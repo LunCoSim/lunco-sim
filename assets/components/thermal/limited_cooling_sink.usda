@@ -1,0 +1,22 @@
+#usda 1.0
+(
+    defaultPrim = "LimitedCoolingSink"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "LimitedCoolingSink" (
+    kind = "component"
+    documentation = "Ideal external coolant reservoir: finite heat rejection in W, minimum coolant temperature in K and heat-transfer conductance in W/K. Connect its heat port within a thermal collection. Pump power and a finite coolant reservoir are not modeled."
+    prepend apiSchemas = ["LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/LimitedCoolingSink.mo@
+    custom token connectors:port = ""
+    custom double parameters:maximum_heat_rejection_w = 100.0
+    custom double parameters:minimum_temperature_k = 273.15
+    custom double parameters:conductance_w_per_k = 10.0
+    custom double outputs:heat_rejection_w = 0.0
+    custom double outputs:temperature_k = 0.0
+}

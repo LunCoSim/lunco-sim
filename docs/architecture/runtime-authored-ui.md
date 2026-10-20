@@ -108,6 +108,9 @@ The same rule applies to engine health. The core runtime publishes the latest
 frame and physics facts once as typed `EngineHealthSnapshot` and
 `PhysicsHealthSnapshot` resources. The engine snapshot also retains a bounded
 raw frame-time history for app-level performance presentation. The
+read-only `EnginePerformance` query exposes that same bounded history and its
+process-scoped sample counter for render-cadence measurements while paused.
+Simulation-clock telemetry retains its own sampling cadence. The
 renderer-independent exposure layer projects the latest facts into the ordinary
 `engine-health` namespace. Native egui, authored HUI, API readers, telemetry
 adapters, and recorders consume those publications; none of them scans

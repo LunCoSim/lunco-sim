@@ -280,7 +280,9 @@ that same teardown boundary.
 Library-only web documents open for inspection without a solver participant.
 Generated networks compile the exact root name already validated by synthesis;
 they do not select another class from the source-wide interface. The production
-`modelica_source_target.rhai` gate covers source rejection and live replacement.
+`modelica_source_target.usda` runs its attached `modelica_source_target.rhai`
+gate through source rejection and live replacement, including construction
+profile availability and retirement.
 Precompile source interfaces project only direct declarations of the selected
 class: parameter/input literal bindings, explicit causal ports, and authored
 documentation. Generated synthesis requests its exact validated class through

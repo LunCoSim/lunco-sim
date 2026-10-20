@@ -14,6 +14,28 @@ through `CelestialClock`.
 the single authority for play/pause and rate; UI, API, and input surfaces use
 `SetTimeTransport` rather than keeping another pause or rate state.
 
+`SimulationLifecycleChanged` is the discrete time-owner contract for Started,
+Paused, Unpaused and Stopped. The first admitted automatic fixed tick publishes
+Started; accepted mode changes publish Paused/Unpaused only for a simulation
+that has started. Duplicate commands and rate-only changes produce no edge.
+`SetTimeTransport` validates the complete request before mutation and rejects
+invalid rates with a terminal error. Scene resource retirement closes the
+lifecycle and retains only a one-shot Stopped notice until after teardown has
+cleared outgoing presentation state. The next lifecycle service (or an admitted
+replacement tick) publishes that notice once. Single stepping, compilation,
+loading and participant holds do not change this transport lifecycle.
+
+`lunco-telemetry-core` projects these typed facts to the discrete Info channels
+`SIMULATION_STARTED`, `SIMULATION_PAUSED`, `SIMULATION_UNPAUSED` and
+`SIMULATION_STOPPED`, using the existing authoritative telemetry stamping seam.
+`lunco-luncosim-presentation` maps the typed facts to the Simulation source in
+StatusBus; the existing Recent Events reader displays them. This is a fixed
+projection of four owner facts, with no selection, permission or authored policy
+requiring a Rhai hook. The retained application scenario
+`scenarios/tests/simulation_lifecycle.rhai` verifies real command, tick,
+duplicate/rejection, hold and teardown behavior in the production app; the
+private presentation bridge test checks exact history messages across reset.
+
 `lunco-core-runtime::SimTick` owns the integer lattice and its canonical seconds
 projection. `TickClock` admits participant intervals from that master exactly
 once, with checked tick arithmetic. Modelica demand and communication endpoints
@@ -54,7 +76,13 @@ equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
 The runner drains at most `MAX_FIXED_STEPS_PER_FRAME` (64) complete cycles per
-app update at every transport rate. Bevy's virtual delta is admitted without
+app update at every transport rate, yielding between complete cycles once its
+wall-clock service reaches one fixed quantum. An admitted first cycle always
+runs; expensive ticks cannot cause a further 63-tick batch before input and
+presentation regain control. The fixed timestep supplies this service budget;
+there is no separate tunable clock. Wall-clock observation chooses only the host
+yield boundary: ordered authoritative inputs and every complete cycle retain
+their sequence, state transitions and admitted duration. Bevy's virtual delta is admitted without
 wall-time clipping (`max_delta = Duration::MAX`); budget exhaustion retains
 the whole remaining duration in the same fixed accumulator. There is no second
 debt clock, timestep change, or skipped tick. Pause and causal holds stop new

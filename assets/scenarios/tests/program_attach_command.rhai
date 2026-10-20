@@ -7,7 +7,7 @@
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "CosimStatus"], required_inputs: [] }
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "InspectUsdDocument", "CosimStatus", "GetReadiness"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -17,6 +17,11 @@ fn on_start(me, ctx) {
     this.source_only_sent = false;
     this.source_only_error = false;
     this.source_only_diagnostic = false;
+    this.plant_was_running = false;
+    this.clean_before_failure = false;
+    this.failure_wait_seen = false;
+    this.removal_sent = false;
+    this.failure_wait_cleared = false;
     this.progress = #{};
     this.rejection_verified = false;
     this.doc = ();
@@ -141,7 +146,17 @@ fn on_tick(me, ctx) {
                 running = true;
             }
         }
+        if running { this.plant_was_running = true; }
         if has_height && has_net_force && running && !this.source_only_sent {
+            let readiness = query("GetReadiness");
+            if readiness == () || readiness.pending == () {
+                fail(this, "program readiness is unavailable");
+                return;
+            }
+            this.clean_before_failure = true;
+            for item in readiness.pending {
+                if item.kind == "program_failed" { this.clean_before_failure = false; }
+            }
             let source_only_path = this.host + "/SourceOnly";
             if authored_prim_exists(this.doc, source_only_path) {
                 this.source_only_sent = true;
@@ -173,21 +188,55 @@ fn on_tick(me, ctx) {
                         && row.status.contains("no declared inputs or outputs");
                 }
             }
+            let readiness = query("GetReadiness");
+            if readiness == () || readiness.pending == () {
+                fail(this, "program readiness is unavailable after the source-only attachment");
+                return;
+            }
+            let failed_now = false;
+            for item in readiness.pending {
+                if item.kind == "program_failed" && item.label.contains("Balloon.mo") {
+                    failed_now = true;
+                }
+            }
+            if this.source_only_error && this.source_only_diagnostic && failed_now {
+                this.failure_wait_seen = true;
+                if !this.removal_sent {
+                    let removed = cmd("ApplyUsdOps", #{doc_id: this.doc, ops: [
+                        #{RemovePrim: #{edit_target: "@runtime@", path: this.host + "/SourceOnly"}}
+                    ]});
+                    if removed == () || removed.ok != true {
+                        fail(this, "source-only program removal failed");
+                        return;
+                    }
+                    this.removal_sent = true;
+                    return;
+                }
+            }
+            if this.removal_sent && !failed_now
+                && !authored_prim_exists(this.doc, this.host + "/SourceOnly")
+                && find_path(this.host + "/SourceOnly") < 0 {
+                this.failure_wait_cleared = true;
+            }
         }
         this.progress = #{height: has_height, net_force: has_net_force, running: running,
             source_only_sent: this.source_only_sent, source_only_error: this.source_only_error,
-            source_only_diagnostic: this.source_only_diagnostic};
-        if has_height && has_net_force && running && this.source_only_error
-            && this.source_only_diagnostic {
+            source_only_diagnostic: this.source_only_diagnostic,
+            failure_wait_seen: this.failure_wait_seen, failure_wait_cleared: this.failure_wait_cleared};
+        if has_height && has_net_force && this.plant_was_running && this.source_only_error
+            && this.source_only_diagnostic && this.failure_wait_cleared {
             this.done = true;
             report_verdict([
                 t_true(this.rejection_verified, "invalid attachment is rejected without changing the document"),
                 t_true(this.plant >= 0, "attached program prim was not projected"),
                 t_true(has_height, "Modelica input port `height` was not exposed"),
                 t_true(has_net_force, "Modelica output port `netForce` was not exposed"),
-                t_true(running, "attached program did not enter CosimStatus"),
+                t_true(this.plant_was_running, "attached program did not enter CosimStatus before the failed attachment"),
                 t_true(this.source_only_error, "source-only attachment was not reported as an error"),
                 t_true(this.source_only_diagnostic, "the interface owner reports the source-only program and its missing scalar interface"),
+                t_true(this.clean_before_failure, "the valid attached program has no failed-program readiness wait"),
+                t_true(this.failure_wait_seen, "a rejected program without a solver has a named failed-program readiness wait"),
+                t_true(this.failure_wait_cleared, "removing the rejected program retires its readiness wait"),
             ], "PROGRAM ATTACH COMMAND", "PROGRAM_ATTACH_COMMAND");
             return;
         }

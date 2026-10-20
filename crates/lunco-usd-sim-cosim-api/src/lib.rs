@@ -31,6 +31,17 @@ fn api_ok(value: ApiValue) -> ApiQueryResult {
     Ok(Some(value))
 }
 
+fn construction_profile_to_api_value(
+    profile: lunco_modelica_runtime::ModelicaConstructionProfile,
+) -> ApiValue {
+    api_value!({
+        "queue_wait_ns": profile.queue_wait_ns,
+        "session_ns": profile.session_ns,
+        "metadata_ns": profile.metadata_ns,
+        "initial_observation_ns": profile.initial_observation_ns,
+    })
+}
+
 fn api_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
     Err(ApiQueryError::new(code, message))
 }
@@ -763,6 +774,11 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                         })
                     })
                     .unwrap_or(ApiValue::Unit);
+                let construction_profile = model
+                    .filter(|model| model.is_compiled)
+                    .and_then(|model| model.construction_profile)
+                    .map(construction_profile_to_api_value)
+                    .unwrap_or(ApiValue::Unit);
                 if include_values {
                     api_value!({
                     "name": name.as_str(),
@@ -787,6 +803,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                         .unwrap_or(0.0),
                     "modelica_is_stepping": model.is_some_and(|m| m.is_stepping),
                     "modelica_step_diagnostics": step_diagnostics,
+                    "modelica_construction_profile": construction_profile,
                     // The Modelica worker's durable failure verdict is the
                     // reason readiness may be holding the world. Surface it
                     // here beside timing/ports so live API diagnosis does not
@@ -818,6 +835,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                             .unwrap_or(0.0),
                         "modelica_is_stepping": model.is_some_and(|m| m.is_stepping),
                         "modelica_step_diagnostics": step_diagnostics,
+                        "modelica_construction_profile": construction_profile,
                         "modelica_error_present": model.is_some_and(|m| m.last_error.is_some()),
                         "outputs": ApiValue::Map(Vec::new()),
                         "inputs": ApiValue::Map(Vec::new()),
@@ -916,11 +934,18 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
             "causal_participants": causal_participants,
             "causal_sink_count": causal_sink_count,
         });
+        let initialization = lunco_usd_sim_cosim::last_coupled_initialization(world)
+            .map(|receipt| api_value!({
+                "scene_generation": receipt.scene_generation,
+                "solver_id": receipt.solver.solver_id.as_str(),
+                "construction_profile": construction_profile_to_api_value(receipt.construction_profile),
+            })).unwrap_or(ApiValue::Unit);
         api_ok(api_value!({
             "entities": entities,
             "entity_count": entity_count,
             "synchronization": synchronization,
             "modelica_step_profile": modelica_step_profile,
+            "last_coupled_initialization": initialization,
             "values_included": include_values,
             "entities_included": include_entities,
         }))

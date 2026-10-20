@@ -444,6 +444,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             .map_or(0, |(_, _, _, _, _, generation, _)| *generation),
         live_solver_snapshot: None,
         variable_metadata: None,
+        construction_profile: None,
         pending_generation: generation,
         resume_after_compile,
     };

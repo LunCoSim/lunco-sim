@@ -34,6 +34,9 @@ pub struct EngineHealthSnapshot {
     /// This history advances with rendered frames, including while no Twin is
     /// active. Simulation telemetry remains sampled on its simulation clock.
     pub frame_time_history: VecDeque<f64>,
+    /// Number of raw frame samples published over this application's lifetime.
+    /// Together with the retained history length this identifies each sample.
+    pub frame_sample_count: u64,
     /// Monotonic revision of the published values.
     pub revision: u64,
 }
@@ -86,5 +89,6 @@ pub fn publish_engine_health(
             snapshot.frame_time_history.pop_front();
         }
         snapshot.frame_time_history.push_back(frame_time_ms);
+        snapshot.frame_sample_count = snapshot.frame_sample_count.wrapping_add(1);
     }
 }

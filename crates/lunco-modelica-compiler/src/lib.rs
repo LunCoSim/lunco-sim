@@ -590,20 +590,66 @@ impl ModelicaCompiler {
         self.load_source_root_in_memory(id, label, files)
     }
 
-    /// Compile Modelica source string and return DAE result.
-    ///
-    /// Source-root dependencies are admitted before the user document enters
-    /// Rumoca. Its strict-reachable DAE walker then sees one settled session,
-    /// so short-form references resolve through normal Modelica scope lookup.
-    ///
-    /// `filename` is used as the document URI for error reporting.
+    /// Select translation-time overrides from Rumoca's checked declaration
+    /// facts and convert the numeric transport to exact typed root modifiers.
+    pub fn structural_parameter_overrides(
+        dae: &rumoca_compile::compile::Dae,
+        values: &[(String, f64)],
+    ) -> Result<Vec<(String, rumoca_compile::compile::StructuralOverride)>, String> {
+        use rumoca_compile::compile::StructuralOverride;
+        use rumoca_ir_dae::{ScalarType, VariableRole};
+        let declarations = dae.inspect(|view| {
+            view.variables()
+                .filter(|(_, variable)| {
+                    variable.role() == VariableRole::Parameter && !variable.is_tunable()
+                })
+                .flat_map(|(_, variable)| {
+                    variable
+                        .scalar_names()
+                        .map(move |name| (name, variable.value_type().scalar_type()))
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        });
+        values
+            .iter()
+            .filter_map(|(name, value)| {
+                declarations.get(name).map(|kind| {
+                    if !value.is_finite() {
+                        return Err(format!("structural parameter `{name}` must be finite"));
+                    }
+                    let literal = match kind {
+                        ScalarType::Real => StructuralOverride::Real(*value),
+                        ScalarType::Integer
+                            if *value >= i64::MIN as f64
+                                && *value < -(i64::MIN as f64)
+                                && value.fract() == 0.0 =>
+                        {
+                            StructuralOverride::Int(*value as i64)
+                        }
+                        ScalarType::Boolean if *value == 0.0 || *value == 1.0 => {
+                            StructuralOverride::Bool(*value == 1.0)
+                        }
+                        _ => {
+                            return Err(format!(
+                                "structural parameter `{name}` requires an exact {kind:?} literal"
+                            ));
+                        }
+                    };
+                    Ok((name.clone(), literal))
+                })
+            })
+            .collect()
+    }
+
+    /// Compile source after admitting its source-root dependencies. Rumoca owns
+    /// scope/reference resolution; `filename` identifies source diagnostics.
     pub fn compile_str(
         &mut self,
         model_name: &str,
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.compile_str_mode(model_name, source, filename, false)
+        self.compile_str_mode(model_name, source, filename, false, &[])
     }
 
     /// Compile in the live worker's settled source-root context without file I/O.
@@ -614,8 +660,9 @@ impl ModelicaCompiler {
         model_name: &str,
         source: &str,
         filename: &str,
+        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.compile_str_mode(model_name, source, filename, true)
+        self.compile_str_mode(model_name, source, filename, true, structural_overrides)
     }
 
     fn compile_str_mode(
@@ -624,8 +671,16 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
         source_roots_admitted: bool,
+        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.compile_str_multi_mode(model_name, source, filename, &[], source_roots_admitted)
+        self.compile_str_multi_mode(
+            model_name,
+            source,
+            filename,
+            &[],
+            source_roots_admitted,
+            structural_overrides,
+        )
     }
 
     /// Release user-document overlays after a caller has captured its compile
@@ -708,7 +763,7 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.compile_str_multi_mode(model_name, source, filename, extras, false)
+        self.compile_str_multi_mode(model_name, source, filename, extras, false, &[])
     }
 
     /// Compile primary and sibling documents in the live worker's settled roots.
@@ -719,8 +774,16 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
         extras: &[(String, String)],
+        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.compile_str_multi_mode(model_name, source, filename, extras, true)
+        self.compile_str_multi_mode(
+            model_name,
+            source,
+            filename,
+            extras,
+            true,
+            structural_overrides,
+        )
     }
 
     fn compile_str_multi_mode(
@@ -730,6 +793,7 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
         source_roots_admitted: bool,
+        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         use rumoca_compile::compile::ParsedSourceDocument;
         let primary = ParsedSourceDocument::parse(filename, source)
@@ -803,7 +867,14 @@ impl ModelicaCompiler {
         self.evict_user_docs_except(&keep);
         self.session.add_in_memory_parsed_batch(admitted);
         self.seated_user_uris = keep;
-        self.compile_loaded(&selected)
+        if structural_overrides.is_empty() {
+            self.compile_loaded(&selected)
+        } else {
+            self.session.set_structural_overrides(structural_overrides);
+            let result = self.compile_loaded(&selected);
+            self.session.set_structural_overrides(&[]);
+            result
+        }
     }
 
     /// Whether a fully-qualified class name belongs to a durable source root

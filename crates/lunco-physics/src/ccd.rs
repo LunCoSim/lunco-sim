@@ -1,12 +1,16 @@
 //! Continuous contact constraints share the native substep joint solve.
 
+use crate::constraint_response::{self, Gradient, Row};
 use crate::joint::rotation_displacement;
 use lunco_core::AppSceneExt;
 
+#[cfg(test)]
+use crate::joint_solver::PhysicsJointPositionSchedule;
 use crate::{
     PhysicsHolds,
     joint_solver::{
-        PhysicsJointOrderPreparation, PhysicsJointPositionSchedule, joint_position_residual,
+        PhysicsJointOrderPreparation, apply_constraint_corrections, apply_joint_constraints,
+        joint_position_residual, linearize_joint_constraints, solver_body_snapshot,
     },
 };
 use avian3d::dynamics::integrator::IntegrationSystems;
@@ -62,6 +66,19 @@ impl Default for ContinuousCollisionSettings {
         }
     }
 }
+impl ContinuousCollisionSettings {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if self.max_iterations == 0
+            || !self.position_tolerance_m.is_finite()
+            || self.position_tolerance_m <= 0.0
+            || !self.angular_tolerance_rad.is_finite()
+            || self.angular_tolerance_rad <= 0.0
+        {
+            return Err("invalid continuous collision convergence settings");
+        }
+        Ok(())
+    }
+}
 
 /// Non-authoritative counters for the most recent physics step.
 #[derive(Resource, Default, Clone, Debug)]
@@ -71,7 +88,7 @@ pub struct ContinuousCollisionDiagnostics {
     pub position_iterations: usize,
     pub solve_time: std::time::Duration,
     pub sweep_time: std::time::Duration,
-    pub joint_time: std::time::Duration,
+    pub projection_time: std::time::Duration,
 }
 
 /// Installs continuous inequalities before XPBD velocity projection, with the
@@ -125,6 +142,35 @@ struct Shape {
     position: DVec3,
     rotation: DQuat,
     center: DVec3,
+    local_center: DVec3,
+    bounding_sphere: avian3d::parry::bounding_volume::BoundingSphere,
+}
+impl Shape {
+    /// Prepare immutable leaf geometry for the current physics step. Motion and
+    /// whole-arc bounds are evaluated anew for every corrected trajectory.
+    fn new(
+        entity: Entity,
+        part_index: usize,
+        body: Entity,
+        collider: Collider,
+        position: DVec3,
+        rotation: DQuat,
+        center: DVec3,
+    ) -> Self {
+        let local_center = rotation.inverse() * (center - position);
+        let bounding_sphere = collider.shape_scaled().compute_local_bounding_sphere();
+        Self {
+            entity,
+            part_index,
+            body,
+            collider,
+            position,
+            rotation,
+            center,
+            local_center,
+            bounding_sphere,
+        }
+    }
 }
 struct SweepPair {
     shapes: [usize; 2],
@@ -537,15 +583,15 @@ fn prepare_pairs<H: CollisionHooks>(
                                   center| {
                     *slot.get_or_insert_with(|| {
                         let index = contacts.shapes.len();
-                        contacts.shapes.push(Shape {
+                        contacts.shapes.push(Shape::new(
                             entity,
                             part_index,
                             body,
-                            collider: collider.clone(),
+                            collider.clone(),
                             position,
                             rotation,
                             center,
-                        });
+                        ));
                         index
                     })
                 };
@@ -618,21 +664,17 @@ impl BodyMotion {
     }
 }
 fn motion(shape: &Shape, body: &BodyMotion) -> NonlinearRigidMotion {
-    let center_local = shape.rotation.inverse() * (shape.center - shape.position);
     let pose = Pose::from_parts(
         shape.center + body.start_position + body.start_rotation * (shape.position - shape.center),
         body.start_rotation * shape.rotation,
     );
-    NonlinearRigidMotion::new(pose, center_local, body.linear, body.angular)
+    NonlinearRigidMotion::new(pose, shape.local_center, body.linear, body.angular)
 }
 /// Every point follows a linear COM trajectory plus a rotational arc. The
 /// endpoint chord's maximum deviation is bounded by |p''| / 8, so expanding
 /// the endpoint AABBs by this remainder encloses the complete swept shape.
 fn swept_bounds(shape: &Shape, motion: &NonlinearRigidMotion) -> Aabb {
-    let sphere = shape
-        .collider
-        .shape_scaled()
-        .compute_local_bounding_sphere();
+    let sphere = shape.bounding_sphere;
     let radius = sphere.radius + (sphere.center - motion.local_center).length();
     let start = shape.collider.shape_scaled().compute_aabb(&motion.start);
     let end = shape
@@ -1138,7 +1180,7 @@ fn certified_native_interval(
     let contact = match cache.contact {
         Some(contact) => contact,
         None => {
-            let contact = initial_native_contact(m1, s1, m2, s2, prediction, axis)?;
+            let contact = initial_native_contact(m1, s1, m2, s2, prediction)?;
             cache.contact = Some(contact);
             contact
         }
@@ -1178,13 +1220,110 @@ fn contact_seed_axis(
     shape2: &dyn avian3d::parry::shape::Shape,
     center2: DVec3,
 ) -> DVec3 {
-    use avian3d::parry::query::PointQuery;
-    if let Some(triangle) = shape1.as_triangle() {
-        center2 - triangle.project_point(pose1, center2, true).point
-    } else if let Some(triangle) = shape2.as_triangle() {
-        triangle.project_point(pose2, center1, true).point - center1
+    let point2_in1 = pose1.inverse_transform_point(center2);
+    let first = point2_in1 - shape1.project_local_point(point2_in1, false).point;
+    let point1_in2 = pose2.inverse_transform_point(center1);
+    let second = shape2.project_local_point(point1_in2, false).point - point1_in2;
+    if !first.is_finite() || !second.is_finite() {
+        return DVec3::NAN;
+    }
+    let (local, rotation) = if first.length_squared() <= second.length_squared() {
+        (first, pose1.rotation)
     } else {
-        center2 - center1
+        (second, pose2.rotation)
+    };
+    if local == DVec3::ZERO {
+        DVec3::ZERO
+    } else if let Some(unit) = local.try_normalize() {
+        // Subtract and normalize in the projecting shape's frame. Translating
+        // its boundary point back before subtraction loses the small gap to a
+        // remote feature, changing the seed of a near-touching native query.
+        rotation * unit
+    } else {
+        DVec3::NAN
+    }
+}
+
+/// Select the maintained analytic dispatcher or its parameterized convex GJK
+/// kernel. A fresh finite-feature direction avoids making an elongated shape's
+/// remote centre the initial simplex direction. Native geometry stays native.
+fn seeded_native_contact(
+    relative: &Pose,
+    shape1: &dyn avian3d::parry::shape::Shape,
+    shape2: &dyn avian3d::parry::shape::Shape,
+    prediction: f64,
+) -> Result<Option<avian3d::parry::query::Contact>, String> {
+    use avian3d::parry::query::{
+        Contact, DefaultQueryDispatcher, QueryDispatcher,
+        details::contact_support_map_support_map_with_params,
+        gjk::{GJKResult, VoronoiSimplex},
+    };
+    // Retain native analytic ball queries and non-support-map dispatch.
+    // Other convex leaves use the same native GJK kernel with an explicit seed.
+    match shape1.as_support_map().zip(shape2.as_support_map()) {
+        Some((first, second)) if shape1.as_ball().is_none() && shape2.as_ball().is_none() => {
+            let sphere1 = shape1.compute_local_bounding_sphere();
+            let sphere2 = shape2.compute_local_bounding_sphere();
+            // Keep the larger geometry in its own frame. Rotating a wide
+            // feature into a small body's frame loses its near-contact gap
+            // when native support points subtract large transformed corners.
+            // Choose once before querying; this is not a retry after failure.
+            let swapped = sphere1.radius < sphere2.radius;
+            let query_pose = if swapped {
+                relative.inverse()
+            } else {
+                *relative
+            };
+            let (shape1, shape2, first, second, sphere1, sphere2) = if swapped {
+                (shape2, shape1, second, first, sphere2, sphere1)
+            } else {
+                (shape1, shape2, first, second, sphere1, sphere2)
+            };
+            let center1 = sphere1.center;
+            let center2 = query_pose * sphere2.center;
+            let axis = contact_seed_axis(
+                &Pose::IDENTITY,
+                shape1,
+                center1,
+                &query_pose,
+                shape2,
+                center2,
+            );
+            if !axis.is_finite() {
+                return Err("native continuous contact seed is not finite".into());
+            }
+            let seed = if axis == DVec3::ZERO {
+                None
+            } else {
+                Some(axis)
+            };
+            match contact_support_map_support_map_with_params(
+                &query_pose,
+                first,
+                second,
+                prediction,
+                &mut VoronoiSimplex::new(),
+                seed,
+            ) {
+                GJKResult::ClosestPoints(point1, point2_1, normal1) => {
+                    let distance = (point2_1 - point1).dot(normal1);
+                    let point2 = query_pose.inverse_transform_point(point2_1);
+                    let normal2 = query_pose.rotation.inverse() * -normal1;
+                    let mut contact = Contact::new(point1, point2, normal1, normal2, distance);
+                    if swapped {
+                        contact.flip();
+                    }
+                    Ok(Some(contact))
+                }
+                GJKResult::NoIntersection(_) => Ok(None),
+                result => Err(format!(
+                    "native continuous contact returned incomplete GJK geometry: {result:?}"
+                )),
+            }
+        }
+        _ => DefaultQueryDispatcher
+            .contact(relative, shape1, shape2, prediction)
+            .map_err(|error| format!("unsupported continuous contact: {error:?}")),
     }
 }
 
@@ -1197,12 +1336,11 @@ fn initial_native_contact(
     m2: &NonlinearRigidMotion,
     s2: &dyn avian3d::parry::shape::Shape,
     prediction: f64,
-    axis: DVec3,
 ) -> Result<avian3d::parry::query::Contact, String> {
     let _span = bevy::log::debug_span!("ccd_initial_native_contact", shape1=?s1.shape_type(), shape2=?s2.shape_type()).entered();
     let missing_geometry = |result: &str| {
         format!(
-            "native continuous initial contact did not return contact geometry for its enclosing prediction: result={result}, prediction={prediction:?}, axis={axis:?}, types={:?}/{:?}, pose1={:?}, pose2={:?}, triangle1={:?}, triangle2={:?}, ball1={:?}, ball2={:?}, cylinder1={:?}, cylinder2={:?}, cuboid1={:?}, cuboid2={:?}",
+            "native continuous initial contact did not return contact geometry for its enclosing prediction: result={result}, prediction={prediction:?}, types={:?}/{:?}, pose1={:?}, pose2={:?}, triangle1={:?}, triangle2={:?}, ball1={:?}, ball2={:?}, cylinder1={:?}, cylinder2={:?}, cuboid1={:?}, cuboid2={:?}",
             s1.shape_type(),
             s2.shape_type(),
             m1.start,
@@ -1218,10 +1356,8 @@ fn initial_native_contact(
         )
     };
     let relative = m1.start.inv_mul(&m2.start);
-    use avian3d::parry::query::{DefaultQueryDispatcher, QueryDispatcher};
-    let mut contact = DefaultQueryDispatcher
-        .contact(&relative, s1, s2, prediction)
-        .map_err(|error| missing_geometry(&format!("{error:?}")))?
+    let mut contact = seeded_native_contact(&relative, s1, s2, prediction)
+        .map_err(|error| missing_geometry(&error))?
         .ok_or_else(|| missing_geometry("native dispatcher returned no contact"))?;
     contact.transform_by_mut(&m1.start, &m2.start);
     validate_native_contact(&contact)?;
@@ -1293,9 +1429,8 @@ impl avian3d::parry::query::QueryDispatcher for CheckedNativeQueries {
         self.contact_queries
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let _span = bevy::log::debug_span!("ccd_cast_native_contact", shape1=?a.shape_type(), shape2=?b.shape_type()).entered();
-        let contact = avian3d::parry::query::DefaultQueryDispatcher
-            .contact(p, a, b, prediction)
-            .map_err(|error| self.reject(format!("unsupported continuous contact: {error:?}")))?;
+        let contact =
+            seeded_native_contact(p, a, b, prediction).map_err(|error| self.reject(error))?;
         if let Some(contact) = &contact {
             validate_native_contact(contact).map_err(|error| self.reject(error))?;
         }
@@ -1671,7 +1806,11 @@ fn sweep_geometry(
         let s2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
         let e1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
         let e2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
-        if contact_gap(plane, s1, e1, s2, e2, tolerance)?.1 < -tolerance {
+        if ContactMotion::new(plane, s1, e1, s2, e2)?
+            .contact_gap(tolerance)?
+            .1
+            < -tolerance
+        {
             planes.push(plane.clone());
         }
     }
@@ -1810,7 +1949,9 @@ fn sweep_geometry(
             let s2 = contacts.starts.get(&b.body).unwrap_or(&dummy);
             let e1 = world.get::<SolverBody>(a.body).unwrap_or(&dummy);
             let e2 = world.get::<SolverBody>(b.body).unwrap_or(&dummy);
-            let (_, gap) = minimum_gap(&plane, s1, e1, s2, e2, tolerance)?;
+            let (_, gap) = ContactMotion::new(&plane, s1, e1, s2, e2)?
+                .minimum_gap(tolerance)?
+                .swept;
             if gap < -tolerance {
                 planes.push(plane);
             }
@@ -1921,194 +2062,227 @@ impl WitnessMotion {
         k.transpose() * self.rotated_point(t).cross(normal)
     }
 }
-/// Bound and minimize the separation of material witnesses throughout the
-/// substep. Taylor's remainder bounds each interval; no temporal samples are
-/// treated as proof that the intervening arc is clear.
-fn minimum_gap(
-    p: &Plane,
-    s1: &SolverBody,
-    e1: &SolverBody,
-    s2: &SolverBody,
-    e2: &SolverBody,
-    tolerance: f64,
-) -> Result<(f64, f64), String> {
-    let _span =
-        bevy::log::debug_span!(target: "lunco_physics::ccd::minimum", "ccd_minimum_gap").entered();
-    let motion1 = WitnessMotion::new(s1, e1, p.point1)?;
-    let motion2 = WitnessMotion::new(s2, e2, p.point2)?;
-    if ![
-        p.center1,
-        p.center2,
-        p.point1,
-        p.point2,
-        p.normal,
-        motion1.start,
-        motion1.end,
-        motion1.omega,
-        motion1.point,
-        motion2.start,
-        motion2.end,
-        motion2.omega,
-        motion2.point,
-    ]
-    .into_iter()
-    .all(DVec3::is_finite)
-        || !p.offset.is_finite()
-        || (p.normal.length_squared() - 1.0).abs() > 1e-6
-    {
-        return Err("continuous contact has invalid native witness geometry or motion".into());
-    }
-    let evaluate = |t: f64| {
-        let (r1, d1) = motion1.position_and_velocity(t);
-        let (r2, d2) = motion2.position_and_velocity(t);
-        (
-            ((p.center2 - p.center1) + (r2 - r1)).dot(p.normal) + p.offset,
-            (d2 - d1).dot(p.normal),
-        )
-    };
-    let (initial, initial_derivative) = evaluate(0.0);
-    // Existing penetration is owned by the discrete contact solver. CCD must
-    // not deepen it or introduce a new crossing during this substep.
-    let baseline = initial.min(0.0);
-    // Rotation preserves |omega cross r|. Project the second-derivative
-    // bound onto the contact normal, rather than bounding all three axes.
-    let acceleration = motion1.omega.cross(motion1.point).length()
-        * p.normal.cross(motion1.omega).length()
-        + motion2.omega.cross(motion2.point).length() * p.normal.cross(motion2.omega).length();
-    let mut best = (0.0, initial);
-    let (end, end_derivative) = evaluate(1.0);
-    if !initial.is_finite() || !end.is_finite() || !acceleration.is_finite() {
-        return Err("continuous witness bound exceeded its finite numeric range".into());
-    }
-    if end < best.1 {
-        best = (1.0, end);
-    }
-    // The complete material trajectory stays above its endpoint chord minus
-    // this second-derivative remainder. A clear bound needs no root search.
-    let chord_lower = initial.min(end) - acceleration / 8.0;
-    if chord_lower >= baseline - tolerance {
-        return Ok((best.0, chord_lower - baseline));
-    }
-    // A derivative that cannot reach zero certifies the endpoint minimum.
-    // This is an analytic whole-interval bound, including zero rotation.
-    if initial_derivative >= acceleration || end_derivative >= acceleration {
-        return Ok((0.0, initial - baseline));
-    }
-    if initial_derivative <= -acceleration || end_derivative <= -acceleration {
-        return Ok((1.0, end - baseline));
-    }
-    let mut intervals = vec![(0.0, 1.0)];
-    let mut count = 0;
-    let mut lower = f64::INFINITY;
-    while let Some((lo, hi)) = intervals.pop() {
-        count += 1;
-        if count > 4096 {
-            return Err("continuous contact arc bound did not converge".into());
-        }
-        let t = (lo + hi) * 0.5;
-        let half = (hi - lo) * 0.5;
-        let (g, d) = evaluate(t);
-        if g < best.1 {
-            best = (t, g);
-        }
-        let bound = g - d.abs() * half - 0.5 * acceleration * half * half;
-        if bound < best.1 - tolerance * 0.25 {
-            intervals.push((t, hi));
-            intervals.push((lo, t));
-        } else {
-            lower = lower.min(bound);
-        }
-    }
-    let (t, g) = best;
-    Ok((t, lower.min(g) - baseline))
-}
-/// Swept constraints protect immutable initial overlap. Existing native
-/// contacts must also end separated, preventing numerical error accumulating.
-fn contact_gap(
-    p: &Plane,
-    s1: &SolverBody,
-    e1: &SolverBody,
-    s2: &SolverBody,
-    e2: &SolverBody,
-    tolerance: f64,
-) -> Result<(f64, f64), String> {
-    let swept = minimum_gap(p, s1, e1, s2, e2, tolerance)?;
-    if !p.close_endpoint {
-        return Ok(swept);
-    }
-    let a = WitnessMotion::new(s1, e1, p.point1)?
-        .position_and_velocity(1.0)
-        .0;
-    let b = WitnessMotion::new(s2, e2, p.point2)?
-        .position_and_velocity(1.0)
-        .0;
-    let endpoint = ((p.center2 - p.center1) + (b - a)).dot(p.normal) + p.offset;
-    if !endpoint.is_finite() {
-        return Err("native contact endpoint gap is not finite".into());
-    }
-    Ok(if endpoint < swept.1 {
-        (1.0, endpoint)
-    } else {
-        swept
-    })
+/// One immutable pair of current material trajectories for a contact evaluation.
+struct ContactMotion<'a> {
+    plane: &'a Plane,
+    first: WitnessMotion,
+    second: WitnessMotion,
 }
 
-fn project(
-    world: &mut World,
-    plane: &Plane,
-    contacts: &mut ContinuousContacts,
+struct GapMinimum {
+    swept: (f64, f64),
+    endpoint: f64,
+}
+
+impl<'a> ContactMotion<'a> {
+    fn new(
+        p: &'a Plane,
+        s1: &SolverBody,
+        e1: &SolverBody,
+        s2: &SolverBody,
+        e2: &SolverBody,
+    ) -> Result<Self, String> {
+        let motion1 = WitnessMotion::new(s1, e1, p.point1)?;
+        let motion2 = WitnessMotion::new(s2, e2, p.point2)?;
+        if ![
+            p.center1,
+            p.center2,
+            p.point1,
+            p.point2,
+            p.normal,
+            motion1.start,
+            motion1.end,
+            motion1.omega,
+            motion1.point,
+            motion2.start,
+            motion2.end,
+            motion2.omega,
+            motion2.point,
+        ]
+        .into_iter()
+        .all(DVec3::is_finite)
+            || !p.offset.is_finite()
+            || (p.normal.length_squared() - 1.0).abs() > 1e-6
+        {
+            return Err("continuous contact has invalid native witness geometry or motion".into());
+        }
+        Ok(Self {
+            plane: p,
+            first: motion1,
+            second: motion2,
+        })
+    }
+
+    /// Bound the whole material arc using Taylor remainders, retaining its endpoint.
+    fn minimum_gap(&self, tolerance: f64) -> Result<GapMinimum, String> {
+        let _span =
+            bevy::log::debug_span!(target: "lunco_physics::ccd::minimum", "ccd_minimum_gap")
+                .entered();
+        let p = self.plane;
+        let motion1 = &self.first;
+        let motion2 = &self.second;
+        let evaluate = |t: f64| {
+            let (r1, d1) = motion1.position_and_velocity(t);
+            let (r2, d2) = motion2.position_and_velocity(t);
+            (
+                ((p.center2 - p.center1) + (r2 - r1)).dot(p.normal) + p.offset,
+                (d2 - d1).dot(p.normal),
+            )
+        };
+        let (initial, initial_derivative) = evaluate(0.0);
+        // Existing penetration is owned by the discrete contact solver. CCD must
+        // not deepen it or introduce a new crossing during this substep.
+        let baseline = initial.min(0.0);
+        // Rotation preserves |omega cross r|. Project the second-derivative
+        // bound onto the contact normal, rather than bounding all three axes.
+        let acceleration = motion1.omega.cross(motion1.point).length()
+            * p.normal.cross(motion1.omega).length()
+            + motion2.omega.cross(motion2.point).length() * p.normal.cross(motion2.omega).length();
+        let mut best = (0.0, initial);
+        let (end, end_derivative) = evaluate(1.0);
+        if !initial.is_finite() || !end.is_finite() || !acceleration.is_finite() {
+            return Err("continuous witness bound exceeded its finite numeric range".into());
+        }
+        if end < best.1 {
+            best = (1.0, end);
+        }
+        // The complete material trajectory stays above its endpoint chord minus
+        // this second-derivative remainder. A clear bound needs no root search.
+        let chord_lower = initial.min(end) - acceleration / 8.0;
+        if chord_lower >= baseline - tolerance {
+            return Ok(GapMinimum {
+                swept: (best.0, chord_lower - baseline),
+                endpoint: end,
+            });
+        }
+        // A derivative that cannot reach zero certifies the endpoint minimum.
+        // This is an analytic whole-interval bound, including zero rotation.
+        if initial_derivative >= acceleration || end_derivative >= acceleration {
+            return Ok(GapMinimum {
+                swept: (0.0, initial - baseline),
+                endpoint: end,
+            });
+        }
+        if initial_derivative <= -acceleration || end_derivative <= -acceleration {
+            return Ok(GapMinimum {
+                swept: (1.0, end - baseline),
+                endpoint: end,
+            });
+        }
+        let mut intervals = vec![(0.0, 1.0)];
+        let mut count = 0;
+        let mut lower = f64::INFINITY;
+        while let Some((lo, hi)) = intervals.pop() {
+            count += 1;
+            if count > 4096 {
+                return Err("continuous contact arc bound did not converge".into());
+            }
+            let t = (lo + hi) * 0.5;
+            let half = (hi - lo) * 0.5;
+            let (g, d) = evaluate(t);
+            if g < best.1 {
+                best = (t, g);
+            }
+            let bound = g - d.abs() * half - 0.5 * acceleration * half * half;
+            if bound < best.1 - tolerance * 0.25 {
+                intervals.push((t, hi));
+                intervals.push((lo, t));
+            } else {
+                lower = lower.min(bound);
+            }
+        }
+        let (t, g) = best;
+        Ok(GapMinimum {
+            swept: (t, lower.min(g) - baseline),
+            endpoint: end,
+        })
+    }
+    /// Swept constraints protect immutable initial overlap. Existing native
+    /// contacts must also end separated, preventing numerical error accumulating.
+    fn contact_gap(&self, tolerance: f64) -> Result<(f64, f64), String> {
+        let GapMinimum { swept, endpoint } = self.minimum_gap(tolerance)?;
+        if !self.plane.close_endpoint {
+            return Ok(swept);
+        }
+        Ok(if endpoint < swept.1 {
+            (1.0, endpoint)
+        } else {
+            swept
+        })
+    }
+}
+
+struct ContactBlock<'a> {
+    plane: &'a Plane,
+    time: f64,
+    row: usize,
+}
+
+fn linearize_contacts<'a>(
+    world: &World,
+    planes: &'a [Plane],
+    contacts: &ContinuousContacts,
     tolerance: f64,
-) -> Result<f64, String> {
+    rows: &mut Vec<Row>,
+) -> Result<Vec<ContactBlock<'a>>, String> {
     let dummy = SolverBody::default();
-    let b1 = world
-        .get::<SolverBody>(plane.body1)
-        .unwrap_or(&dummy)
-        .clone();
-    let b2 = world
-        .get::<SolverBody>(plane.body2)
-        .unwrap_or(&dummy)
-        .clone();
-    let mut i1 = world
-        .get::<SolverBodyInertia>(plane.body1)
-        .cloned()
-        .unwrap_or(SolverBodyInertia::DUMMY);
-    let mut i2 = world
-        .get::<SolverBodyInertia>(plane.body2)
-        .cloned()
-        .unwrap_or(SolverBodyInertia::DUMMY);
-    match i1.dominance().cmp(&i2.dominance()) {
-        std::cmp::Ordering::Greater => i1 = SolverBodyInertia::DUMMY,
-        std::cmp::Ordering::Less => i2 = SolverBodyInertia::DUMMY,
-        _ => {}
+    let mut blocks = Vec::new();
+    for plane in planes {
+        let b1 = solver_body_snapshot(world, plane.body1)?;
+        let b2 = solver_body_snapshot(world, plane.body2)?;
+        let s1 = contacts.starts.get(&plane.body1).unwrap_or(&dummy);
+        let s2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
+        let motion = ContactMotion::new(plane, s1, &b1.body, s2, &b2.body)?;
+        let (t, gap) = motion.contact_gap(tolerance)?;
+        if t == 0.0 && gap >= -tolerance {
+            continue;
+        }
+        let n = plane.normal * t;
+        let angular1 = motion.first.gradient(t, plane.normal);
+        let angular2 = motion.second.gradient(t, plane.normal);
+        blocks.push(ContactBlock {
+            plane,
+            time: t,
+            row: rows.len(),
+        });
+        rows.push(Row::new(
+            [plane.body1, plane.body2],
+            [
+                Gradient {
+                    linear: n,
+                    angular: angular1,
+                },
+                Gradient {
+                    linear: -n,
+                    angular: -angular2,
+                },
+            ],
+            [&b1.inertia, &b2.inertia],
+            -gap,
+            tolerance,
+            true,
+        )?);
     }
-    let s1 = contacts.starts.get(&plane.body1).unwrap_or(&dummy);
-    let s2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
-    let (t, gap) = contact_gap(plane, s1, &b1, s2, &b2, tolerance)?;
-    if gap >= 0.0 || (t == 0.0 && gap >= -tolerance) {
-        return Ok(0.0);
+    Ok(blocks)
+}
+
+fn record_contact_response(
+    world: &mut World,
+    block: &ContactBlock,
+    multipliers: &[f64],
+    contacts: &mut ContinuousContacts,
+) -> Result<(), String> {
+    let plane = block.plane;
+    let lambda = multipliers[block.row];
+    if !lambda.is_finite() || lambda < 0.0 {
+        return Err("coupled continuous contact reaction is not finite and nonnegative".into());
     }
-    let a1 = WitnessMotion::new(s1, &b1, plane.point1)?.gradient(t, plane.normal);
-    let a2 = WitnessMotion::new(s2, &b2, plane.point2)?.gradient(t, plane.normal);
-    let n = plane.normal * t;
-    let w = n.dot((i1.effective_inv_mass() + i2.effective_inv_mass()) * n)
-        + a1.dot(i1.effective_inv_angular_inertia() * a1)
-        + a2.dot(i2.effective_inv_angular_inertia() * a2);
-    if !w.is_finite() || w <= 0.0 {
-        return Err(
-            "continuous collision has no finite movable constraint degree of freedom".into(),
-        );
+    if lambda == 0.0 {
+        return Ok(());
     }
-    let lambda = -gap / w;
-    let mut b1 = b1;
-    let mut b2 = b2;
-    b1.delta_position -= i1.effective_inv_mass() * n * lambda;
-    b2.delta_position += i2.effective_inv_mass() * n * lambda;
-    b1.delta_rotation.0 =
-        DQuat::from_scaled_axis(-(i1.effective_inv_angular_inertia() * a1) * lambda)
-            * b1.delta_rotation.0;
-    b2.delta_rotation.0 =
-        DQuat::from_scaled_axis((i2.effective_inv_angular_inertia() * a2) * lambda)
-            * b2.delta_rotation.0;
+    let dummy = SolverBody::DUMMY;
+    let b1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
+    let b2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
     let contact_point = 0.5
         * (plane.center1
             + b1.delta_position
@@ -2116,14 +2290,8 @@ fn project(
             + plane.center2
             + b2.delta_position
             + b2.delta_rotation * plane.point2);
-    if let Some(mut body) = world.get_mut::<SolverBody>(plane.body1) {
-        *body = b1;
-    }
-    if let Some(mut body) = world.get_mut::<SolverBody>(plane.body2) {
-        *body = b2;
-    }
     let dt = world.resource::<Time<Substeps>>().delta_secs_f64();
-    let impulse = lambda * t / dt;
+    let impulse = lambda * block.time / dt;
     if let Some((color, index, point)) = plane.native_point {
         let mut graph = world.resource_mut::<ConstraintGraph>();
         let constraint = graph
@@ -2197,7 +2365,7 @@ fn project(
             });
         }
     }
-    Ok(-gap)
+    Ok(())
 }
 
 /// Consume only the additional continuous normal reaction after position
@@ -2296,7 +2464,11 @@ fn violated_planes(
         let start2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
         let end1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
         let end2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
-        if contact_gap(plane, start1, end1, start2, end2, tolerance)?.1 < -tolerance {
+        if ContactMotion::new(plane, start1, end1, start2, end2)?
+            .contact_gap(tolerance)?
+            .1
+            < -tolerance
+        {
             violated.push(plane.clone());
         }
     }
@@ -2330,14 +2502,7 @@ fn solve_contacts(world: &mut World) {
         .expect("continuous collision owner initialized");
     let mut initial_contacts = std::mem::take(&mut contacts.initial_contacts);
     let outcome = (|| -> Result<(), String> {
-        if settings.max_iterations == 0
-            || !settings.position_tolerance_m.is_finite()
-            || settings.position_tolerance_m <= 0.0
-            || !settings.angular_tolerance_rad.is_finite()
-            || settings.angular_tolerance_rad <= 0.0
-        {
-            return Err("invalid continuous collision convergence settings".into());
-        }
+        settings.validate()?;
         // Starts and collider geometry remain immutable until this substep ends.
         let mut planes = sweep(
             world,
@@ -2358,8 +2523,24 @@ fn solve_contacts(world: &mut World) {
         let mut joint_rotation_error = 0.0f64;
         for _ in 0..settings.max_iterations {
             diagnostics.position_iterations += 1;
+            let projection_begin = bevy::platform::time::Instant::now();
+            let mut rows = Vec::new();
+            let joints = linearize_joint_constraints(world, &mut rows)?;
+            let blocks = linearize_contacts(
+                world,
+                &admitted,
+                &contacts,
+                settings.position_tolerance_m,
+                &mut rows,
+            )?;
+            let multipliers = constraint_response::solve(&rows, settings.max_iterations)?;
+            let corrected = apply_constraint_corrections(world, &rows, &multipliers)?;
+            apply_joint_constraints(world, &joints, &multipliers)?;
+            for block in &blocks {
+                record_contact_response(world, block, &multipliers, &mut contacts)?;
+            }
+            diagnostics.projection_time += projection_begin.elapsed();
             for plane in &admitted {
-                project(world, plane, &mut contacts, settings.position_tolerance_m)?;
                 // Admit each material plane once; witness coordinates are in the
                 // step's fixed reference frame, shared by every substep.
                 if plane.native_point.is_none()
@@ -2368,18 +2549,21 @@ fn solve_contacts(world: &mut World) {
                     contacts.impacts.push(plane.clone());
                 }
             }
-            let joint_begin = bevy::platform::time::Instant::now();
-            world.run_schedule(PhysicsJointPositionSchedule);
-            diagnostics.joint_time += joint_begin.elapsed();
-            if world.resource::<lunco_core::RuntimeFaults>().active() {
-                return Err("native hard-joint closure rejected the continuous solve".into());
-            }
             let residual = joint_position_residual(world)?;
             (joint_position_error, joint_rotation_error) = (residual.0, residual.1);
             // Material witnesses remain real points of the admitted shapes.
             // Close their exact trajectories and native joints before querying
             // the full geometry again; only a revalidated sweep may commit.
             planes = violated_planes(world, &contacts, &admitted, settings.position_tolerance_m)?;
+            if !corrected
+                && (!planes.is_empty()
+                    || joint_position_error > settings.position_tolerance_m
+                    || joint_rotation_error > settings.angular_tolerance_rad)
+            {
+                return Err(
+                    "coupled contact and joint rows have no correcting native motion".into(),
+                );
+            }
             if planes.is_empty()
                 && joint_position_error <= settings.position_tolerance_m
                 && joint_rotation_error <= settings.angular_tolerance_rad
@@ -2408,12 +2592,11 @@ fn solve_contacts(world: &mut World) {
             let s2 = contacts.starts.get(&plane.body2).unwrap_or(&dummy);
             let e1 = world.get::<SolverBody>(plane.body1).unwrap_or(&dummy);
             let e2 = world.get::<SolverBody>(plane.body2).unwrap_or(&dummy);
-            let (time, gap) = contact_gap(plane, s1, e1, s2, e2, settings.position_tolerance_m)?;
-            let first_motion = WitnessMotion::new(s1, e1, plane.point1)?;
-            let second_motion = WitnessMotion::new(s2, e2, plane.point2)?;
+            let motion = ContactMotion::new(plane, s1, e1, s2, e2)?;
+            let (time, gap) = motion.contact_gap(settings.position_tolerance_m)?;
             let separation = |time| {
-                let a = first_motion.position_and_velocity(time).0;
-                let b = second_motion.position_and_velocity(time).0;
+                let a = motion.first.position_and_velocity(time).0;
+                let b = motion.second.position_and_velocity(time).0;
                 ((plane.center2 - plane.center1) + (b - a)).dot(plane.normal) + plane.offset
             };
             remaining.push(format!(
@@ -2445,7 +2628,7 @@ fn solve_contacts(world: &mut World) {
     total.sweep_queries += diagnostics.sweep_queries;
     total.position_iterations += diagnostics.position_iterations;
     total.sweep_time += diagnostics.sweep_time;
-    total.joint_time += diagnostics.joint_time;
+    total.projection_time += diagnostics.projection_time;
     total.solve_time += begin.elapsed();
     if let Err(detail) = outcome {
         world
@@ -2465,6 +2648,78 @@ mod tests {
     use super::*;
     use crate::joint_solver::JointSolverOrder;
     use avian3d::math::SymmetricMatrix;
+
+    #[test]
+    fn continuous_prepared_leaf_bounds_enclose_native_trajectories() {
+        let vertices = vec![
+            DVec3::new(-1.0, -2.0, -3.0),
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(0.0, 5.0, 0.0),
+            DVec3::new(0.0, 0.0, 6.0),
+        ];
+        let colliders = [
+            Collider::sphere(0.3),
+            Collider::cylinder(0.3, 0.7),
+            Collider::cuboid(0.3, 0.7, 1.1),
+            Collider::convex_hull(vertices.clone()).unwrap(),
+            Collider::try_trimesh_with_config(
+                vertices,
+                vec![[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]],
+                TrimeshFlags::FIX_INTERNAL_EDGES,
+            )
+            .unwrap(),
+        ];
+        for collider in colliders {
+            for scale in [DVec3::ONE, DVec3::new(1.5, 0.75, 2.0)] {
+                let mut collider = collider.clone();
+                collider.set_scale(scale, 16);
+                for origin in [DVec3::ZERO, DVec3::new(1e9, -2e9, 3e9)] {
+                    let position = origin + DVec3::new(0.2, -0.3, 0.7);
+                    let center = origin + DVec3::new(-0.4, 0.8, 0.1);
+                    let rotation = DQuat::from_rotation_y(0.37) * DQuat::from_rotation_z(-0.23);
+                    let shape = Shape::new(
+                        Entity::PLACEHOLDER,
+                        0,
+                        Entity::PLACEHOLDER,
+                        collider.clone(),
+                        position,
+                        rotation,
+                        center,
+                    );
+                    for angle in [0.0, 0.01, 0.7, 2.9] {
+                        let start = SolverBody {
+                            delta_position: DVec3::new(0.03, -0.07, 0.11),
+                            delta_rotation: Rotation(DQuat::from_rotation_x(-0.13)),
+                            ..default()
+                        };
+                        let end = SolverBody {
+                            delta_position: DVec3::new(-0.1, 0.2, -0.3),
+                            delta_rotation: Rotation(DQuat::from_rotation_z(angle)),
+                            ..default()
+                        };
+                        let body = BodyMotion::new(&start, &end).unwrap();
+                        let motion = motion(&shape, &body);
+                        let bounds = swept_bounds(&shape, &motion);
+                        for sample in 0..=128 {
+                            let pose = motion.position_at_time(sample as f64 / 128.0);
+                            let occupied = collider.shape_scaled().compute_aabb(&pose);
+                            assert!(
+                                bounds.contains(&occupied),
+                                "swept bounds lost native geometry at sample {sample}"
+                            );
+                        }
+                        let remote = collider
+                            .shape_scaled()
+                            .compute_aabb(&Pose::from_translation(origin + DVec3::splat(1e6)));
+                        assert!(
+                            !bounds.contains(&remote),
+                            "swept bound must exclude unrelated distant geometry"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn continuous_contact_load_survives_hold_and_excludes_sensors() {
@@ -2700,24 +2955,24 @@ mod tests {
     fn rolling_initial_contact_admits_fresh_endpoint_witness() {
         let ground = Entity::from_bits(1);
         let wheel = Entity::from_bits(2);
-        let mut a = Shape {
-            entity: ground,
-            part_index: 0,
-            body: ground,
-            collider: Collider::cuboid(20.0, 1.0, 20.0),
-            position: -DVec3::Y * 0.5,
-            rotation: DQuat::IDENTITY,
-            center: -DVec3::Y * 0.5,
-        };
-        let b = Shape {
-            entity: wheel,
-            part_index: 0,
-            body: wheel,
-            collider: Collider::cylinder(0.34, 0.25),
-            position: DVec3::Y * 0.34,
-            rotation: DQuat::from_rotation_z(-std::f64::consts::FRAC_PI_2),
-            center: DVec3::Y * 0.34,
-        };
+        let mut a = Shape::new(
+            ground,
+            0,
+            ground,
+            Collider::cuboid(20.0, 1.0, 20.0),
+            -DVec3::Y * 0.5,
+            DQuat::IDENTITY,
+            -DVec3::Y * 0.5,
+        );
+        let b = Shape::new(
+            wheel,
+            0,
+            wheel,
+            Collider::cylinder(0.34, 0.25),
+            DVec3::Y * 0.34,
+            DQuat::from_rotation_z(-std::f64::consts::FRAC_PI_2),
+            DVec3::Y * 0.34,
+        );
         let start = SolverBody::default();
         let end = SolverBody {
             delta_position: -DVec3::Y * 0.01,
@@ -2750,12 +3005,15 @@ mod tests {
         attach_native_contact_response(&mut distinct, &[prepared]);
         assert!(distinct.native_point.is_none());
         assert!(
-            minimum_gap(&plane, &start, &start, &start, &end, 1e-6)
+            ContactMotion::new(&plane, &start, &start, &start, &end)
                 .unwrap()
+                .minimum_gap(1e-6)
+                .unwrap()
+                .swept
                 .1
                 < -0.009
         );
-        a.collider = Collider::try_trimesh_with_config(
+        let collider = Collider::try_trimesh_with_config(
             vec![
                 DVec3::new(-10.0, 0.5, -10.0),
                 DVec3::new(-10.0, 0.5, 10.0),
@@ -2766,6 +3024,15 @@ mod tests {
             TrimeshFlags::FIX_INTERNAL_EDGES,
         )
         .unwrap();
+        a = Shape::new(
+            a.entity,
+            a.part_index,
+            a.body,
+            collider,
+            a.position,
+            a.rotation,
+            a.center,
+        );
         let mesh_planes = endpoint_contact_planes(&a, &b, &m1, &m2, 1e-6).unwrap();
         assert!(
             !mesh_planes.is_empty(),
@@ -2774,7 +3041,9 @@ mod tests {
         for plane in mesh_planes {
             assert!(plane.normal.abs_diff_eq(DVec3::Y, 1e-10));
             assert!(
-                contact_gap(&plane, &start, &start, &start, &end, 1e-6)
+                ContactMotion::new(&plane, &start, &start, &start, &end)
+                    .unwrap()
+                    .contact_gap(1e-6)
                     .unwrap()
                     .1
                     < -0.009
@@ -2816,15 +3085,120 @@ mod tests {
             native_point: Some((0, 0, 0)),
             close_endpoint: true,
         };
-        assert_eq!(minimum_gap(&plane, &a, &a, &b, &b, 1e-6).unwrap().1, 0.0);
         assert_eq!(
-            contact_gap(&plane, &a, &a, &b, &b, 1e-6).unwrap(),
+            ContactMotion::new(&plane, &a, &a, &b, &b)
+                .unwrap()
+                .minimum_gap(1e-6)
+                .unwrap()
+                .swept
+                .1,
+            0.0
+        );
+        assert_eq!(
+            ContactMotion::new(&plane, &a, &a, &b, &b)
+                .unwrap()
+                .contact_gap(1e-6)
+                .unwrap(),
             (1.0, -0.01)
         );
         plane.native_point = None;
-        assert_eq!(contact_gap(&plane, &a, &a, &b, &b, 1e-6).unwrap().1, -0.01);
+        assert_eq!(
+            ContactMotion::new(&plane, &a, &a, &b, &b)
+                .unwrap()
+                .contact_gap(1e-6)
+                .unwrap()
+                .1,
+            -0.01
+        );
         plane.close_endpoint = false;
-        assert_eq!(contact_gap(&plane, &a, &a, &b, &b, 1e-6).unwrap().1, 0.0);
+        assert_eq!(
+            ContactMotion::new(&plane, &a, &a, &b, &b)
+                .unwrap()
+                .contact_gap(1e-6)
+                .unwrap()
+                .1,
+            0.0
+        );
+    }
+
+    #[test]
+    fn continuous_initial_contact_retains_cylinder_against_wide_cuboid() {
+        use avian3d::parry::shape::{Cuboid, Cylinder};
+        let cylinder = Cylinder::new(0.125, 0.34);
+        let ground = Cuboid::new(DVec3::new(50000.0, 0.5, 50000.0));
+        let pose1 = Pose::from_parts(
+            DVec3::new(-0.83448541154401, 0.34000067075763996, 198.6218338294672),
+            DQuat::from_xyzw(
+                -0.0024119570994890153,
+                -0.004608159380691827,
+                -0.7071045647686177,
+                0.7070898682723834,
+            ),
+        );
+        let pose2 = Pose::from_translation(DVec3::new(0.0, -0.5, 0.0));
+        let prediction = 70909.66573337132;
+        let native = initial_native_contact(
+            &NonlinearRigidMotion::constant_position(pose1),
+            &cylinder,
+            &NonlinearRigidMotion::constant_position(pose2),
+            &ground,
+            prediction,
+        );
+        let contact =
+            native.expect("valid near-touching cylinder/ground geometry must be retained");
+        validate_native_contact(&contact).unwrap();
+        assert!(contact.dist.abs() < 1e-8);
+        let reversed = initial_native_contact(
+            &NonlinearRigidMotion::constant_position(pose2),
+            &ground,
+            &NonlinearRigidMotion::constant_position(pose1),
+            &cylinder,
+            prediction,
+        )
+        .unwrap();
+        assert!((reversed.dist - contact.dist).abs() < 1e-8);
+        let penetrated = NonlinearRigidMotion::constant_position(Pose::from_parts(
+            pose1.translation - DVec3::Y * 0.01,
+            pose1.rotation,
+        ));
+        let contact = initial_native_contact(
+            &penetrated,
+            &cylinder,
+            &NonlinearRigidMotion::constant_position(pose2),
+            &ground,
+            prediction,
+        )
+        .unwrap();
+        assert!(
+            contact.dist < -0.009,
+            "a real penetration must retain its depth"
+        );
+    }
+
+    #[test]
+    fn continuous_initial_contact_retains_near_zero_gap_against_wide_cuboid() {
+        use avian3d::parry::shape::{Cuboid, Cylinder};
+        let cylinder = Cylinder::new(0.125, 0.34);
+        let ground = Cuboid::new(DVec3::new(50000.0, 0.5, 50000.0));
+        let pose1 = Pose::from_parts(
+            DVec3::new(-0.8356024490742583, 0.34000000000583275, 198.62150620194677),
+            DQuat::from_xyzw(
+                -0.002334450088754244,
+                -0.004571620421059774,
+                -0.7071029276460433,
+                0.7070920027435634,
+            ),
+        );
+        let pose2 = Pose::from_translation(DVec3::new(0.0, -0.5, 0.0));
+        let prediction = 70909.66541044295;
+        let a = NonlinearRigidMotion::constant_position(pose1);
+        let b = NonlinearRigidMotion::constant_position(pose2);
+        let reversed = initial_native_contact(&b, &ground, &a, &cylinder, prediction);
+        let contact = initial_native_contact(&a, &cylinder, &b, &ground, prediction)
+            .expect("valid near-zero-gap native geometry must be retained");
+        validate_native_contact(&contact).unwrap();
+        assert!(contact.dist.abs() < 1e-8);
+        assert!((reversed.unwrap().dist - contact.dist).abs() < 1e-8);
     }
 
     #[test]
@@ -2849,19 +3223,10 @@ mod tests {
         let moving = NonlinearRigidMotion::constant_position(body);
         let local_fixed = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
         let local_moving = NonlinearRigidMotion::constant_position(relative);
-        let axis = floor.rotation * DVec3::Y;
 
-        let world =
-            initial_native_contact(&fixed, &triangle, &moving, &cylinder, 2.0, axis).unwrap();
-        let local = initial_native_contact(
-            &local_fixed,
-            &triangle,
-            &local_moving,
-            &cylinder,
-            2.0,
-            DVec3::Y,
-        )
-        .unwrap();
+        let world = initial_native_contact(&fixed, &triangle, &moving, &cylinder, 2.0).unwrap();
+        let local =
+            initial_native_contact(&local_fixed, &triangle, &local_moving, &cylinder, 2.0).unwrap();
         assert_eq!(
             world.dist, local.dist,
             "world origin changed native initial clearance"
@@ -2892,14 +3257,22 @@ mod tests {
             delta_position: -DVec3::Y * 0.0000152587890625,
             ..default()
         };
-        let (time, gap) = minimum_gap(&plane, &start, &start, &start, &end, 1e-6).unwrap();
+        let (time, gap) = ContactMotion::new(&plane, &start, &start, &start, &end)
+            .unwrap()
+            .minimum_gap(1e-6)
+            .unwrap()
+            .swept;
         assert_eq!(time, 1.0);
         assert!(gap < -1e-6, "material crossing rounded away: {gap:e}");
         let mut local = plane.clone();
         local.center2 -= local.center1;
         local.center1 = DVec3::ZERO;
         assert_eq!(
-            minimum_gap(&local, &start, &start, &start, &end, 1e-6).unwrap(),
+            ContactMotion::new(&local, &start, &start, &start, &end)
+                .unwrap()
+                .minimum_gap(1e-6)
+                .unwrap()
+                .swept,
             (time, gap)
         );
     }
@@ -2916,14 +3289,16 @@ mod tests {
                 contact.dist.to_bits(),
             )
         };
-        let shape = |collider| Shape {
-            entity: Entity::PLACEHOLDER,
-            part_index: 0,
-            body: Entity::PLACEHOLDER,
-            collider,
-            position: DVec3::ZERO,
-            rotation: DQuat::IDENTITY,
-            center: DVec3::ZERO,
+        let shape = |collider| {
+            Shape::new(
+                Entity::PLACEHOLDER,
+                0,
+                Entity::PLACEHOLDER,
+                collider,
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                DVec3::ZERO,
+            )
         };
         let mut shapes = vec![shape(Collider::from(
             avian3d::parry::shape::SharedShape::triangle(
@@ -3182,9 +3557,8 @@ mod tests {
             axis,
             lower_depth: 0.05,
         }));
-        part.contact = Some(
-            initial_native_contact(&fixed, &triangle, &overlap, &cylinder, 10.0, DVec3::Y).unwrap(),
-        );
+        part.contact =
+            Some(initial_native_contact(&fixed, &triangle, &overlap, &cylinder, 10.0).unwrap());
         part.candidate_axis = Some(axis);
         cache.parts.insert(7, part);
         cache.advance_substep();
@@ -3222,8 +3596,7 @@ mod tests {
         assert_eq!(triangle.local_support_point(normal), point);
         assert_eq!(pose * cuboid.local_support_point(-normal), point);
         let touching = NonlinearRigidMotion::constant_position(pose);
-        let contact =
-            initial_native_contact(&fixed, &triangle, &touching, &cuboid, 10.0, normal).unwrap();
+        let contact = initial_native_contact(&fixed, &triangle, &touching, &cuboid, 10.0).unwrap();
         assert_eq!(
             contact.point1, point,
             "native touching must retain the triangle's material point"
@@ -3263,15 +3636,15 @@ mod tests {
         app.world_mut()
             .resource_mut::<ContinuousContacts>()
             .shapes
-            .push(Shape {
-                entity: Entity::from_bits(1),
-                part_index: 0,
-                body: Entity::from_bits(2),
+            .push(Shape::new(
+                Entity::from_bits(1),
+                0,
+                Entity::from_bits(2),
                 collider,
-                position: DVec3::ZERO,
-                rotation: DQuat::IDENTITY,
-                center: DVec3::ZERO,
-            });
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                DVec3::ZERO,
+            ));
         app.world_mut()
             .resource_mut::<ContinuousCollisionDiagnostics>()
             .sweep_queries = 7;
@@ -3320,20 +3693,9 @@ mod tests {
                 -0.6855358526530525,
             ),
         ));
-        let axis = DVec3::new(
-            -0.09186413013952333,
-            0.3989396412921885,
-            0.09186413013944517,
-        );
-        let contact = initial_native_contact(
-            &fixed,
-            &triangle,
-            &moving,
-            &cylinder,
-            496.8394434529555,
-            axis,
-        )
-        .unwrap();
+        let contact =
+            initial_native_contact(&fixed, &triangle, &moving, &cylinder, 496.8394434529555)
+                .unwrap();
         validate_native_contact(&contact).unwrap();
         assert!(
             contact.dist > 0.0001 && contact.dist < 0.01,
@@ -3375,15 +3737,8 @@ mod tests {
         let fixed = NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::new(
             0.0, -0.5, 0.0,
         )));
-        let contact = initial_native_contact(
-            &wheel,
-            &cylinder,
-            &fixed,
-            &ground,
-            405.0532286425992,
-            DVec3::new(9.896414017119408, -0.9000003863307968, -50.09619959068687),
-        )
-        .unwrap();
+        let contact =
+            initial_native_contact(&wheel, &cylinder, &fixed, &ground, 405.0532286425992).unwrap();
         validate_native_contact(&contact).unwrap();
         assert!(
             contact.dist.abs() < 0.001,
@@ -3401,7 +3756,7 @@ mod tests {
             NonlinearRigidMotion::constant_position(Pose::from_translation(DVec3::X * 100.0));
         // Deliberately supply an incomplete internal prediction. The consumer
         // requires initial geometry, so a missing result must remain an error.
-        let result = initial_native_contact(&fixed, &triangle, &distant, &cylinder, 0.1, DVec3::Y);
+        let result = initial_native_contact(&fixed, &triangle, &distant, &cylinder, 0.1);
         assert!(
             result.is_err(),
             "missing initial geometry cannot classify clear space: {result:?}"
@@ -3686,7 +4041,6 @@ mod tests {
                         &NonlinearRigidMotion::constant_position(p),
                         b,
                         10.0,
-                        DVec3::Y,
                     )
                     .unwrap();
                     validate_native_contact(&initial).unwrap();
@@ -3753,7 +4107,7 @@ mod tests {
         let reference = avian3d::parry::query::contact(&m1.start, &ball, &m2.start, &cylinder, 1.0)
             .unwrap()
             .unwrap();
-        let contact = initial_native_contact(&m1, &ball, &m2, &cylinder, 1.0, DVec3::Y).unwrap();
+        let contact = initial_native_contact(&m1, &ball, &m2, &cylinder, 1.0).unwrap();
         assert!((contact.point1 - reference.point1).length() < 1e-12);
         assert!((contact.point2 - reference.point2).length() < 1e-12);
         assert!((contact.dist - reference.dist).abs() < 1e-12);
@@ -3789,15 +4143,15 @@ mod tests {
         .unwrap();
         let floor = NonlinearRigidMotion::constant_position(Pose::IDENTITY);
         let floor_bounds = mesh.compute_local_aabb();
-        let shape = Shape {
-            entity: Entity::PLACEHOLDER,
-            part_index: 0,
-            body: Entity::PLACEHOLDER,
-            collider: Collider::sphere(0.1),
-            position: DVec3::ZERO,
-            rotation: DQuat::IDENTITY,
-            center: DVec3::ZERO,
-        };
+        let shape = Shape::new(
+            Entity::PLACEHOLDER,
+            0,
+            Entity::PLACEHOLDER,
+            Collider::sphere(0.1),
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        );
         for side in [-1.0, 1.0] {
             let motion = NonlinearRigidMotion::new(
                 Pose::from_translation(DVec3::new(0.2, 0.5 * side, 0.1)),
@@ -4071,15 +4425,15 @@ mod tests {
             rotation * (DVec3::X * 4.0),
             DVec3::ZERO,
         );
-        let shape = Shape {
-            entity: owner,
-            part_index: 0,
-            body: owner,
-            collider: Collider::sphere(0.1),
-            position: DVec3::ZERO,
-            rotation: DQuat::IDENTITY,
-            center: DVec3::ZERO,
-        };
+        let shape = Shape::new(
+            owner,
+            0,
+            owner,
+            Collider::sphere(0.1),
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        );
         let bounds = swept_bounds(&shape, &moving);
         let target_bounds = avian3d::parry::shape::Shape::compute_aabb(&composite, &target.start);
         let mut queries = 0;
@@ -4136,10 +4490,15 @@ mod tests {
         assert!((hit.normal1 - reverse.normal2).length() < 1e-12);
         let spinning =
             NonlinearRigidMotion::new(target.start, DVec3::ZERO, DVec3::ZERO, DVec3::Y * 0.02);
-        let root_shape = Shape {
-            collider: Collider::from(SharedShape::new(composite.clone())),
-            ..shape
-        };
+        let root_shape = Shape::new(
+            shape.entity,
+            shape.part_index,
+            shape.body,
+            Collider::from(SharedShape::new(composite.clone())),
+            shape.position,
+            shape.rotation,
+            shape.center,
+        );
         let spinning_bounds = swept_bounds(&root_shape, &spinning);
         let mut queries = 0;
         let selected = shape_hits(
@@ -4267,15 +4626,15 @@ mod tests {
         let mut contacts = ContinuousContacts::default();
         let mut trajectories = Vec::new();
         for index in 0..8 {
-            let shape = Shape {
-                entity: Entity::PLACEHOLDER,
-                part_index: index,
-                body: Entity::PLACEHOLDER,
-                collider: Collider::sphere(0.1),
-                position: DVec3::X * index as f64,
-                rotation: DQuat::IDENTITY,
-                center: DVec3::X * index as f64,
-            };
+            let shape = Shape::new(
+                Entity::PLACEHOLDER,
+                index,
+                Entity::PLACEHOLDER,
+                Collider::sphere(0.1),
+                DVec3::X * index as f64,
+                DQuat::IDENTITY,
+                DVec3::X * index as f64,
+            );
             let start = SolverBody::default();
             let mut end = SolverBody::default();
             if index == 0 {
@@ -4286,7 +4645,15 @@ mod tests {
             }
             let mut shape = shape;
             if index == 4 {
-                shape.position += DVec3::X * 2.0;
+                shape = Shape::new(
+                    shape.entity,
+                    shape.part_index,
+                    shape.body,
+                    shape.collider,
+                    shape.position + DVec3::X * 2.0,
+                    shape.rotation,
+                    shape.center,
+                );
                 end.delta_rotation = Rotation(DQuat::from_rotation_z(std::f64::consts::PI));
             }
             let motion = motion(&shape, &BodyMotion::new(&start, &end).unwrap());
@@ -4436,14 +4803,8 @@ mod tests {
             ))
             .id();
         let wall = world.spawn_empty().id();
-        let shape = |entity, center, collider| Shape {
-            entity,
-            part_index: 0,
-            body: entity,
-            collider,
-            center,
-            position: center,
-            rotation: DQuat::IDENTITY,
+        let shape = |entity, center, collider| {
+            Shape::new(entity, 0, entity, collider, center, DQuat::IDENTITY, center)
         };
         let sa = shape(a, DVec3::X * 2.0, Collider::sphere(0.1));
         let sb = shape(b, DVec3::ZERO, Collider::sphere(0.1));
@@ -4496,11 +4857,15 @@ mod tests {
             native_point: None,
             close_endpoint: false,
         };
-        let (t, g) = minimum_gap(&p, &s, &e, &s, &s, 1e-6).unwrap();
+        let (t, g) = ContactMotion::new(&p, &s, &e, &s, &s)
+            .unwrap()
+            .minimum_gap(1e-6)
+            .unwrap()
+            .swept;
         assert!((t - 0.5).abs() < 1e-3 && (g + 0.5).abs() < 1e-6, "{t} {g}");
         let mut invalid = p.clone();
         invalid.normal = DVec3::splat(f64::NAN);
-        assert!(minimum_gap(&invalid, &s, &e, &s, &s, 1e-6).is_err());
+        assert!(ContactMotion::new(&invalid, &s, &e, &s, &s).is_err());
         // Verify the exact derivative of the interpolated rotation with respect
         // to a left perturbation of the solved endpoint, including a nonzero start.
         let s = SolverBody {
@@ -4531,9 +4896,15 @@ mod tests {
             );
         }
         // The sweep rotation pivots about the COM, even for an offset collider.
-        let mut sa = sa;
-        sa.position = sa.center + DVec3::X;
-        sa.rotation = DQuat::from_rotation_y(0.3);
+        let sa = Shape::new(
+            sa.entity,
+            sa.part_index,
+            sa.body,
+            sa.collider,
+            sa.center + DVec3::X,
+            DQuat::from_rotation_y(0.3),
+            sa.center,
+        );
         let motion = motion(&sa, &BodyMotion::new(&s, &e).unwrap());
         let expected =
             sa.center + e.delta_position + e.delta_rotation.0 * (sa.position - sa.center);

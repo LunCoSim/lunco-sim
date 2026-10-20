@@ -28,6 +28,14 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
   start `tracy-capture` before the production binary and inspect the settled
   window, not only startup.
+  On Linux, the adjacent Tracy client supports `TRACY_SAMPLING_HZ`; record the
+  requested rate and verify the saved capture's sampling period. Its default
+  10 kHz CPU sampling can add substantial overhead. A lower sampling rate is
+  useful for a separate zone-attribution run; it is still not FPS acceptance.
+  Select CCD debug zones with `RUST_LOG` when distinguishing initial geometry
+  from nonlinear cast samples. Keep `lunco_physics::order_audit` disabled and
+  suppress the hot `lunco_physics::ccd::minimum` and `::support` targets unless
+  those individual evaluations are the measurement subject.
   Check the profiler listener and connection against the owned PID with
   `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
@@ -103,6 +111,15 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   an earlier tail in a later run does not prove a fix. Record visible popup/UI
   state alongside camera and graphics settings.
 
+For a numerical constraint diagnosis, the opt-in trace target
+`lunco_physics::constraint_response::systems=trace` records admitted f64 row
+errors, tolerances, gradients and native body responses. Capture a bounded owned
+session with exact source/artifact hashes; keep this verbose target disabled for
+performance acceptance. Compare the complete unilateral solve and geometric
+owner checks, not just one matrix factorization. Matrix assembly can change
+floating-point accumulation order, so preserve the native body-reduction
+operator when evaluating the retained Krylov path.
+
 ## Architecture checks
 
 When comparing native CPU/GPU instance preparation, retain the same PBR,
@@ -129,6 +146,12 @@ with a CCD owner once in stable collider order, without a candidate tree.
 Step-local body facts and dense collider/leaf slots avoid repeated owner lookups
 and identity hashing; lazy admission retains first-encounter shape order.
 Do not turn these per-step facts into a revision-only geometry/eligibility cache.
+The admitted leaf also owns its native local bounding sphere and local COM
+offset for that step. Keep these immutable geometric facts separate from
+fresh corrected trajectories and swept bounds. The low-level
+`continuous_prepared_leaf_bounds_enclose_native_trajectories` check
+requires native trajectory enclosure across geometry, scale and large-world inputs;
+retain production physics and separate FPS qualification as well.
 Keep the sparse static-population bound, native body/layer/hook filtering and
 pair order when optimizing this path; current-pose AABBs cannot replace the
 whole solved-trajectory bounds used during each substep.
@@ -345,7 +368,23 @@ service, cancellation and weak queue lifetime remain independent of frame rate.
 Verify refill without another host update and retirement with captured permits,
 then compare settled terrain readiness and replay the authoritative state.
 For physical solar visibility, attribute `publish_sun_visibility` separately
-from native physics. Distinguish terrain enclosure cache misses from actual
+from native physics. Canonical ray-enclosure cuts reuse spatial certificates
+only while the complete current segment is covered by them. When a ray crosses
+both midplanes, the same slab clipper must produce a complete rectangle cover;
+prefer a common containing half when one exists. Bound the total cut count,
+retain scratch storage, and never quantize or offset the fresh ray. Preserve exact
+rectangle keys, complete surface invalidation, FIFO capacity and the configured
+`max_ray_cache_depth`; cache residency must not change the attempted cut order.
+These exact-key caches use Bevy's maintained hash map. Keep lookup storage
+independent of decision order: eviction uses the FIFO queue, and neither the
+certificate map nor the ray-local sample map supplies traversal order.
+Enable `lunco_terrain_surface::occlusion=debug` for the bounded diagnostic spans
+`terrain_occlusion_bounds_miss`, `terrain_occlusion_exact_footprint` and
+`terrain_occlusion_point_sample`. They separate reusable-certificate preparation,
+fresh exact-footprint bounds and actual uncached point evaluation. Compare a
+settled native-export window; instrumented times are not FPS acceptance.
+The moving-footprint regression verifies nearby-ray reuse and a real blocker
+outside the earlier clear certificates. Distinguish terrain enclosure cache misses from actual
 height evaluations: a warm bounds cache can still repeat procedural samples
 at adjacent-cell and refinement endpoints. Ray-local sample reuse must use
 exact f64 coordinate bits and preserve traversal, interval budgets, unavailable
@@ -499,7 +538,30 @@ session requires binding cleanup. Verify retained history through
 the public accepted-step reader through production. Measure response latency
 separately from solver integration and fixed-step output publication.
 For loading, separate prepared-FMI lookup/lowering, live construction and ordered
-publication. `modelica_live_plan_admission` runs on the command owner;
+publication.
+Read `GetReadiness` alongside compact `CosimStatus` during loading. A terminal
+participant error, including a rejected generated network with no solver,
+must expose its named `program_failed` readiness item. Preserve the full error
+detail and classify that run as failed admission; do not count it as a slow
+successful load or a physics benchmark. Removing the program closes its exact
+ticket even when its physical host survives. The production
+`program_attach_command` gate covers rejection and removal recovery.
+Read `CosimStatus.modelica_construction_profile` for queue wait, session,
+metadata and first-observation nanoseconds. Compact status retains the same
+facts; a non-compiled participant reports no construction profile. Model-attributed
+structured logs and Recent status also retain completed initialization timings.
+`CosimStatus.last_coupled_initialization` retains the successful one-shot actor's
+worker receipt after retirement. Compare its solver identity and
+construction timings with ordinary participants' construction profiles.
+Run `test_modelica_initialization_receipt.py` for retained construction facts and
+scene replacement; both full and fleet-only status must clear the old receipt.
+The `modelica_source_target` production gate checks the profile through rejection,
+replacement and recovery. Record window focus and the effective host pacing
+policy: idle unfocused windows can use a one-second low-power wait. Use the
+explicit `--no-throttle` production run for throughput attribution and report
+ordinary background loading separately. `[pacing] host frame policy changed`
+logs primary-window focus and both effective update modes on transitions.
+`modelica_live_plan_admission` runs on the command owner;
 `modelica_live_construction_job` records queue wait and measures the native session,
 metadata and initial-observation children. `modelica_live_construction_commit`
 measures publication. Preparation and live sessions use separate captured bounded
@@ -514,6 +576,13 @@ communication points, backend numerical profiles, metadata and generation
 retirement. The native
 compiler already shares its DAE and source map; additional metadata caches do
 not address dominant native construction cost.
+For source parsing, compare the logged queue `wait` against parse/install time.
+The engine-sync driver submits documents linked to non-editor scene participants
+at `SimulationRequired`, the focused editor document at `Interactive`, and
+other documents at `Background`, in stable priority/document/generation order.
+Verify the exact registry link and participant document before attributing a
+wait to scheduling. A priority repair does not establish a construction or
+end-to-end loading gain; running work is not preempted.
 For mixed loading and live execution, inspect `modelica_live_step_job` queue
 wait and execution separately. Match its construction identity and thread to
 preparation/construction spans before attributing a response-latency rise to
@@ -936,8 +1005,11 @@ Uncertain bounds and boundary cases keep the map for compatible layers. Restore
 the extracted main-world shadow intent before every frame's relevance check;
 native light extraction is incremental, so focusing a parked preview must
 restore its shadows without requiring a light edit. This saves only maps
-provably irrelevant to all outputs; Bevy's main-world per-light caster
-visibility pass is still a separate cost to measure.
+provably irrelevant to all outputs. Bevy's main-world point/spot caster pass
+is admitted only while either native light component exists. Verify that its
+zones disappear in a world with no local lights and that dynamic point/spot
+addition still wakes the original native system. Shadow-LOD extraction remains
+active for its native consumers, including directional shadow views.
 
 Before adding shadow-content reuse, measure per-map native caster poses and
 light projections across consecutive frames; stable counts are insufficient.
@@ -1199,7 +1271,52 @@ Do not add a second cache, a timer, a compatibility path, or a quality fallback.
 If the hot path is not established, stop after source inspection and capture a
 bounded profile rather than guessing.
 
+Hard joint rows distinguish positional geometry from angular error. Anchor
+rotations and separation belong only to positional rows; angular rows must not
+repeat that unused work. Residual reads retain typed full/axial/perpendicular
+subspaces. Current scalar gradients and native responses enter the coupled
+constraint solve with contact inequalities. Preserve row order, locked channels,
+native dominance, signed joint reactions, nonnegative contact reactions and
+convergence tolerances. Generalized body impulses must be summed before native
+rotation integration; large internal reactions can cancel. Rebuild geometry
+after each nonlinear correction and require a complete native sweep before
+writeback. `continuous_articulated_mass` exercises a heavy attachment, contact
+and an unconnected witness. `continuous_contacts` covers joint closure, nonlinear
+arcs and invalid initial overlap; retain joint-kind, detach and held-load gates.
+Profile `coupled_constraint_response`, `coupled_island_response`,
+`coupled_active_set` and `coupled_response_krylov` with
+`RUST_LOG=info,lunco_physics::constraint_response=debug`. Separate outer
+geometry corrections, active-set pivots and inner Krylov work: nested span
+totals overlap. Resolve sampled native addresses against the exact captured
+ELF and its recorded symbol relocation before attributing sparse-product cost.
+The response workspace retains typed linear/angular body gradients and admitted
+addition order in both products. For inner convergence attribution, explicitly
+enable `lunco_physics::constraint_response::iterations=trace`: each completed
+native solve records its row count, iteration count and residuals in a log event.
+Keep it disabled for product timing; these values do not create span identities.
+Maintained faer LSMR
+uses explicit serial parallelism and sparse native response/transpose products.
+Compare its iterations and cost with row assembly and native query time;
+geometric revalidation still owns admission after each least-squares correction.
+`PhysicsPerformance.continuous_projection_time_ms`
+reports the coupled correction phase separately from swept geometry; it includes
+joint/contact row preparation, numerical response and reaction application.
+The joint-only admission pass precedes that timer; inspect its schedule span
+when attributing total joint cost.
+
 ## Evidence
+
+For frame distributions, query `EnginePerformance` after a quiet measurement
+window. It reads the core health owner's chronological raw frame history, including
+while simulation is paused; `frame_sample_count` identifies the last observation
+and `history_capacity` bounds retained rows. Keep adjacent collection windows within
+that capacity when collecting every frame, and deduplicate by process identity and
+sample number with wrapping arithmetic. `available: false` means frame diagnostics
+are not installed or have not published; do not fabricate zero FPS. The
+`engine.frame_time` telemetry channel is sampled on the simulation clock, so catch-up
+ticks may repeat one render diagnostic. It cannot qualify a render-frame percentile.
+The production `engine_performance.rhai` gate covers rolling paused-frame publication
+and unavailable headless diagnostics.
 
 For whole fixed-step timing, use the `PhysicsPerformance` query's
 `step_time_samples_ms` history in every host that installs the shared USD
@@ -1231,8 +1348,11 @@ settled owned run. It summarizes the latest 240 fixed ticks and 240 app-update
 fixed-loop bursts: p50/p95/p99/max service time, per-tick realtime service-budget
 exceedances, fixed steps per app update, and retained pending simulation duration
 (`fixed_loop.latest_pending_simulation_secs`, whole ticks plus fractional
-overstep). The owner drains at most 64 complete cycles per update while admitting
-the full running delta. Its separate `Time<Virtual>::max_delta` diagnostic
+overstep). The owner drains at most 64 complete cycles per update and yields
+between complete ticks after one fixed quantum of monotonic wall-clock service,
+while admitting the full running delta. An expensive first tick still completes;
+the remaining demand stays queued instead of becoming a synchronous 64-tick
+batch. This fairness boundary does not make an individual slow tick fast. Its separate `Time<Virtual>::max_delta` diagnostic
 detects unexpected clipping and should remain zero. Pair this with
 `QueryTelemetryHistory` for `engine.frame_time`, which covers the full app frame.
 Use `CosimStatus` step diagnostics to separate solver service from end-to-end
@@ -1248,7 +1368,7 @@ clock admission, distinct from the recoverable pending duration.
 When changing this boundary, exercise the rendered production
 `fixed_budget_recording.rhai` gate with a fresh writable `output_dir`; it runs
 25 FPS recording at 64x to require several budgeted updates per logical frame.
-Require three saved frames, a witnessed 64-cycle burst and pending duration,
+Require three saved frames, completed cycles yielding with pending duration,
 zero clipped demand, and no readback while whole cycles remain queued.
 
 For CPU outliers, report p50/p95/p99/max for the app-thread frame and the
@@ -1267,7 +1387,16 @@ For articulated continuous-contact cost, enable
 `ccd_sweep_geometry`, `ccd_support_gap_bound`, `ccd_initial_native_contact`,
 `ccd_native_shape_cast`, `ccd_cast_native_contact` and
 `ccd_cast_native_closest_points`. Shape-type fields identify
-the native pair kernels. Nested spans overlap; do not add them to their parent.
+the native pair kernels. Initial and nonlinear contact samples must use the
+same relative-frame native adapter. For asymmetric scales, choose the larger
+native bounding-sphere shape as the query frame before querying, then flip
+native contact ownership back. Retain near-zero gaps, reversed input order,
+penetration and large-world checks: one successful touching pose does not
+certify adjacent poses. For non-ball convex pairs, preserve Parry's
+parameterized GJK/EPA API and its fresh feature seed: subtract and normalize
+point-projection gaps in the projecting shape's local frame before rotation.
+Do not substitute remote centre directions, retry failed queries with guessed
+axes, or reuse a cached seed as authoritative geometry. Nested spans overlap; do not add them to their parent.
 `ccd_leaf_trajectories`, `ccd_swept_bvh` and `ccd_candidate_geometry` separate
 the sweep's preparation, native broad phase and candidate work. To profile
 these stages without millions of support/witness zones, use
@@ -1282,6 +1411,15 @@ closure when optimizing these queries. Compare separate unprofiled runs over
 the same physics tick window, retaining `PhysicsPerformance.step_time_samples_ms`
 and recording sample coverage. Those samples establish physics-step timing;
 they do not establish the complete fixed transaction or uncontended viewport FPS.
+
+`ContactMotion` prepares the two current material trajectories once for a contact
+evaluation. Arc minimization retains its absolute endpoint along with the swept
+minimum; endpoint closure and correction gradients consume the same preparation.
+Rebuild it after corrections. Preserve the distinct initial-overlap-relative
+swept gap and absolute endpoint separation, and verify nonlinear arcs, large
+origins, fresh rolling witnesses and the production `continuous_contacts` verdict.
+The `ccd_minimum_gap` span measures arc bounding after preparation; include the
+constructor when attributing total witness cost.
 
 Inspect effective compiler profiles as well as runtime work. The root's explicit
 development overrides optimize `lunco-physics`, the workspace glam math owner

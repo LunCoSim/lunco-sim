@@ -576,8 +576,10 @@ document, dispatch `AttachProgram`, then verify `ListPorts`, `CosimStatus`, and
   --scene scenes/tests/program_attach_command.usda --max-ticks 3000
 ```
 
-It proves both a declared Modelica participant and the visible error status for
-an attached source with no port contract. Do not treat a prim appearing in the
+Its ten assertions cover a declared Modelica participant, rejection of a source
+with no port contract, its named `program_failed` readiness item, and retirement
+of that item when the program is removed while its host survives.
+Do not treat a prim appearing in the
 scene tree or a fire-and-forget command acknowledgement as a running model.
 
 Scene-test `_EVIDENCE` telemetry crosses the process boundary as bounded typed
@@ -699,3 +701,19 @@ ended; a display-name scan does not identify the current scene's avatar.
 For gizmo acceptance, inject pointer events through the production input API. Both
 the picking backend and transform frontend consume Bevy `PointerLocation`; do not
 move the OS cursor or mutate the native `Window` to make a test gesture work.
+
+### Simulation lifecycle notices
+
+Use `python3 scripts/api/test_simulation_lifecycle.py --output <evidence-dir>`
+with `LUNCOSIM_BIN` set to the production binary. The retained application
+observer checks 11 transport and teardown assertions while paused and after
+scene replacement; `--windowed` also captures the terminal presentation. The
+four `SIMULATION_*` Info channels describe actual start, user pause/unpause and
+scene stop. Readiness/solver/manual holds are separate facts, and rejected or
+idempotent transport requests must not create additional lifecycle events.
+
+For terminal runtime failures, inspect `GetReadiness.fault` even when
+`RuntimeDiagnostics.errors` is zero: they are distinct owners. A windowed
+negative fixture must also show the first fault's subject and kind as a
+`Simulation stopped` Error in Recent Events. The presentation bridge publishes
+once per scene and resets with scene history.

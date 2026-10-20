@@ -61,6 +61,7 @@ use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, Usd
 pub struct UsdSimCosimPlugin;
 
 mod initialization;
+pub use initialization::{CoupledInitializationReceipt, last_coupled_initialization};
 pub mod readiness;
 pub mod sync;
 mod wiring;

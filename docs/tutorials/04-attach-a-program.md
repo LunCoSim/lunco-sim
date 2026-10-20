@@ -86,7 +86,10 @@ export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
 ```
 
 The observer waits for the authored program prim, its Modelica ports, and its
-`CosimStatus` participant. A parse-only `--validate` result is not sufficient.
+`CosimStatus` participant. It also checks that a source rejected before solver
+creation appears as `program_failed` in `GetReadiness`, and that removing the
+program clears that item while retaining the body. A parse-only `--validate`
+result is not sufficient.
 
 ## Ownership rules to keep
 

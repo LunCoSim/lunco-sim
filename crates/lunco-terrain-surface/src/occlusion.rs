@@ -4,6 +4,7 @@
 //! grazing geometry or exhausted work produces an error, never a clear ray.
 use crate::oracle::SurfaceOracle;
 use bevy::math::DVec3;
+use bevy::platform::collections::HashMap;
 use lunco_terrain_core::HeightSource;
 
 /// Maximum interval examinations admitted by a physical terrain query.
@@ -13,6 +14,9 @@ pub struct SurfaceOcclusionBudget {
     pub max_depth: u32,
     pub max_tick_intervals: usize,
     pub max_cached_cells: usize,
+    /// Canonical enclosure cuts attempted before the exact ray footprint.
+    /// This bounds cache preparation, independently of interval admission.
+    pub max_ray_cache_depth: u32,
 }
 impl Default for SurfaceOcclusionBudget {
     fn default() -> Self {
@@ -21,24 +25,28 @@ impl Default for SurfaceOcclusionBudget {
             max_depth: 60,
             max_tick_intervals: 32768,
             max_cached_cells: 65536,
+            max_ray_cache_depth: 8,
         }
     }
 }
 
-/// Reusable conservative cell enclosures, invalidated by the complete surface key.
+type CellBoundsKey = ([usize; 2], [u64; 4]);
+type RayCoverEntry = ([f64; 4], [f64; 2], usize);
+
+/// Reusable conservative spatial enclosures, invalidated by the complete surface key.
 /// FIFO admission bounds memory without making cache residency authoritative.
 #[derive(Default)]
 pub struct SurfaceOcclusionCache {
     surface: Option<u64>,
-    cells: std::collections::HashMap<([usize; 2], u64), [f64; 2]>,
-    order: std::collections::VecDeque<([usize; 2], u64)>,
+    cells: HashMap<CellBoundsKey, [f64; 2]>,
+    order: std::collections::VecDeque<CellBoundsKey>,
+    ray_cover: std::collections::VecDeque<RayCoverEntry>,
 }
 impl SurfaceOcclusionCache {
     fn bounds(
         &mut self,
         surface: &SurfaceOracle,
         cell: [usize; 2],
-        node: u64,
         rect: [f64; 4],
         capacity: usize,
     ) -> Result<[f64; 2], String> {
@@ -53,18 +61,163 @@ impl SurfaceOcclusionCache {
                 self.cells.remove(&oldest);
             }
         }
-        if let Some(bounds) = self.cells.get(&(cell, node)) {
+        let rectangle = (cell, rect.map(f64::to_bits));
+        if let Some(bounds) = self.cells.get(&rectangle) {
             return Ok(*bounds);
         }
-        let bounds = surface.height_bounds_in_cell(cell, rect)?;
+        let bounds = {
+            let _span = bevy::log::debug_span!("terrain_occlusion_bounds_miss").entered();
+            surface.height_bounds_in_cell(cell, rect)?
+        };
         while self.cells.len() >= capacity {
             if let Some(oldest) = self.order.pop_front() {
                 self.cells.remove(&oldest);
             }
         }
-        self.cells.insert((cell, node), bounds);
-        self.order.push_back((cell, node));
+        self.cells.insert(rectangle, bounds);
+        self.order.push_back(rectangle);
         Ok(bounds)
+    }
+
+    /// Every segment of a fresh ray must be contained by a conservative
+    /// rectangle certificate. Canonical cuts share complete covers between
+    /// nearby rays without quantizing their coordinates or heights.
+    fn refine_ray_enclosure(
+        &mut self,
+        surface: &SurfaceOracle,
+        cell: [usize; 2],
+        rect: [f64; 4],
+        ray: OcclusionRay,
+        interval: [f64; 2],
+        budget: SurfaceOcclusionBudget,
+    ) -> Result<Option<bool>, String> {
+        let mut pending = std::mem::take(&mut self.ray_cover);
+        pending.push_back((rect, interval, 0));
+        let result = (|| {
+            let mut cuts = 0;
+            while let Some((rect, interval, level)) = pending.pop_front() {
+                let points = ray.endpoints(interval);
+                if points.iter().any(|point| {
+                    point.x < rect[0] || point.z < rect[1] || point.x > rect[2] || point.z > rect[3]
+                }) {
+                    return Ok(None);
+                }
+                if cuts >= budget.max_ray_cache_depth.min(budget.max_depth) {
+                    return Ok(None);
+                }
+                let coordinates = points.map(|point| [point.x, point.z]);
+                let axes = [level % 2, (level + 1) % 2];
+                let mut children = [None, None];
+                // Prefer a single containing half before splitting a crossing ray.
+                for axis in axes {
+                    let mid = (rect[axis] + rect[axis + 2]) * 0.5;
+                    if mid <= rect[axis] || mid >= rect[axis + 2] {
+                        continue;
+                    }
+                    let mut child = rect;
+                    if coordinates[0][axis] <= mid && coordinates[1][axis] <= mid {
+                        child[axis + 2] = mid;
+                    } else if coordinates[0][axis] >= mid && coordinates[1][axis] >= mid {
+                        child[axis] = mid;
+                    } else {
+                        continue;
+                    }
+                    children[0] = Some((child, interval));
+                    break;
+                }
+                if children[0].is_none() {
+                    for axis in axes {
+                        let mid = (rect[axis] + rect[axis + 2]) * 0.5;
+                        if mid <= rect[axis] || mid >= rect[axis + 2] {
+                            continue;
+                        }
+                        let mut low = rect;
+                        low[axis + 2] = mid;
+                        let mut high = rect;
+                        high[axis] = mid;
+                        children = [low, high]
+                            .map(|child| ray.clip(interval, child).map(|span| (child, span)));
+                        if children.iter().all(Option::is_none) {
+                            return Err("terrain enclosure clipping lost its ray".into());
+                        }
+                        break;
+                    }
+                }
+                if children.iter().all(Option::is_none) {
+                    return Ok(None);
+                }
+                cuts += 1;
+                for (child, span) in children.into_iter().flatten() {
+                    let points = ray.endpoints(span);
+                    if points.iter().any(|point| {
+                        point.x < child[0]
+                            || point.z < child[1]
+                            || point.x > child[2]
+                            || point.z > child[3]
+                    }) {
+                        return Ok(None);
+                    }
+                    let bounds = self.bounds(surface, cell, child, budget.max_cached_cells)?;
+                    match classify_enclosure(bounds, points) {
+                        Some(true) => return Ok(Some(true)),
+                        Some(false) => {}
+                        None => pending.push_back((child, span, level + 1)),
+                    }
+                }
+            }
+            Ok(Some(false))
+        })();
+        pending.clear();
+        self.ray_cover = pending;
+        result
+    }
+}
+
+#[derive(Clone, Copy)]
+struct OcclusionRay {
+    origin: DVec3,
+    direction: DVec3,
+}
+
+impl OcclusionRay {
+    fn endpoints(self, interval: [f64; 2]) -> [DVec3; 2] {
+        interval.map(|t| self.origin + self.direction * t)
+    }
+
+    fn clip(self, [mut near, mut far]: [f64; 2], rect: [f64; 4]) -> Option<[f64; 2]> {
+        for axis in 0..2 {
+            let origin = if axis == 0 {
+                self.origin.x
+            } else {
+                self.origin.z
+            };
+            let direction = if axis == 0 {
+                self.direction.x
+            } else {
+                self.direction.z
+            };
+            if direction == 0.0 {
+                if origin < rect[axis] || origin > rect[axis + 2] {
+                    return None;
+                }
+            } else {
+                let t0 = (rect[axis] - origin) / direction;
+                let t1 = (rect[axis + 2] - origin) / direction;
+                near = near.max(t0.min(t1));
+                far = far.min(t0.max(t1));
+            }
+        }
+        (near < far).then_some([near, far])
+    }
+}
+
+fn classify_enclosure(bounds: [f64; 2], [a, b]: [DVec3; 2]) -> Option<bool> {
+    if a.y.min(b.y) > bounds[1] {
+        Some(false)
+    } else if a.y.max(b.y) < bounds[0] {
+        Some(true)
+    } else {
+        None
     }
 }
 
@@ -85,9 +238,14 @@ impl SurfaceOracle {
         {
             return Err("terrain occlusion requires a finite unit ray".into());
         }
-        if budget.max_intervals == 0 || budget.max_cached_cells == 0 || budget.max_depth > 62 {
+        if budget.max_intervals == 0
+            || budget.max_cached_cells == 0
+            || budget.max_depth > 62
+            || budget.max_ray_cache_depth > 62
+        {
             return Err("invalid terrain occlusion budget".into());
         }
+        let ray = OcclusionRay { origin, direction };
         let half = self.half_extent() as f64;
         let slab = |o: f64, d: f64| -> Option<(f64, f64)> {
             if d == 0.0 {
@@ -125,8 +283,8 @@ impl SurfaceOracle {
         // Adjacent cells and refinement intervals share endpoints. The oracle
         // is immutable during this ray; reuse only identical f64 coordinates.
         // Sample residency cannot change interval admission or classification.
-        let mut point_samples = std::collections::HashMap::new();
-        let mut classify = |cell, a: f64, b: f64, node, rect| -> Result<Option<bool>, String> {
+        let mut point_samples = HashMap::new();
+        let mut classify = |cell, a: f64, b: f64, rect| -> Result<Option<bool>, String> {
             if *remaining == 0 {
                 return Err("solar fixed-tick interval budget exceeded".into());
             }
@@ -135,35 +293,36 @@ impl SurfaceOracle {
             if examined > budget.max_intervals {
                 return Err("terrain occlusion interval budget exceeded".into());
             }
-            let pa = origin + direction * a;
-            let pb = origin + direction * b;
+            let [pa, pb] = ray.endpoints([a, b]);
             if !pa.is_finite() || !pb.is_finite() {
                 return Err("terrain ray interval exceeds finite coordinates".into());
             }
-            let bounds = cache.bounds(self, cell, node, rect, budget.max_cached_cells)?;
-            if pa.y.min(pb.y) > bounds[1] {
-                return Ok(Some(false));
+            let bounds = cache.bounds(self, cell, rect, budget.max_cached_cells)?;
+            if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
+                return Ok(Some(result));
             }
-            if pa.y.max(pb.y) < bounds[0] {
-                return Ok(Some(true));
+            if let Some(result) =
+                cache.refine_ray_enclosure(self, cell, rect, ray, [a, b], budget)?
+            {
+                return Ok(Some(result));
             }
             // The shared cell certificate includes terrain beside the ray.
             // Restrict the same oracle enclosure to the segment's footprint
             // before subdividing: transverse relief cannot block this segment.
-            let bounds = self.height_bounds_in_cell(
-                cell,
-                [
-                    pa.x.min(pb.x),
-                    pa.z.min(pb.z),
-                    pa.x.max(pb.x),
-                    pa.z.max(pb.z),
-                ],
-            )?;
-            if pa.y.min(pb.y) > bounds[1] {
-                return Ok(Some(false));
-            }
-            if pa.y.max(pb.y) < bounds[0] {
-                return Ok(Some(true));
+            let bounds = {
+                let _span = bevy::log::debug_span!("terrain_occlusion_exact_footprint").entered();
+                self.height_bounds_in_cell(
+                    cell,
+                    [
+                        pa.x.min(pb.x),
+                        pa.z.min(pb.z),
+                        pa.x.max(pb.x),
+                        pa.z.max(pb.z),
+                    ],
+                )?
+            };
+            if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
+                return Ok(Some(result));
             }
             // Actual samples only certify blockers. A clear ray still requires
             // conservative enclosures over every interval it traverses.
@@ -171,7 +330,11 @@ impl SurfaceOracle {
                 let point = origin + direction * t;
                 let height = *point_samples
                     .entry([point.x.to_bits(), point.z.to_bits()])
-                    .or_insert_with(|| self.height_at(point.x, point.z));
+                    .or_insert_with(|| {
+                        let _span =
+                            bevy::log::debug_span!("terrain_occlusion_point_sample").entered();
+                        self.height_at(point.x, point.z)
+                    });
                 if !height.is_finite() {
                     return Err("non-finite terrain sample".into());
                 }
@@ -229,10 +392,10 @@ impl SurfaceOracle {
                 boundary(cell[1] + 1),
             ];
             if end > near {
-                match classify(cell, near, end, 1_u64, rect)? {
+                match classify(cell, near, end, rect)? {
                     Some(true) => return Ok(true),
                     Some(false) => {}
-                    None => pending.push_back((cell, near, end, 0, 1_u64, rect)),
+                    None => pending.push_back((cell, near, end, 0, rect)),
                 }
             }
             near = near.max(end);
@@ -253,9 +416,9 @@ impl SurfaceOracle {
         // grazing contact must not consume the budget before a later definite
         // blocker can be found. Breadth-first refinement has the same property
         // across unresolved cells and its storage is bounded by the work quota.
-        while let Some((cell, a, b, depth, node, rect)) = pending.pop_front() {
+        while let Some((cell, a, b, depth, rect)) = pending.pop_front() {
             if depth != 0 {
-                match classify(cell, a, b, node, rect)? {
+                match classify(cell, a, b, rect)? {
                     Some(true) => return Ok(true),
                     Some(false) => continue,
                     None => {}
@@ -277,27 +440,12 @@ impl SurfaceOracle {
             low[axis + 2] = m;
             let mut high = rect;
             high[axis] = m;
-            let clip = |r: [f64; 4]| -> Option<(f64, f64)> {
-                let mut n = a;
-                let mut f = b;
-                for i in 0..2 {
-                    let o = if i == 0 { origin.x } else { origin.z };
-                    let d = if i == 0 { direction.x } else { direction.z };
-                    if d == 0.0 {
-                        if o < r[i] || o > r[i + 2] {
-                            return None;
-                        }
-                    } else {
-                        let t0 = (r[i] - o) / d;
-                        let t1 = (r[i + 2] - o) / d;
-                        n = n.max(t0.min(t1));
-                        f = f.min(t0.max(t1));
-                    }
-                }
-                (n < f).then_some((n, f))
-            };
-            let l = clip(low).map(|(n, f)| (cell, n, f, depth + 1, node * 2, low));
-            let h = clip(high).map(|(n, f)| (cell, n, f, depth + 1, node * 2 + 1, high));
+            let l = ray
+                .clip([a, b], low)
+                .map(|[n, f]| (cell, n, f, depth + 1, low));
+            let h = ray
+                .clip([a, b], high)
+                .map(|[n, f]| (cell, n, f, depth + 1, high));
             match (l, h) {
                 (Some(l), Some(h)) => {
                     pending.push_back(l);
@@ -419,6 +567,168 @@ mod tests {
         // Repeated endpoints must not evaluate the modifier again.
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 15);
         assert_eq!(budget.max_tick_intervals - remaining, 22);
+    }
+
+    #[test]
+    fn certified_occlusion_reuses_rectangular_covers_for_crossing_rays() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct CountedRidge(Arc<AtomicUsize>, Arc<AtomicUsize>);
+        impl HeightModifier for CountedRidge {
+            fn apply(&self, x: f64, z: f64, height: f64) -> f64 {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                height + (x - z).powi(2)
+            }
+            fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                let low = rect[0] - rect[3];
+                let high = rect[2] - rect[1];
+                Some([
+                    input[0]
+                        + if low <= 0.0 && high >= 0.0 {
+                            0.0
+                        } else {
+                            low.powi(2).min(high.powi(2))
+                        },
+                    input[1] + low.powi(2).max(high.powi(2)),
+                ])
+            }
+        }
+        let bounds = Arc::new(AtomicUsize::new(0));
+        let points = Arc::new(AtomicUsize::new(0));
+        let surface = SurfaceOracle::new(
+            Arc::new(HeightGrid::new_flat(17, 4.0)),
+            vec![HeightContribution {
+                modifier: Arc::new(CountedRidge(bounds.clone(), points.clone())),
+                content_key: 1,
+            }],
+        );
+        let budget = SurfaceOcclusionBudget::default();
+        let direction = DVec3::new(0.5, 0.5_f64.sqrt(), 0.5);
+        let mut cache = SurfaceOcclusionCache::default();
+        let mut remaining = budget.max_tick_intervals;
+        assert!(
+            !surface
+                .occludes_ray(
+                    DVec3::new(-4.0, 0.07, -4.0),
+                    direction,
+                    budget,
+                    &mut remaining,
+                    &mut cache
+                )
+                .unwrap()
+        );
+        let prepared = [
+            bounds.load(Ordering::Relaxed),
+            points.load(Ordering::Relaxed),
+        ];
+        for step in 1..=3 {
+            let offset = step as f64 / 1048576.0;
+            let mut remaining = budget.max_tick_intervals;
+            assert!(
+                !surface
+                    .occludes_ray(
+                        DVec3::new(-4.0 + offset, 0.07, -4.0 + offset),
+                        direction,
+                        budget,
+                        &mut remaining,
+                        &mut cache
+                    )
+                    .unwrap()
+            );
+        }
+        let reused = [
+            bounds.load(Ordering::Relaxed),
+            points.load(Ordering::Relaxed),
+        ];
+        eprintln!(
+            "crossing-ray enclosure evaluations: prepared={prepared:?}, after_moves={reused:?}"
+        );
+        assert_eq!(
+            reused, prepared,
+            "a ray crossing cell midplanes must reuse a complete conservative rectangle cover"
+        );
+        let mut remaining = budget.max_tick_intervals;
+        assert!(
+            surface
+                .occludes_ray(
+                    DVec3::new(-4.0, 0.07, -3.6),
+                    direction,
+                    budget,
+                    &mut remaining,
+                    &mut cache
+                )
+                .unwrap(),
+            "a ray outside the clear cover must still observe the real ridge"
+        );
+    }
+
+    #[test]
+    fn certified_occlusion_reuses_enclosures_covering_moving_ray_footprints() {
+        struct CountedSlope(Arc<std::sync::atomic::AtomicUsize>);
+        impl HeightModifier for CountedSlope {
+            fn apply(&self, _: f64, z: f64, _: f64) -> f64 {
+                100.0 * z
+            }
+            fn height_bounds(&self, rect: [f64; 4], _: [f64; 2]) -> Option<[f64; 2]> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some([100.0 * rect[1], 100.0 * rect[3]])
+            }
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let surface = SurfaceOracle::new(
+            Arc::new(HeightGrid::new_flat(17, 4.0)),
+            vec![HeightContribution {
+                modifier: Arc::new(CountedSlope(calls.clone())),
+                content_key: 1,
+            }],
+        );
+        let budget = SurfaceOcclusionBudget::default();
+        let mut cache = SurfaceOcclusionCache::default();
+        let mut remaining = budget.max_tick_intervals;
+        assert!(
+            !surface
+                .occludes_ray(
+                    DVec3::new(-3.5, 11.0, 0.1),
+                    DVec3::X,
+                    budget,
+                    &mut remaining,
+                    &mut cache
+                )
+                .unwrap()
+        );
+        let prepared = calls.load(std::sync::atomic::Ordering::Relaxed);
+        for offset in [0.000001, -0.000001, 0.000002] {
+            let mut remaining = budget.max_tick_intervals;
+            assert!(
+                !surface
+                    .occludes_ray(
+                        DVec3::new(-3.5, 11.0, 0.1 + offset),
+                        DVec3::X,
+                        budget,
+                        &mut remaining,
+                        &mut cache
+                    )
+                    .unwrap()
+            );
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            prepared,
+            "nearby rays must reuse a conservative enclosure covering their new footprints"
+        );
+        // A new ray outside those clear certificates still sees the real slope.
+        let mut remaining = budget.max_tick_intervals;
+        assert!(
+            surface
+                .occludes_ray(
+                    DVec3::new(-3.5, 11.0, 0.2),
+                    DVec3::X,
+                    budget,
+                    &mut remaining,
+                    &mut cache
+                )
+                .unwrap()
+        );
     }
 
     #[test]

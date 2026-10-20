@@ -20,6 +20,7 @@ pub struct LunCoTelemetryCorePlugin;
 impl Plugin for LunCoTelemetryCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(stamp_telemetry_event)
+            .add_observer(project_simulation_lifecycle)
             .add_plugins(LunCoLogPlugin)
             .add_observer(project_command_occurrence)
             .add_observer(project_runtime_error)
@@ -162,4 +163,20 @@ mod tests {
         assert_eq!(event.sim_secs, 17.0 / 60.0);
         assert_eq!(event.sim_tick, 17);
     }
+}
+
+fn project_simulation_lifecycle(
+    trigger: On<lunco_time::SimulationLifecycleChanged>,
+    mut commands: Commands,
+) {
+    let transition = trigger.event().transition;
+    commands.trigger(TelemetryEvent {
+        name: transition.telemetry_name().into(),
+        source: 0,
+        severity: telemetry::Severity::Info,
+        data: telemetry::TelemetryValue::String(format!("{transition:?}")),
+        timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
+    });
 }

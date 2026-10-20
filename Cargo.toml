@@ -265,6 +265,7 @@ description = "Initialize multi-crate workspace architecture for vessel control 
 license = "Apache-2.0"
 
 [workspace.dependencies]
+faer = { version = "0.24.4", default-features = false, features = ["std", "linalg"] }
 kurbo = "0.13.1"
 # Keep all astronomy consumers on one reviewed fork revision. Its workspace
 # pins the fixed `celestial-eop-data` build dependency.

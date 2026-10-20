@@ -1,5 +1,1054 @@
 # High-quality realtime performance handover
 
+## Validated integration checkpoint — 2026-10-20
+
+The retained physics, lifecycle, preparation diagnostics and Modelica changes
+are ready for local integration. The Roadster projection tail remains open.
+An ignored native Faer block-preconditioner experiment preserves the original
+matrix-free body reduction, LSMR tolerance and unilateral contact coordinates.
+Across 133 captured systems it reduces diagnostic time from 109.426 to 39.354 ms
+and pivots from 314 to 303. These are isolated numerical measurements, not
+production physics or FPS acceptance. No preconditioner implementation is
+installed in the runtime; full authored and vehicle validation is required
+before adopting it. The next investigation must also establish which retained
+material witnesses remain necessary across the complete swept trajectory.
+Evidence: `response-preconditioned-all.csv` and the ignored native diagnostic
+sources under `.cache/codex-evidence/loading-20261019/`.
+
+## Unilateral residual admission and real Roadster stall — 2026-10-20
+
+Initial unilateral activation in `constraint_response` uses the same per-row
+residual tolerance as later re-admission. A satisfied row remains in the full
+response check; another row's correction can activate it when that bound is
+crossed. Active constraints still target zero error. Native LSMR precision,
+iteration bounds, authored tolerances, substeps and vehicle equations are
+unchanged. The low-level regression fails before the fix with a `5e-7`
+reaction for a `1e-6` residual bound, then passes the inactive, disturbed,
+initially separated and already-violated cases. All four response mechanism
+tests pass. The owning runtime contract is in architecture 62.
+
+The opt-in `constraint_response::systems` trace records admitted f64 row facts
+without adding a retained per-frame matrix. A bounded owned Roadster session
+captures 133 systems through physics tick 15; the largest contains 134 rows,
+84 unilateral. Exact source hashes remain unchanged within the capture.
+A 70-row example has numerical rank 59 and nonzero-spectrum condition number
+about `7.72e9`. Isolated native QR composition agrees with an SVD reference,
+but the complete unilateral solve increases principal pivots from 349 to
+1,118 and diagnostic solve time from 150 to 254 ms across the capture.
+No QR replacement is retained. The matrix-free native body-reduction operator
+must be preserved when reproducing the Krylov baseline: forming a dense matrix
+changes floating-point accumulation, and a separate dense-operator workspace
+attempt did not complete. These are numerical diagnostics, not FPS acceptance.
+
+The retained admission change reduces pivots from 349 to 314 and aggregate
+captured-system solve time from 149.811 to 117.291 ms (about 22 percent).
+The production artifact
+`84fc0b67ca2e738a06830904529afd4c3ceaf0b504de15b62bb8897d85bfa97b`
+builds without warnings and passes 33 authored physics assertions plus the
+expected invalid-joint fault. Its real Roadster run reaches physics counter
+327, remains ready without faults, accepts forward/release input and reports
+6.911 m/s while held. The driving screenshot shows the car on the road.
+Owned ports 4757/4758 are released. Tracy source is unchanged.
+
+Performance remains outside the goal: the final 120 physics samples have
+median 44.589 ms and maximum 1,196.968 ms. At one sampled counter-266 tick,
+948.830 ms total contains 937.114 ms of continuous projection, 68 correction
+iterations, and only 1.473 ms of native sweep work. The previous service run
+uses a different `components/body.usda` source cohort; do not claim a matched
+speedup from those runtime medians. The new run overlaps the bounded headless
+production gates during startup and uses a Tracy-enabled artifact, so it is not
+clean FPS acceptance. Contact-witness accumulation across substeps and repeated
+closure are the next owners to trace; the physical necessity of each retained
+witness must be established before changing its lifetime. The sub-second load,
+sub-millisecond physics, 200 FPS and macOS acceptance requirements remain open.
+
+Evidence under `.cache/codex-evidence/loading-20261019/`:
+`native-response-contact-systems/`, `contact-admission-comparison.json`,
+`contact-admission-baseline-verdict.log`, `contact-admission-tests.log`,
+`contact-admission-production-gates.json`, `tesla-contact-admission/` and the
+ignored native factorization/admission diagnostic sources.
+
+
+## Solar Modelica interface and lunar admission — 2026-10-20
+
+The shared `SolarPanel` Modelica model and reusable USD interface include
+prescribed cell temperature, bounded temperature-sensitive conversion,
+nameplate adjustment, absorbed/reflected power and waste heat. A reusable
+`LimitedCoolingSink` supplies a capacity-limited acausal thermal boundary.
+These equations remain in Modelica. The matching source changes come from
+reviewed commit `2f556cd5a`; only the electrothermal changes are integrated.
+The USD components were saved and read back through native document operations.
+All 45 authored production temperature/cooling checks pass, including hot/cold
+ratings, high-bus power conservation, invalid temperature/cooling capacity and
+the disconnected heat-path counterexample. Canonical contracts are in
+architecture 54 and `skills/run-modelica/SKILL.md`.
+The final retained production artifact is
+`36135b8c46add7ed6702b6d58458e7ddef2f0f2667c1d27b106ffd0ce2f2ae85`.
+It passes those 45 checks plus the 46 coupled-initialization/receipt checks.
+The 43-skill catalogue and diff checks pass; owned ports 4757/4758/8096 are
+released. No macOS performance acceptance is established.
+
+The actual Griffin Twin reaches `ready:true`, no pending waits, no runtime
+errors, and certified six-participant coupled initialization in 33.216 s.
+Its sources remain unchanged during the owned run. The admitted screenshot
+shows the lander on terrain. This clears the missing solar-interface blocker;
+it does not meet the sub-second loading target. An earlier 0.847 s sample was
+rejected: its co-simulation topology was not ready and its screenshot showed
+no scene. `QueryUsdPrim` alone can read document-backed facts before runtime
+admission. Loading qualification must require the exact scene's settled
+transition and current co-simulation topology as well as readiness.
+
+A separate native Tracy capture of the same source cohort takes 26.156 s and
+retains a 9.924 s coupled-session construction interval. Native framing, CSV
+exports, artifact identity, source identity and 1 ms sampling are verified.
+Samples inside that interval include Cranelift verification/register allocation,
+symbolic-program hashing and allocation. Native construction does more than
+numerical initialization; compilation/lowering and observation have separate
+owner timings. The diagnostic is not clean FPS acceptance.
+
+Automatic execution remains the retained contract. An explicit interpreter
+experiment passes 46 production initialization/receipt checks, but on the real
+Twin its coupled construction still costs 9.848 s and initial observation costs
+2.683 s; total admission is 38.157 s. Preparation cache states differ between
+runs, and foreign tutorials/Tesla sessions overlap the interpreter run, so
+those totals are not a controlled speed comparison. The experiment
+fails to remove the measured construction cost and adds a large observation
+cost. Its policy API, callers and test assertion were removed together. Only
+ignored source/evidence archives retain that experiment. No dependency source
+or Tracy source changed.
+
+Evidence under `.cache/codex-evidence/loading-20261019/`:
+`solar-native-authoring/`, `solar-temperature-production/`,
+`griffin-solar-admitted/`, `griffin-initialization-profile.json`,
+`griffin-initialization-resolved-samples.json`,
+`griffin-interpreted-initialization/` and
+`initialization-interpreter-attempt-source.tar.zst`.
+
+## Vehicle model boundary and numerical alternatives — 2026-10-20
+
+The Roadster's propulsion, regeneration, aerodynamic and air-system equations
+are authored Modelica. Native measured shaft speeds feed those equations;
+native rigid bodies integrate vehicle motion. The authored mechanism has
+four 5 kg suspension carriers and two 6 kg steering knuckles, with their own
+inertias, and standard USD prismatic spring/damper drives. This audit establishes
+ownership; it does not prove that the mass ratios, drive parameters or topology
+cause the measured correction cost. Preserve the concurrently edited Tesla
+Modelica sources. Shared Rust contact/constraint math must not acquire
+vehicle-specific force or suspension laws.
+
+An ignored native diagnostic compares maintained SVD/pseudoinverse and LSMR
+using identical f64 response matrices and diagonal scaling. At 49 rows SVD
+costs 546 microseconds versus 176 for LSMR; at 97 rows it costs 2,527 versus
+882. These are diagnostic allocations/assembly-inclusive timings, not product
+physics acceptance. No SVD replacement is retained. The diagnostic function
+was archived outside production source. The remaining Roadster joint/contact
+cost is unresolved; the physics and FPS goals remain open.
+
+
+## Tesla local reproduction and finite-feature query seed — 2026-10-20
+
+The normal production artifact
+`a71abc5eaa6b5ca2be1781fdf87a3a4cff731cbb5bc088a1657fee6574e5fecd`
+opens clean Tesla Twin revision `c3d67d6` on owned port 4758, with exact source
+hashes unchanged. Admission takes 3.986 s. Its retained physics history reaches
+191.847 ms; sampled idle steps spend 31.9/109.4 ms in coupled projection, with
+19/32 outer corrections. The authored 8,192 iteration limit is a ceiling,
+not an observed exhausted outer loop. Modelica's 125 worker steps average
+1.749 ms and peak at 3.982 ms, with no worker backlog. At tick 125 a near-touching
+Cylinder/Cuboid initial query returns no geometry for its enclosing prediction.
+The runtime correctly holds further simulation; rendered frames continue.
+A foreign tutorials app overlaps this diagnostic, so it is not FPS acceptance.
+
+`tesla-admitted-diagnosis/analysis.json` classifies the failure. The diagnostic
+driver's nominal driving phase is invalid: its actorless SetPorts requests were
+rejected and the simulation was already faulted. Its raw report records Python
+exceptions only; `failure:null` is not a passing runtime verdict. No Tesla
+source is edited. A separate camera.follow policy-owner warning is retained,
+but it is not evidence for this measured physics bottleneck.
+
+The exact cylinder/100-km-ground numerical regression fails on the baseline.
+Parry's existing parameterized native GJK/EPA API produces geometry from a
+near-feature direction, while its centre-based simplex seed fails. The CCD
+adapter therefore uses one fresh relative-frame seed owner for initial and
+nonlinear samples. Both point-projection gaps are subtracted and normalized in
+their projecting shape's frame before rotation, avoiding cancellation from
+remote coordinates. Ball and non-support-map queries retain native analytic
+and type dispatch. No dependency source, contact math, tolerances or graphics
+are changed. The two initial-contact checks and eight related native geometry,
+negative, face-normal, cache-revalidation and scoped-query checks pass. A
+caller-supplied initial-query axis is removed from every caller; it cannot
+select a different simplex from the nonlinear sample. Production verification
+remains pending; the separate control capture below attributes correction cost.
+
+The separate Tracy control capture uses archived production artifact
+`ef6570ab874b5045a98dd79006d6e5bd2f93fd1d467fa2a79ff3cb955650db5c`,
+owned API 4758/Tracy 8096, and the unchanged Tesla source cohort. Native CSV
+export and complete file framing pass; the saved sampling period is 1 ms.
+It reproduces the same tick-125 native geometry fault. Before the fault,
+7.5–13 s contains 1,521 coupled corrections, 7,274 active-set solves and
+4.210 s inside native Krylov solves (nested totals must not be added).
+Across the complete capture, 14,193 Krylov solves consume 8.781 s of self time.
+Main-thread samples resolve predominantly to `ResponseOperator::product`:
+2,362 exclusive samples in the selected 7–13 s interval. Symbol resolution
+uses the exact archived ELF and the capture's native symbol relocation.
+Concurrent tutorials and foreign Tesla sessions are recorded; these numbers
+are diagnostic attribution, not FPS acceptance.
+
+The first production seeded-query run (`f083a91e...`) passes 33 authored
+physics assertions plus the invalid-joint fault boundary and five private
+response/status checks. Its actual Tesla run is still a failure: a nearby
+Cylinder/Cuboid pose faults at tick 119 (201.752 ms retained maximum physics
+step). The new Simulation Error is visible in `tesla-seeded-profile/fault.png`.
+This is not a repaired Tesla acceptance result. Opt-in convergence log events
+record 13,594 completed native inner solves, median 137 iterations and maximum
+824; their rows are generally 55–56. Instrumentation and the different failed
+trajectory prohibit a product-performance comparison.
+
+The new near-zero-gap numerical fixture reproduces that failure while the
+same native API returns geometry when evaluated in the wide shape's frame.
+The convex adapter now chooses the larger native bounding-sphere frame once,
+before the query, and flips the native contact back to the input shape order.
+It retains the same local finite-feature seed and executes one GJK/EPA query;
+there is no failed-query retry, tolerance change or dependency edit. The ten native geometry checks and explicit missing-geometry negative check
+pass. The final production run below verifies this conditioning during Tesla
+idle and admitted forward input.
+
+The response operator now accumulates typed linear/angular body gradients in
+its existing stack workspace. This removes scalar-coordinate indexing from
+the repeated sparse product while preserving row, endpoint and component
+addition order, f64 arithmetic, transpose semantics and native LSMR settings.
+Its three response/transpose numerical checks pass. The measured solver cost
+remains excessive; no product speedup is qualified from the different failed
+trajectories.
+
+The existing workbench fault handler opens Recent Events, but no status producer
+had inserted the terminal fault itself. The application presentation bridge now
+publishes its first scene-owned fault once as a concise Simulation Error with
+the subject and stable kind. It uses resource change detection and registered
+scene state; teardown retires both its marker and status history. Full diagnostic
+facts remain at `RuntimeFaults`, and transport mode is unchanged. The two bridge seams pass. The actual Tesla failure capture shows the Error
+with the correct subject and kind in the automatically opened Recent Events.
+
+## Complete-cycle service fairness — 2026-10-20
+
+The conditioned-contact runtime reaches physics step 345 and the timing
+profile records 409 completed fixed cycles with `ready:true`, `faulted:false`.
+The run is nevertheless failed acceptance: its screenshot never publishes
+within 10 s. The owner profile exposes the cause: one app update drains 64
+complete cycles in 6.331 s; a later one spends 6.238 s and retains 19.612 s
+of pending demand. Readiness remains clear. This is a synchronous catch-up
+batch, separate from the earlier terminal contact fault. The artifact is
+Tracy-enabled, other sessions overlap, and these are not clean FPS results.
+
+`lunco-time` now yields between complete cycles when the loop has spent one
+fixed quantum of monotonic wall-clock service, while retaining its 64-cycle
+hard ceiling. At least one admitted tick completes. Pending `overstep`, manual
+step demand, causal receipt admission, fixed delta and input order remain at
+their existing owners. Only the next host yield boundary depends on measured
+service; no tick is shortened, skipped or reordered. The native and recording
+hosts consume this same runner. This generic clock fairness invariant needs
+no authored routing/selection hook or second clock. It does not solve the
+cost of an individual slow physics tick.
+
+The tiny-quantum low-level resource seam exercises a real dispatch yield,
+pause, exact pending-time conservation, resumed completion and empty demand
+without sleeps or a fake clock. The recording gate now observes completed
+cycles yielding with pending demand rather than requiring a hardware-dependent
+exact 64-cycle batch. The two clock resource-seam checks pass. The rendered production recording
+observer passes six assertions and saves three PNGs, with no partial-debt
+readback or clipped demand. Its first empty-stage attempt correctly remained
+armed with no meshes and no fixed ticks; that attempt is invalid recording
+acceptance. The real mesh fixture is `scenes/tests/point_instancer.usda`, whose
+captured green cube is visually inspected.
+
+Final production artifact
+`b41ddfebd0f26b41581a2d4e3d45be8ee89e053c5586e93c490a254122b4746f`
+passes 33 authored physics assertions plus expected invalid-joint rejection,
+11 lifecycle assertions, and the six recording assertions. Its Tesla run
+advances through 272 observed fixed cycles without a runtime fault, captures
+idle and moving views, and admits/retires a stable-producer forward intent.
+The input-surface throttle reads 1 while held and 0 after release; measured
+speed reaches 7.187 m/s. Exact Twin hashes remain unchanged within each run and owned ports
+are released. The final run is a different source cohort: concurrent work added
+`models/JetFlightPilot.mo` and changed `models/RoadsterVehicle.mo` after the
+conditioned-contact run. `tesla-source-cohorts.json` records both file hashes;
+the other four diagnoses match the initial clean `c3d67d6` cohort. Those external
+Twin changes are preserved. The 409-cycle no-fault observation uses the initial
+cohort; the final driving and fairness observation uses the updated cohort. Recent Events shows the first fault in the retained failure
+capture and simulation lifecycle notices in the validated transport gate.
+
+This remains diagnostic, not goal acceptance: the artifact enables Tracy,
+concurrent workloads are retained, and the final 120 Avian steps have a
+73.210 ms median and 593.748 ms maximum during idle plus driving. The latest
+loop completes one tick, takes 19.544 ms and retains 25.460 s of demand;
+recorded API command latency peaks at 0.492 s. The queue is deliberately
+visible and conserved; individual physics ticks are still too expensive.
+The last readiness is clear, but neither the under-1-ms physics goal nor
+200 FPS, under-1-s startup or native macOS acceptance has been achieved.
+`tesla-service-runtime/analysis.json` classifies the exact evidence.
+
+## Rectangle-cover reuse and simulation lifecycle notices — 2026-10-20
+
+`lunco-terrain-surface` shares one exact f64 slab clipper between bounded cache
+preparation and the outer interval traversal. Preparation prefers one common
+containing half; a segment crossing both midplanes instead receives a complete
+clipped rectangle cover. Total cuts retain the existing eight-cut default,
+exact-coordinate keys, FIFO residency and complete surface invalidation. The
+cache owns reusable scratch storage; its two child slots are stack storage.
+Cache hits do not choose the cut order or change query budgets/failure semantics.
+
+The crossing-ray regression fails on the baseline: warming consumes 20 bounds
+and three point evaluations, and three nearby rays increase those counts to
+23 and 12. The complete-cover implementation warms at 19 bounds/zero point
+evaluations and adds neither for those three rays. Its shifted blocked-ray
+negative case and all eight certified-occlusion numerical tests pass, including
+the shared-endpoint budget assertions. The final scratch-storage implementation
+is covered by `rectangle-cover-final-test.log`. Product timing and Tracy
+comparison remain pending for this phase.
+
+`lunco-time::SimulationLifecycleChanged` owns discrete Started/Paused/Unpaused/
+Stopped facts. The first automatic fixed tick establishes start; accepted
+transport mode changes establish pause/unpause. Scene retirement retains only
+one terminal stop notice until after scene-resource resets. Temporary holds,
+single stepping and duplicate commands do not create transport edges.
+`SetTimeTransport` validates the whole request before mutation, including a
+combined invalid-rate/play request. `lunco-telemetry-core` projects these facts
+to four stamped Info events; the application presentation bridge publishes
+four Simulation notices through the existing Recent Events reader. This fixed
+fact projection needs no authored selection hook. The private history/reset
+bridge seam passes (`simulation-lifecycle-status-test.log`); the retained
+11-assertion retained authored observer passes in both headless and windowed
+production hosts (22 assertions), with each owned port released. The same normal
+artifact passes the eight physical solar assertions and expected invalid-solar
+fault boundary. Its archive is verified by decompressed SHA-256. No dependency or Tracy sources are changed.
+
+## Native local-light admission and terrain attribution — 2026-10-20
+
+The renderer installs Bevy's native point/spot caster visibility delegate with
+its current-population condition through the public schedule replacement API.
+Native visibility-set membership, implicit type identity and preparation/
+visibility edges remain explicit. Empty local-light populations have no caster
+work; adding either native light component wakes the same kernel. Directional
+caster work and native shadow-LOD extraction retain their owners. This is
+render hot-path admission from current native component facts, with application
+plugin lifetime; it introduces no authored selection policy, approximation,
+physics clock or dependency fork. Missing or duplicate native registrations
+fail at application composition.
+
+The native execution-tick resource regression fails on the baseline because
+the kernel executes with no local lights. It passes empty/directional-only,
+point addition/removal and spot addition/removal cases with installation into
+both uninitialized and initialized schedules. The normal production artifact
+`0b3366f20f581c50a90f05851f40d6fa6dbb1f93c8b823b3e1e50d8ba2e8e8f5`
+then passes the windowed Summer gate: stable simulation/visual readiness at
+3.846/3.974 s, unchanged Twin sources, zero retained errors, fully resident
+High-quality visuals and an inspected screenshot. Its complete 1,219-frame
+window averages 12.312 ms and reaches 30.333 ms maximum; physics history has
+0.750 ms median and 1.684 ms maximum. This bounded window does not meet the
+performance targets. Owned port 4758 is released and its compressed artifact
+is verified by decompressed SHA-256.
+
+A subsequent same-source normal comparison records 942/944 complete frames
+for the archived control/current artifacts, with means 15.941/15.953 ms
+(62.731/62.682 FPS) and physics medians 0.754/0.714 ms. Both preserve source
+hashes and zero errors, but both lose window focus despite continuous pacing.
+This provides no continuously focused acceptance or isolated speedup claim.
+The earlier control artifact is restored from its verified archive into a task
+evidence executable, run on owned port 4758, then removed only after process
+exit and port release. The current normal artifact is restored atomically at
+`target/debug/luncosim`; the instrumented executable remains archived. See
+`local-light-comparison.json`. The catalogue check passes all 43 skills.
+
+The separate diagnostic artifact
+`ef6570ab874b5045a98dd79006d6e5bd2f93fd1d467fa2a79ff3cb955650db5c`
+produces a valid 40.37 s, 1,706-frame, 12,267,892-zone Tracy capture. Native CSV
+exports pass; all 256,597,640 bytes reconcile with compressed-block framing.
+Native readback confirms 1 kHz sampling. Point/spot caster calls are zero and
+native shadow-LOD extraction remains present. In the settled 20–35 s window,
+897 solar publications contain 800,030 exact-footprint bounds evaluations and
+791,154 fresh point samples, with no spatial-certificate cache misses. Their
+inclusive totals are 1.655 s and 0.582 s, inside the parent's 3.974 s; do not
+sum parent and child costs. Per-call instrumentation affects timing. Repeated
+exact footprint and point work after certificate warm-up is the next terrain
+optimization target. Inputs remain unchanged, diagnostics retain zero errors,
+and owned API/profiler ports 4758/8096 are released. Tracy source is unchanged.
+Evidence uses `local-light-`, `local-light-summer-` and `summer-local-light-`
+under `.cache/codex-evidence/loading-20261019/`.
+
+A separate default-pacing Summer session remains unfocused throughout a quiet
+30-second interval without API polling. It completes admission with zero
+readiness waits and zero errors. Its policy changes from the one-second idle
+wait to the existing 16.667 ms bounded cadence when the first model becomes
+active. Owned ports 4758/4759 are released. This is background completion
+evidence, not sub-second loading or FPS acceptance. Evidence is
+`summer-background-current/`.
+
+The matched solar Modelica/USD interface is integrated and production-qualified
+as recorded above. Keep the actively edited Twin sources intact.
+
+## Certificate lookup storage — bounded verification, 2026-10-20
+
+The two exact-key occlusion maps use Bevy's maintained fixed-hasher map.
+Traversal does not iterate those maps; the existing FIFO queue still selects
+evictions. Four diagnostic rounds of four million certificate-key lookups
+return identical checksums: standard-map times are 130.6–137.6 ms and native-map
+times are 64.6–68.2 ms. This isolates lookup storage, not whole-query or FPS cost.
+
+Normal artifact
+`8dcc0cc0b8732c12373ee0af4e4e1c36c07c7fd196d8de8b95f6f9cb231cb6e8`
+builds in 1m08s without warnings and passes the eight authored solar assertions
+and expected invalid-solar fault. Both production scenes exit zero and release
+owned port 4757. A separate Summer run keeps the exact previous source cohort,
+passes simulation and fully resident visual gates, retains zero errors and
+releases owned port 4758. The High-quality screenshot is inspected.
+
+This window overlaps a Tesla runtime and a tutorials-checkout Cargo build.
+Stable simulation/visual readiness is 5.837/6.111 s. Three complete collections
+contain 447/557/472 frames with means 34.342/26.708/32.868 ms
+(29.1/37.4/30.4 FPS), and maxima 671.321/227.967/271.189 ms. Physics medians
+are 0.766/1.343/0.902 ms and maxima 2.301/8.309/2.097 ms. These are
+contention-affected observations; they establish neither an isolated speedup
+nor clean performance acceptance. Loading, 200 FPS, strict physics tails and
+native macOS acceptance remain open. Evidence uses `occlusion-map-` and
+`summer-occlusion-map/` in the loading evidence directory.
+
+## Failed generated-program readiness — verified, 2026-10-20
+
+The USD readiness producer reconciles both solver-backed programs and
+pre-solver `SimComponent` state. Terminal errors take precedence over pending
+initialization. Each program owns one exact readiness ticket; removing its
+source components or despawning the program closes that ticket even when the
+physical subject remains. Ready programs avoid ancestor traversal. The existing
+`readiness.action` hook and failed-model setting still own the response policy.
+
+The extended `program_attach_command` production gate fails on the earlier
+normal artifact because the rejected source has no named failure wait. Normal
+artifact `92b03a5c5cebf88e3c2a3d16d675e478fb2f52ea02e8d3826774a0cc18d8ba61`
+passes all ten assertions, including the valid-program negative case and
+removal recovery. The existing source-target gate passes all 19 assertions for
+rejection, structural variants, replacement, recovery and removal. Both exit
+zero and release owned port 4757. The normal binary archive is verified by its
+decompressed SHA-256. The skill catalogue passes all 43 entries.
+
+The same artifact opens the real lunar-base-model Griffin Twin and observes
+`program_failed`, label `Griffin1SurfaceOps_x2f_FLIP_System`, action
+`hold_entity`, at 4.831 s. Full status retains the five missing solar thermal
+output diagnostics. The screenshot shows scene projection still in progress
+and the Modelica error in the status bar; it is not completed loading or visual
+acceptance. Twin sources remain unchanged and owned port 4758 is released.
+No loading or physics performance claim is made for this rejected cohort.
+Evidence is `program-readiness-production-gates.json`,
+`source-readiness-production-gates.json`, `program-readiness-artifact.json` and
+`griffin-program-readiness/` under `.cache/codex-evidence/loading-20261019/`.
+
+The latest separate solar Tracy capture uses artifact
+`390a7a2eecc81b9ef7cfe4a289a20e8cbf4b8dfa44c51ca25a0c4185e63d797b`.
+Native readback verifies 40.3 s, 2,453 frames, 11,436,701 zones and 1 kHz
+sampling. All 262,416,571 bytes reconcile with compressed payload and native
+framing. The 20–35 s window has 901 solar calls, mean/max 3.178/4.473 ms.
+Seven independent ELF anchors validate attribution; procedural height bounds
+and spatial-certificate lookups remain application costs. A native
+`ShadowLodOrigin` query-archetype construction is another measured main-thread
+cost; its maintained dependency source is unchanged. The instrumented result
+is diagnostic, not an FPS acceptance sample. Owned ports 4758/8096 are released.
+See `solar-enclosure-summer-profile.json` for the native exports and attribution.
+
+## Moving-ray spatial certificates — bounded production verification, 2026-10-20
+
+The separate Summer Tracy artifact
+`2a8a1db1c9f716c020c4b53ea5cc8704e336ed59967cdf9c311efdfe4d28294a`
+captures 62.5 s, 1,006 frames and 7,335,905 zones. Native self-time and solar-event
+CSV exports pass. Its 245,758,628-byte capture contains 245,711,946 compressed
+payload bytes and 46,682 framing bytes. Native readback verifies 1 kHz sampling.
+The 20–50 s window contains 1,812 `publish_sun_visibility` calls, totaling
+10.527 s, with mean/max 5.810/8.052 ms. Strict ELF intervals and eight independent
+symbol anchors identify procedural `Overzoom::height_bounds` as the leading
+process leaf. Optimized stacks are shallow; leaf counts are not inclusive owner
+costs. Cross-thread schedule waits must not be added to the worker's work.
+Inputs remain unchanged, diagnostics retain zero errors, and owned API/Tracy
+ports 4758/8096 are released. Concurrent workloads and profiler overhead apply.
+The compressed binary is retained and its decompressed SHA-256 is verified.
+Evidence uses `matrix-free-summer-` in the loading evidence directory.
+
+`SurfaceOcclusionCache` now retains canonical rectangular certificates at the
+terrain mathematical owner. A fresh segment must fit entirely inside each
+attempted dyadic enclosure before its bounds can certify clear or blocked.
+Complete surface identity, raster cell and exact f64 rectangle bits identify
+the certificate. The existing FIFO capacity bounds residency. The owner budget
+allows eight ray-enclosure cuts by default, then the exact footprint and normal
+interval subdivision continue as needed. Cut order does not depend on cache
+hits. Scene teardown retains the existing owner boundary. This is continuous
+geometry and bounded cache preparation in Rust; it adds no lifecycle or
+presentation policy, authored approximation, sample-coordinate rounding or
+alternate surface.
+
+The new moving-footprint regression fails before the repair: warming costs
+30 bound evaluations and three tiny ray moves increase the total to 75. The
+repair needs no new evaluations for those moves and still detects the real
+blocker outside the earlier clear certificates. All seven certified-occlusion
+mechanism checks pass, including transverse relief, rounded boundaries, shared
+endpoints, moving procedural rays, narrow features, cache replacement and
+failure/budget boundaries. The normal build completes in 3m46s with no warnings.
+Artifact `c1a210db17a7a052887d92fdf6a8e484c2b59d1afb1aa5f5e014823510517c27`
+passes 47 production assertions across the solar, articulated-mass,
+continuous-contact, joint-kind, detach and held-load gates, plus the expected
+invalid-joint and invalid-solar faults. Owned port 4757 is released. The normal
+binary is compressed and its decompressed SHA-256 is verified.
+
+Summer reaches stable simulation/visual readiness at 3.485/3.668 s. Its three
+complete frame collections contain 2,267/2,242/2,179 samples, with means
+6.621/6.691/6.889 ms (151.0/149.5/145.2 FPS) and maxima
+14.005/15.054/14.475 ms. Endpoint physics medians are 0.593/0.579/0.630 ms,
+with maxima 1.332/0.925/1.489 ms. Source guards pass, diagnostics retain zero
+errors, the High-quality screenshot is inspected, and owned port 4758 is
+released. An archived normal control has the exact same Twin source cohort and
+records 8.450 ms mean frames; an extra Tesla scene-test process overlaps that
+control, so no isolated speedup factor is assigned. Loading, 200 FPS, no-stall
+and native macOS acceptance remain open. Evidence is
+`solar-enclosure-verification.json`, `solar-enclosure-production-gates.json`,
+`solar-integrated-production-gates.json`, `solar-integrated-contact-hold.log`,
+`summer-solar-enclosure/` and `summer-solar-control/` in the loading directory.
+
+The earlier instrumented cohort also supplies valid native GPU events. In its
+20–50 s window, 550 camera-shadow early events average 1.807 ms, main opaque
+events average 0.669 ms and bloom averages 0.126 ms. Native events can nest and
+their totals must not be summed with CPU schedule waits. This attributes the
+unchanged render pipeline in that profiled cohort; it is not the current
+artifact's GPU acceptance. See `matrix-free-summer-gpu-summary.json`.
+
+## Coupled contact/joint repair — qualification in progress, 2026-10-20
+
+`lunco-physics::constraint_response` now solves admitted contact inequalities
+and hard joint rows together. Responsive body islands, admitted scalar-row
+order, native dominance and locked channels define the numerical system.
+Maintained faer LSMR consumes sparse response and transpose products with
+explicit `Par::Seq`; no dense row matrix is formed. Principal pivots release
+pulling contact reactions and redundant slack. Summed generalized impulses use
+the public native position/angular kernels once per body. Fresh joint geometry,
+material arcs and a complete native sweep still own writeback admission.
+Unresolved native fixed points and failed numerical convergence fault and hold
+the operation. Motors, compliance and geometric tolerances retain their owners.
+
+The matrix-free implementation passes three response/transpose math checks,
+eight joint-geometry checks, one continuous-contact math check and two native
+state/publication resource checks. Normal artifact
+`c00b1e79f62d68cc9b3fb42cdba31da852da254593bdcd698481f37f7c611eca`
+passes 39 authored assertions across the same scene cohort listed below,
+including held contact loads, plus the expected invalid-joint fault. Every
+scene exits with code zero and releases owned port 4757. The compressed normal
+artifact is retained and its decompressed SHA-256 matches.
+
+Summer reaches stable simulation/visual readiness at 7.363/6.806 s with unchanged
+inputs and zero retained runtime errors. Three complete 15-second render
+collections contain 388/424/395 samples, with means 39.034/35.426/37.913 ms and
+maxima 88.540/75.136/108.566 ms. Their endpoint physics-history medians are
+0.964/0.905/1.004 ms, with maxima 2.276/2.010/3.207 ms. High-quality terrain,
+route and shadows are visually inspected. Concurrent simulator workloads affect
+these timings; no isolated speedup or 200 FPS acceptance is claimed.
+
+The current Griffin cohort differs from the first coupled run in four authored
+files, including `vehicles/flip.usda`. Its own source guard passes. FLIP exposes
+five outputs whose SolarArray sources do not exist (`heat_w`,
+`reflected_power_w`, `temperature_adjusted_peak_power_w`, `temperature_factor`
+and `temperature_k`). `CosimStatus` reports the exact terminal network error
+while dependent models remain compiling and `RuntimeDiagnostics` reports zero
+errors. The owned session is explicitly closed through API Exit after capturing
+those facts; this is a failed admission measurement, not physics performance
+evidence. Port 4758 is released. No actively edited Twin input is changed by
+this task. Evidence is `matrix-free-verification.json`,
+`matrix-free-production-gates.json`, `matrix-free-contact-hold.log`,
+`summer-matrix-free/` and `griffin-matrix-free/` in the loading evidence directory.
+
+The first coupled artifact
+`e4238c1ad7d9ce320655a9245db6ff7a557cc752b662d3df3c9595762b90a82b`
+passes 39 authored assertions across the articulated-mass, continuous-contact,
+joint-kind, detach and held-contact-load gates, plus the expected invalid-joint
+runtime fault. Its real Griffin measurement fails when API requests time out;
+touchdown alone does not qualify performance. This failed qualification is the
+reason for the current sparse numerical implementation, not evidence of a
+performance improvement. Its evidence is `coupled-production-gates.json`,
+`coupled-contact-hold.log` and `griffin-coupled/report.json` under
+`.cache/codex-evidence/loading-20261019/`. Owned ports 4757 and 4758 are released.
+
+The production `continuous_articulated_mass` regression isolates a 1 kg contacting
+body fixed to a 1,000 kg body, both moving at 1,200 m/s toward a static wall.
+A separate free body checks that the response does not propagate contact
+response outside the attachment. The fixture is authored through `OpenFile`,
+`ForkDocument`, `ApplyUsdOps`, `AttachProgram`, `SaveAsDocument` and
+`SaveDocument`; source-document generation, dirty state and file hash are
+preserved. Document inspection reads the saved fixture back. No USD source is
+written through a text or patch operation.
+
+Normal artifact `b44c12975a4626bf6791f5f3a46ddd48d570137957337dd60b6ff88f7499fb8e`
+fails the regression at tick 1 with exit 1 and the structured
+`physics-continuous-contact-invalid` fault. After the configured 1,024 closure
+iterations, joint position and angular residuals are zero but the contact gap
+is `-0.7546122884800086 m`. Native pose writeback is refused; there is no panic.
+This is the intentionally failing pre-repair baseline.
+
+For this collinear fixed-joint case, each contact correction followed by hard
+joint closure multiplies the unresolved penetration by `M / (M + m)`. The
+observed residual matches `2.0999996 * (1000/1001)^1024` within `1e-13 m`.
+The initial penetration uses the native 2,083,333 ns substep, rather than an
+unquantized `1/480 s`: `1200 * 0.002083333 - 0.4 = 2.0999996 m`.
+An exact rational two-row coupled linear oracle produces joint/contact
+multipliers `-2099.9996 / 2102.0995996 kg m` and moves both bodies by
+`-2.0999996 m`, closing both constraints together. This oracle is diagnostic
+evidence, not production
+implementation or whole-engine numerical verification.
+
+The paused live Griffin snapshot has a 3,935.193 kg lander, four 180 kg legs,
+six 31.667 kg ramp sections and two 15 kg transition plates. Its composed
+topology also contains hinge/latch constraints on shared endpoint pairs.
+Typed `QueryPhysicsState` and `QueryEntity` supply the native mass and pose
+facts. The inspected native body/joint component reads through reflection
+return unavailable in this host.
+The snapshot preserves all 128 authored source hashes. A concurrent tutorials
+session is present; these are topology facts, not uncontended timing acceptance.
+Both owned ports 4757 and 4758 are released.
+
+The shared hard-constraint owner handles redundant constraints, locked channels,
+dominance and unilateral release while retaining native geometry, impulse
+kernels, reaction accounting and deterministic admission. The searched Avian
+0.7 solver exposes sequential joint/contact kernels rather than this coupled
+application solve. Baseline evidence is
+`constraint-coupling-proof.json`, `articulated-baseline.log` and
+`constraint-topology/` under the loading evidence directory.
+The physics package reuses maintained `faer` 0.24.4 already present in the
+lockfile. Its explicit serial execution leaves Modelica's global parallelism
+unchanged. No third-party source or Tracy source is modified.
+The damping owner retains its direct point-response solve.
+
+## Contact response reads after geometric admission — 2026-10-20
+
+Material-contact admission evaluates the current trajectory through borrowed body
+state. Only a negative gap requiring an impulse acquires the two inertias and
+copies the two bodies for correction. Clear admitted planes perform no response
+lookups. Geometry validation, gap evaluation, dominance, f64 impulse arithmetic,
+native reaction publication, correction order and convergence settings are
+unchanged. This uses the existing contact owner with no additional cache or
+policy.
+
+The normal production build completes in 2m44s with no warnings.
+`continuous_contacts` passes all 12 authored checks, including initial-contact
+and rejected-overlap boundaries. Its reported body positions, maximum anchor
+error and penetration exactly match the preceding artifact. This bounded
+observation equality is not full native-state replay. Owned API port 4757 is
+released. The new normal artifact's SHA-256 is
+`b44c12975a4626bf6791f5f3a46ddd48d570137957337dd60b6ff88f7499fb8e`.
+
+Griffin reaches stable simulation/visual readiness at 23.100/34.262 s. Its
+three 120-sample endpoint physics histories have medians
+11.042/12.773/12.197 ms and maxima 13.666/14.843/14.459 ms. Frame counter
+deltas are 519/157/40; the first exceeds the 240-frame ring and is incomplete.
+The final complete collection has 377.383 ms mean and 516.678 ms maximum.
+The preceding artifact reaches readiness at 23.613/38.361 s with the exact same
+authored Twin cohort; both input guards pass, retain zero errors and publish
+touchdown at tick 1401 / 23.35 s. Histories cover different mission-step ranges
+and uncontrolled host conditions, so no isolated speedup is assigned to their
+difference. Evidence: `lazy-inertia-verification.json` under the loading evidence
+directory.
+
+Summer Space School reaches stable simulation/visual readiness at 3.320/3.552 s
+with unchanged inputs and zero runtime errors. This pass collects no settled
+FPS window. Both High-quality screenshots retain their expected scene, terrain
+and shadows. Both owned normal sessions exit through API port 4758. The
+under-one-second loading, sub-millisecond physics, no-stall, 200 FPS and native
+macOS acceptance requirements remain open.
+
+## Current continuous-contact attribution — 2026-10-20
+
+The production Tracy artifact has SHA-256
+`9006de59c69ce031bc2eff6e0b46b8c0b19c36385dd67e07c37cea99b8754082`.
+`constraint-space-current.tracy` retains 140.4 s, 1,941 frames and 15,127,052
+zones. The 445,998,744-byte file contains 445,916,914 bytes of compressed
+payload and 81,830 bytes of native framing; native self-time CSV export passes.
+The 110–135 s window follows authored touchdown. Exact ELF intervals and 13
+independent symbol anchors resolve 91.6% of its main-thread exclusive samples.
+Leaf samples identify joint projection, material-arc evaluation and native
+GJK/EPA queries as continuing costs. Optimized Rust stack unwinding is shallow;
+these samples do not establish inclusive subsystem times.
+
+A separate CCD debug-zone capture, `contact-query-detail.tracy`, retains
+124.9 s, 2,776 frames and 21,020,767 zones. Its 388,578,530-byte file has
+388,501,880 bytes of compressed payload and 76,650 bytes of native framing;
+native event CSV export passes. Native readback confirms the requested 1 kHz
+CPU sampling period. In the post-touchdown 85–115 s window, main-thread
+`solve_contacts` spans total 19.992 s. Nested geometry sweeps account for
+7.710 s, including 4.971 s in query dispatch. Native triangle/cylinder casts
+account for 3.544 s, with 304,854 nested contact queries totaling 2.594 s.
+Initial native contacts total 0.338 s. These are nested wall spans, not additive
+CPU percentages. Worker query chunks also run concurrently; equal candidate
+counts do not establish equal geometry work.
+
+Both captures verify their owned app/collector socket connection before use,
+preserve the Twin input hashes, retain zero runtime errors and exit through
+owned API port 4758. Profiler port 8096 is released. The first overlaps another
+tutorials session; neither instrumented run is product FPS acceptance. Tracy
+and dependency source remain unchanged. Uninstrumented measurements and current
+acceptance boundaries are recorded in the contact-response section above.
+
+## Typed joint-correction subspaces — 2026-10-20
+
+`JointProjection` retains each row's current full, axial or perpendicular
+constrained subspace as typed geometry. Residual evaluation reads the same
+positional/angular errors without constructing projection matrices. Current
+frames and axis validation run for every evaluation. The current numerical
+consumer is the shared coupled response described above.
+
+The pre-coupled normal production build completes in 2m02s with exit 0 and no
+warnings. `continuous_contacts` passes 12 authored checks and exactly matches
+the baseline's reported positions and maximum anchor/contact errors. This is
+not complete native-state replay evidence. Owned API port 4757 is released.
+Evidence uses the `constraint-space-` prefix in the loading directory.
+
+Normal artifact SHA-256
+`79d9294d04e3166d04ecf610498926a78a31e244c86b6b005e2098a30d225d71`
+reaches stable simulation/visual readiness at 22.916/34.962 s. Its three
+endpoint physics histories (120 samples each) have medians
+11.025/13.418/14.080 ms and maxima 12.844/16.666/15.679 ms. The last two raw
+render collections contain 139 and 31 frames; the last reaches 736.530 ms.
+The first collection exceeds the 240-frame ring, so its retained samples do
+not cover the entire collection. The explicit counter/coverage receipt is
+`constraint-space-verification.json`.
+
+The preceding normal baseline has the exact same authored Twin inputs and
+is individually unchanged, as is the new run. Both retain zero runtime
+diagnostics and publish the authored touchdown event at tick 1401 / 23.35 s.
+However, a concurrent tutorials session overlaps the baseline and is absent
+from the new run. The physical histories also cover changing mission state;
+this is not a clean speedup comparison or full native-state replay. No gain is
+assigned to the difference in loading, frame counts or endpoint physics
+statistics. The High-quality screenshot shows the lander, terrain and shadow.
+Both owned API sessions exit and release port 4758. The loading, sub-millisecond
+physics, no-stall, 200 FPS and native macOS acceptance requirements remain open.
+
+## Retained coupled-initialization diagnostics — 2026-10-20
+
+The coupled-admission owner retains the successful worker's solver snapshot and
+construction timings after its transient actor retires. Certification publishes
+one bounded, scene-scoped `CosimStatus.last_coupled_initialization` receipt:
+scene generation, solver identity and the existing construction profile. A
+superseded or failed certificate cannot publish it. Missing diagnostics remain
+unavailable without gating numerical admission. Scene teardown clears the owner,
+including when an application observer survives the replacement. This is a
+diagnostic mechanism with no new lifecycle or backend-selection policy.
+
+The final normal production build finishes in 1m48s with exit 0 and no warnings.
+`test_modelica_initialization_receipt.py` requires 44 authored initialization,
+clock/rate and pause/resume checks plus two retained-receipt/replacement checks;
+all 46 pass. The inconsistent-equations production scene retains its expected
+terminal initialization-failure verdict. Owned API port 4757 is released.
+Final normal binary SHA-256:
+`ed32ae1c6f79b7ec78c4e9ce0185f5c2b21703f9bef393daaf15af9c172526b9`.
+Evidence uses the `initialization-receipt-` prefix in the loading directory.
+
+The final native artifact reaches stable simulation/visual readiness at
+25.313/37.898 s for Griffin and 2.318/3.472 s for Summer Space School. Both
+runs preserve their authored inputs, retain zero runtime diagnostics, show
+the expected High-quality scene, and exit through owned port 4758. Griffin's
+retained initializer reports 9.540 s construction, 2.654 ms metadata and
+1.536 ms first observation; Summer has no coupled receipt. These loading
+passes collect no settled FPS window. A Twin test model changes externally
+between the earlier three-way experiment and the final Griffin run; the final
+run is individually unchanged, not the same complete authored cohort as that
+experiment. No performance gain is assigned to the diagnostic change.
+
+A same-authored-cohort experiment does not establish a useful gain from replacing
+automatic native execution with Rumoca's supported interpreter. Native
+construction/first observation take 9.629/0.0018 s; the warm interpreter trial
+takes 7.849/2.418 s. Both prepared-IR lookups are disk hits for source key
+`52ee9c5d82671e03`; the source-hash guards pass and all three runs share exact
+authored Twin inputs. Native and warm interpreter simulation/visual readiness
+are 25.740/38.245 s and 24.670/33.714 s respectively. End-to-end variance does
+not establish a constructor gain; no backend-policy change is retained.
+`griffin-execution-policy/` is the initial cold-lowering diagnostic run,
+`griffin-execution-baseline/` the native trial, and
+`griffin-execution-policy-warm/` the warm interpreter trial. Their binaries are
+retained in verified archives for attribution, not as alternate runtime paths.
+
+The initial interpreter run has 31.936/39.827 s stable simulation/visual
+readiness, zero retained diagnostics and unchanged authored inputs. Its later
+two 15 s histories contain only 12 frames each, with roughly 1.2–1.4 s mean
+frames; native physics medians are 15.189/14.820 ms and maxima
+17.435/17.684 ms. These are contention-affected diagnostics with another
+tutorials app active, not clean FPS acceptance or an optimization claim.
+The High-quality screenshot shows the lander, terrain and shadow. All three
+owned measurement sessions exit and release port 4758.
+
+Automatic execution, numerical settings, graphics and default focus pacing
+remain unchanged. Native macOS and browser runtime acceptance remain unverified.
+No dependency source or Tracy source is modified; the separate Rumoca-source
+optimization request remains pending. The loading, physics-tail, no-stall and
+200 FPS targets remain open.
+
+## Current contact-motion preparation — 2026-10-20
+
+The material-contact owner prepares one `ContactMotion` for the exact plane and
+two current body trajectories. Arc minimization returns its conservative swept
+gap plus the absolute endpoint that it already evaluated. Endpoint closure
+consumes that endpoint; corrections consume the same two prepared witness
+motions for gradients. The snapshot is local to one evaluation and is rebuilt
+after corrections. Whole-arc bounds, search order/limits, initial-overlap
+semantics, tolerance and correction arithmetic are unchanged. This is a pure
+physics mechanism with no changeable policy decision requiring a hook.
+
+All 30 selected CCD mechanism tests pass. The already documented pinned-Parry
+collinear-triangle projection failure is explicitly excluded; this is not a
+green full CCD suite. The production rebuild completes with exit 0 and no
+warnings in 1m38s. The `continuous_contacts` production gate passes 12 checks;
+its reported body positions and maximum anchor/contact errors exactly match
+the preceding response-factor artifact. The owned API port 4757 is released.
+Normal binary SHA-256
+`b198222c4488ec82be224825c294136514246aa08cab04fe83c581ec89723cd4`
+is archived in `contact-motion-luncosim.zst`; tests and comparison receipts
+use the `contact-motion-` evidence prefix.
+
+The subsequent Griffin run is **not a qualified performance cohort**:
+`requirements/flip_sensor_power_requirements.sysml` and
+`scenarios/tests/flip_sensor_power_requirements.rhai` change externally during
+the run. The source-hash guard rejects it with exit 1 despite ready simulation
+and zero retained runtime diagnostics. Raw samples, before/after source hashes,
+periodic host/GPU samples and the screenshot remain in `griffin-contact-motion/`
+for diagnosis only. No loading, FPS or physics speedup is assigned to this run.
+Its owned API port 4758 is released; authored Twin files are not modified by
+this task.
+
+## Render-frame analytics and quiet measurements — 2026-10-20
+
+The normal production artifact
+`9934f24db992ee1c90d5d4cd35b5bb718e1e376a637391c66272c7554f23ae2d`
+was restored from its verified archive after the local target directory was
+removed. Its current Twin runs retain High graphics, no VSync and continuous
+pacing. Summer reaches stable simulation/visual readiness at 3.676/3.798 s;
+Griffin reaches 41.394/58.150 s. Each run preserves its exact authored inputs
+and reports zero retained runtime diagnostics. Screenshots show Summer terrain
+and route labels, and Griffin's lander and shadow. They do not certify all
+vehicle details or mission completion. Concurrent compilation affects these
+cohorts; neither is an A/B speedup claim.
+
+Three 15-second intervals per Twin contain no API requests. Endpoint physics
+histories report Summer p50 values of 0.572/0.565/0.771 ms with maxima of
+1.125/0.941/1.739 ms, and Griffin p50 values of 13.936/18.070/23.418 ms with
+maxima of 22.315/23.883/29.280 ms. All six endpoints have ready simulation,
+fully resident wanted terrain, and completed derived maps. These are retained
+endpoint histories, not coverage of every step in the full interval. The
+Griffin coupled constructor takes 12.966 s with 0.125 ms queue wait. Both
+owned sessions exit through API 4758 and release the port. Reports, source
+hashes, logs and images are in `summer-joint-quiet/` and `griffin-joint-quiet/`
+under `.cache/codex-evidence/loading-20261019/`.
+
+Those runs also retain `engine.frame_time` telemetry. Its simulation-clock
+sampling repeats some render diagnostics during catch-up; those values are
+explicitly excluded from render-frame percentile acceptance. The generic
+`EnginePerformance` query instead projects the existing core health history,
+which advances on the application frame cadence, together with its bounded
+capacity and process-scoped sample counter. It adds no diagnostic-store reader,
+recorder, scene state or simulation decision. `lunco-core-runtime` owns the
+facts and lifetime, `lunco-api` owns the read-only projection and schema, and
+the production API test consumes the history through an authored Rhai gate.
+There is no changeable policy decision requiring a hook at this boundary.
+
+The production rebuild completes with exit 0 and no warnings in 4m47s.
+`scripts/api/test_engine_performance.py` passes six authored checks in each
+host (12 total), exercising paused rolling render publication and explicit
+headless unavailability. It uses the existing minimal lunar-surface fixture.
+Both successful hosts release their owned ports 4757
+and 4758. The gate's schema readbacks and host logs are in
+`frame-history-gate/`. Binary SHA-256
+`b3c8726d050108c5a5fa26e627bbc036b3543948b434c531abe0d17ef89d7004`
+is preserved in the hash-verified `frame-history-luncosim.zst` archive. No
+fresh macOS, post-change Tracy, complete native-state
+replay, or 200 FPS acceptance is established by this analytics gate.
+
+The same artifact then exercises the query on the unchanged Summer Twin with
+High graphics and continuous pacing. Stable simulation/visual readiness is
+4.852/5.016 s with zero retained diagnostics. Three quiet intervals advance
+1161/1831/1360 frame observations; the retained 240-frame tails cover
+4.184/2.102/1.897 s and average 57.37/114.19/126.52 FPS respectively. Their
+raw frame p99/max values are 101.677/185.729, 16.324/17.516 and
+15.849/31.091 ms. These are actual frame observations, not simulation-clock
+repeats, but they cover only the retained tails. Concurrent compilation and
+another simulator test are recorded with periodic CPU/memory pressure and GPU
+samples; these remain diagnostic results, not clean FPS acceptance or a
+performance comparison. The three native physics histories have p50 values
+0.657/0.576/0.547 ms and maxima 1.775/1.115/1.066 ms. All endpoints retain
+ready simulation and completed terrain preparation. The owned app exits and
+releases port 4758. Evidence is in `summer-render-frames/`.
+
+## Scene-source admission and loading attribution — 2026-10-20
+
+The Modelica engine-sync driver derives required parse demand from exact
+document-registry links to non-editor scene participants. It submits those
+documents as `SimulationRequired`, the focused editor document as `Interactive`,
+and other documents as `Background`, retaining stable order and both existing
+queue bounds. A low-level admission test fails before the change with queued
+counts `[0, 1, 3]` and passes afterward with `[1, 1, 2]`; the unlinked model and
+editor actors are negative controls. Parsing logs now separate queue wait from
+parse/install service. No worker count, source fencing or simulation commit
+order changes.
+
+The normal production baseline for the local Griffin surface-operations Twin
+reaches stable simulation readiness at 37.149 s and stable visual-map readiness
+at 54.673 s. A second run of the same binary and unchanged Twin inputs, with
+warm solver preparation caches, takes 27.618 s and 42.029 s respectively.
+These are different cache conditions, not a measured optimization gain. Both
+runs retain high graphics quality, have zero retained runtime errors and
+unchanged Twin inputs, and exit through the owned API port 4758 with verified
+port release. Another tutorials app was active, so these are contention-affected
+diagnostic cohorts. The ready screenshot is inspected; it does not qualify FPS.
+
+Current Linux source parsing takes roughly 2–117 ms per generated document;
+the dominant baseline delay follows coupled initialization compilation and
+solver preparation, before live construction publishes its result. The
+historical macOS log has a separate 35–37 s parse scheduling delay despite
+millisecond parse/install service. The priority regression addresses that
+classification defect; fresh native macOS and post-change runtime gains remain
+unverified. The current owned Tracy cohort below provides construction attribution. Evidence, source
+hashes, screenshots and the compressed baseline executable are under
+`.cache/codex-evidence/loading-20261019/`.
+
+The construction profile is available in compact and full `CosimStatus`,
+Modelica notices and structured model-attributed logs. Focus/pacing transitions
+are logged by the application pacer. The API-authored self-contained
+`modelica_source_target.usda` production gate passes all 19 checks, including
+profile readback, rejected-source unavailability, replacement, recovery and
+two independently compiled structural parameter variants. The focused worker
+mechanism test also passes dimension changes, variant reuse and invalid literal
+rejection. The unchanged production binary rejects the same authored structural
+fixture at its runtime-only override boundary; the repaired production app
+passes and releases the owned API port 4757.
+
+Owned instrumented PID 236620 on API 4758 connects to collector PID 236527 on
+8096. The saved 62.2 s capture has 10,369,027 zones; all 15,352 native compressed
+blocks are complete. Its 330,924,648-byte compressed payload plus 61,414 bytes
+of native framing equals the 330,986,062-byte file, and native CSV export succeeds.
+The coupled-initialization constructor takes 14.341 s, with 0.041 ms queue wait,
+7.277 ms metadata and 1.790 ms initial observation. Of 10,948 CPU samples in
+that constructor's exact thread/interval, 95.6% resolve through native frames
+and strict symbol bounds from the captured executable. Cranelift code generation
+and register allocation dominate direct samples; Rumoca projection preparation
+also contributes. The optimized dev artifact includes the JIT verifier, which
+accounts for 5.4% of these CPU samples; a release or macOS result is unqualified.
+The Tracy checkout is unchanged. Its maintained native reader/CSV exporter and
+a read-only evidence consumer provide the analysis.
+
+The pinned Rumoca projection compiler eagerly allocates retained-result vectors
+for every source program before visiting the selected color programs
+(`rumoca-exec-cranelift/src/emit/projection_batch.rs`). Allocation and destruction
+of those vectors account for 6.5% of the constructor's direct samples. The
+maintained Cranelift 0.125.4 also exposes experimental incremental compilation
+through `Context::compile_with_cache` and `CacheKvStore`; its ordinary
+`JITModule::define_function` calls `Context::compile` directly. These are concrete
+Rumoca-owner investigation points. Any cache integration must preserve native
+relocation, ABI, target/version identity, validation and module lifetime through
+maintained APIs. Neither candidate has been implemented or assigned a speedup.
+
+This changed Twin cohort reaches stable simulation readiness at 41.300 s and
+stable visual readiness at 53.445 s, with no retained warnings/errors and unchanged
+inputs during the run. Eight Twin inputs differ from the earlier normal cohort,
+including the surface scene; this is not a speedup comparison. The screenshot
+shows terrain, the vehicle and its shadow at High quality. API Exit releases
+4758 and 8096. Binary SHA-256
+`2813c5b5ddba5e8d6095380955509bee8cfadcd0a21cd76ec6c07ddfd456dc03`
+is preserved in a compressed, hash-verified archive with the capture.
+
+The subsequent normal production artifact
+`14d31b4d7b643a71c2be7293ce89a280dc3a3dbae44a48c9b3c7ff671e5c8f23`
+reaches stable simulation readiness at 61.073 s and stable visual readiness at
+87.816 s. Its coupled constructor takes 24.572 s, with 0.026 ms queue wait.
+Five Twin inputs differ from the Tracy cohort and concurrent simulator sessions
+and builds create CPU/GPU and memory contention; these times are not an A/B
+comparison or acceptance evidence. The 120 retained physics samples are
+18.251/23.805/24.558/24.714 ms at p50/p95/p99/max. The run has unchanged Twin
+inputs, zero retained diagnostics and inspected High-quality terrain, vehicle
+and shadow. Its owned API port 4758 is released. The report, source identities,
+contention snapshots and screenshot are in `normal-structural-current/`.
+
+The compiler host sends structural parameters through Rumoca's supported typed
+root modifiers and sends only tunable parameters to runtime lowering. The base
+artifact supplies checked parameter classification, structural variants have
+exact source/library/value identities, and live admission validates the compiled
+bindings. Summer Space School's radio now runs with its authored capacity binding.
+The owned uninstrumented High-quality Twin run reaches stable simulation
+readiness at 10.316 s and stable terrain-map readiness at 9.803 s, with zero
+retained runtime diagnostics and unchanged Twin inputs. The screenshot shows
+terrain, route and location labels; it does not qualify detailed vehicle visuals
+or FPS. A separate composition warning names an obsolete `/LunarSurfaceCamera`
+reference in the Twin; no authored Twin file was changed. The 120 retained
+physics-step samples range from 0.662 to 1.641 ms. The loading and physics-tail
+targets remain open. API Exit releases port 4758. Native Rumoca optimization
+requires the explicit dependency-source approval requested in this session;
+no dependency or Tracy source has been modified.
+
+The settled capture's main-thread interval from 45 to 60 s contains 10,808
+CPU samples; 91.1% resolve through strict captured-executable symbol bounds or
+native frame names. Joint-row solving, world rotations and response-matrix
+eigendecomposition are prominent. The 143,060 symmetric sweep zones in this
+interval take 27.230/33.583/286.064 microseconds at p50/p95/max. These are
+instrumented attribution facts, not raw physics acceptance. Avian updates
+world-space inertia between substeps; a proposed reused angular response must
+respect that boundary. Joint row evaluation now calculates anchor levers and
+separation only for positional rows. The optimized production baseline's
+disassembly confirms the two anchor-rotation calls precede every row dispatch;
+the typed positional/angular result removes that unused work from angular rows.
+All nine focused joint-math tests pass before and after the change. The
+`continuous_contacts` production baseline passes 12 checks, including fixed-joint
+anchor/orientation closure and invalid initial overlap. The repaired production
+app passes the same 12 checks, with identical reported body positions and maximum
+anchor/contact errors. Its disassembly dispatches angular rows before anchor
+rotation. This verifies removal of unused work and the observed fixture's
+behavior, not an end-to-end speedup or full-state replay. No response
+factorization, tolerance, iteration limit or solver ordering has changed.
+
+The owned default-pacing UI run uses port 4758 and a second owned empty window
+on 4759 as its focus control. It logs loss of focus before the fixture opens,
+remains unfocused through all 19 authored checks and completes them in 1.088 s
+without API polling during the 30-second observation interval. The logged idle
+wait is one second with device events disabled; installed running models select
+the existing 16.667 ms reactive cadence. Both ports are released and the authored
+fixture is unchanged. This validates the background cohort and pacing analytics,
+not the two Twins' loading targets. The first minimize-only attempt remained
+focused until after its verdict and is excluded from background evidence.
+
+The production artifact for these final gates has SHA-256
+`9934f24db992ee1c90d5d4cd35b5bb718e1e376a637391c66272c7554f23ae2d`.
+The normal `-j 4` production build's Cargo timing report is retained as
+`joint-build-timing.html` beside the runtime reports. The installed
+`cargo-overstay` shim reports 2.309 GB of automatic target cleanup and pending
+disk-pressure maintenance; the final build invokes the toolchain's Cargo
+directly, with the normal target directory and sccache. No cleanup policy,
+dependency source or Tracy source is changed. Final graphics/FPS acceptance,
+post-change native Tracy attribution and native macOS validation remain open.
+
+## Step-owned continuous leaf geometry — 2026-10-19
+
+`lunco-physics` prepares each admitted leaf's native local bounding sphere and
+local COM offset once at pair preparation. Substeps and closure corrections
+reuse these immutable geometry facts while recomputing solved motion, endpoint
+AABBs and full-arc bounds. Preparation rebuilds the leaves every physics step;
+there is no geometry-revision cache or retained separation verdict. Native
+convex-hull sphere construction scans the hull points, so repeated sweeps no
+longer repeat that preparation. No dependency source, solver ordering,
+precision, physics setting or rendering quality changes.
+
+The before-change CCD suite passes 29 checks and fails
+`degenerate_native_triangle_retains_boundary_geometry` inside pinned Parry's
+collinear projection. The same 29 checks pass after the change; the dependency
+failure remains. A separate differential experiment passes exact f64 motion
+center and swept-bound comparisons over 20 geometry admissions and 80 sweeps.
+The maintained native-enclosure test passes 10,320 sampled poses across ball,
+cylinder, cuboid, convex-hull and mesh geometry, including nonuniform scale,
+offset COMs and large translations, plus distant-geometry negative controls.
+The experiment source and logs are retained in
+`.cache/codex-evidence/ccd-preparation/` outside Cargo's build outputs.
+
+This is mechanism evidence, not a measured runtime speedup. The normal
+production loading cohorts above include this geometry preparation change;
+they do not isolate its cost. Running FPS, native-physics tails, full-state
+replay and native macOS qualification remain open. The original sub-second
+loading, 200 FPS and sub-millisecond physics targets are unqualified.
+
 ## Contact samples retain their solved interval — 2026-10-19
 
 The full-value comparison localizes an earlier transient Lander difference to

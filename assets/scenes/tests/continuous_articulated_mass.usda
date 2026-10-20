@@ -1,0 +1,77 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def Sphere "A" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        bool physxRigidBody:enableCCD = true
+        double3 xformOp:translate = (2.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+    }
+    def Sphere "B" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1000.0
+        bool physxRigidBody:enableCCD = true
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+    }
+    def Cube "Wall" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (3.0, 0.0, 0.0)
+        double3 xformOp:scale = (1.0, 10.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def DistantLight "Sun"
+    {
+    }
+    def PhysicsFixedJoint "Attachment"
+    {
+        rel physics:body0 = </World/B>
+        rel physics:body1 = </World/A>
+        point3f physics:localPos0 = (2.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+    def Sphere "Free" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 0.0, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+    }
+    def Scope "Observer" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/continuous_articulated_mass.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+}

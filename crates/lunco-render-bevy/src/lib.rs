@@ -207,6 +207,7 @@ impl Plugin for LuncoRenderPlugin {
     }
 
     fn finish(&self, app: &mut App) {
+        local_light_shadow_relevance::finish(app);
         shadow_view_schedule::finish(app);
     }
 }

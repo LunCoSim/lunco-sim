@@ -2,5 +2,6 @@ HeatPort
 HeatLoad
 ThermalMass
 Radiator
+LimitedCoolingSink
 ThermalConductor
 ThermostatHeater

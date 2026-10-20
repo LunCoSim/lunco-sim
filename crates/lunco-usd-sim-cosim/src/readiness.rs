@@ -1,14 +1,14 @@
 //! Declaring what a loading scene is still waiting on.
 //!
 //! [`lunco_readiness`] holds the registry and the policy; `lunco_physics` does
-//! the freezing. This module is the **producer** for the two waits a USD scene
-//! actually has, and it is deliberately the only place that knows how to detect
-//! them:
+//! the freezing. This module publishes scene, program and physics-admission
+//! facts from their authoritative state:
 //!
 //! | Wait | Open while | Scope |
 //! |---|---|---|
 //! | [`kinds::SCENE_LOAD`] | the stage or its projected participants are still settling | world |
 //! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | its owning physical subtree |
+//! | [`kinds::PROGRAM_FAILED`] | a program's preparation or solver has failed, including rejection before a solver exists | its owning physical subtree |
 //! | [`kinds::PARTICIPANT_INIT`] | an active Modelica model lacks a valid initialized t=0 snapshot (entity), or an authored rigid body has not been admitted to Avian (world) | entity subtree or world |
 //!
 //! # Why reconcile systems rather than events
@@ -21,10 +21,11 @@
 //!
 //! These systems instead derive the wait from state that is *already* the truth:
 //! `SceneLoadInFlight` and unresolved `UsdSceneAwaitingStage` prims for the scene, a
-//! `ModelicaModel` whose interface has not compiled for a model, and the
-//! physics-admission markers for bodies not yet admitted. There is no
-//! path to miss, because there is no transition being watched — each frame the
-//! wait either still describes the world or it does not.
+//! `ModelicaModel` for solver preparation, `SimComponent` for pre-solver
+//! preparation and rejection, and physics-admission markers. Each frame the
+//! wait either still describes the world or it does not. A program component's
+//! removal also closes its exact ticket, because its physical subject can
+//! survive the program.
 
 use bevy::prelude::*;
 use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
@@ -53,19 +54,27 @@ struct PhysicsAdmissionWait {
     ticket: ReadinessTicket,
 }
 
-/// The open compile or initial-snapshot wait for this entity's Modelica model.
-///
-/// On the entity rather than in a side table so it dies with the entity; the
-/// registry drops waits whose subject was despawned, so a scene reload
-/// mid-compile needs no teardown of its own.
+/// One program's preparation, failure or initial-snapshot wait. The ticket's
+/// physical subject may outlive the program, so removal closes its exact lease.
 #[derive(Component)]
-struct ModelCompileWait {
+struct ProgramReadinessWait {
     ticket: ReadinessTicket,
     kind: &'static str,
+    label: String,
     /// The physical owner held while the program is unavailable.  Modelica
     /// programs are commonly authored below a rigid body, so the program
     /// entity itself is not the thing whose initial state must remain fixed.
     owner: Entity,
+}
+
+fn finish_program_readiness_wait(
+    removed: On<Remove, ProgramReadinessWait>,
+    waits: Query<&ProgramReadinessWait>,
+    mut registry: ResMut<ReadinessRegistry>,
+) {
+    if let Ok(wait) = waits.get(removed.entity) {
+        registry.finish(wait.ticket);
+    }
 }
 
 /// Hold the world while the USD stage itself is being mounted.
@@ -104,7 +113,7 @@ fn scene_still_loading(stage_loading: bool) -> bool {
     stage_loading
 }
 
-/// Freeze the physical owner of a Modelica entity during its program lifecycle
+/// Freeze the physical owner of a USD program during its preparation lifecycle
 /// while it compiles or an active participant awaits its first successful
 /// communication point. A deliberately paused, compiled model is ready without
 /// a live step.
@@ -114,11 +123,12 @@ fn scene_still_loading(stage_loading: bool) -> bool {
 /// compiler. Until it has, the object is not a vehicle — it is a rock with a
 /// pending appointment — and it must not be falling.
 ///
-/// The `ModelicaModel` lifecycle is authoritative here. A bind-published
+/// The `ModelicaModel` lifecycle owns solver preparation. A bind-published
 /// [`SimComponent`] intentionally remains `Compiling` until its first solver
 /// tick, so the model's source state closes the compile wait and its first
 /// successful communication point closes participant initialization. Waiting
-/// on the wrapper status would conflate those separate lifecycle facts.
+/// on the wrapper status would conflate those separate lifecycle facts. Before
+/// a solver exists, the component's preparation or terminal error owns the wait.
 ///
 /// The wait is deliberately attached to the owning physical subtree rather than
 /// the whole world. A cold compiler must not stop unrelated rovers, terrain
@@ -126,54 +136,83 @@ fn scene_still_loading(stage_loading: bool) -> bool {
 /// entity hierarchy and the runtime rigid-body schema; there is no vehicle-name
 /// or program-name special case. A standalone program with no rigid-body
 /// ancestor holds its own entity, preserving the original participant scope.
-fn track_model_compiles(
+fn track_program_readiness(
     initializing: Query<(), With<lunco_cosim_core::initialization::CoupledInitializationPending>>,
-    models: Query<
+    programs: Query<
         (
             Entity,
-            &ModelicaModel,
+            Option<&ModelicaModel>,
             Option<&ModelicaVariables>,
             Option<&SimComponent>,
         ),
-        With<UsdSourcedCosim>,
+        (
+            With<UsdSourcedCosim>,
+            Or<(With<ModelicaModel>, With<SimComponent>)>,
+        ),
     >,
-    waits: Query<(Entity, &ModelCompileWait)>,
+    waits: Query<(Entity, &ProgramReadinessWait)>,
     parents: Query<&ChildOf>,
     rigid_bodies: Query<(), With<avian3d::prelude::RigidBody>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    for (entity, model, variables, component) in &models {
-        let kind = if initializing.contains(entity) {
-            Some(kinds::PARTICIPANT_INIT)
-        } else {
-            modelica_wait_kind(model, variables, component)
+    for (entity, model, variables, component) in &programs {
+        let (label, kind) = match (model, component) {
+            (Some(model), component) => {
+                let kind = modelica_wait_kind(model, variables, component);
+                (
+                    model.model_name.as_str(),
+                    if kind == Some(kinds::PROGRAM_FAILED) {
+                        kind
+                    } else if initializing.contains(entity) {
+                        Some(kinds::PARTICIPANT_INIT)
+                    } else {
+                        kind
+                    },
+                )
+            }
+            (None, Some(component)) => {
+                let kind = if matches!(component.status, lunco_cosim_core::SimStatus::Error(_)) {
+                    Some(kinds::PROGRAM_FAILED)
+                } else if initializing.contains(entity) {
+                    Some(kinds::PARTICIPANT_INIT)
+                } else if matches!(component.status, lunco_cosim_core::SimStatus::Compiling) {
+                    Some(kinds::PROGRAM_COMPILE)
+                } else {
+                    None
+                };
+                (component.model_name.as_str(), kind)
+            }
+            (None, None) => continue,
         };
-        let wait = waits.get(entity).ok();
+        let wait = waits.get(entity).ok().map(|(_, wait)| wait);
+        let Some(kind) = kind else {
+            if let Some(wait) = wait {
+                registry.finish(wait.ticket);
+                commands.entity(entity).try_remove::<ProgramReadinessWait>();
+            }
+            continue;
+        };
         let owner = owning_physics_entity(entity, &parents, &rigid_bodies);
-        match (kind, wait) {
-            (Some(kind), None) => {
-                let ticket = registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
-                commands.entity(entity).try_insert(ModelCompileWait {
-                    ticket,
-                    kind,
-                    owner,
-                });
-            }
-            (None, Some((_, wait))) => {
-                registry.finish(wait.ticket);
-                commands.entity(entity).try_remove::<ModelCompileWait>();
-            }
-            (Some(kind), Some((_, wait))) if kind != wait.kind || owner != wait.owner => {
-                registry.finish(wait.ticket);
-                let ticket = registry.begin(Subject::Entity(owner), kind, model.model_name.clone());
-                commands.entity(entity).try_insert(ModelCompileWait {
-                    ticket,
-                    kind,
-                    owner,
-                });
-            }
-            _ => {}
+        if wait.is_some_and(|wait| kind == wait.kind && owner == wait.owner && label == wait.label)
+        {
+            continue;
+        }
+        if let Some(wait) = wait {
+            registry.finish(wait.ticket);
+        }
+        let ticket = registry.begin(Subject::Entity(owner), kind, label.to_owned());
+        commands.entity(entity).try_insert(ProgramReadinessWait {
+            ticket,
+            kind,
+            owner,
+            label: label.to_owned(),
+        });
+    }
+    for (entity, wait) in &waits {
+        if programs.get(entity).is_err() {
+            registry.finish(wait.ticket);
+            commands.entity(entity).try_remove::<ProgramReadinessWait>();
         }
     }
 }
@@ -339,11 +378,11 @@ impl Plugin for UsdReadinessPlugin {
         // `PostUpdate`: after the frame's spawning and compile-wrapping have run,
         // so a wait that closed this frame is not re-declared before the state
         // that closes it is visible.
-        app.add_systems(
+        app.add_observer(finish_program_readiness_wait).add_systems(
             PostUpdate,
             (
                 track_scene_load,
-                track_model_compiles,
+                track_program_readiness,
                 track_physics_admission,
             ),
         );
@@ -351,7 +390,7 @@ impl Plugin for UsdReadinessPlugin {
         // drops waits whose subject entity was despawned, but a WORLD-scoped one
         // has no entity to die with — the outgoing scene's load wait would be
         // inherited by the incoming scene and go on holding physics against it.
-        // Both producers above re-declare from live state on the next frame, so
+        // The producers re-declare from live state on the next frame, so
         // clearing here costs nothing that is still true.
         app.add_systems(
             lunco_core::SceneTeardown,
@@ -569,7 +608,7 @@ mod tests {
     fn pending_model_compile_does_not_hold_the_world() {
         let mut app = App::new();
         app.init_resource::<ReadinessRegistry>()
-            .add_systems(Update, track_model_compiles);
+            .add_systems(Update, track_program_readiness);
 
         let entity = app
             .world_mut()
@@ -598,7 +637,7 @@ mod tests {
     fn model_compile_wait_targets_the_authored_rigid_body_owner() {
         let mut app = App::new();
         app.init_resource::<ReadinessRegistry>()
-            .add_systems(Update, track_model_compiles);
+            .add_systems(Update, track_program_readiness);
 
         let body = app
             .world_mut()

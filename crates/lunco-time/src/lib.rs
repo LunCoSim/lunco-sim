@@ -30,6 +30,9 @@ use std::time::Duration;
 
 use lunco_core_runtime::{SECS_PER_TICK, SimTick};
 
+mod lifecycle;
+pub use lifecycle::{SimulationLifecycleChanged, SimulationLifecycleTransition};
+
 pub mod stepping;
 pub use stepping::{SimulationStepControl, StepSimulation};
 
@@ -572,7 +575,15 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    for _ in 0..MAX_FIXED_STEPS_PER_FRAME {
+    let started_at = Instant::now();
+    let service_budget = world.resource::<Time<Fixed>>().timestep();
+    for completed in 0..MAX_FIXED_STEPS_PER_FRAME {
+        // A complete fixed cycle is indivisible. Once one has run, return to
+        // input/presentation after one fixed quantum of wall-clock service.
+        // The accumulator retains every pending cycle for the next update.
+        if completed > 0 && started_at.elapsed() >= service_budget {
+            break;
+        }
         if !world.resource::<lunco_core::RuntimeFaults>().active()
             && (world
                 .get_resource::<lunco_core_runtime::SimulationBarrier>()
@@ -611,6 +622,9 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
             virtual_time.advance_by(timestep);
         } else if world.resource::<Time<Fixed>>().overstep() < timestep {
             break;
+        }
+        if !manual_step {
+            lifecycle::start(world);
         }
         let mut fixed = world.resource_mut::<Time<Fixed>>();
         // Bevy represents a completed fixed quantum as a paired accumulator
@@ -1157,6 +1171,7 @@ impl Plugin for TimePlugin {
         );
 
         stepping::install(app);
+        lifecycle::install(app);
         // The clock tree (T5): TimeDomain/Playback/TimeBinding + the per-frame
         // resolve into `ResolvedDomains` (in `DomainResolveSet`, `Update`).
         domain::build_domain_tree(app);
@@ -1597,10 +1612,8 @@ mod tests {
                 "{rate}x must retain all admitted time from a hitched frame"
             );
             let expected_ticks = (admitted.as_nanos() / timestep.as_nanos()) as u32;
-            assert_eq!(
-                app.world().resource::<FixedRunCount>().0,
-                expected_ticks.min(MAX_FIXED_STEPS_PER_FRAME)
-            );
+            let completed = app.world().resource::<FixedRunCount>().0;
+            assert!(completed > 0 && completed <= expected_ticks.min(MAX_FIXED_STEPS_PER_FRAME));
 
             app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
                 Duration::ZERO,
@@ -1631,6 +1644,50 @@ mod tests {
                 Duration::ZERO
             );
         }
+    }
+
+    #[test]
+    fn realtime_fixed_loop_service_yield_retains_each_complete_cycle() {
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::ZERO,
+            ))
+            .init_resource::<FixedRunCount>()
+            .add_systems(FixedUpdate, (count_fixed_runs, count_fixed_ticks));
+        // Native ECS dispatch exceeds this quantum without a sleep or a fake
+        // clock. Every app update must still admit one complete causal cycle.
+        let quantum = Duration::from_nanos(1);
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(quantum);
+        app.update();
+        let admitted = quantum * 8;
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(admitted);
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 1);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            quantum * 7
+        );
+        app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 1);
+        app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Playing;
+        for expected in 2..=8 {
+            app.update();
+            assert_eq!(app.world().resource::<FixedRunCount>().0, expected);
+            let fixed = app.world().resource::<Time<Fixed>>();
+            assert_eq!(fixed.elapsed() + fixed.overstep(), admitted);
+        }
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, 8);
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::ZERO
+        );
     }
 
     #[derive(Resource, Default)]
