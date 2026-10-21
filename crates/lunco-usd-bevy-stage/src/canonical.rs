@@ -191,6 +191,10 @@ impl CanonicalStage {
     /// [`add_layer_bytes`](Self::add_layer_bytes)).
     pub fn from_recipe(recipe: &StageRecipe) -> anyhow::Result<Self> {
         let (stage, shared) = crate::compose::build_stage_with_resolver(recipe)?;
+        // Referenced layers enter the native stage during composition. They
+        // must be addressable by the first dependency-layer edit, before any
+        // reader or log formatter happens to traverse the stage.
+        stage.traverse(openusd::usd::PrimPredicate::ALL, |_| {})?;
         let mut cs = Self::from_stage(stage, recipe.root_id.clone());
         cs.resolver_bytes = Some(shared);
         cs.dependency_diagnostics = recipe.dependency_diagnostics.clone();
@@ -329,59 +333,6 @@ impl CanonicalStage {
         self.insert_xform_op(path, "xformOp:scale")
     }
 
-    /// Remove one locally authored standard xform operation and its order token
-    /// from the live stage. This is the projection counterpart of the document's
-    /// `RemoveXformOp` history inverse; it reveals the weaker composed value
-    /// without rebuilding the scene.
-    pub(crate) fn remove_xform_op(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
-        use anyhow::anyhow;
-        if !matches!(
-            name,
-            "xformOp:translate" | "xformOp:rotateXYZ" | "xformOp:scale"
-        ) {
-            return Err(anyhow!("unsupported xform operation `{name}`"));
-        }
-        let existing: Vec<String> = match self
-            .stage
-            .prim(path.clone())
-            .expect("validated USD path")
-            .attribute("xformOpOrder")
-            .get::<openusd::sdf::Value>()
-            .map_err(|e| anyhow!("read xformOpOrder at {path}: {e}"))?
-        {
-            Some(openusd::sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
-            Some(openusd::sdf::Value::StringVec(v)) => v,
-            Some(openusd::sdf::Value::TokenListOp(v)) => {
-                v.flatten().into_iter().map(Into::into).collect()
-            }
-            Some(openusd::sdf::Value::StringListOp(v)) => v.flatten(),
-            _ => Vec::new(),
-        };
-        self.stage
-            .remove_property(format!("{path}.{name}"))
-            .map_err(|e| anyhow!("remove xform operation {path}.{name}: {e}"))?;
-        if existing.iter().any(|token| token == name) {
-            let remaining = existing
-                .into_iter()
-                .filter(|token| token != name)
-                .collect::<Vec<_>>();
-            if remaining.is_empty() {
-                self.stage
-                    .remove_property(format!("{path}.xformOpOrder"))
-                    .map_err(|e| anyhow!("remove empty xformOpOrder at {path}: {e}"))?;
-            } else {
-                self.stage
-                    .prim(path.clone())
-                    .expect("validated USD path")
-                    .create_attribute("xformOpOrder", "token[]")
-                    .map_err(|e| anyhow!("update xformOpOrder at {path}: {e}"))?
-                    .set(openusd::sdf::Value::token_vec(remaining))
-                    .map_err(|e| anyhow!("set xformOpOrder at {path}: {e}"))?;
-            }
-        }
-        Ok(())
-    }
-
     /// Project the document's resolved property after a layer opinion changes.
     /// The live root combines document layers, so removing its flattened spec
     /// directly would discard a weaker document-layer value too.
@@ -425,51 +376,6 @@ impl CanonicalStage {
                 Ok(())
             })
             .map_err(|error| anyhow::anyhow!("restore prim subtree at {path}: {error}"))?;
-        Ok(())
-    }
-
-    /// Restore one standard xform operation and, when supplied, its exact local
-    /// `xformOpOrder` captured by the document history inverse.
-    pub(crate) fn restore_xform_op(
-        &self,
-        path: &SdfPath,
-        name: &str,
-        value: [f64; 3],
-        order: Option<&[String]>,
-    ) -> anyhow::Result<()> {
-        use anyhow::anyhow;
-        if !matches!(
-            name,
-            "xformOp:translate" | "xformOp:rotateXYZ" | "xformOp:scale"
-        ) {
-            return Err(anyhow!("unsupported xform operation `{name}`"));
-        }
-        let conv = crate::stage_convention(&self.view())
-            .map_err(|error| anyhow!("invalid stage convention: {error}"))?;
-        let authored = match name {
-            "xformOp:translate" => conv
-                .stage_point_d(bevy::math::DVec3::from_array(value))
-                .to_array(),
-            "xformOp:rotateXYZ" => conv.stage_euler_xyz_deg(value),
-            "xformOp:scale" => conv
-                .stage_scale_vec_d(bevy::math::DVec3::from_array(value))
-                .to_array(),
-            _ => unreachable!(),
-        };
-        self.stage
-            .create_attribute(format!("{path}.{name}"), "double3")
-            .map_err(|e| anyhow!("restore xform operation {path}.{name}: {e}"))?
-            .set(authored)
-            .map_err(|e| anyhow!("set xform operation {path}.{name}: {e}"))?;
-        if let Some(order) = order {
-            self.stage
-                .prim(path.clone())
-                .expect("validated USD path")
-                .create_attribute("xformOpOrder", "token[]")
-                .map_err(|e| anyhow!("restore xformOpOrder at {path}: {e}"))?
-                .set(openusd::sdf::Value::token_vec(order.iter().cloned()))
-                .map_err(|e| anyhow!("set xformOpOrder at {path}: {e}"))?;
-        }
         Ok(())
     }
 
@@ -1181,11 +1087,6 @@ impl StageProjector<'_> {
         self.0.author_scale(path, value)
     }
 
-    /// Replay a `RemoveXformOp` history op.
-    pub fn remove_xform_op(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
-        self.0.remove_xform_op(path, name)
-    }
-
     /// Replay an attribute or relationship removal history operation.
     pub fn reconcile_document_property(
         &self,
@@ -1205,17 +1106,6 @@ impl StageProjector<'_> {
     ) -> anyhow::Result<()> {
         self.0
             .restore_prim_subtree(path, snapshot_usda, sibling_order)
-    }
-
-    /// Replay a `RestoreXformOp` history op.
-    pub fn restore_xform_op(
-        &self,
-        path: &SdfPath,
-        name: &str,
-        value: [f64; 3],
-        order: Option<&[String]>,
-    ) -> anyhow::Result<()> {
-        self.0.restore_xform_op(path, name, value, order)
     }
 
     /// Replay a `DefinePrim` op — see [`CanonicalStage::author_prim`].
@@ -2155,6 +2045,36 @@ mod authoring_tests {
                 .chain(&change.info_only)
                 .all(|path| !path.to_string().starts_with("/Unrelated"))
         }));
+    }
+
+    #[test]
+    fn first_dependent_patch_addresses_an_unread_reference_layer() {
+        let recipe = StageRecipe::new(
+            "scene.usda".to_owned(),
+            HashMap::from([
+                ("scene.usda".to_owned(), b"#usda 1.0\ndef Xform \"World\" (prepend references = @part.usda@</Part>) {}\n".to_vec()),
+                ("part.usda".to_owned(), b"#usda 1.0\ndef Xform \"Part\" { double value = 1 }\n".to_vec()),
+            ]),
+        );
+        let mut canonical = CanonicalStage::from_recipe(&recipe).expect("build live stage");
+        let source =
+            lunco_usd_compose::parse_usda("#usda 1.0\ndef Xform \"Part\" { double value = 2 }\n")
+                .expect("parse updated layer");
+        canonical
+            .projector()
+            .patch_layer(
+                "part.usda",
+                &source,
+                &[],
+                &[(SdfPath::new("/Part.value").unwrap(), "default".to_owned())],
+            )
+            .expect("first edit reaches the referenced layer without an earlier read");
+        assert_eq!(
+            canonical
+                .view()
+                .value::<f64>(&SdfPath::new("/World").unwrap(), "value"),
+            Some(2.0)
+        );
     }
 
     #[test]

@@ -1890,11 +1890,11 @@ fn apply_dependent_layer_patch(
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
 
     if refresh.layers.len() != 1 {
-        return Ok(false);
+        return Err("incremental dependent patch requires exactly one source layer".to_owned());
     }
     let layer = &refresh.layers[0];
     if layer.patch.rebuild_stage {
-        return Ok(false);
+        return Err("incremental dependent patch was classified as a stage rebuild".to_owned());
     }
     let Some(source) = layer.source.as_ref() else {
         return Err(format!(
@@ -1924,9 +1924,36 @@ fn apply_dependent_layer_patch(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let Some(mut stages) = world.get_non_send_mut::<CanonicalStages>() else {
-        return Ok(false);
+    // Initial projection uses the immutable asset plan. Its first live edit
+    // creates the same canonical owner used by primary-document edits.
+    let initial_recipe = if is_authoritative_scene_stage(world, stage_id)
+        && world
+            .get_non_send::<CanonicalStages>()
+            .is_none_or(|stages| stages.get(stage_id).is_none())
+    {
+        let asset = world
+            .resource::<Assets<UsdStageAsset>>()
+            .get(stage_id)
+            .ok_or_else(|| "dependent stage asset retired before live patch".to_owned())?;
+        Some((
+            asset
+                .recipe
+                .clone()
+                .ok_or_else(|| "authoritative dependent stage has no admitted recipe".to_owned())?,
+            Arc::clone(&asset.projection_plan),
+        ))
+    } else {
+        None
     };
+    let mut stages = world
+        .get_non_send_mut::<CanonicalStages>()
+        .ok_or_else(|| "dependent stage has no canonical-stage owner".to_owned())?;
+    if let Some((recipe, plan)) = initial_recipe {
+        stages.get_or_build(stage_id, &recipe).ok_or_else(|| {
+            format!("cannot initialize authoritative dependent stage {stage_id:?}")
+        })?;
+        stages.mark_prepared_plan_snapshot(stage_id, plan);
+    }
     let Some(stage) = stages.get_mut(stage_id) else {
         return Ok(false);
     };
@@ -1961,7 +1988,7 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
         )
     };
     for completion in completions {
-        let layer_sources = {
+        let (layer_sources, target_plan) = {
             let refreshes = world.resource::<PendingDependentStageRefreshes>();
             let Some(current) = refreshes.by_stage.get(&completion.stage) else {
                 continue;
@@ -1971,8 +1998,25 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
             {
                 continue;
             }
-            current.changed_layers.values().cloned().collect::<Vec<_>>()
+            (
+                current.changed_layers.values().cloned().collect::<Vec<_>>(),
+                Arc::clone(&current.target_plan),
+            )
         };
+        let target_is_current = world
+            .resource::<Assets<UsdStageAsset>>()
+            .get(completion.stage)
+            .is_some_and(|asset| Arc::ptr_eq(&asset.projection_plan, &target_plan));
+        if !target_is_current {
+            let retired = world
+                .resource_mut::<PendingDependentStageRefreshes>()
+                .by_stage
+                .remove(&completion.stage);
+            if let Some(retired) = retired {
+                release_dependent_stage_progress(world, retired.progress_key);
+            }
+            continue;
+        }
         let document_state = {
             let registry = world.resource::<DocumentRegistry<UsdDocument>>();
             layer_sources.iter().find_map(|source| {
@@ -2243,15 +2287,6 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                         pending_refresh,
                         error.to_string(),
                     );
-                    continue;
-                }
-                let current_plan = world
-                    .resource::<Assets<UsdStageAsset>>()
-                    .get(completion.stage)
-                    .map(|asset| Arc::ptr_eq(&asset.projection_plan, &pending_refresh.target_plan));
-                if current_plan != Some(true) {
-                    release_dependent_stage_progress(world, pending_refresh.progress_key);
-
                     continue;
                 }
                 if !requires_full_rebuild {
@@ -3248,57 +3283,50 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 }
             }
         }
-        UsdOp::RemoveXformOp { path, name, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else {
-                return;
-            };
-            if let Some(cs) = world
+        UsdOp::RemoveXformOp { path, name, .. } | UsdOp::RestoreXformOp { path, name, .. } => {
+            let projected = world
                 .get_non_send::<CanonicalStages>()
-                .and_then(|s| s.get(scene_id))
-            {
-                if let Err(e) = cs.projector().remove_xform_op(&sp, name) {
-                    warn!("[twin] remove xform operation {path}.{name}: {e}");
-                } else if let Some(channel) =
-                    crate::live_consume::TransformEditChannels::for_attribute(name)
-                {
-                    crate::live_consume::mark_live_transform(
-                        world,
-                        scene_id,
-                        path.clone(),
-                        channel,
-                    );
+                .and_then(|stages| stages.get(scene_id))
+                .ok_or_else(|| "transform history projection has no canonical stage".to_owned())
+                .and_then(|stage| {
+                    let source = document_projection_source(world, scene_id, op.edit_target())?;
+                    let prim = openusd::sdf::Path::new(path).map_err(|error| error.to_string())?;
+                    let properties = [
+                        prim.append_property(name)
+                            .map_err(|error| error.to_string())?,
+                        prim.append_property("xformOpOrder")
+                            .map_err(|error| error.to_string())?,
+                    ];
+                    let target = stage.stage().edit_target().layer_identifier().to_owned();
+                    stage
+                        .projector()
+                        .patch_layer(
+                            &target,
+                            &source,
+                            &properties,
+                            &[(prim, "propertyChildren".to_owned())],
+                        )
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                });
+            match projected {
+                Ok(()) => {
+                    if let Some(channel) =
+                        crate::live_consume::TransformEditChannels::for_attribute(name)
+                    {
+                        crate::live_consume::mark_live_transform(
+                            world,
+                            scene_id,
+                            path.clone(),
+                            channel,
+                        );
+                    }
                 }
-            }
-        }
-        UsdOp::RestoreXformOp {
-            path,
-            name,
-            value,
-            order,
-            ..
-        } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else {
-                return;
-            };
-            if let Some(cs) = world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|s| s.get(scene_id))
-            {
-                if let Err(e) = cs
-                    .projector()
-                    .restore_xform_op(&sp, name, *value, order.as_deref())
-                {
-                    warn!("[twin] restore xform operation {path}.{name}: {e}");
-                } else if let Some(channel) =
-                    crate::live_consume::TransformEditChannels::for_attribute(name)
-                {
-                    crate::live_consume::mark_live_transform(
-                        world,
-                        scene_id,
-                        path.clone(),
-                        channel,
-                    );
-                }
+                Err(error) => report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("transform history {path}.{name}: {error}"),
+                ),
             }
         }
         UsdOp::RemoveAttribute { path, name, .. } => {

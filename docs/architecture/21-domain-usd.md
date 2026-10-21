@@ -157,7 +157,12 @@ base/runtime revisions and coalesces layer updates against the immutable recipe.
 Bounded `UsdPreparation` workers compose the persistent document layers directly
 to `Sdf Data`, shared across dependent stages for the same revision. A bounded
 typed edit publishes its affected prim specs and fields to the existing
-thread-affine `CanonicalStage` as soon as that data is ready. One
+thread-affine `CanonicalStage` as soon as that data is ready. If an active
+dependent stage has only its initial immutable plan, this first edit opens
+its admitted recipe through the shared canonical-stage owner and binds the
+matching prepared snapshot before applying the patch. Native construction
+traverses composition so referenced layers are addressable before any reader
+or logging consumer runs. One
 `Stage::batch_edit` transaction patches the owning layer, and the ordinary stage
 sink reconciles only the changed paths. An active stage holds its exact
 simulation-progress key through that ECS handoff. Only after the live patch is
@@ -423,6 +428,11 @@ as a USDA fragment plus the owning parent's sibling order. Undo/redo restores
 those specs in one atomic layer edit and sends the ordinary stage change notice;
 it does not serialize the complete layer or rebuild the scene. Sibling order is
 merged against the current parent list so unrelated later children are retained.
+Undo of a transform value override preserves an inherited `xformOpOrder`
+entry; it removes an order token only when the forward edit introduced it.
+Live undo/redo copies the authoritative document's transform property and
+order together through the generic layer patch; the native projection does
+not make a separate transform-history decision.
 
 Derived presentation has a separate typed boundary: `ApplyUsdTransientOps`
 updates the runtime view from already-authored facts (for example, the route
@@ -494,7 +504,9 @@ has a distinct lifetime and write path:
   pose queries retain their separate frame owner. The production `usd_query_api`
   gate composes a large parent translation with fractional child coordinates
   and checks exact single/batch readback, alongside schema-rejection and
-  document-history boundaries.
+  document-history boundaries. `quatd` orientation and joint-rotation values
+  use the native `DQuat` basis conversions in both directions; authoring and
+  document queries preserve their double components.
 
 The `Send`/`!Send` boundary falls on this same seam by nature, so the two stay even if
 openusd ever makes `Stage` `Send`. Save / journal / net-sync touch the cheap serializable

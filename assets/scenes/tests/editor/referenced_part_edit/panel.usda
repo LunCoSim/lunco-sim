@@ -1,0 +1,161 @@
+#usda 1.0
+(
+    defaultPrim = "SolarPanel"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "SolarPanel" (
+    documentation = "Reusable photovoltaic panel component with mass, collision, electrical source, and telemetry facets."
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoTelemetryAPI", "LunCoModelicaTopologyAPI"]
+)
+{
+    uniform token lunco:modelica:topologyRole = "source"
+    uniform bool lunco:spawnable = true
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+    custom token connectors:p
+    bool lunco:telemetry = true
+    string ui:displayName = "Solar power"
+    token lunco:telemetry:port = "power_out"
+    token lunco:telemetry:name = "power.solar_power"
+    token lunco:telemetry:unit = "W"
+    string lunco:telemetry:description = "Solved power delivered by the solar panel at its terminals."
+    float physics:mass = 15.0
+    custom double inputs:target_mount_x
+    double inputs:target_mount_x.connect = </SolarPanel/Environment.outputs:sun_mount_x>
+    custom double inputs:target_mount_y
+    double inputs:target_mount_y.connect = </SolarPanel/Environment.outputs:sun_mount_y>
+    custom double inputs:target_mount_z
+    double inputs:target_mount_z.connect = </SolarPanel/Environment.outputs:sun_mount_z>
+    custom double inputs:irradiance
+    double inputs:irradiance.connect = </SolarPanel/Environment.outputs:sun_irradiance_w_m2>
+    custom double inputs:sun_visibility
+    double inputs:sun_visibility.connect = </SolarPanel/Environment.outputs:sun_visibility>
+    custom double outputs:incident_irradiance_w_m2
+    double outputs:incident_irradiance_w_m2.connect = None
+    custom double outputs:incident_power_w
+    double outputs:incident_power_w.connect = None
+    double parameters:area = 18.0
+    double parameters:efficiency = 0.3
+    double inputs:panel_normal_x = 0.0
+    double inputs:panel_normal_y = 1.0
+    double inputs:panel_normal_z = 0.0
+    custom double outputs:available_power_w
+    double outputs:available_power_w.connect = None
+    custom double outputs:power_out
+    double outputs:power_out.connect = None
+    custom double outputs:cos_incidence
+    double outputs:cos_incidence.connect = None
+    custom double outputs:terminal_voltage_v
+    double outputs:terminal_voltage_v.connect = None
+    custom double outputs:generated_current_a
+    double outputs:generated_current_a.connect = None
+    custom double inputs:cell_temperature_k = 298.15 (
+        documentation = "Absolute cell temperature in kelvin. Prescribed at reference temperature until connected to a thermal-mass temperature output."
+    )
+    custom double parameters:reference_temperature_k = 298.15
+    custom double parameters:power_temperature_coefficient_per_k = -0.0037 (
+        documentation = "Relative per-kelvin power coefficient. Default -0.0037/K is the PVWatts standard crystalline-silicon study value, not a FLIP supplier measurement. Source: https://samrepo.nlr.gov/help/pvwatts_system_design.html (accessed 2026-10-20)."
+    )
+    custom double parameters:solar_absorptivity = 1.0
+    custom double outputs:temperature_k = 0.0
+    custom double outputs:temperature_factor = 0.0
+    custom double outputs:conversion_efficiency = 0.0
+    custom double outputs:temperature_adjusted_peak_power_w = 0.0
+    custom double outputs:absorbed_power_w = 0.0
+    custom double outputs:reflected_power_w = 0.0
+    custom double outputs:heat_w = 0.0
+    def Scope "Looks"
+    {
+        def Material "SolarPanel"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </SolarPanel/Looks/SolarPanel/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
+                color3f inputs:cell_color = (0.05000000074505806, 0.05000000074505806, 0.3499999940395355)
+                color3f inputs:bus_color = (0.8500000238418579, 0.8500000238418579, 0.8999999761581421)
+                color3f inputs:frame_color = (0.3499999940395355, 0.3499999940395355, 0.3799999952316284)
+                float inputs:cell_rows = 12.0
+                float inputs:cell_cols = 6.0
+                float inputs:cell_gap = 0.019999999552965164
+                float inputs:bus_width = 0.004000000189989805
+                float inputs:border = 0.05000000074505806
+                token outputs:surface
+            }
+        }
+    }
+    def Cube "PanelFrame" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, -0.005, 0.0)
+        double3 xformOp:scale = (6.2, 0.02, 3.2)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.44999998807907104, 0.44999998807907104, 0.47999998927116394)]
+        bool physics:collisionEnabled = true
+    }
+    def Cube "PanelSurface" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, 0.0115, 0.0)
+        double3 xformOp:scale = (6.0, 0.003, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.05000000074505806, 0.05000000074505806, 0.8500000238418579)]
+        bool physics:collisionEnabled = true
+        rel material:binding = </SolarPanel/Looks/SolarPanel>
+    }
+    def Points "Environment" (
+        prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+    )
+    {
+        custom double outputs:sun_mount_x
+        custom double outputs:sun_mount_y
+        custom double outputs:sun_mount_z
+        point3f[] points = [(-2.0, 0.014499999582767487, -1.0), (0.0, 0.014499999582767487, -1.0), (2.0, 0.014499999582767487, -1.0), (-2.0, 0.014499999582767487, 0.0), (0.0, 0.014499999582767487, 0.0), (2.0, 0.014499999582767487, 0.0), (-2.0, 0.014499999582767487, 1.0), (0.0, 0.014499999582767487, 1.0), (2.0, 0.014499999582767487, 1.0)]
+        token visibility = "invisible"
+    }
+    def Scope "VoltageTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Solar voltage"
+        token lunco:telemetry:port = "terminal_voltage_v"
+        token lunco:telemetry:name = "power.solar_terminal_voltage_v"
+        token lunco:telemetry:unit = "V"
+        string lunco:telemetry:description = "Solved voltage at the solar panel terminals on the electrical bus."
+        rel lunco:telemetry:target = </SolarPanel>
+    }
+    def Scope "CurrentTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Solar current"
+        token lunco:telemetry:port = "generated_current_a"
+        token lunco:telemetry:name = "power.solar_generated_current_a"
+        token lunco:telemetry:unit = "A"
+        string lunco:telemetry:description = "Current delivered by the solar panel into the electrical bus."
+        rel lunco:telemetry:target = </SolarPanel>
+    }
+    def Scope "AvailablePowerTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Available solar"
+        token lunco:telemetry:port = "available_power_w"
+        token lunco:telemetry:name = "power.solar_available_power_w"
+        token lunco:telemetry:unit = "W"
+        string lunco:telemetry:description = "Solar electrical power available before bus loading."
+        rel lunco:telemetry:target = </SolarPanel>
+    }
+}

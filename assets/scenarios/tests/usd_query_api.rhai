@@ -64,6 +64,11 @@ fn on_tick(me, ctx) {
             || batch.records.len() != 1 || batch.records[0].world_position != expected {
             this = fail(this, "document placement lost authored f64 precision: " + single.to_string()); return;
         }
+        let expected_orientation = [0.7071067811865476, 0.7071067811865476, 0.0, 0.0];
+        if single.attrs["xformOp:orient"] != expected_orientation
+            || batch.records[0].attrs["xformOp:orient"] != expected_orientation {
+            this = fail(this, "quatd document orientation lost authored f64 precision: " + single.attrs["xformOp:orient"].to_string()); return;
+        }
         this = finish(this, [
             t_true(true, "document inspection is explicit and reads composed USD facts"),
             t_true(true, "reference inspection and target resolution use native document composition"),
@@ -71,6 +76,7 @@ fn on_tick(me, ctx) {
             t_true(true, "document synchronization returns typed deltas and rejects future cursors"),
             t_true(true, "expired operation history returns the complete authored layer snapshot"),
             t_true(true, "single and batch document placement preserve f64 through the parent transform"),
+            t_true(true, "quatd authoring and query conversion preserve f64 components"),
         ]);
         return;
     }
@@ -296,6 +302,9 @@ fn on_tick(me, ctx) {
     let precision = assembly_edit::batch(this.doc, "Check canonical f64 placement", [
         #{SetTranslate: #{edit_target: "@runtime@", path: ASSEMBLY, value: [16777217.0, 0.0, 0.0]}},
         #{SetTranslate: #{edit_target: "@runtime@", path: DELTA_TARGET, value: [0.25, 1.9205, 2.55]}},
+        #{SetAttribute: #{edit_target: "@runtime@", path: DELTA_TARGET,
+            name: "xformOp:orient", type_name: "quatd",
+            value: "(0.7071067811865476, 0.7071067811865476, 0.0, 0.0)"}},
     ], snapshot.generation);
     if precision == () || precision.id == () || precision.ok == false {
         this = fail(this, "canonical placement fixture was rejected"); return;

@@ -849,14 +849,12 @@ impl ConventionTransform {
                 })
             }
             ("xformOp:orient", "quatd", V::Quatd(q)) => {
-                let r = self.stage_rotation(Quat::from_xyzw(
-                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
-                ));
+                let r = self.stage_rotation_d(DQuat::from_xyzw(q.x, q.y, q.z, q.w));
                 V::Quatd(gf::Quatd {
-                    w: r.w as f64,
-                    x: r.x as f64,
-                    y: r.y as f64,
-                    z: r.z as f64,
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
                 })
             }
             (_, _, value) => self.stage_value(type_name, value),
@@ -891,14 +889,12 @@ impl ConventionTransform {
                 })
             }
             ("physics:localRot0" | "physics:localRot1", "quatd", V::Quatd(q)) => {
-                let r = self.stage_rotation(Quat::from_xyzw(
-                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
-                ));
+                let r = self.stage_rotation_d(DQuat::from_xyzw(q.x, q.y, q.z, q.w));
                 V::Quatd(gf::Quatd {
-                    w: r.w as f64,
-                    x: r.x as f64,
-                    y: r.y as f64,
-                    z: r.z as f64,
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
                 })
             }
             (_, _, value) => self.stage_xform_value(name, type_name, value),
@@ -975,14 +971,12 @@ impl ConventionTransform {
                 })
             }
             ("xformOp:orient", "quatd", V::Quatd(q)) => {
-                let r = self.rotation(Quat::from_xyzw(
-                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
-                ));
+                let r = self.rotation_d(DQuat::from_xyzw(q.x, q.y, q.z, q.w));
                 V::Quatd(gf::Quatd {
-                    w: r.w as f64,
-                    x: r.x as f64,
-                    y: r.y as f64,
-                    z: r.z as f64,
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
                 })
             }
             (_, _, value) => self.canonical_value(type_name, value),
@@ -1011,14 +1005,12 @@ impl ConventionTransform {
                 })
             }
             ("physics:localRot0" | "physics:localRot1", "quatd", V::Quatd(q)) => {
-                let r = self.rotation(Quat::from_xyzw(
-                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
-                ));
+                let r = self.rotation_d(DQuat::from_xyzw(q.x, q.y, q.z, q.w));
                 V::Quatd(gf::Quatd {
-                    w: r.w as f64,
-                    x: r.x as f64,
-                    y: r.y as f64,
-                    z: r.z as f64,
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
                 })
             }
             (_, _, value) => self.canonical_xform_value(name, type_name, value),

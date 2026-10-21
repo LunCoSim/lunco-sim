@@ -976,6 +976,11 @@ because it contains a component collection; use `preview_domain_isolation`
 when changing that runtime admission boundary. Preview queries remain valid
 even when the authored network is incomplete.
 
+For dependent component edits, include the first edit after fresh scene
+admission, before another authoring operation opens the live native stage.
+Verify the active scene receives the change, readiness clears, and undo
+restores it. Source-document readback alone does not prove that handoff.
+
 For physical acceptance, inspect the production scene/scenario's
 real verdict. `--validate` is parse/preflight only. For code or authored asset
 changes, run the narrowest relevant checks after the interactive session; do

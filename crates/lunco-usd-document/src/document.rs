@@ -2753,6 +2753,7 @@ impl<'a> UsdEditSession<'a> {
                 let authored_value = layer.field(&value_path, "default").is_some();
                 let authored_order = layer.field(&order_path, "default").is_some();
                 let existing_order = xform_op_order_tokens(layer, &prim_sdf);
+                let remove_order_entry = restore_order.is_some();
                 let inverse = UsdOp::RestoreXformOp {
                     edit_target: id.clone(),
                     path: path.clone(),
@@ -2765,7 +2766,9 @@ impl<'a> UsdEditSession<'a> {
                 if authored_value {
                     stage.remove_property(value_path).map_err(author_err)?;
                 }
-                if authored_order {
+                // A value override of an inherited op does not introduce its
+                // order token. Undo keeps that op active in the weaker layer.
+                if authored_order && remove_order_entry {
                     let remaining = existing_order
                         .into_iter()
                         .filter(|token| token != &name)

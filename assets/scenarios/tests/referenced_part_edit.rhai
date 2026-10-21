@@ -2,15 +2,19 @@
 const TEST_KIND = "editor";
 const PANEL = "/ReferencedPartEdit/Panel";
 const PREVIEW = 15401;
+const COMPONENT_PREVIEW = 15402;
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "InspectUsdViewport"], required_inputs: [] }
+       query_reads: ["QueryUsdPrim", "InspectUsdDocument", "InspectUsdEditSession", "InspectUsdViewport", "ListOpenDocuments", "GetReadiness"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
-    this.phase = 0; this.elapsed = 0.0; this.done = false;
+    this.phase = -2; this.elapsed = 0.0; this.done = false;
     this.doc = (); this.checks = [];
+    let opened = cmd("OpenUsdSourceDocument", #{source: "twin://referenced_part_edit/panel.usda"});
+    print("[referenced-part-edit] source open " + opened.to_string());
+    this.command = opened.id;
 }
 
 fn ready(preview_id, doc, generation) {
@@ -29,6 +33,77 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(false, "referenced edit timeout phase " + this.phase));
         this.done = true;
         report_verdict(this.checks, "REFERENCED PART EDIT", "REFERENCED_PART_EDIT");
+        return;
+    }
+    if this.phase == -2 {
+        let result = command_result(this.command);
+        if result.status == "pending" { return; }
+        if result.status != "applied" {
+            this.checks.push(t_true(false, "component source open rejected: " + result.error));
+            this.done = true;
+            report_verdict(this.checks, "REFERENCED PART EDIT", "REFERENCED_PART_EDIT");
+            return;
+        }
+        for document in query("ListOpenDocuments").open_documents {
+            if document.kind == "usd" && document.title == "panel" { this.component = document.doc_id; }
+        }
+        if this.component == () { return; }
+        this.component_generation = assembly_edit::describe(this.component).generation;
+        assembly_ui::open_session(COMPONENT_PREVIEW, this.component, "@root@");
+        this.phase = -4;
+        return;
+    }
+    if this.phase == -4 {
+        if !ready(COMPONENT_PREVIEW, this.component, this.component_generation) { return; }
+        let original = query("QueryUsdPrim", #{doc_id: this.component, path: "/SolarPanel/PanelFrame"});
+        if original == () || original.attrs == () { return; }
+        this.component_original = original.attrs["xformOp:translate"];
+        this.component_live_position = query("QueryUsdPrim", #{path: PANEL + "/PanelFrame"}).world_position;
+        let changed = this.component_original;
+        changed[1] += 0.25;
+        this.component_generation = assembly_edit::describe(this.component).generation;
+        this.command = cmd("ApplyUsdOp", #{doc_id: this.component, parent_gen: this.component_generation,
+            op: #{SetTranslate: #{edit_target: "@runtime@", path: "/SolarPanel/PanelFrame", value: changed}}}).id;
+        this.phase = -1;
+        return;
+    }
+    if this.phase == -1 {
+        let result = command_result(this.command);
+        if result.status == "pending" { return; }
+        if result.status != "applied" {
+            this.checks.push(t_true(false, "component edit rejected: " + result.error));
+            this.done = true;
+            report_verdict(this.checks, "REFERENCED PART EDIT", "REFERENCED_PART_EDIT");
+            return;
+        }
+        let frame = query("QueryUsdPrim", #{path: PANEL + "/PanelFrame"});
+        if frame == () || frame.attrs == ()
+            || abs(frame.attrs["xformOp:translate"][1] - this.component_original[1] - 0.25) > 1.0e-9 { return; }
+        let readiness = query("GetReadiness");
+        if readiness.ready != true { return; }
+        this.checks.push(t_true(result.status == "applied" && !readiness.faulted,
+            "first component edit reaches the active scene before any primary edit"));
+        this.component_changed_generation = assembly_edit::describe(this.component).generation;
+        cmd("UndoDocument", #{doc_id: this.component});
+        this.phase = -3;
+        return;
+    }
+    if this.phase == -3 {
+        let generation = assembly_edit::describe(this.component).generation;
+        if generation <= this.component_changed_generation
+            || !ready(COMPONENT_PREVIEW, this.component, generation) { return; }
+        let frame = query("QueryUsdPrim", #{path: PANEL + "/PanelFrame"});
+        if frame == () || frame.attrs == ()
+            || abs(frame.attrs["xformOp:translate"][1] - this.component_original[1]) > 1.0e-9 { return; }
+        let readiness = query("GetReadiness");
+        if readiness.ready != true { return; }
+        this.checks.push(t_true(!readiness.faulted
+            && frame.world_position == this.component_live_position
+            && frame.attrs["xformOpOrder"].contains("xformOp:translate"),
+            "undo of the first component edit restores the active pose and inherited op order"));
+        assembly_edit::preview_close(COMPONENT_PREVIEW);
+        cmd("CloseDocument", #{doc_id: this.component});
+        this.phase = 0;
         return;
     }
     if this.phase == 0 {
