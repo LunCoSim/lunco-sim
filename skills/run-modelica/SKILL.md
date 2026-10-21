@@ -203,6 +203,16 @@ admission without the workbench. Provide `LUNCOSIM_BIN` explicitly. The gate
 uses the existing source-root owner and queries a bounded, named trajectory;
 constant columns must retain the same final sample row as time.
 
+For distributed propellant mass properties, run
+`scripts/api/test_propellant_mass.py --output <directory>`. It compares the
+production `PropellantStatus` trajectory with an independent four-point load
+sum through uneven depletion and the dry limit, and checks compatibility with
+the default point-load model. Vehicle tank-group centroids and specific
+inertia must come from the same authored stations as the modeled tanks; scale
+the intrinsic group inertia with live mass. This equation check does not prove
+vehicle wiring or flight mass calibration: also exercise the vehicle's native
+mass/COM/inertia propagation and powered landing gate.
+
 Compile controllers with their required inputs and acausal components inside
 closed networks. An open current source, torque source or heat source need not
 initialize alone. Inspect compiler and solver diagnostics separately. The

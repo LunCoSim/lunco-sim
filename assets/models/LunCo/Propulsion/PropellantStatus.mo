@@ -22,6 +22,16 @@ model PropellantStatus
   parameter Real oxidizer_position_x_m = 0.0;
   parameter Real oxidizer_position_y_m = -0.8;
   parameter Real oxidizer_position_z_m = 0.0;
+  // Diagonal inertia per unit live mass about each species-group centroid.
+  // Zero retains the point-load model. A distributed tank group supplies
+  // its mass-weighted transverse squared distances (m2), not a fixed wet
+  // inertia: its contribution must disappear as the species drains.
+  parameter Real fuel_specific_inertia_xx_m2 = 0.0;
+  parameter Real fuel_specific_inertia_yy_m2 = 0.0;
+  parameter Real fuel_specific_inertia_zz_m2 = 0.0;
+  parameter Real oxidizer_specific_inertia_xx_m2 = 0.0;
+  parameter Real oxidizer_specific_inertia_yy_m2 = 0.0;
+  parameter Real oxidizer_specific_inertia_zz_m2 = 0.0;
 
   input Real fuel_mass_kg = 0.0;
   input Real oxidizer_mass_kg = 0.0;
@@ -53,9 +63,9 @@ equation
     0.5 + 0.5 * (depleted_mass_kg - propellant_mass_kg)
       / max(minimum_mass_kg, event_transition_width_kg)));
 
-  // The tank locations are authored parameters of this component. Treating
-  // each live tank load as a point mass keeps the equations explicit while
-  // applying the same parallel-axis shift as the rigid-body projection.
+  // Authored positions are species-group centroids in the vehicle frame.
+  // Their intrinsic diagonal inertia and the parallel-axis shift are both
+  // required when one species is split between several modeled tanks.
   total_mass_kg = max(minimum_mass_kg, dry_mass_kg + propellant_mass_kg);
   vehicle_mass_kg = total_mass_kg;
   vehicle_com_x_m = (dry_mass_kg * dry_com_x_m
@@ -68,6 +78,8 @@ equation
       + max(0.0, fuel_mass_kg) * fuel_position_z_m
       + max(0.0, oxidizer_mass_kg) * oxidizer_position_z_m) / total_mass_kg;
   vehicle_inertia_xx_kg_m2 = dry_inertia_xx_kg_m2
+      + max(0.0, fuel_mass_kg) * fuel_specific_inertia_xx_m2
+      + max(0.0, oxidizer_mass_kg) * oxidizer_specific_inertia_xx_m2
       + dry_mass_kg * ((dry_com_y_m - vehicle_com_y_m)^2
         + (dry_com_z_m - vehicle_com_z_m)^2)
       + max(0.0, fuel_mass_kg) * ((fuel_position_y_m - vehicle_com_y_m)^2
@@ -75,6 +87,8 @@ equation
       + max(0.0, oxidizer_mass_kg) * ((oxidizer_position_y_m - vehicle_com_y_m)^2
         + (oxidizer_position_z_m - vehicle_com_z_m)^2);
   vehicle_inertia_yy_kg_m2 = dry_inertia_yy_kg_m2
+      + max(0.0, fuel_mass_kg) * fuel_specific_inertia_yy_m2
+      + max(0.0, oxidizer_mass_kg) * oxidizer_specific_inertia_yy_m2
       + dry_mass_kg * ((dry_com_x_m - vehicle_com_x_m)^2
         + (dry_com_z_m - vehicle_com_z_m)^2)
       + max(0.0, fuel_mass_kg) * ((fuel_position_x_m - vehicle_com_x_m)^2
@@ -82,6 +96,8 @@ equation
       + max(0.0, oxidizer_mass_kg) * ((oxidizer_position_x_m - vehicle_com_x_m)^2
         + (oxidizer_position_z_m - vehicle_com_z_m)^2);
   vehicle_inertia_zz_kg_m2 = dry_inertia_zz_kg_m2
+      + max(0.0, fuel_mass_kg) * fuel_specific_inertia_zz_m2
+      + max(0.0, oxidizer_mass_kg) * oxidizer_specific_inertia_zz_m2
       + dry_mass_kg * ((dry_com_x_m - vehicle_com_x_m)^2
         + (dry_com_y_m - vehicle_com_y_m)^2)
       + max(0.0, fuel_mass_kg) * ((fuel_position_x_m - vehicle_com_x_m)^2
