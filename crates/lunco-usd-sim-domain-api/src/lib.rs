@@ -5,8 +5,14 @@
 //! not rebuild the projection engine.
 
 use bevy::prelude::*;
-use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_str};
+use lunco_api::{
+    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_bool,
+    api_param_str,
+};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
+use lunco_doc::Document;
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica_document::ModelicaDocument;
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_usd_sim_domain::GeneratedModelicaSource;
 
@@ -32,6 +38,15 @@ impl ApiQueryProvider for GeneratedSourceProvider {
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let include_source = match params.get("include_source") {
+            None => true,
+            Some(_) => api_param_bool(params, "include_source").ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "GeneratedModelicaSource: `include_source` must be a boolean",
+                )
+            })?,
+        };
         let wanted = params
             .get("network_root")
             .map(|_| {
@@ -54,6 +69,7 @@ impl ApiQueryProvider for GeneratedSourceProvider {
                 "GeneratedModelicaSource: ECS query is unavailable",
             ));
         };
+        let documents = world.get_resource::<DocumentRegistry<ModelicaDocument>>();
         let networks: Vec<ApiValue> = query
             .iter(world)
             .filter(|(generated, _)| {
@@ -62,9 +78,18 @@ impl ApiQueryProvider for GeneratedSourceProvider {
                     .is_none_or(|root| root == generated.network_root)
             })
             .map(|(generated, model)| {
-                api_value!({
+                let document_id = model
+                    .map(|model| model.document)
+                    .filter(|id| !id.is_unassigned());
+                let document = document_id
+                    .and_then(|id| documents.and_then(|registry| registry.host(id)))
+                    .map(|host| host.document());
+                let mut network = api_value!({
                     "network_root": generated.network_root.clone(),
                     "model_name": model.map(|model| model.model_name.clone()).unwrap_or_default(),
+                    "document_id": document_id.map(|id| id.raw()),
+                    "document_generation": document.map(|doc| doc.generation()),
+                    "document_source_matches": document.map(|doc| doc.source() == generated.source),
                     "doc_uri": generated.doc_uri.clone(),
                     "projection_error": generated.projection_error.clone(),
                     "boundary_inputs": generated.boundary_inputs.clone(),
@@ -110,8 +135,11 @@ impl ApiQueryProvider for GeneratedSourceProvider {
                             }))
                             .collect::<Vec<_>>(),
                     },
-                    "source": generated.source.clone(),
-                })
+                });
+                if include_source && let ApiValue::Map(fields) = &mut network {
+                    fields.push(("source".into(), ApiValue::str(generated.source.clone())));
+                }
+                network
             })
             .collect();
         Ok(Some(api_value!({ "networks": networks })))

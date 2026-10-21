@@ -180,10 +180,12 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H "Content-Type: application
 # other ids: "sandbox_view", "rover_build". Reset a broken layout: {"type":"ExecuteCommand","command":"ResetWorkspaceLayout","params":{}}
 ```
 
-- Add `--no-ui` for a headless compile/run server (no window, no GPU). The API
-  surface is identical; screenshots, diagrams, and 3D viz are what you lose (so
-  perspective switching is moot). `GetExperimentResult`/`SnapshotVariables` still
-  give full numeric results headless.
+- Add `--no-ui` for a headless compile/run server (no window, no GPU).
+  `RunModelicaSolve` takes an explicit `doc_id`, `class`, `source_generation`,
+  `t_start`, `t_end`, `dt`, and `label`; optional `inputs` is a map of finite
+  constant Real bindings and `tolerance` sets the integration tolerance.
+  Workbench `RunExperiment` also supports UI drafts and parameter sweeps.
+  `GetExperimentResult`/`SnapshotVariables` give full numeric results headless.
 - Use production `luncosim` for scene-test and visual evidence. Use
   `luncosim-server` or `luncosim --no-ui` for numeric/API evidence only, and
   report the binary, revision, readiness state, and evidence type separately.

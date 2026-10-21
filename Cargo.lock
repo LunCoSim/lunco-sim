@@ -11272,6 +11272,9 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-api-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-modelica-document",
  "lunco-modelica-runtime",
  "lunco-usd-sim-domain",
 ]

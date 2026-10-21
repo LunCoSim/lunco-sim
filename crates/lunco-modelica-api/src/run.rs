@@ -1,5 +1,7 @@
 //! Headless Modelica run commands for authored tools.
 
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command, register_commands};
@@ -21,9 +23,12 @@ pub struct RunModelicaSolve {
     pub doc_id: DocumentId,
     pub class: String,
     pub source_generation: u64,
+    /// Constant finite Real input bindings for this experiment snapshot.
+    pub inputs: BTreeMap<String, f64>,
     pub t_start: f64,
     pub t_end: f64,
     pub dt: f64,
+    pub tolerance: Option<f64>,
     pub label: String,
 }
 
@@ -52,6 +57,18 @@ fn on_run_modelica_solve(
     }
     if request.label.trim().is_empty() {
         return Err("RunModelicaSolve requires a non-empty run label".into());
+    }
+    let mut inputs = BTreeMap::new();
+    for (name, value) in &request.inputs {
+        if name.trim().is_empty() || !value.is_finite() {
+            return Err(
+                "RunModelicaSolve inputs require non-empty names and finite Real values".into(),
+            );
+        }
+        inputs.insert(
+            lunco_experiments::ParamPath(name.clone()),
+            lunco_experiments::ParamValue::Real(*value),
+        );
     }
 
     let host = registry.host(request.doc_id).ok_or_else(|| {
@@ -132,7 +149,7 @@ fn on_run_modelica_solve(
         t_end: request.t_end,
         dt: Some(request.dt),
         n_intervals: None,
-        tolerance: None,
+        tolerance: request.tolerance,
         solver: None,
         h0: None,
     };
@@ -154,7 +171,7 @@ fn on_run_modelica_solve(
         twin_id,
         model_ref,
         Default::default(),
-        Default::default(),
+        inputs,
         bounds,
     );
     let Some(experiment) = experiments.get_mut(experiment_id) else {

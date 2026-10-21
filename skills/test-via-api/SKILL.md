@@ -149,6 +149,15 @@ Rust core for a script-only change. The observer must verify public `cmd:*`
 events plus the resulting live state and emit a real verdict. Parsing or
 `--validate` is only preflight evidence.
 
+For experiments on USD-generated Modelica networks, query
+`GeneratedModelicaSource { network_root, include_source: false }` to read
+bounded metadata. Require `document_source_matches == true` and retain its
+`document_id` and `document_generation`; reject changed metadata before
+admission or during observation. Run the original generated document rather
+than copying its equations. `scenarios/tests/generated_source_metadata.rhai`
+accepts a composed `network_root` parameter and checks the linked document,
+source omission, absent roots and invalid query types in the production host.
+
 The generic model-authoring facades have the same production gate. The focused
 fixture is `model_authoring`:
 

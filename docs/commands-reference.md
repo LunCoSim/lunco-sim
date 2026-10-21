@@ -2456,9 +2456,11 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |   |
 | `class` | `String` |   |
 | `source_generation` | `u64` |   |
+| `inputs` | `BTreeMap < String, f64 >` |  Constant finite Real input bindings for this experiment snapshot. |
 | `t_start` | `f64` |   |
 | `t_end` | `f64` |   |
 | `dt` | `f64` |   |
+| `tolerance` | `Option < f64 >` |   |
 | `label` | `String` |   |
 
 #### `SetDocumentSource`
@@ -4107,7 +4109,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 270 commands from the runtime schema; scanned 1026 .rs files for docs (0 parse failure(s) skipped).
+<!-- 270 commands from the runtime schema; scanned 1029 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

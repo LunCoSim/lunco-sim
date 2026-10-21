@@ -116,7 +116,9 @@ same document lifecycle and asynchronous Rumoca experiment path in production
 scene tests and non-UI hosts.
 
 `RunModelicaSolve` starts the existing asynchronous experiment runner against
-an explicit document id, parsed class, and source generation. It returns an
+an explicit document id, parsed class, and source generation. Its optional
+`inputs` map supplies finite constant Real bindings and `tolerance` selects the
+run tolerance through the shared bounds validator. It returns an
 experiment id immediately; callers poll `RunStatus` and read finite `f64`
 series through `GetExperimentResult`. Required package roots come from
 Rumoca's strict document AST and enter through the same
@@ -439,6 +441,12 @@ units, and layout to diagnostics and the workbench, so the visible diagram and
 the compiled simulation have one inspectable source of truth. Its
 `projection_error` field is reserved for USD-to-Modelica projection failures;
 compiler and solver failures remain on the linked Modelica runtime state.
+The query accepts `include_source: false` for bounded metadata reads without
+copying the generated program into scripts. `document_id` identifies the
+linked Modelica document; `document_generation` and `document_source_matches`
+read its actual registry state. Missing document state is unavailable, and a
+source mismatch is false. Consumers must require a current document before
+running an experiment against a generated network.
 The projector carries the interface extracted while validating the generated
 source into installation, so validation and runtime setup share one Rumoca AST
 parse rather than independently recovering the same policy result.
