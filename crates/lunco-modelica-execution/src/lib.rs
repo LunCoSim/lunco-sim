@@ -56,10 +56,10 @@ impl Plugin for ModelicaExecutionPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            app.init_resource::<lunco_modelica_worker::worker::PreparedSolveDiskLimits>();
+            app.init_resource::<lunco_modelica_worker::worker::ModelicaArtifactDiskLimits>();
             let disk_limits = *app
                 .world()
-                .resource::<lunco_modelica_worker::worker::PreparedSolveDiskLimits>();
+                .resource::<lunco_modelica_worker::worker::ModelicaArtifactDiskLimits>();
             app.init_resource::<lunco_modelica_worker::worker::ModelicaWorkerLimits>();
             let worker_limits = *app
                 .world()

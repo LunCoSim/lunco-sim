@@ -46,6 +46,7 @@ pub(super) fn construct(
     lane: Lane<Sessions>,
     component: Arc<rumoca_ir_solve::fmi::FmiComponent>,
     plan: LiveBuildPlan,
+    native_cache: super::native_code_cache::SharedNativeCodeCache,
     tx: Sender<WorkerPreparationResult>,
 ) -> Result<(), String> {
     let session_lane = lane.clone();
@@ -59,7 +60,7 @@ pub(super) fn construct(
         )
         .entered();
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_prepared_stepper(&component, plan)
+            native_cache.construct(|| build_prepared_stepper(&component, plan))
         }))
         .unwrap_or_else(|payload| {
             let message = payload
@@ -71,19 +72,22 @@ pub(super) fn construct(
                 "live session construction panicked: {message}"
             )))
         });
-        let result = built.map(|(stepper, snapshot, metadata, symbols, mut profile)| {
-            profile.queue_wait_ns = Some(queue_wait_ns);
-            let handle = SessionHandle {
-                lane: session_lane,
-                id,
-                time: stepper.time(),
-                input_names: stepper.input_names().to_vec(),
-                pending: None,
-                last_step_duration_ns: None,
-            };
-            sessions.insert(id, stepper);
-            (handle, snapshot, metadata, symbols, profile)
-        });
+        let result = built.map(
+            |((stepper, snapshot, metadata, symbols, mut profile), native_profile)| {
+                profile.queue_wait_ns = Some(queue_wait_ns);
+                profile.native_code_cache = Some(native_profile);
+                let handle = SessionHandle {
+                    lane: session_lane,
+                    id,
+                    time: stepper.time(),
+                    input_names: stepper.input_names().to_vec(),
+                    pending: None,
+                    last_step_duration_ns: None,
+                };
+                sessions.insert(id, stepper);
+                (handle, snapshot, metadata, symbols, profile)
+            },
+        );
         let _ = tx.send(WorkerPreparationResult::Live(LiveConstructionResult {
             id,
             result,

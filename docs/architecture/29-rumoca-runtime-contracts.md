@@ -283,6 +283,12 @@ they do not select another class from the source-wide interface. The production
 `modelica_source_target.usda` runs its attached `modelica_source_target.rhai`
 gate through source rejection and live replacement, including construction
 profile availability and retirement.
+Native construction can reuse relocatable Cranelift artifacts through Rumoca's
+explicit thread-local cache scope; LunCoSim owns budgets, asynchronous persistence
+and public accounting. See the [cache ownership contract](20-domain-modelica.md)
+for identity, failure and lifetime boundaries. This scope retains no solver state.
+The workspace pins Rumoca revision `f8df42b448c31273d94926183dac2fffeccef9d0`
+from `LunCoSim/rumoca`; normal builds require no local dependency override.
 Precompile source interfaces project only direct declarations of the selected
 class: parameter/input literal bindings, explicit causal ports, and authored
 documentation. Generated synthesis requests its exact validated class through

@@ -39,6 +39,15 @@ fn construction_profile_to_api_value(
         "session_ns": profile.session_ns,
         "metadata_ns": profile.metadata_ns,
         "initial_observation_ns": profile.initial_observation_ns,
+        "native_code_cache": profile.native_code_cache.map(|cache| api_value!({
+            "attempts": cache.attempts,
+            "hits": cache.hits,
+            "compilations": cache.compilations,
+            "rejected_entries": cache.rejected_entries,
+            "evictions": cache.evictions,
+            "retained_entries": cache.retained_entries,
+            "retained_bytes": cache.retained_bytes,
+        })),
     })
 }
 

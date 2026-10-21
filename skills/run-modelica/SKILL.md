@@ -403,13 +403,20 @@ does not resize the pools or alter solver clocks.
 
 Shared immutable RAM caches use the captured
 `lunco_modelica_runtime::ModelicaCacheLimits` resource: positive compiled and
-prepared entry capacities, each defaulting to 64 per worker. Follow the
+prepared entry capacities, each defaulting to 64 per worker, plus native compiler
+artifact limits of 32,768 entries and 64 MiB. All limits must be positive. Follow the
 [Modelica cache contract](../../docs/architecture/20-domain-modelica.md) for
 configuration timing, FIFO reuse, and browser startup/respawn admission. Entry
 caps bound graph count rather than heap bytes; eviction preserves live owners.
 Run the generic `immutable_reuse_cache_` tests and compile the browser worker
 bundle when changing configuration transport. Do not infer Twin teardown from
 shared immutable cache contents.
+Native compilation scopes reuse only relocatable artifacts, never live solver
+state. `CosimStatus.modelica_construction_profile.native_code_cache` reports
+actual attempts, hits, compilations and rejected entries. Native artifact I/O
+uses a separate asynchronous owner; missing snapshots are ordinary cold builds,
+and invalid records warn before fresh compilation. Compare actual hit counts
+across process restarts when measuring loading improvements.
 For shared browser worker transport changes, run the generic `worker_lifecycle_`
 tests in a real browser and compile both Modelica execution and DEM bake
 consumers. Replacement must release the old handlers, including replacement
@@ -418,8 +425,8 @@ For native compiler heartbeat changes, run the generic `compile_heartbeat_`
 lifetime tests; ensure normal, error, and unwind exit interrupt the wait and
 release the owned thread.
 
-Native optional solve-cache reuse captures the cache-owned
-`lunco_modelica_worker::worker::PreparedSolveDiskLimits` resource before
+Native optional Modelica artifact persistence captures the cache-owned
+`lunco_modelica_worker::worker::ModelicaArtifactDiskLimits` resource before
 `ModelicaExecutionPlugin` starts the worker. Defaults are 32 retained records, 64 MiB compressed,
 256 MiB decoded, and a 64 MiB zstd window; see
 [the cache ownership contract](../../docs/architecture/20-domain-modelica.md) for

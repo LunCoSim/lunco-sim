@@ -313,6 +313,12 @@ The production `modelica_source_target` gate covers successful construction,
 compact readback, rejection, replacement and recovery. These measurements are
 diagnostic wall time and do not select simulation transitions.
 
+Native profiles also report compiler artifact attempts, hits, fresh compilations
+and rejected entries. Attempts equal hits plus compilations; rejections are a
+subset of compilations. Browser profiles leave this native-only field absent.
+The native profile also counts evictions caused by that construction and records
+the shared cache's resident entries and key/artifact bytes at completion.
+
 Numeric instance overrides cross two maintained Rumoca boundaries. The compiler
 host reads checked DAE parameter roles and `is_tunable` facts; translation-time
 parameters become typed root modifiers through `Session::set_structural_overrides`.
@@ -758,10 +764,12 @@ retained facts with their solver. Serialized worker transports encode the same
 snapshot value through Serde's standard shared-reference support.
 
 `lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
-capacities, captured before worker admission. Both capacities must be positive;
+capacities, captured before worker admission. All capacities must be positive;
 defaults retain at most 64 compiled artifacts and 64 prepared FMI components per
 worker. Insert the resource before `ModelicaExecutionPlugin` to change its
-immutable snapshot. `worker/cache.rs` owns one bounded FIFO mechanism for both
+immutable snapshot. Native compiler retention additionally defaults to 32,768
+entries and 64 MiB, counting each key and artifact's bytes.
+`worker/cache.rs` owns one bounded FIFO mechanism for these
 caches: distinct insertions evict the oldest admitted key, while hits and
 same-key replacement preserve order. Compiled-closure/solver/parameter identity
 controls prepared-model reuse. Prepared solve results are shared through `Arc`, including native
@@ -786,7 +794,27 @@ tests cover FIFO bounds, replacement, exact solve keys, live-reference survival
 and invalid admission. Browser configuration also requires a worker-bundle
 compile check.
 
-Native prepared-solve disk reuse uses the cache-owned `PreparedSolveDiskLimits`
+`worker/native_code_cache.rs` owns application-lived, content-addressed native
+compiler artifacts. Rumoca's scoped native adapter consumes them synchronously
+through Cranelift's maintained incremental-cache API. Cranelift keys include
+the complete function stencil, compiler version, ISA and compiler flags. Current
+module relocations and host addresses are rebound on every construction; no
+executable arena, FMI state, scene entity or numeric workspace is retained.
+Twin close retires its live owners while this immutable compiler cache survives.
+One dedicated thread-affine I/O lane asynchronously loads and coalesces bounded
+snapshots in `modelica/native-code-v1/stencils.json.zst`. Neither physics nor UI
+waits for storage. A late load only admits keys absent from current compilation.
+The existing bounded zstd/typed persistence codec owns both artifact formats.
+Storage failures and invalid records warn at their owner; Cranelift-rejected
+artifacts warn, increment the profile's rejection count and compile fresh code.
+Cache key protocol or poisoned-owner failures reject the construction visibly.
+The I/O owner drains after the live owners shut down. Native artifact completion
+order affects only reuse, never authoritative simulation state or commit order.
+The low-level cache tests cover byte/count eviction, replacement accounting,
+bounded persistence and corrupt records; `modelica_source_target` consumes the
+accounting through production, including rejection/replacement lifecycle checks.
+
+Native prepared-solve disk reuse uses the cache-owned `ModelicaArtifactDiskLimits`
 resource, captured before the worker starts. Insert it before
 `ModelicaExecutionPlugin` to configure retained entries, compressed bytes,
 decoded bytes, and the zstd window logarithm. Defaults are 32 retained records,

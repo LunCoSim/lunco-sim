@@ -110,6 +110,11 @@ fn on_tick(me, ctx) {
                 "successful construction exposes real solver and observation service measurements"),
             t_true(replacement.outputs.sample == 3.0, "a valid source runs its actual selected class")
         ];
+        let native = replacement.modelica_construction_profile.native_code_cache;
+        this.failures.push(t_true(native != ()
+            && native.attempts == native.hits + native.compilations
+            && native.rejected_entries <= native.compilations,
+            "native construction reports checked compiler cache accounting"));
         this.failures += [
             t_true(structural_a.outputs.sample == 360.0,
                 "typed integer and real structural bindings combine with tunable lowering"),

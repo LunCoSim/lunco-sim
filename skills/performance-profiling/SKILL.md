@@ -564,6 +564,16 @@ Read `CosimStatus.modelica_construction_profile` for queue wait, session,
 metadata and first-observation nanoseconds. Compact status retains the same
 facts; a non-compiled participant reports no construction profile. Model-attributed
 structured logs and Recent status also retain completed initialization timings.
+Native profiles include `native_code_cache` attempts, hits, compilations and
+rejected entries. Attempts equal hits plus compilations; rejected entries are
+included in compilations. Record these per constructor when comparing cold,
+warm and new-process loading. The worker's application-lived cache retains only
+relocatable compiler artifacts, under `ModelicaCacheLimits` entry/byte budgets;
+it does not retain live FMI state. Cache I/O is asynchronous, so report observed
+hits rather than assuming that a disk snapshot was ready before construction.
+Check `evictions`, `retained_entries` and `retained_bytes` alongside the admitted
+byte/entry limits. A repeated load whose working set exceeds retention can evict
+the next functions before they are reused; a cache file alone proves no benefit.
 `CosimStatus.last_coupled_initialization` retains the successful one-shot actor's
 worker receipt after retirement. Compare its solver identity and
 construction timings with ordinary participants' construction profiles.

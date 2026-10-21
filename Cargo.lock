@@ -3477,6 +3477,10 @@ name = "cranelift-bitset"
 version = "0.125.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac0790c83cfdab95709c5d0105fd888221e3af9049a7d7ec376ec901ab4e4dba"
+dependencies = [
+ "serde",
+ "serde_derive",
+]
 
 [[package]]
 name = "cranelift-codegen"
@@ -3496,9 +3500,12 @@ dependencies = [
  "gimli",
  "hashbrown 0.15.5",
  "log",
+ "postcard",
  "regalloc2",
  "rustc-hash 2.1.3",
  "serde",
+ "serde_derive",
+ "sha2 0.10.9",
  "smallvec",
  "target-lexicon 0.13.5",
  "wasmtime-internal-math",
@@ -3538,6 +3545,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "981b56af777f9a34ea6dcce93255125776d391410c2a68b75bed5941b714fa15"
 dependencies = [
  "cranelift-bitset",
+ "serde",
+ "serde_derive",
 ]
 
 [[package]]
@@ -4100,7 +4109,7 @@ checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
 [[package]]
 name = "diffsol"
 version = "0.13.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "faer",
  "faer-traits",
@@ -4430,6 +4439,18 @@ dependencies = [
  "bytemuck",
  "serde",
 ]
+
+[[package]]
+name = "embedded-io"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "ena"
@@ -13673,6 +13694,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
 dependencies = [
  "cobs",
+ "embedded-io 0.4.0",
+ "embedded-io 0.6.1",
  "postcard-derive",
  "serde",
 ]
@@ -14452,6 +14475,7 @@ dependencies = [
  "hashbrown 0.15.5",
  "log",
  "rustc-hash 2.1.3",
+ "serde",
  "smallvec",
 ]
 
@@ -14674,7 +14698,7 @@ dependencies = [
 [[package]]
 name = "rumoca-compile"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "anyhow",
  "bincode 1.3.3",
@@ -14705,7 +14729,7 @@ dependencies = [
 [[package]]
 name = "rumoca-core"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "miette",
@@ -14715,7 +14739,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-ast"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-core",
  "rumoca-ir-ast",
@@ -14725,7 +14749,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-dae"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-core",
  "rumoca-ir-dae",
@@ -14736,7 +14760,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-flat"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -14748,7 +14772,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-solve"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "faer",
  "indexmap",
@@ -14761,7 +14785,7 @@ dependencies = [
 [[package]]
 name = "rumoca-exec-cranelift"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -14775,7 +14799,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-ast"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -14786,7 +14810,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-dae"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-core",
  "rustc-hash 2.1.3",
@@ -14797,7 +14821,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-flat"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -14808,7 +14832,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-galec"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-core",
  "rustc-hash 2.1.3",
@@ -14819,7 +14843,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-solve"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -14830,7 +14854,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-autodiff"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-core",
  "rumoca-ir-ast",
@@ -14840,7 +14864,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-codegen"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "miette",
@@ -14861,7 +14885,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-dae"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "miette",
  "rumoca-core",
@@ -14875,7 +14899,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-flatten"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "miette",
@@ -14891,7 +14915,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-instantiate"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "miette",
@@ -14906,7 +14930,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-parse"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -14921,7 +14945,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-resolve"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "miette",
@@ -14933,7 +14957,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-solve"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -14950,7 +14974,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-structural"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -14963,7 +14987,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-typecheck"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-core",
  "rumoca-eval-ast",
@@ -14976,8 +15000,9 @@ dependencies = [
 [[package]]
 name = "rumoca-sim"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
+ "cranelift-codegen",
  "indexmap",
  "libc",
  "rumoca-core",
@@ -14999,7 +15024,7 @@ dependencies = [
 [[package]]
 name = "rumoca-solver"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "faer",
  "indexmap",
@@ -15018,7 +15043,7 @@ dependencies = [
 [[package]]
 name = "rumoca-solver-diffsol"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "diffsol",
  "rumoca-solver",
@@ -15028,7 +15053,7 @@ dependencies = [
 [[package]]
 name = "rumoca-solver-rk45"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-solver",
 ]
@@ -15036,7 +15061,7 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-fmt"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-compile",
  "rumoca-core",
@@ -15047,7 +15072,7 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-lint"
 version = "0.10.2"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#e3da928cce08b794c6ec78ef85d2db0bd521547f"
+source = "git+https://github.com/LunCoSim/rumoca?rev=f8df42b448c31273d94926183dac2fffeccef9d0#f8df42b448c31273d94926183dac2fffeccef9d0"
 dependencies = [
  "rumoca-compile",
  "rumoca-core",

@@ -1085,6 +1085,7 @@ pub fn handle_modelica_responses(
                             session_ns = profile.session_ns,
                             metadata_ns = profile.metadata_ns,
                             initial_observation_ns = profile.initial_observation_ns,
+                            native_code_cache = ?profile.native_code_cache,
                             "[modelica-runtime] live solver construction phases completed");
                         format!(
                             "live initialization finished: solver {:.1} ms, metadata {:.1} ms, initial observation {:.1} ms",

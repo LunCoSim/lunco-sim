@@ -36,12 +36,24 @@ pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.
 pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = lunco_core_runtime::SECS_PER_TICK;
 
 /// Immutable shared-cache entry limits captured before each worker starts.
-/// These bound retained graph count, not the heap size of one graph or live
-/// participant state. Insert before `ModelicaExecutionPlugin` to configure them.
+/// Graph budgets bound retained graph count. Native artifacts are bounded by
+/// both count and bytes. Live participant state is separate. Insert before
+/// `ModelicaExecutionPlugin` to configure these budgets.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelicaCacheLimits {
     pub compiled_artifact_entries: usize,
     pub prepared_solve_entries: usize,
+    pub native_code_entries: usize,
+    pub native_code_bytes: usize,
+}
+
+/// Positive cache capacities admitted before starting Modelica workers.
+#[derive(Clone, Copy, Debug)]
+pub struct ModelicaCacheCapacities {
+    pub compiled_artifacts: std::num::NonZeroUsize,
+    pub prepared_solves: std::num::NonZeroUsize,
+    pub native_code_entries: std::num::NonZeroUsize,
+    pub native_code_bytes: std::num::NonZeroUsize,
 }
 
 impl Default for ModelicaCacheLimits {
@@ -49,20 +61,31 @@ impl Default for ModelicaCacheLimits {
         Self {
             compiled_artifact_entries: 64,
             prepared_solve_entries: 64,
+            native_code_entries: 32_768,
+            native_code_bytes: 64 * 1024 * 1024,
         }
     }
 }
 
 impl ModelicaCacheLimits {
     /// Validate the runtime DTO once at admission and return positive capacities.
-    pub fn validate(&self) -> Result<(std::num::NonZeroUsize, std::num::NonZeroUsize), String> {
+    pub fn validate(&self) -> Result<ModelicaCacheCapacities, String> {
         let compiled =
             std::num::NonZeroUsize::new(self.compiled_artifact_entries).ok_or_else(|| {
                 "Modelica compiled-artifact cache capacity must be positive".to_owned()
             })?;
         let prepared = std::num::NonZeroUsize::new(self.prepared_solve_entries)
             .ok_or_else(|| "Modelica prepared-solve cache capacity must be positive".to_owned())?;
-        Ok((compiled, prepared))
+        let native_code_entries = std::num::NonZeroUsize::new(self.native_code_entries)
+            .ok_or_else(|| "Modelica native-code cache capacity must be positive".to_owned())?;
+        let native_code_bytes = std::num::NonZeroUsize::new(self.native_code_bytes)
+            .ok_or_else(|| "Modelica native-code cache byte budget must be positive".to_owned())?;
+        Ok(ModelicaCacheCapacities {
+            compiled_artifacts: compiled,
+            prepared_solves: prepared,
+            native_code_entries,
+            native_code_bytes,
+        })
     }
 }
 
@@ -395,6 +418,21 @@ pub struct ModelicaConstructionProfile {
     pub session_ns: u64,
     pub metadata_ns: u64,
     pub initial_observation_ns: u64,
+    pub native_code_cache: Option<ModelicaNativeCodeCacheProfile>,
+}
+
+/// Native compilation work; rejections are also counted in compilations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelicaNativeCodeCacheProfile {
+    pub attempts: u64,
+    pub hits: u64,
+    pub compilations: u64,
+    pub rejected_entries: u64,
+    /// Artifacts evicted by insertions from this construction scope.
+    pub evictions: u64,
+    /// Shared cache residency observed when this construction completes.
+    pub retained_entries: u64,
+    pub retained_bytes: u64,
 }
 
 /// The registered solver capabilities selected for one live Modelica model.

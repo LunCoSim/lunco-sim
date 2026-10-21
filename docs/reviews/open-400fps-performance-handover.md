@@ -1,5 +1,97 @@
 # High-quality realtime performance handover
 
+## Scoped native compiler artifacts — 2026-10-21
+
+The approved Rumoca worktree now exposes an explicit synchronous native-cache
+scope through its curated simulation facade. Cranelift owns function-stencil,
+version, ISA and flag identity; current module relocations and host addresses
+are rebound for each new executable arena. The Modelica worker owns a bounded
+application-lived FIFO of immutable artifacts and coalesces persistence on a
+separate I/O owner. Live FMI state remains thread-affine and retires normally.
+The canonical owner/API/lifetime contract is in architecture 20's cache section.
+
+Frozen-FMI diagnostics retain identical f64 bits for all 6,053 exposed values
+at initialization and twelve steps, including independent-process persistence.
+Native tests cover changed constants and inputs, shifted function IDs/host
+addresses, scope restoration, occupied-store rejection and corrupt artifacts.
+The application passes 16 bounded-cache/codec/admission tests. Its production
+`modelica_source_target` gate passes 20 authored checks, including public cache
+accounting, rejected source, replacement, compact status and recovery.
+
+Full Griffin qualification exposed a working set larger than 32 MiB: repeated
+loads with that limit evicted the upcoming native functions and rebuilt them.
+The resource default is 64 MiB and 32,768 entries; public construction profiles
+now report scope evictions and shared resident entries/bytes. On restart the
+coupled constructor hits 16,408 of 16,476 functions, compiles 68, rejects none
+and evicts none. Its resident snapshot is 39,998,549 bytes; later subsystems
+raise this to 41,219,102 bytes, still within both limits.
+
+The two 32 MiB runs become ready in 28.642 / 28.784 s. Filling the larger cache
+takes 21.725 s; its next-process run takes 20.584 s. Coupled construction is
+8.628 / 8.899 s with the smaller cache and 4.450 s in the final restart.
+The normal High-quality artifact is
+`a6d694a87d360196b883b3bc60be83bf5822a17b1cc52c10c97fd54fe4901faf`,
+on LunCoSim base `34423da2f`. No foreign simulator/build workload is recorded.
+All four runs confirm touchdown, retain unchanged source hashes and complete
+frame histories, show clear readiness and zero retained errors, and release
+owned API port 4758. The final screenshot was inspected. Native profile data
+also survives the one-shot coupled actor's retirement through its existing receipt.
+
+Physics medians remain approximately 59–60 ms and frame medians 75–76 ms;
+there is no physics/FPS improvement claim. The dirty local compiler identity
+correctly disables prepared-FMI disk admission in these experiments, so these
+are native artifact qualifications rather than final combined-cache acceptance.
+The portable workspace dependency pins Rumoca commit
+`f8df42b448c31273d94926183dac2fffeccef9d0`, published with explicit user approval
+on `LunCoSim/rumoca` branch `perf/projection-construction`. Local path overrides
+are diagnostic evidence only. macOS qualification remains pending. Tracy and
+the original `../rumoca` branch remain untouched.
+
+The final local Rumoca commit is
+`f8df42b448c31273d94926183dac2fffeccef9d0` (including the preceding selected
+retention commit). A normal rebuild with the clean compiler identity produces
+LunCoSim SHA-256
+`0580e6a00cadf16bac8955a07bc04d725241f7484eb6cd3da815762433e45849`.
+Griffin's first clean-identity run takes 21.109 s; its restart takes 18.125 s,
+with eleven prepared-FMI disk hits and 16,408/16,476 native hits in the coupled
+constructor. That constructor takes 4.328 s, with no artifact rejection or
+eviction. Physics remains 59.383 ms median and measured frame throughput is
+13.043 FPS. Both runs confirm touchdown and pass the ownership, source,
+readiness, complete-frame-history and retained-error checks above.
+
+Summer Space School on the same normal High-quality binary takes 2.264 s on
+its first run and 1.852 s on restart (three prepared-FMI disk hits). Its restart
+physics median is 0.535 ms, retained maximum 0.868 ms, and frame median 4.286 ms.
+Measured throughput across all 2,637 frame intervals is 175.030 FPS; the
+reciprocal of the median frame time must not be reported as sustained FPS.
+Both runs have unchanged source hashes, clear readiness, zero retained errors,
+complete frame histories and inspected screenshots; their owned ports close.
+These use ephemeral `--no-throttle --no-vsync --render-quality high`, with no
+profiler or saved preference change. Summer meets the observed physics budget;
+loading and sustained FPS still miss the goal. Griffin remains above all three
+limits. The final normal artifact also passes all twenty source-target checks.
+Combined-cache evidence is `native-cache-clean-identity-comparison.json` and
+the `griffin-native-cache-clean-identity-*` / `summer-native-cache-clean-identity-*`
+directories. The original frozen diagnostic FMI record is preserved separately
+as `frozen-griffin-fmi-v13.bin.zst`, SHA-256
+`a996c979a1d8ab649e1ccbf8d92d0e0c198f0f238e0e894a5f30950bbc376baf`.
+
+The browser Modelica worker compile check passes. The fixed twenty-model
+Rumoca canary has zero per-model diagnostic or oracle-band delta against clean
+`bda1e01ff223`: fourteen compile, twelve simulate and all twelve compare
+strict-high against OpenModelica. The same six ToDae rejections and two solver
+failures remain visible, with no timeouts/non-finite results. This is focused
+canary evidence, not a full-cohort claim. Emitter lib/tests and facade lib scoped
+Clippy pass. Facade test Clippy encounters an unchanged unnecessary cast at
+`solve_lowering/tests.rs:1419`; dependency-inclusive Clippy also has existing
+core nesting failures. Neither is suppressed by this change.
+
+Evidence is `.cache/codex-evidence/performance-20261020/`:
+`native-cache-integrated-comparison.json`, `native-cache-working-set-*`,
+`native-cache-source-target-*`, `native-cache-worker-tests.log`, and
+`native-cache-persist-*`, plus `native-cache-msl-canary-delta.json` and its two
+source runs. The loading, physics and FPS goal remains open.
+
 ## Selected native projection retention — 2026-10-21
 
 An approved local Rumoca change allocates emission-time reuse storage only for
@@ -34,8 +126,9 @@ qualification remain open.
 Rumoca commit `bda1e01ff223300b3b8dd1cb53bcea12587c1309` lives in its
 `perf/projection-construction` worktree at `../rumoca-performance`;
 `../rumoca` keeps its original clean
-branch. Local Cargo patch configuration and lockfile snapshots are evidence
-only, not a portable dependency update. No dependency publication is included.
+branch. The portable workspace dependency includes this commit through the
+published `f8df42b448c3` revision described above. Local Cargo patch configuration
+and lockfile snapshots are diagnostic evidence only.
 Evidence is retained under `.cache/codex-evidence/performance-20261020/` in
 `projection-construction-*`, `rumoca-selected-retention-*` and
 `griffin-rumoca-retention-final/`.
