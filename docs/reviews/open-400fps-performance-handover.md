@@ -1,5 +1,39 @@
 # High-quality realtime performance handover
 
+## Entity-tree source invalidation — 2026-10-21
+
+The tree build owner now remembers observed mount identity, mount diagnostic
+and system-entity filter separately from its asynchronous presentation result.
+Comparing those inputs with an unpublished or diagnostically different tree
+could repeatedly invalidate a pending build without any source change. The
+regression reproduces five invalidations over five unchanged updates; the
+repair admits one. All twelve focused tree tests pass, including source edits,
+filter changes and scene teardown. The manual gate benchmark remains ignored.
+
+This is generic revision/admission machinery in `EntityTreeBuildState`, not a
+new presentation policy or hook. Existing metadata and ancestry changes still
+invalidate through their owner, stale revisions still reject publication, and
+scene teardown clears the observed scope with the task. The canonical lifetime
+contract and profiling runbook describe that boundary.
+
+Production artifact SHA-256
+`aeaab47641ec0d58dc96d7bd3b5a93ae6282e39fe1f1e9b2cc177d69af3abd1a`
+uses the repair with main's committed distributed-propellant-inertia model.
+Both Twins become ready without retained errors, preserve their recorded source
+hashes, render populated Build entity trees and release owned API 4758. Griffin
+also reaches the authored touchdown confirmation before measurement. Both tree
+screenshots were inspected. Sources and concurrent workloads are retained in
+`summer-entity-tree-scope-fixed/` and `griffin-entity-tree-scope-fixed/` under
+`.cache/codex-evidence/performance-20261020/`.
+
+Current measured readiness is 2.918 s for Summer and 17.113 s for Griffin.
+Their complete frame windows yield 96.736 and 14.887 sustained FPS; physics
+sample medians are 1.046 and 53.399 ms, with maxima 2.000 and 81.311 ms.
+These are current-state observations, not an isolated UI speedup or portable
+performance acceptance. The loading, physics and FPS targets remain unmet;
+macOS qualification is still open. Numerical factorization experiments remain
+unmerged and their expansion is set aside following user feedback.
+
 ## Native response metric capture — 2026-10-21
 
 `constraint_response::native_rows=trace` records each constructed row with its
