@@ -120,6 +120,15 @@ owner checks, not just one matrix factorization. Matrix assembly can change
 floating-point accumulation order, so preserve the native body-reduction
 operator when evaluating the retained Krylov path.
 
+For Modelica native-construction costs, distinguish selected application work
+from whole-source preparation. Projection reuse storage is needed only for
+selected source programs and is shared across that application's issued colors.
+Preserve checked identity, input validation and evaluation order. Compare the
+same prepared component's complete f64 states alongside construction timing;
+exclude overlapping builds/apps and record local dependency patches separately
+from the portable lockfile. Dependency changes require the repository's explicit
+authorization before edits.
+
 ## Architecture checks
 
 When comparing native CPU/GPU instance preparation, retain the same PBR,

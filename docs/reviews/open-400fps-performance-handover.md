@@ -1,5 +1,45 @@
 # High-quality realtime performance handover
 
+## Selected native projection retention — 2026-10-21
+
+An approved local Rumoca change allocates emission-time reuse storage only for
+programs selected by the checked projection application. It preserves color
+order, Modelica equations, numerical options and executable-memory ownership.
+The regression reproduces 16,398 allocated operation slots for 13 selected
+operations before the fix, and 13 afterward. All 13 focused projection tests
+and scoped Clippy pass. Dependency-inclusive Clippy stops on existing
+`rumoca-core` excessive nesting; that source is unchanged.
+
+An isolated comparison uses the exact cached Griffin FMI component with source
+key `5c7237cb45d93c71`, automatic native execution, RK-like integration,
+1/180 s steps and 1e-6 tolerances. Three baseline constructions have median
+7,589.186 ms; two qualified candidate constructions have median 7,290.481 ms
+(3.94% lower). A third candidate overlaps app startup and is excluded from
+timing. All six runs retain identical f64 bits for 6,053 exposed values at
+initialization and twelve following steps. The complete state digest is
+`8def1a60ed868e958272691c30a8f0406747498e55e75526b8f88e28836bb409`.
+
+The final locally patched production artifact, SHA-256
+`149adc0ed3e15553ded926c2b3352751fd46af61a69ecc9e52f6c92b76b45f0b`,
+uses LunCoSim base `49634b9eb7e460c2b045e9f6c254ed4ccc1d0ced`. It
+confirms Griffin touchdown and reaches tick 1,848 with unchanged source hashes,
+clear readiness, zero retained errors and an inspected screenshot. Its owned
+4758 session exits and releases the port. Two foreign simulator sessions remain
+active. Ready time 34.911 s, median physics 70.295 ms and median frame 88.637 ms
+are contention-affected observations, not comparative performance acceptance.
+A separate baseline run is excluded after a concurrent Griffin test-source edit
+and foreign-app launch. The target loading, physics and FPS limits and macOS
+qualification remain open.
+
+Rumoca commit `bda1e01ff223300b3b8dd1cb53bcea12587c1309` lives in its
+`perf/projection-construction` worktree at `../rumoca-performance`;
+`../rumoca` keeps its original clean
+branch. Local Cargo patch configuration and lockfile snapshots are evidence
+only, not a portable dependency update. No dependency publication is included.
+Evidence is retained under `.cache/codex-evidence/performance-20261020/` in
+`projection-construction-*`, `rumoca-selected-retention-*` and
+`griffin-rumoca-retention-final/`.
+
 ## Grazing box/cylinder contact — 2026-10-21
 
 The Griffin rover/gear gate exposed an EPA hull failure in the maintained Parry
