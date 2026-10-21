@@ -296,7 +296,7 @@ impl Panel for SysmlRequirementsPanel {
     }
 
     fn default_slot(&self) -> PanelSlot {
-        PanelSlot::Center
+        PanelSlot::RightInspector
     }
 
     fn preferred_perspective(&self) -> Option<PerspectiveId> {

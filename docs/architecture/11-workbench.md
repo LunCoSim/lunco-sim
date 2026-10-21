@@ -390,7 +390,7 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | View (`sandbox_view`) | Observe and operate a mission | Full-window live scene |
 | Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Analyze (`analysis`) | Inspect and compare simulation signals | Telemetry above Entities; Graphs center; Ports right |
-| Editor (`editor`) | Edit an explicit USD assembly document | Prim structure above Twin sources; isolated preview/behavior center; Inspector and authoring review right |
+| Editor (`editor`) | Edit an explicit USD assembly document | Prim/Twin tabs left; isolated preview/behavior center; Inspector/Requirements tabs above change History right |
 | Lunica (`modelica_analyze`) | Engineer continuous models | Twin/Files browser; Welcome or open model views center |
 
 Optional panel contributions still use `Panel::visible_in_perspective`, for
@@ -576,9 +576,11 @@ perspective before opening and focusing the panel; panels without an owner
 perspective keep the active perspective. The menu keeps Reset Layout and
 Toggle Activity Bar directly available, then groups panel checkboxes into
 Build, Analyze, Editor, and Lunica submenus according to `PanelMenuGroup`;
-unclassified integrations use Other. The SysML Requirements browser is
-grouped under Editor and opens in Center. Its Requirement details panel
-contributes the lower-right Editor pane and follows the selected requirement.
+unclassified integrations use Other. The Editor default places Prim and Twin
+in the same left tab group, preserving the full height for either browser.
+SysML Requirements and Requirement details share the upper-right tab group
+with Inspector; details follows the selected requirement. Change History
+occupies the lower-right pane.
 When a lower-right panel is present, the default split gives it about 62% of
 the right column and leaves 38% for the Inspector; the dock divider remains
 resizable. The initial cross-layout gives the right column about 24% of the
