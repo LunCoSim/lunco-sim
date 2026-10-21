@@ -56,7 +56,7 @@ where
         SurfacePickPolicy::TerrainFirst if terrain.is_some() => None,
         _ => {
             let physics_limit = terrain
-                .map(|hit| hit.distance)
+                .map(|hit| f64::from(hit.distance))
                 .unwrap_or(max_distance)
                 .min(max_distance);
             raycaster
@@ -75,7 +75,7 @@ where
         origin,
         direction.as_dvec3(),
         terrain,
-        physics.map(|hit| hit.distance),
+        physics.map(|hit| f64::from(hit.distance)),
         physics.map(|hit| hit.entity),
         policy,
     )
@@ -108,13 +108,15 @@ pub(crate) fn resolve_cursor_surface(
                 })
             }),
         SurfacePickPolicy::Nearest => match (physics_distance, terrain) {
-            (Some(distance), Some(hit)) if distance < hit.distance => Some(CursorSurfaceHit {
-                point: GridPos(origin.0 + direction * distance),
-                terrain_primary: false,
-                terrain: Some(hit),
-                physics_distance: Some(distance),
-                physics_entity,
-            }),
+            (Some(distance), Some(hit)) if distance < f64::from(hit.distance) => {
+                Some(CursorSurfaceHit {
+                    point: GridPos(origin.0 + direction * distance),
+                    terrain_primary: false,
+                    terrain: Some(hit),
+                    physics_distance: Some(distance),
+                    physics_entity,
+                })
+            }
             (_, Some(hit)) => Some(CursorSurfaceHit {
                 point: hit.point,
                 terrain_primary: true,

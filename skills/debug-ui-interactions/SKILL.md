@@ -163,7 +163,7 @@ when several documents can mount the same authored path. Generic `MoveEntity`
 persistence resolves the write document from the moved entity's stage, not the
 active editor tab.
 
-Scene `Pointer<Move>` and `Pointer<Enter>` observers may collect raw hits, but
+Scene `PointerMove` and `PointerEnter` observers may collect raw hits, but
 the viewport must dispatch movement only for a document with an active typed
 `SetScenePointerMoveHook` subscription. Supply a caller-owned `interaction_id`
 to both Set and Clear so stale cleanup cannot end a newer interaction.

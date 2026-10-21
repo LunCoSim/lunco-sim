@@ -33,11 +33,8 @@
 //! Filtering is symmetric (the USD docs say so, and a one-sided contact filter is
 //! meaningless), so authoring it on either prim filters the pair.
 
+use avian3d::collider_tree::{ColliderTreeProxyFlags, ColliderTreeProxyKey, ColliderTrees};
 use avian3d::prelude::*;
-use avian3d::{
-    collider_tree::{ColliderTreeProxyFlags, ColliderTreeProxyKey, ColliderTrees},
-    math::{Scalar, Vector},
-};
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -97,7 +94,7 @@ pub struct SharedTireContact;
 /// never measures an exact mathematical zero. One centimetre per second is a
 /// solver tolerance, not a material classifier: both coefficients and their
 /// combine rule still come entirely from the authored [`Friction`] properties.
-const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: Scalar = 0.01;
+const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: f32 = 0.01;
 
 /// Suppress collisions between the bodies of one live joint.
 ///
@@ -155,7 +152,7 @@ pub fn release_joint_pair(commands: &mut Commands, joint: Entity, a: Entity, b: 
 
 /// Release a joint's transient pair filter before the joint entity is removed.
 pub fn on_remove_joint_collision_pair(
-    trigger: On<Remove, JointCollisionPair>,
+    trigger: On<Remove<JointCollisionPair>>,
     pairs: Query<&JointCollisionPair>,
     mut commands: Commands,
 ) {
@@ -451,7 +448,7 @@ pub fn enable_static_friction_contact_hooks(
     q_changed: Query<(Entity, &Friction), Changed<Friction>>,
 ) {
     for (entity, friction) in &q_changed {
-        if (friction.static_coefficient - friction.dynamic_coefficient).abs() <= Scalar::EPSILON {
+        if (friction.static_coefficient - friction.dynamic_coefficient).abs() <= f32::EPSILON {
             continue;
         }
         enable_collision_hook(&mut commands, entity, ActiveCollisionHooks::MODIFY_CONTACTS);
@@ -510,7 +507,7 @@ pub fn synchronize_collision_hook_flags(
     }
 }
 
-fn use_static_friction(max_tangent_speed: Scalar) -> bool {
+fn use_static_friction(max_tangent_speed: f32) -> bool {
     max_tangent_speed <= STATIC_FRICTION_MAX_SLIP_SPEED_MPS
 }
 
@@ -559,31 +556,28 @@ impl CollisionHooks for UsdCollisionFilter<'_, '_> {
         };
         let combined = surface_friction(contacts.collider1, contacts.body1)
             .combine(surface_friction(contacts.collider2, contacts.body2));
-        let point_velocity = |body: Option<Entity>, anchor: Vector| {
+        let point_velocity = |body: Option<Entity>, anchor: Vec3| {
             let Some(body) = body else {
-                return Vector::ZERO;
+                return Vec3::ZERO;
             };
             let linear = self
                 .linear_velocity
                 .get(body)
-                .map_or(Vector::ZERO, |velocity| velocity.0);
+                .map_or(Vec3::ZERO, |velocity| velocity.0);
             let angular = self
                 .angular_velocity
                 .get(body)
-                .map_or(Vector::ZERO, |velocity| velocity.0);
+                .map_or(Vec3::ZERO, |velocity| velocity.0);
             linear + angular.cross(anchor)
         };
 
         for manifold in &mut contacts.manifolds {
-            let max_tangent_speed = manifold
-                .points
-                .iter()
-                .fold(0.0 as Scalar, |maximum, point| {
-                    let relative = point_velocity(contacts.body2, point.anchor2)
-                        - point_velocity(contacts.body1, point.anchor1);
-                    let tangent = relative - manifold.normal * relative.dot(manifold.normal);
-                    maximum.max(tangent.length())
-                });
+            let max_tangent_speed = manifold.points.iter().fold(0.0 as f32, |maximum, point| {
+                let relative = point_velocity(contacts.body2, point.anchor2)
+                    - point_velocity(contacts.body1, point.anchor1);
+                let tangent = relative - manifold.normal * relative.dot(manifold.normal);
+                maximum.max(tangent.length())
+            });
             manifold.friction = if use_static_friction(max_tangent_speed) {
                 combined.static_coefficient
             } else {

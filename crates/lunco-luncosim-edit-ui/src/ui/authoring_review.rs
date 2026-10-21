@@ -95,7 +95,7 @@ pub(crate) struct AuthoringReviewResourceSnapshot {
 }
 
 pub(crate) fn mark_target_index_dirty_on_insert<T: Component>(
-    _trigger: On<Insert, T>,
+    _trigger: On<Insert<T>>,
     mut dirty: ResMut<AuthoringReviewTargetIndexDirty>,
     mut view_dirty: ResMut<AuthoringReviewViewDirty>,
 ) {
@@ -104,7 +104,7 @@ pub(crate) fn mark_target_index_dirty_on_insert<T: Component>(
 }
 
 pub(crate) fn mark_target_index_dirty_on_remove<T: Component>(
-    _trigger: On<Remove, T>,
+    _trigger: On<Remove<T>>,
     mut dirty: ResMut<AuthoringReviewTargetIndexDirty>,
     mut view_dirty: ResMut<AuthoringReviewViewDirty>,
 ) {
@@ -150,7 +150,7 @@ fn is_review_target(
 }
 
 fn mark_authoring_review_view_dirty_on_insert<T: Component>(
-    trigger: On<Insert, T>,
+    trigger: On<Insert<T>>,
     selected: Res<SelectedEntities>,
     local_avatar: Res<TheLocalEmbodiment>,
     viewport: Option<Res<SceneViewport>>,
@@ -169,7 +169,7 @@ fn mark_authoring_review_view_dirty_on_insert<T: Component>(
 }
 
 fn mark_authoring_review_view_dirty_on_remove<T: Component>(
-    trigger: On<Remove, T>,
+    trigger: On<Remove<T>>,
     selected: Res<SelectedEntities>,
     local_avatar: Res<TheLocalEmbodiment>,
     viewport: Option<Res<SceneViewport>>,

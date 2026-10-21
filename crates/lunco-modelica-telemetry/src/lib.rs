@@ -110,7 +110,7 @@ fn retire_closed_document_signals(
 }
 
 fn retire_modelica_runtime_session(
-    event: On<Remove, ModelicaModel>,
+    event: On<Remove<ModelicaModel>>,
     mut sessions: ResMut<RuntimeTelemetrySessions>,
 ) {
     sessions.sessions.remove(&event.entity);

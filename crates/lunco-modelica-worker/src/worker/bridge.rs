@@ -4,7 +4,7 @@ use super::*;
 /// despawned entity does not leave a `SimulationSession` alive in the worker thread.
 /// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
 pub fn on_remove_modelica(
-    trigger: On<Remove, ModelicaModel>,
+    trigger: On<Remove<ModelicaModel>>,
     channels: Res<ModelicaChannels>,
     models: Query<(
         &ModelicaModel,

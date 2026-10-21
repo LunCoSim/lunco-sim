@@ -137,7 +137,7 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
         // it catches an edge left in Avian's island graph even when the joint
         // entity itself was already despawned.
         let Some(joint_graph) =
-            world.get_resource::<avian3d::dynamics::solver::joint_graph::JointGraph>()
+            world.get_resource::<avian3d::dynamics::joints::joint_graph::JointGraph>()
         else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
@@ -153,12 +153,40 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
                     "PhysicsPerformance: Avian contact graph is not installed",
                 )
             })?;
-        let continuous = world
-            .get_resource::<lunco_physics::ContinuousCollisionDiagnostics>()
+        let mut contact_pairs = 0usize;
+        let mut contact_pairs_missing_entities = 0usize;
+        let mut contact_pairs_without_colliders = 0usize;
+        for pair in contact_graph
+            .iter_active()
+            .chain(contact_graph.iter_sleeping())
+        {
+            contact_pairs += 1;
+            let endpoints = [pair.collider1, pair.collider2].map(|entity| world.get_entity(entity));
+            if endpoints.iter().any(Result::is_err) {
+                contact_pairs_missing_entities += 1;
+            }
+            if endpoints.iter().any(|entity| {
+                !entity
+                    .as_ref()
+                    .is_ok_and(|entity| entity.contains::<avian3d::prelude::ColliderMarker>())
+            }) {
+                contact_pairs_without_colliders += 1;
+            }
+        }
+        let solver = world
+            .get_resource::<avian3d::dynamics::solver::SolverDiagnostics>()
             .ok_or_else(|| {
                 ApiQueryError::new(
                     ApiErrorCode::InternalError,
-                    "PhysicsPerformance: continuous collision diagnostics are not installed",
+                    "PhysicsPerformance: native solver diagnostics are not installed",
+                )
+            })?;
+        let collision = world
+            .get_resource::<avian3d::collision::CollisionDiagnostics>()
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "PhysicsPerformance: native collision diagnostics are not installed",
                 )
             })?;
 
@@ -166,12 +194,14 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             "step_number": timing.step_number,
             "step_time_ms": timing.step_time.as_secs_f64() * 1000.0,
             "step_time_samples_ms": step_time_samples_ms,
-            "continuous_solve_time_ms": continuous.solve_time.as_secs_f64()*1000.0,
-            "continuous_sweep_time_ms": continuous.sweep_time.as_secs_f64()*1000.0,
-            "continuous_projection_time_ms": continuous.projection_time.as_secs_f64()*1000.0,
-            "continuous_substeps": continuous.substeps,
-            "continuous_sweep_queries": continuous.sweep_queries,
-            "continuous_position_iterations": continuous.position_iterations,
+            "solver_swept_ccd_time_ms": solver.swept_ccd.as_secs_f64()*1000.0,
+            "solver_prepare_constraints_time_ms": solver.prepare_constraints.as_secs_f64()*1000.0,
+            "solver_solve_constraints_time_ms": solver.solve_constraints.as_secs_f64()*1000.0,
+            "solver_relax_velocities_time_ms": solver.relax_velocities.as_secs_f64()*1000.0,
+            "collision_broad_phase_time_ms": collision.broad_phase.as_secs_f64()*1000.0,
+            "collision_narrow_phase_time_ms": collision.narrow_phase.as_secs_f64()*1000.0,
+            "collision_contacts": collision.contact_count,
+            "collision_recycled_contacts": collision.recycled_count,
             "entities": entities,
             "bodies": bodies,
             "dynamic_bodies": dynamic,
@@ -183,6 +213,9 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             "joint_graph_edges": joint_graph_edges,
             "contact_graph_edges": contact_graph.edges.edge_count(),
             "contact_graph_nodes": contact_graph.edges.node_count(),
+            "contact_graph_pairs": contact_pairs,
+            "contact_graph_pairs_missing_entities": contact_pairs_missing_entities,
+            "contact_graph_pairs_without_colliders": contact_pairs_without_colliders,
             "pending_joints": pending_joints,
             "detach_requests": detach_requests,
             "detach_sets": detach_sets,
@@ -266,12 +299,12 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                 let shape = world.get::<avian3d::prelude::Collider>(*collider)?;
                 let transform = world.get::<avian3d::prelude::ColliderTransform>(*collider);
                 let (position, rotation) = if *collider == entity {
-                    (bevy::math::DVec3::ZERO, bevy::math::DQuat::IDENTITY)
+                    (bevy::math::DVec3::ZERO, bevy::math::Quat::IDENTITY)
                 } else {
                     let transform = transform?;
-                    (transform.translation, transform.rotation.0)
+                    (transform.translation.as_dvec3(), transform.rotation)
                 };
-                Some(shape.aabb(position, rotation))
+                Some(shape.aabb(position, rotation, 0.0))
             })
             .reduce(|mut bounds, next| {
                 bounds.min = bounds.min.min(next.min);
@@ -292,7 +325,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             let proxy = world.get::<avian3d::collider_tree::ColliderTreeProxyKey>(*collider)
                 .and_then(|key| world.get_resource::<avian3d::collider_tree::ColliderTrees>()?.get_proxy(*key));
             let bounds = world.get::<avian3d::prelude::Collider>(*collider)
-                .map(|shape| shape.aabb(bevy::math::DVec3::ZERO, bevy::math::DQuat::IDENTITY));
+                .map(|shape| shape.aabb(bevy::math::DVec3::ZERO, bevy::math::Quat::IDENTITY, 0.0));
             api_value!({
                 "source_path": lunco_usd_avian_contracts::collider_source(world, *collider),
                 "body_relationship_present": world.get::<avian3d::prelude::ColliderOf>(*collider).is_some(),
@@ -301,7 +334,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                 "physics_position_m": position.map(|p| api_value!([p.0.x, p.0.y, p.0.z])),
                 "physics_rotation_xyzw": rotation.map(|r| api_value!(r.0.to_array())),
                 "body_local_translation_m": transform.map(|t| api_value!([t.translation.x, t.translation.y, t.translation.z])),
-                "body_local_rotation_xyzw": transform.map(|t| api_value!(t.rotation.0.to_array())),
+                "body_local_rotation_xyzw": transform.map(|t| api_value!(t.rotation.to_array())),
                 "scale": transform.map(|t| api_value!([t.scale.x, t.scale.y, t.scale.z])),
                 "disabled": world.get::<ColliderDisabled>(*collider).is_some(),
                 "broad_phase_present": proxy.is_some(),
@@ -475,7 +508,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                 "disabled": world.get::<SleepingDisabled>(entity).is_some(),
                 "timer_s": world.get::<SleepTimer>(entity).map(|timer| timer.0),
                 "required_rest_s": world.get_resource::<TimeToSleep>().map(|duration| duration.0),
-                "linear_threshold_mps": sleep_threshold.zip(length_unit).map(|(threshold, unit)| threshold.linear as f64 * unit.0),
+                "linear_threshold_mps": sleep_threshold.zip(length_unit).map(|(threshold, unit)| f64::from(threshold.linear) * f64::from(unit.0)),
                 "angular_threshold_radps": sleep_threshold.map(|threshold| threshold.angular),
             },
             "constant_linear_acceleration_mps2": constant_acceleration.map(|acceleration| api_value!([acceleration.0.x, acceleration.0.y, acceleration.0.z])),
@@ -491,7 +524,8 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
-            "continuous_collision_enabled": world.get::<avian3d::prelude::SweptCcd>(entity).is_some(),
+            "continuous_collision_enabled": world.get::<avian3d::prelude::SweptCcd>(entity).is_none_or(|ccd| !ccd.filter.is_empty()),
+            "speculative_collision_distance_m": world.get::<avian3d::prelude::SpeculativeCcd>(entity).map(|ccd| f64::from(ccd.max_distance)),
             "collider_source_paths": if collider {Some(collider_source_paths.into_iter().collect::<Vec<_>>())} else {None},
             "collider_local_bounds": collider_local_bounds,
             "colliders": collider_details,

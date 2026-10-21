@@ -519,11 +519,9 @@ pub fn collect_body_colliders_from_usd(
             child_tf.translation.y as f64,
             child_tf.translation.z as f64,
         ));
-        // A rendering quaternion widened from f32 is not necessarily unit in
-        // f64. Native rigid poses require a unit rotation, including composed
-        // primitive-axis adjustments on compound collider children.
-        let mut rot = Rotation(child_tf.rotation.as_dquat());
-        if !lunco_physics::avian_backend_pose_is_valid(pos.0, rot.0)
+        // Native collider mounts use the validated body-local rotation.
+        let rot = Rotation(child_tf.rotation);
+        if !lunco_physics::avian_backend_pose_is_valid(pos.0, rot.0.as_dquat())
             || !lunco_physics::avian_backend_collider_shape_is_valid(&collider)
         {
             return Err(ColliderProjectionError::Backend {
@@ -533,7 +531,6 @@ pub fn collect_body_colliders_from_usd(
                         .to_owned(),
             });
         }
-        rot.0 = rot.0.normalize();
         colliders.push(AuthoredBodyCollider {
             source_path: child_path.to_string(),
             position: pos,
@@ -729,13 +726,13 @@ pub fn build_collider_from_usd_at_scale(
         }
         let collider = match approximation {
             AvianMeshApproximation::ConvexHull => {
-                Collider::convex_hull(verts).ok_or_else(|| ColliderProjectionError::Backend {
+                Collider::convex_hull(&verts).ok_or_else(|| ColliderProjectionError::Backend {
                     prim: sdf_path.to_string(),
                     detail: "authored convexHull approximation could not be built".to_owned(),
                 })?
             }
             AvianMeshApproximation::ConvexDecomposition => {
-                Collider::convex_decomposition(verts, tris)
+                Collider::convex_decomposition(&verts, &tris)
             }
             AvianMeshApproximation::TriangleMesh => {
                 // Match streamed terrain cooking: shared triangle edges are
@@ -772,11 +769,19 @@ pub fn build_collider_from_usd_at_scale(
         }
     })?;
     let collider = match shape_dims {
-        ShapeDims::Cube { size } => Collider::cuboid(size, size, size),
-        ShapeDims::Sphere { radius } => Collider::sphere(radius),
-        ShapeDims::Cylinder { radius, height, .. } => Collider::cylinder(radius, height),
-        ShapeDims::Cone { radius, height, .. } => Collider::cone(radius, height),
-        ShapeDims::Capsule { radius, height, .. } => Collider::capsule(radius, height),
+        ShapeDims::Cube { size } => {
+            avian3d::parry::shape::SharedShape::cuboid(size * 0.5, size * 0.5, size * 0.5).into()
+        }
+        ShapeDims::Sphere { radius } => avian3d::parry::shape::SharedShape::ball(radius).into(),
+        ShapeDims::Cylinder { radius, height, .. } => {
+            avian3d::parry::shape::SharedShape::cylinder(height * 0.5, radius).into()
+        }
+        ShapeDims::Cone { radius, height, .. } => {
+            avian3d::parry::shape::SharedShape::cone(height * 0.5, radius).into()
+        }
+        ShapeDims::Capsule { radius, height, .. } => {
+            avian3d::parry::shape::SharedShape::capsule_y(height * 0.5, radius).into()
+        }
         // Preserve the finite authored surface as two coplanar triangles. A
         // synthetic box thickness would create collision volume absent from
         // the USD geometry.
@@ -1096,6 +1101,6 @@ fn validate_derived_nurbs_proxy(
 /// round shapes). Blocked on Avian: while it hardcodes `10`, any runtime scale
 /// edit re-clobbers our value, so a clean realtime story needs Avian's knob first.
 fn apply_collider_scale(mut collider: Collider, scale: Vec3) -> Collider {
-    collider.set_scale(scale.as_dvec3(), 10);
+    collider.set_scale(scale, 10);
     collider
 }

@@ -348,7 +348,7 @@ impl Material for ShaderMaterial {
     /// pass. Register Bevy's native prepass program so its material-binding and
     /// draw selection retain that group before per-instance specialization.
     fn prepass_vertex_shader() -> ShaderRef {
-        "embedded://bevy_pbr/prepass/prepass.wgsl".into()
+        "embedded://bevy_pbr/prepass/prepass.wesl".into()
     }
 
     fn specialize(

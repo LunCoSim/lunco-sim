@@ -264,16 +264,22 @@ impl JointDrive {
         if [self.target_position, self.target_velocity]
             .into_iter()
             .flatten()
-            .any(|value| !value.is_finite())
-            || self
-                .max_force
-                .is_some_and(|value| value.is_nan() || value < 0.0)
+            .any(|value| !value.is_finite() || value.abs() > f64::from(f32::MAX))
+            || self.max_force.is_some_and(|value| {
+                value.is_nan() || value < 0.0 || (value.is_finite() && value > f64::from(f32::MAX))
+            })
         {
             return Err(lunco_physics::ForceDriveMotorError::InvalidParameters);
         }
         let stiffness = self.stiffness.unwrap_or(0.0);
         let damping = self.damping.unwrap_or(0.0);
-        if !stiffness.is_finite() || !damping.is_finite() || stiffness < 0.0 || damping < 0.0 {
+        if !stiffness.is_finite()
+            || !damping.is_finite()
+            || stiffness < 0.0
+            || damping < 0.0
+            || stiffness > f64::from(f32::MAX)
+            || damping > f64::from(f32::MAX)
+        {
             return Err(lunco_physics::ForceDriveMotorError::InvalidParameters);
         }
         match self
@@ -281,7 +287,10 @@ impl JointDrive {
             .unwrap_or(openusd_schemas::physics::DriveType::Force)
         {
             openusd_schemas::physics::DriveType::Acceleration => {
-                Ok(MotorModel::AccelerationBased { stiffness, damping })
+                Ok(MotorModel::AccelerationBased {
+                    stiffness: stiffness as f32,
+                    damping: damping as f32,
+                })
             }
             openusd_schemas::physics::DriveType::Force => {
                 lunco_physics::force_drive_motor_model(stiffness, damping)

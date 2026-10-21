@@ -443,9 +443,9 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAs
     })
 }
 
-/// `On<Add, ShaderLook>` — the moment intent appears, give it a material.
+/// `On<Add<ShaderLook>>` — the moment intent appears, give it a material.
 fn bind_shader_look(
-    add: On<Add, ShaderLook>,
+    add: On<Add<ShaderLook>>,
     looks: Query<&ShaderLook>,
     skyboxes: Query<(), With<ProceduralSkybox>>,
     mut cache: ResMut<ShaderLookCache>,
@@ -497,7 +497,7 @@ fn bind_shader_look(
 /// If the USD reader adds the explicit sky marker after the shader look, move
 /// the already-resolved look onto the same render-side sky material contract.
 fn bind_added_skybox_shader_look(
-    add: On<Add, ProceduralSkybox>,
+    add: On<Add<ProceduralSkybox>>,
     looks: Query<&ShaderLook>,
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,

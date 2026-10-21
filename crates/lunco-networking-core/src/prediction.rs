@@ -70,10 +70,10 @@ pub fn force_kinematic_proxies(
         if frozen {
             // No authority to follow — pin velocity to zero so the body holds.
             if let Some(mut l) = lin {
-                l.0 = DVec3::ZERO;
+                l.0 = Vec3::ZERO;
             }
             if let Some(mut a) = ang {
-                a.0 = DVec3::ZERO;
+                a.0 = Vec3::ZERO;
             }
         }
         // NOTE (Step 1): when connected, velocity is NOT zeroed here. The proxy's velocity is
@@ -224,22 +224,17 @@ const PROXY_MAX_SPEED: f64 = 50.0;
 /// step of `h` seconds: `ω = axis · θ / h` where `q_err = to · from⁻¹`. Takes the
 /// **shortest arc** (negate `q_err` if `w < 0`, since `q` and `−q` are the same
 /// orientation but the naive angle would be the long way round). Returns zero for a
-/// negligible rotation. Used by `drive_kinematic_proxies` to drive a kinematic
+/// zero rotation. Used by `drive_kinematic_proxies` to drive a kinematic
 /// proxy's `AngularVelocity` so its orientation tracks the snapshot curve through
 /// the solver (and its spin enters contact resolution) instead of being teleported.
 fn ang_vel_to_track(from: Quat, to: Quat, h: f64) -> DVec3 {
-    let mut q_err = to * from.inverse();
-    if q_err.w < 0.0 {
-        q_err = Quat::from_xyzw(-q_err.x, -q_err.y, -q_err.z, -q_err.w);
-    }
-    let w = q_err.w.clamp(-1.0, 1.0);
-    let sin_half = (1.0 - w * w).sqrt();
-    if sin_half < 1e-6 {
-        return DVec3::ZERO; // no meaningful rotation this step
-    }
-    let angle = 2.0 * (w.acos() as f64); // total rotation, radians
-    let axis = Vec3::new(q_err.x, q_err.y, q_err.z) / sin_half;
-    axis.as_dvec3() * (angle / h)
+    let difference = to * from.inverse();
+    let shortest = if difference.w < 0.0 {
+        -difference
+    } else {
+        difference
+    };
+    shortest.to_scaled_axis().as_dvec3() / h
 }
 
 /// Sample the interpolation curve for one body's buffer at host-tick time `t`.
@@ -334,6 +329,8 @@ const INTERP_MAX_EXTRAP_DIST: f64 = 8.0;
 pub fn ingest_snapshots(
     mut snaps: ResMut<crate::session::IncomingSnapshots>,
     mut buffers: ResMut<InterpBuffers>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     if snaps.0.is_empty() {
         return;
@@ -342,6 +339,33 @@ pub fn ingest_snapshots(
     // resource), never back into `snaps`, so the `.collect::<Vec<_>>()`
     // was a pure-waste allocation per ingest (CQ-216).
     for s in snaps.0.drain(..) {
+        let position = DVec3::from_array(s.pos);
+        let rotation = Quat::from_array(s.r);
+        let linear = DVec3::from_array(s.lv);
+        let angular = DVec3::from_array(s.av);
+        if !Vec3::from(s.t).is_finite()
+            || !lunco_physics::avian_backend_pose_is_valid(position, rotation.as_dquat())
+            || !lunco_physics::avian_backend_vector_is_valid(linear)
+            || !lunco_physics::avian_backend_vector_is_valid(angular)
+        {
+            let detail = format!(
+                "snapshot for gid {:x} cannot be represented by the native physics backend",
+                s.gid
+            );
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "network-physics-state-invalid",
+                    None,
+                    "network snapshot",
+                    &detail,
+                );
+            }
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            }
+            error!("[network] network-physics-state-invalid: {detail}");
+            return;
+        }
         let buf = buffers.0.entry(s.gid).or_default();
         let gen_t = s.tick as f64 * SECS_PER_TICK;
         // Drop out-of-order / duplicate snapshots. `SnapChannel` is
@@ -358,12 +382,12 @@ pub fn ingest_snapshots(
         buf.push_back(InterpSample {
             gen_t,
             pos: Vec3::from(s.t),
-            rot: Quat::from_array(s.r),
+            rot: rotation,
             // Wire boundary: `s.pos` is the raw grid-absolute [f64;3] (byte-locked
             // serde array) — it becomes typed here, at ingest.
-            pos_world: GridPos(DVec3::from_array(s.pos)),
-            lv: DVec3::from_array(s.lv),
-            av: DVec3::from_array(s.av),
+            pos_world: GridPos(position),
+            lv: linear,
+            av: angular,
             last_input_seq: s.last_input_seq,
         });
         while buf.len() > INTERP_MAX_SAMPLES {
@@ -485,13 +509,10 @@ pub fn interpolate_proxies(
         if let Some(mut p) = pos {
             p.0 = out_world.0;
         }
-        // Also write avian's f64 `Rotation` (the physics truth), not just the f32
-        // `Transform.rotation`. Without this, avian's writeback re-derives Transform
-        // from the un-updated `Rotation` next frame and CLOBBERS the interpolated
-        // orientation → the proxy's rotation fights/jitters (very visible on a body
-        // that's turning). Position already sticks because we write `Position` above.
+        // Keep the native orientation consistent with the interpolated pose.
+        // Avian 0.8 stores rotations as f32 and positions as f64.
         if let Some(mut r) = rot {
-            r.0 = out_rot.as_dquat();
+            r.0 = out_rot;
         }
 
         // Deliver the authoritative chassis velocity for LOCAL wheel animation.
@@ -608,9 +629,9 @@ pub fn drive_kinematic_proxies(
             // authoritative discontinuity — closing this gap with one tick of
             // velocity would be a violent kick into anything in contact.
             pos.0 = here.0;
-            rot.0 = here_rot.as_dquat();
-            lin.0 = DVec3::ZERO;
-            ang.0 = DVec3::ZERO;
+            rot.0 = here_rot;
+            lin.0 = Vec3::ZERO;
+            ang.0 = Vec3::ZERO;
         } else {
             // Feed-forward curve velocity + soft position correction over TAU (NOT
             // deadbeat: the old `(target−pos)/h` commanded ~50 m/s → jitter +
@@ -626,8 +647,8 @@ pub fn drive_kinematic_proxies(
             if vl > PROXY_MAX_SPEED {
                 v *= PROXY_MAX_SPEED / vl; // backstop a diverging authoritative body
             }
-            lin.0 = v;
-            ang.0 = av + ang_vel_to_track(rot.0.as_quat(), here_rot, PROXY_CORRECT_TAU);
+            lin.0 = v.as_vec3();
+            ang.0 = (av + ang_vel_to_track(rot.0, here_rot, PROXY_CORRECT_TAU)).as_vec3();
         }
 
         // Animation hint = authoritative chassis velocity (moved here from
@@ -841,13 +862,13 @@ pub fn maintain_owned_locally(
                             p.0 = s.pos_world.0;
                         }
                         if let Some(mut r) = em.get_mut::<Rotation>() {
-                            r.0 = s.rot.as_dquat();
+                            r.0 = s.rot;
                         }
                         if let Some(mut lv) = em.get_mut::<LinearVelocity>() {
-                            lv.0 = s.lv;
+                            lv.0 = s.lv.as_vec3();
                         }
                         if let Some(mut av) = em.get_mut::<AngularVelocity>() {
-                            av.0 = s.av;
+                            av.0 = s.av.as_vec3();
                         }
                     });
                 }
@@ -1231,9 +1252,9 @@ pub struct AssemblyHistory(HashMap<u64, VecDeque<AssemblyState>>);
 fn rb_state(p: &Position, r: &Rotation, lv: &LinearVelocity, av: &AngularVelocity) -> RbState {
     RbState {
         pos: p.0,
-        rot: r.0,
-        lv: lv.0,
-        av: av.0,
+        rot: r.0.as_dquat(),
+        lv: lv.0.as_dvec3(),
+        av: av.0.as_dvec3(),
     }
 }
 
@@ -1526,22 +1547,26 @@ pub fn rollback_owned_prediction(world: &mut World) {
             let ports = world
                 .resource::<lunco_port_core::ports::PortRegistry>()
                 .clone();
+            if !apply_states(world, &restore) {
+                return;
+            }
             let saved_time = *world.resource::<Time>();
-
             world
                 .resource_mut::<lunco_core_runtime::RollbackInProgress>()
                 .0 = true;
-            apply_states(world, &restore);
             for input in unacked.iter().take(steps) {
                 replay_one_tick(world, &ports, chassis, input);
             }
             // Put the frozen world back exactly as it was (they moved under gravity /
             // their own velocity during the replay steps).
-            apply_states(world, &frozen);
+            let restored = apply_states(world, &frozen);
             world
                 .resource_mut::<lunco_core_runtime::RollbackInProgress>()
                 .0 = false;
             *world.resource_mut::<Time>() = saved_time;
+            if !restored {
+                return;
+            }
 
             debug!(
                 "[rollback] gid={gid} ack={ack} dpos={dpos:.3}m drot={drot:.3}rad replayed={steps} \
@@ -1578,7 +1603,28 @@ pub fn rollback_owned_prediction(world: &mut World) {
 }
 
 /// Seat a batch of bodies' public physics state (the only state a rollback may touch).
-fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
+fn apply_states(world: &mut World, states: &[(Entity, RbState)]) -> bool {
+    if states.iter().any(|(_, state)| {
+        !lunco_physics::avian_backend_pose_is_valid(state.pos, state.rot)
+            || !lunco_physics::avian_backend_vector_is_valid(state.lv)
+            || !lunco_physics::avian_backend_vector_is_valid(state.av)
+    }) {
+        let detail = "rollback state cannot be represented by the native physics backend";
+        if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+            faults.raise(
+                "network-physics-state-invalid",
+                None,
+                "network rollback",
+                detail,
+            );
+        }
+        if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>() {
+            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        }
+        error!("[network] network-physics-state-invalid: {detail}");
+        return false;
+    }
+    // Canonical replay/history remains f64. These checked writes are the native f32 boundary.
     for (e, s) in states {
         let Ok(mut em) = world.get_entity_mut(*e) else {
             continue;
@@ -1587,15 +1633,16 @@ fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
             p.0 = s.pos;
         }
         if let Some(mut r) = em.get_mut::<Rotation>() {
-            r.0 = s.rot;
+            r.0 = s.rot.as_quat();
         }
         if let Some(mut lv) = em.get_mut::<LinearVelocity>() {
-            lv.0 = s.lv;
+            lv.0 = s.lv.as_vec3();
         }
         if let Some(mut av) = em.get_mut::<AngularVelocity>() {
-            av.0 = s.av;
+            av.0 = s.av.as_vec3();
         }
     }
+    true
 }
 
 /// Client predict-own reconciliation (input-replay model, D2). GENERAL over any
@@ -1767,15 +1814,11 @@ pub fn reconcile_owned_prediction(
                 );
                 tf.translation = new_pos;
                 tf.rotation = new_rot;
-                // TODO(multiplayer): this seats absolute f64 `Position` from a
-                // cell-relative f32 pose (the owned compare ignores `s.cell`)
-                // — wrong at any non-zero cell (e.g. moonbase). Revisit before
-                // multiplayer hardening (REVIEW-2026-07-19.md PRED-1).
                 if let Some(mut p) = pos {
-                    p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
+                    p.0 = sample.pos_world.0;
                 }
                 if let Some(mut r) = rot {
-                    r.0 = new_rot.as_dquat();
+                    r.0 = new_rot;
                 }
                 if let Some(mut pc) = off {
                     *pc = PendingCorrection::default();
@@ -1790,10 +1833,10 @@ pub fn reconcile_owned_prediction(
         let auth_lv = sample.lv;
         let auth_av = sample.av;
         if let Some(mut l) = lin {
-            l.0 = (l.0 + auth_lv) * 0.5;
+            l.0 = ((l.0.as_dvec3() + auth_lv) * 0.5).as_vec3();
         }
         if let Some(mut a) = ang {
-            a.0 = (a.0 + auth_av) * 0.5;
+            a.0 = ((a.0.as_dvec3() + auth_av) * 0.5).as_vec3();
         }
     }
 }
@@ -2134,7 +2177,7 @@ pub fn reconcile_predicted_dynamic(
         let Ok((pos, rot, lin, ang, off)) = q.get_mut(e) else {
             continue;
         };
-        // Dynamic bodies always carry avian `Position`/`Rotation` (absolute, f64).
+        // Native bodies carry f64 world positions and f32 orientations.
         let (Some(mut pos), Some(mut rot)) = (pos, rot) else {
             continue;
         };
@@ -2149,7 +2192,7 @@ pub fn reconcile_predicted_dynamic(
 
         let err = here.0 - pos.0; // DVec3, frame-free error (both grid-absolute)
         let dist = err.length();
-        let cur_rot = rot.0.as_quat();
+        let cur_rot = rot.0;
         let mut rot_err = (here_rot * cur_rot.inverse()).normalize();
         if rot_err.w < 0.0 {
             rot_err = -rot_err; // shortest arc
@@ -2176,12 +2219,12 @@ pub fn reconcile_predicted_dynamic(
             // velocity so it stops diverging. Closing a >2 m gap with velocity would
             // be a violent kick into anything in contact.
             pos.0 = here.0;
-            rot.0 = here_rot.as_dquat();
+            rot.0 = here_rot;
             if let Some(mut l) = lin {
-                l.0 = lv;
+                l.0 = lv.as_vec3();
             }
             if let Some(mut a) = ang {
-                a.0 = av;
+                a.0 = av.as_vec3();
             }
             if let Some(mut pc) = off {
                 *pc = PendingCorrection::default();
@@ -2198,10 +2241,10 @@ pub fn reconcile_predicted_dynamic(
             // host-moved prop leaves the dead-zone immediately, so it reaches this
             // branch and tracks authority velocity.
             if let Some(mut l) = lin {
-                l.0 = lv;
+                l.0 = lv.as_vec3();
             }
             if let Some(mut a) = ang {
-                a.0 = av;
+                a.0 = av.as_vec3();
             }
 
             // Soft CONTINUOUS spring (every fixed tick): SET the residual to the
@@ -2279,7 +2322,7 @@ pub fn drain_pending_corrections(
         if angle > 1e-5 {
             let take = (frac * angle).min(CORRECTION_MAX_ROT_PER_TICK) / angle; // fraction of residual
             let applied = Quat::IDENTITY.slerp(pc.rot, take as f32);
-            rot.0 = applied.as_dquat() * rot.0;
+            rot.0 = applied * rot.0;
             pc.rot = (applied.inverse() * pc.rot).normalize();
         } else {
             pc.rot = Quat::IDENTITY;
@@ -2555,6 +2598,48 @@ register_commands!(on_set_visual_lead);
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn replay_rejects_unrepresentable_state_before_writing_any_body() {
+        use super::*;
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.init_resource::<lunco_physics::PhysicsHolds>();
+        let bodies = [0.0, 1.0].map(|x| {
+            world
+                .spawn((
+                    Position(DVec3::X * x),
+                    Rotation(Quat::IDENTITY),
+                    LinearVelocity(Vec3::ZERO),
+                    AngularVelocity(Vec3::ZERO),
+                ))
+                .id()
+        });
+        let state = RbState {
+            pos: DVec3::X * 5.0,
+            rot: DQuat::IDENTITY,
+            lv: DVec3::ZERO,
+            av: DVec3::ZERO,
+        };
+        assert!(!apply_states(
+            &mut world,
+            &[
+                (bodies[0], state),
+                (
+                    bodies[1],
+                    RbState {
+                        lv: DVec3::splat(f64::MAX),
+                        ..state
+                    }
+                )
+            ]
+        ));
+        for (body, x) in bodies.into_iter().zip([0.0, 1.0]) {
+            assert_eq!(world.get::<Position>(body).unwrap().0, DVec3::X * x);
+        }
+        assert!(world.resource::<lunco_core::RuntimeFaults>().active());
+        assert!(world.resource::<lunco_physics::PhysicsHolds>().is_held());
+    }
+
     use super::{PREDICT_GRACE_TICKS, predicts_locally};
     use bevy::prelude::*;
     use lunco_core_session::{BufferedClientInputs, NetworkRole};
@@ -2610,17 +2695,6 @@ mod tests {
         #[derive(Resource, Default)]
         struct AppliedTargets(Vec<u64>);
 
-        fn record_target_write(world: &mut World, entity: Entity, _: &str, _: f64) -> bool {
-            let Some(gid) = world
-                .get::<lunco_core::GlobalEntityId>(entity)
-                .map(|gid| gid.get())
-            else {
-                return false;
-            };
-            world.resource_mut::<AppliedTargets>().0.push(gid);
-            true
-        }
-
         let mut app = App::new();
         app.insert_resource(NetworkRole::Host)
             .insert_resource(BufferedClientInputs::default())
@@ -2628,6 +2702,7 @@ mod tests {
             .init_resource::<lunco_core_session::SessionRegistry>()
             .init_resource::<lunco_api::registry::ApiEntityRegistry>()
             .init_resource::<lunco_port_core::ports::PortRegistry>()
+            .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<AppliedTargets>();
         app.world_mut()
             .resource_mut::<lunco_port_core::ports::PortRegistry>()
@@ -2816,9 +2891,9 @@ mod pose_write_tests {
         );
         // …which the drain converges onto avian `Rotation` (physics truth) in
         // small per-tick steps, never exceeding the per-tick cap.
-        let before = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        let before = world.entity(e).get::<Rotation>().unwrap().0;
         world.run_system_once(drain_pending_corrections).unwrap();
-        let after = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        let after = world.entity(e).get::<Rotation>().unwrap().0;
         let step = after.angle_between(before);
         assert!(
             step > 1e-4,
@@ -2832,7 +2907,7 @@ mod pose_write_tests {
         for _ in 0..600 {
             world.run_system_once(drain_pending_corrections).unwrap();
         }
-        let settled = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        let settled = world.entity(e).get::<Rotation>().unwrap().0;
         let target = predicted.slerp(authoritative, 0.3); // blend=0.3 nudge target
         assert!(
             settled.angle_between(target) < 0.01,
@@ -2886,7 +2961,7 @@ mod pose_write_tests {
         world.run_system_once(interpolate_proxies).unwrap();
 
         let tf_rot = world.entity(e).get::<Transform>().unwrap().rotation;
-        let avian_rot = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        let avian_rot = world.entity(e).get::<Rotation>().unwrap().0;
         assert!(
             tf_rot.angle_between(target) < 1e-4,
             "proxy Transform should take the sample rotation; got {tf_rot:?}"
@@ -3068,7 +3143,7 @@ mod pose_write_tests {
                 Transform::default(), // at origin
                 Position::default(),
                 Rotation::default(),
-                LinearVelocity(local_vel),
+                LinearVelocity(local_vel.as_vec3()),
                 AngularVelocity::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
                 lunco_core_session::PredictedDynamic,
@@ -3264,7 +3339,7 @@ mod avian_kinematic_probe {
             .add_plugins(PhysicsPlugins::default())
             .insert_resource(SubstepCount(lunco_physics::DEFAULT_SUBSTEP_COUNT))
             // No gravity — isolate kinematic integration / contact push from fall.
-            .insert_resource(Gravity(avian3d::math::Vector::ZERO))
+            .insert_resource(Gravity(Vec3::ZERO))
             // Fixed step == H, and advance virtual time by exactly H per update:
             // one — and only one — physics tick per `app.update()`, no wall clock.
             .insert_resource(Time::<Fixed>::from_hz(HZ))
@@ -3293,7 +3368,7 @@ mod avian_kinematic_probe {
     #[test]
     fn kinematic_advances_position_by_v_times_h() {
         let mut app = headless_physics_app();
-        let v = avian3d::math::Vector::new(2.0, 0.0, 0.0); // 2 m/s +x
+        let v = Vec3::new(2.0, 0.0, 0.0); // 2 m/s +x
         let e = app
             .world_mut()
             .spawn((
@@ -3313,7 +3388,7 @@ mod avian_kinematic_probe {
         step(&mut app, k);
         let p1 = app.world().entity(e).get::<Position>().unwrap().0;
 
-        let expected = v * (H * k as f64);
+        let expected = v.as_dvec3() * (H * k as f64);
         // Tolerance ~1e-6 m: the authoritative substep count splits h into
         // integer-nanosecond substeps. The advance is therefore v·h modulo
         // substep-time rounding —
@@ -3340,9 +3415,9 @@ mod avian_kinematic_probe {
             .spawn((
                 RigidBody::Kinematic,
                 Collider::sphere(0.5),
-                Position(avian3d::math::Vector::new(0.0, 0.0, 0.0)),
+                Position(bevy::math::DVec3::new(0.0, 0.0, 0.0)),
                 Rotation::default(),
-                LinearVelocity(avian3d::math::Vector::new(3.0, 0.0, 0.0)),
+                LinearVelocity(Vec3::new(3.0, 0.0, 0.0)),
                 AngularVelocity::default(),
                 Transform::default(),
                 GlobalTransform::default(),
@@ -3353,7 +3428,7 @@ mod avian_kinematic_probe {
             .spawn((
                 RigidBody::Dynamic,
                 Collider::sphere(0.5),
-                Position(avian3d::math::Vector::new(1.2, 0.0, 0.0)),
+                Position(bevy::math::DVec3::new(1.2, 0.0, 0.0)),
                 Rotation::default(),
                 LinearVelocity::default(),
                 AngularVelocity::default(),

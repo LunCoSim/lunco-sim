@@ -5,7 +5,7 @@
  */
 @font-face {
   font-family: "LunCo UI";
-  src: url("fonts/FiraSans-Regular.ttf");
+  src: url("../fonts/FiraSans-Regular.ttf");
 }
 
 :root {

@@ -108,7 +108,7 @@ mod tests {
         struct TerminalRequester;
         let mut app = App::new();
         install(&mut app);
-        app.add_observer(|_: On<Remove, TerminalRequester>, mut commands: Commands| {
+        app.add_observer(|_: On<Remove<TerminalRequester>>, mut commands: Commands| {
             commands.queue(|world: &mut World| {
                 let mut control = world.resource_mut::<SimulationStepControl>();
                 control.request(Some(true), Some(7), true).unwrap();

@@ -39,13 +39,9 @@
 //!
 //! # Forces
 //!
-//! A frozen body must not be *accumulating* force. avian clears velocity
-//! increments in `clear_velocity_increments`, which is `With<SolverBody>` — and a
-//! disabled body has no `SolverBody`. So force applied to a frozen body is never
-//! cleared, sums for the whole hold, and discharges into a single step on
-//! release. That is the same failure that launched a rover at 224 m/s through the
-//! ground (see [`crate::physics_is_live`], the world-scoped version of this
-//! hazard).
+//! A frozen body must not accumulate force while disabled. Native integration
+//! consumes forces only for admitted active solver bodies; retaining force over
+//! a readiness hold would discharge it on release.
 //!
 //! The rule that prevents it is one line and belongs to every force producer:
 //! **apply force only to bodies the solver will integrate.** [`Integrable`] is
@@ -124,7 +120,7 @@ pub(crate) fn reconcile_frozen_subtrees(
     joints: Query<
         (),
         (
-            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+            With<avian3d::dynamics::joints::joint_graph::JointComponentId>,
             Without<JointDisabled>,
         ),
     >,
@@ -388,7 +384,7 @@ mod tests {
             .world_mut()
             .spawn((
                 RevoluteJoint::new(body, other),
-                avian3d::dynamics::solver::joint_graph::JointComponentId::new(),
+                avian3d::dynamics::joints::joint_graph::JointComponentId::new(),
                 ChildOf(body),
             ))
             .id();

@@ -411,7 +411,7 @@ pub(crate) fn retire_terrain_tiles(
 /// not hide a resident tile. An observer gives the tile streamer the same event
 /// without rescanning every resident tile on stable frames.
 pub(crate) fn invalidate_removed_shader_look_ready(
-    trigger: On<Remove, ShaderLookReady>,
+    trigger: On<Remove<ShaderLookReady>>,
     mut commands: Commands,
     mut terrains: Query<&mut LodTiles>,
 ) {

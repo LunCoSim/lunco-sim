@@ -612,7 +612,7 @@ impl TerrainLayer for RockScatterLayer {
                     Visibility::Inherited
                 },
                 rigid_body: RigidBody::Static,
-                collider: Collider::sphere((r_vis * 0.6) as f64),
+                collider: Collider::sphere(r_vis * 0.6),
                 order_key: lunco_physics::PhysicsOrderKey(format!(
                     "{}|rock/{index}",
                     cx.physics_identity
@@ -741,7 +741,7 @@ impl TerrainLayer for RockInstanceLayer {
                 .with_rotation(Quat::from_rotation_y(yaw)),
                 Visibility::Inherited,
                 RigidBody::Static,
-                Collider::sphere((r * 0.6) as f64),
+                Collider::sphere(r * 0.6),
                 lunco_physics::PhysicsOrderKey(format!("{}|rock/0", cx.physics_identity)),
             ));
             if let Some(mesh) = mesh {

@@ -31,7 +31,7 @@ bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light",
 # `Image`s. These are the POD descriptors `bevy_image` itself takes from `wgpu-types`;
 # `bevy::render::render_resource` only re-exports them, and importing THAT would drag
 # in wgpu + naga. `wgpu-types` is not `wgpu`.
-wgpu-types = "29"
+wgpu-types = "30"
 lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-spatial = { path = "../lunco-spatial" }

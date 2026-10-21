@@ -25,6 +25,34 @@ pub(crate) fn attachment_suspension_path(
         .and_then(|s| SdfPath::new(s).ok())
 }
 
+/// Validate wheel values that cross the native solver and ray-query boundary.
+pub(crate) fn validate_native_parameters(params: &WheelParams) -> Result<(), String> {
+    let transverse_inertia =
+        params.mass * (3.0 * params.radius * params.radius + params.width * params.width) / 12.0;
+    for (name, value) in [
+        ("radius", params.radius),
+        ("width", params.width),
+        ("mass", params.mass),
+        ("axle inertia", params.axle_inertia()),
+        ("transverse inertia", transverse_inertia),
+        ("friction", params.friction_mu),
+    ] {
+        if !value.is_finite()
+            || value.abs() > f64::from(f32::MAX)
+            || (value != 0.0 && value as f32 == 0.0)
+        {
+            return Err(format!("wheel {name} exceeds the native solver range"));
+        }
+    }
+    if params.suspension.is_some_and(|suspension| {
+        let distance = lunco_mobility::suspension_ray_max_distance(suspension.rest_length);
+        !distance.is_finite() || distance > f64::from(f32::MAX)
+    }) {
+        return Err("wheel suspension ray exceeds the native query range".to_owned());
+    }
+    Ok(())
+}
+
 /// Resolve a wheel's attachment tire prim via the standard attachment
 /// topology. The map belongs to one composed stage, so its keys are stage-local
 /// paths; independent instances retain independent topology maps.
@@ -154,6 +182,10 @@ pub(crate) fn resync_wheels_for_stage(
                 .and_then(|s| SdfPath::new(s).ok());
             match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
                 Ok(params) => {
+                    if let Err(detail) = validate_native_parameters(&params) {
+                        failures.push((Some(*entity), path.clone(), detail));
+                        continue;
+                    }
                     // Use the same authored pose/axis readers as the mesh owner.
                     // Keep this rest pose separate from the animated transform.
                     let geometry_basis = match read_geometry_orientation(&view, &sp) {
@@ -271,7 +303,8 @@ pub(crate) fn resync_wheels_for_stage(
                     lunco_mobility::strut_offset(susp.rest_length, u.params.radius),
                     0.0,
                 );
-                ray.max_distance = lunco_mobility::suspension_ray_max_distance(susp.rest_length);
+                ray.max_distance =
+                    lunco_mobility::suspension_ray_max_distance(susp.rest_length) as f32;
             }
             continue;
         }
@@ -307,8 +340,8 @@ pub(crate) fn resync_wheels_for_stage(
             );
         } else {
             if let Some(mut friction) = world.get_mut::<Friction>(u.entity) {
-                friction.dynamic_coefficient = u.params.friction_mu;
-                friction.static_coefficient = u.params.friction_mu;
+                friction.dynamic_coefficient = u.params.friction_mu as f32;
+                friction.static_coefficient = u.params.friction_mu as f32;
             }
         }
         world.entity_mut(u.entity).insert((

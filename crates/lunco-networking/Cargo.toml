@@ -117,8 +117,8 @@ serde = { workspace = true, optional = true }
 # ONLY for direct bare-IP native connections (a self-signed server over LAN/dev,
 # no CA cert) — see `native_client_config` in wt_client.rs. Hostname connections
 # always use full CA validation; the insecure path never applies to them.
-aeronet_webtransport = { version = "0.21", features = ["client", "dangerous-configuration"], optional = true }
-lightyear_aeronet = { version = "0.28.0", default-features = false, optional = true }
+aeronet_webtransport = { version = "0.22.0-rc.1", features = ["client", "dangerous-configuration"], optional = true }
+lightyear_aeronet = { version = "0.31.0", default-features = false, optional = true }
 
 
 # Native (desktop / dedicated server): full client+server WebTransport.
@@ -133,10 +133,8 @@ lightyear = { workspace = true, optional = true, features = [
 # Host TLS identity loading (production certbot cert via env paths). File reads
 # route through lunco-storage (shared dep, see above); rustls-pemfile turns the
 # PEM into DER for wtransport's sync `Identity::new`.
-# Pinned to the wtransport that aeronet_webtransport 0.21 (lightyear 0.28's IO
-# layer) links — the Identity handed to lightyear must be the same type. Do not
-# bump past it until lightyear/aeronet do.
-wtransport = { version = "0.6.1", optional = true }
+# Match the transport type used by Lightyear 0.31 and Aeronet 0.22.
+wtransport = { version = "0.7.2", optional = true }
 rustls-pemfile = { version = "2", optional = true }
 # Single-instance IPC for `luncosim://` deep-links: forward a clicked link to the
 # already-running app over a local socket (Unix domain socket / Windows named

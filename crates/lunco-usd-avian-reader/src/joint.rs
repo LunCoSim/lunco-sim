@@ -320,10 +320,16 @@ fn read_joint_spec_with_policy(
     let damping = if view.has_api_schema(path, "LunCoJointDampingAPI") {
         let linear = read_real_or_default("lunco:jointDamping:linear", 0.0)?;
         let angular = read_real_or_default("lunco:jointDamping:angular", 0.0)?;
-        if !(linear.is_finite() && linear >= 0.0 && angular.is_finite() && angular >= 0.0) {
+        if ![linear, angular]
+            .into_iter()
+            .all(|value| value.is_finite() && value >= 0.0 && value <= f64::from(f32::MAX))
+        {
             return None;
         }
-        Some(JointDamping { linear, angular })
+        Some(JointDamping {
+            linear: linear as f32,
+            angular: angular as f32,
+        })
     } else {
         None
     };
@@ -547,6 +553,24 @@ fn read_joint_spec_with_policy(
         }
         _ => return None,
     };
+
+    if ![spec.local_pos0, spec.local_pos1, spec.axis]
+        .into_iter()
+        .all(lunco_physics::avian_backend_vector_is_valid)
+        || ![spec.local_rot0, spec.local_rot1]
+            .into_iter()
+            .all(lunco_physics::avian_backend_rotation_is_valid)
+        || [spec.limit_lower, spec.limit_upper]
+            .into_iter()
+            .any(|value| value.is_nan() || (value.is_finite() && value.abs() > f64::from(f32::MAX)))
+        || spec.swing_limit.is_some_and(|(a, b)| {
+            [a, b]
+                .into_iter()
+                .any(|value| !value.is_finite() || value.abs() > f64::from(f32::MAX))
+        })
+    {
+        return None;
+    }
 
     // Wheel-targeted joints are owned by `lunco-usd-sim` (built alongside the
     // wheel body); skip them here to avoid double-up/race.

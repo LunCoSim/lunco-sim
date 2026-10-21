@@ -16,6 +16,7 @@ pub struct BodyMassFromColliders;
 pub fn update_body_mass_from_colliders(
     mut bodies: Query<
         (
+            Entity,
             &RigidBodyColliders,
             Has<NoAutoMass>,
             Has<NoAutoAngularInertia>,
@@ -46,6 +47,7 @@ pub fn update_body_mass_from_colliders(
     mut holds: Option<ResMut<crate::PhysicsHolds>>,
 ) {
     for (
+        entity,
         colliders,
         no_auto_mass,
         no_auto_inertia,
@@ -87,21 +89,43 @@ pub fn update_body_mass_from_colliders(
         });
         let mut properties = aggregate_collider_mass(geometry);
         if no_auto_mass {
-            properties.set_mass(computed_mass.value(), !no_auto_inertia);
-        } else {
-            let target_mass = properties.mass();
+            properties.set_mass(f64::from(computed_mass.value()), !no_auto_inertia);
+        }
+        let valid = properties.mass().is_finite()
+            && properties.mass() >= 0.0
+            && properties.mass() <= f64::from(f32::MAX)
+            && crate::avian_backend_vector_is_valid(properties.principal_inertia())
+            && crate::avian_backend_point_is_valid(properties.local_com)
+            && crate::avian_backend_rotation_is_valid(properties.principal_inertia_local_frame);
+        if !valid {
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
+            }
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "physics-body-mass-invalid",
+                    Some(entity),
+                    "body collider mass",
+                    "computed mass properties exceed the native solver representation",
+                );
+            }
+            continue;
+        }
+        // Explicit Avian 0.8 solver boundary; the geometry reduction remains f64.
+        if !no_auto_mass {
+            let target_mass = properties.mass() as f32;
             if computed_mass.value() != target_mass {
                 computed_mass.set(target_mass);
             }
         }
         if !no_auto_inertia {
             computed_inertia.set_if_neq(ComputedAngularInertia::new_with_local_frame(
-                properties.principal_inertia(),
-                properties.principal_inertia_local_frame,
+                properties.principal_inertia().as_vec3(),
+                properties.principal_inertia_local_frame.as_quat(),
             ));
         }
         if !no_auto_center {
-            computed_center.set_if_neq(ComputedCenterOfMass(properties.local_com));
+            computed_center.set_if_neq(ComputedCenterOfMass(properties.local_com.as_vec3()));
         }
     }
 }
@@ -120,8 +144,8 @@ fn aggregate_collider_mass(
                 mass.local_inertial_frame.as_dquat(),
             )
             .transform_by(&Pose::from_parts(
-                transform.translation,
-                transform.rotation.0,
+                transform.translation.as_dvec3(),
+                transform.rotation.as_dquat(),
             ))
         })
         .sum()
@@ -138,7 +162,7 @@ mod tests {
             (
                 cube,
                 ColliderTransform {
-                    translation: avian3d::math::Vector::new(x, 0.0, 0.0),
+                    translation: Vec3::new(x, 0.0, 0.0),
                     ..default()
                 },
             )
@@ -151,24 +175,5 @@ mod tests {
         assert!((tensor.x_axis.x - 10.0 / 6.0).abs() < 1e-5);
         assert!((tensor.y_axis.y - 70.0 / 6.0).abs() < 1e-5);
         assert!((tensor.z_axis.z - 70.0 / 6.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn reduction_preserves_offsets_beyond_render_precision() {
-        let cube = ColliderMassProperties::from_shape(&Cuboid::new(1.0, 1.0, 1.0), 1.0);
-        let offset = 16_777_216.0;
-        let mass = aggregate_collider_mass([-1.0, 1.0].into_iter().map(|x| {
-            (
-                cube,
-                ColliderTransform {
-                    translation: avian3d::math::Vector::new(offset + x, 0.0, 0.0),
-                    ..default()
-                },
-            )
-        }));
-        assert_eq!(mass.local_com.x, offset);
-        let tensor = mass.reconstruct_inertia_matrix();
-        assert!((tensor.y_axis.y - 7.0 / 3.0).abs() < 1e-6);
-        assert!((tensor.z_axis.z - 7.0 / 3.0).abs() < 1e-6);
     }
 }

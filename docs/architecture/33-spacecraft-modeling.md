@@ -455,8 +455,12 @@ lint; generic synthesized-joint admission enforces the same invariant.
 
 `GearRatio` owns bidirectional mesh efficiency. Terminal powers are positive
 into the component; `power_a_w + power_b_w = heat`. Its output torque is a
-checked rating; a physical limiter requires a clutch/slip model. The stateless
-constant-efficiency model omits backlash and static friction.
+checked rating; a physical limiter requires a clutch/slip model. Its `eta` input accepts a Modelica law of shaft speed or temperature; no
+backlash or static-friction state is implied. `DCMotor.resistance_scale` accepts
+a positive temperature/material law relative to its nameplate winding
+resistance. Omitted laws use the declared constant efficiency and unit resistance
+scale. Electrical power, delivered shaft work and thermal loss retain their
+energy balance as these inputs vary; invalid operating points fail the solve.
 
 Native wheel mechanics own bearing, brake and contact forces. `solve_axle_step`
 evaluates the final combined friction cone in the axle balance. The same force
@@ -467,12 +471,10 @@ The locked-patch projection cannot propel existing slip and is bounded by the
 remaining authored brake authority. Physical wheels apply bearing torque across
 the relative axle/housing coordinate, rather than damping world rotation.
 
-Shared physical tires consume both prepared native contact loads and additional
-continuous reactions from the physics owner's existing `ContinuousContacts`.
-The latter retain their body/collider/compound-part identities, normal and
-impulse-weighted world contact point. Their impulses are physical contributions,
-not Avian biased/relaxation samples. Tire forces and work use the delivered
-geometry; generic `contact_force` also includes these contributions once.
+Shared physical tires consume the physics owner's prepared native contact
+loads with their exact body/collider provenance, normal and world contact point.
+The same completed native contact graph supplies generic `contact_force`; there
+is one contact impulse owner.
 Completed samples survive an admission hold and retire with the scene.
 
 USD wheel surfaces expose physical `bearing_heat`, `brake_heat`, `tire_heat`

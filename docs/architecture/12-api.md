@@ -17,10 +17,19 @@ Use this render-cadence query for frame distributions, including while simulatio
 is paused. `PhysicsPerformance` reports completed native physics steps;
 `SimulationTimingProfile` reports fixed-loop service and retained demand. Their
 clocks are distinct. See [telemetry ownership](telemetry-subsystem.md#engine-diagnostics-and-generic-visualization).
-`PhysicsPerformance.continuous_projection_time_ms` measures joint/contact row
-preparation, coupled response and reaction application inside the continuous
-solve. The joint-only admission pass precedes that timer. Native total-step
-diagnostics include both phases.
+Native solver timings are exposed as `solver_swept_ccd_time_ms`,
+`solver_prepare_constraints_time_ms`, `solver_solve_constraints_time_ms`, and
+`solver_relax_velocities_time_ms`. Collision diagnostics expose
+`collision_broad_phase_time_ms`, `collision_narrow_phase_time_ms`,
+`collision_contacts`, and `collision_recycled_contacts`. These native phase
+measurements complement the complete step duration; nested timings must not be
+added as independent work.
+The on-demand contact-graph audit reports `contact_graph_pairs` across native
+active and sleeping pairs, `contact_graph_pairs_missing_entities` for pairs
+with a retired endpoint, and `contact_graph_pairs_without_colliders` for pairs
+with an endpoint lacking Avian's `ColliderMarker` (including retired entities).
+These counts expose lifecycle failures independently of occupied graph slots;
+they do not remove contacts or change solver admission.
 
 ## Quick Start
 

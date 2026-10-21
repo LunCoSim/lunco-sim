@@ -142,6 +142,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             || !direction.as_vec3().is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.0
+            || max_distance > f64::from(f32::MAX)
         {
             return None;
         }
@@ -158,7 +159,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             .transform_vector3(direction.as_dvec3());
         let direction = Dir3::new(direction.as_vec3()).ok()?;
         self.spatial
-            .cast_ray(origin, direction, max_distance, solid, filter)
+            .cast_ray(origin, direction, max_distance as f32, solid, filter)
     }
 
     /// A non-finite origin yields `None`, for the same hard reason as
@@ -177,11 +178,12 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             || !direction.as_vec3().is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.0
+            || max_distance > f64::from(f32::MAX)
         {
             return None;
         }
         self.spatial
-            .cast_ray(origin.0, direction, max_distance, solid, filter)
+            .cast_ray(origin.0, direction, max_distance as f32, solid, filter)
     }
 
     /// Cast a ray expressed in a named BigSpace `source_grid`.
@@ -206,6 +208,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             || !direction.as_vec3().is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.0
+            || max_distance > f64::from(f32::MAX)
         {
             return None;
         }
@@ -226,7 +229,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         self.spatial.cast_ray(
             physics_origin,
             physics_direction,
-            max_distance,
+            max_distance as f32,
             solid,
             filter,
         )

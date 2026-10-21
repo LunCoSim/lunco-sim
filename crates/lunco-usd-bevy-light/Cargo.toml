@@ -18,7 +18,7 @@ lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
 openusd-schemas = { workspace = true }
-wgpu-types = "29"
+wgpu-types = "30"
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

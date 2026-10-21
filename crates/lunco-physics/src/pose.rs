@@ -68,7 +68,7 @@ fn simulation_pose<F: bevy::ecs::query::QueryFilter>(
         }
         let owned = if native_body {
             let (position, rotation) = physics.get(ancestor).ok()?;
-            Some((GridPos(position.0), GridRot(rotation.0)))
+            Some((GridPos(position.0), GridRot(rotation.0.as_dquat())))
         } else if let Some(supplied) = supplied {
             match supplied {
                 PrescribedSimulationPose::Sample {
@@ -378,14 +378,14 @@ mod tests {
     }
 
     #[test]
-    fn physical_body_uses_exact_f64_pose_not_rounded_transform() {
+    fn physical_body_uses_native_pose_not_presentation_transform() {
         let mut world = World::new();
         let frame = world
             .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
         world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let exact = DVec3::new(0.123_456_789_012, -1_901.623_456_789, 4.987_654_321_098);
-        let exact_rotation = DQuat::from_rotation_y(0.123_456_789);
+        let exact_rotation = bevy::math::Quat::from_rotation_y(0.123_456_789);
         let body = world
             .spawn((
                 RigidBody::Dynamic,
@@ -399,7 +399,7 @@ mod tests {
 
         let (position, rotation) = read(&mut world, body).expect("seeded body pose");
         assert_eq!(position.0, exact);
-        assert_eq!(rotation.0, exact_rotation);
+        assert_eq!(rotation.0, exact_rotation.as_dquat());
         assert_ne!(position.0.y, exact.y as f32 as f64);
     }
 
@@ -411,12 +411,12 @@ mod tests {
             .id();
         world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let position = DVec3::new(0.123_456_789_012, 50.123_456_789_012, -7.0);
-        let rotation = DQuat::from_rotation_y(0.3);
+        let rotation = DQuat::from_rotation_y(0.3).as_quat().as_dquat();
         let body = world
             .spawn((
                 RigidBody::Dynamic,
                 Position(position),
-                Rotation(rotation),
+                Rotation(rotation.as_quat()),
                 PhysicsPoseSeeded,
                 Transform::from_xyz(100.0, 200.0, 300.0),
                 ChildOf(frame),
@@ -508,7 +508,7 @@ mod tests {
             .spawn((
                 RigidBody::Dynamic,
                 Position(DVec3::ZERO),
-                Rotation(DQuat::IDENTITY),
+                Rotation(bevy::math::Quat::IDENTITY),
                 Transform::from_xyz(12.0, 34.0, 56.0),
                 ChildOf(frame),
             ))
@@ -547,7 +547,7 @@ mod tests {
             .spawn((
                 RigidBody::Dynamic,
                 Position(exact),
-                Rotation(DQuat::IDENTITY),
+                Rotation(bevy::math::Quat::IDENTITY),
                 PhysicsPoseSeeded,
                 Transform::from_translation(exact.as_vec3()),
                 ChildOf(frame),

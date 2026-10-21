@@ -55,13 +55,16 @@
 //       live-only evidence for runtime provider endpoints. File validation
 //       supplies an empty array because it cannot observe ECS projection.
 //
+//   facts.runtime_connection_contracts[] #{ subject, error }
+//       live connection rejection from the binding owner (units, frames, gains).
+//
 //   facts.runtime_port_collisions[] #{ subject, name, direction,
 //                                      owners: [{source, direction, precedence}] }
 //       live-only ownership evidence from the shared PortRegistry. This policy
 //       owns whether the ambiguity is an error and how the repair is explained.
 //
 //   facts.runtime_joints[] #{ entity_bits, subject, linked, pending, native,
-//                             graph, graph_available, detach_requested }
+//                             graph, graph_available, detach_requested, effort_error }
 //       live-only evidence for the one joint-detach lifecycle. `linked` is the
 //       projected PhysicsJointLink contract; the other bits identify pending,
 //       native, graph, and requested states. File validation supplies an empty
@@ -366,6 +369,7 @@ fn lint_usd(facts) {
     for f in direction_source_contract(facts) { out.push(f); }
     for f in connection_contract(facts) { out.push(f); }
     for f in runtime_connection_contract(facts) { out.push(f); }
+    for f in runtime_connection_engineering_contract(facts) { out.push(f); }
     for f in runtime_port_owner_contract(facts) { out.push(f); }
     for f in runtime_joint_contract(facts) { out.push(f); }
     for f in collision_enabled_without_api(facts) { out.push(f); }
@@ -530,6 +534,17 @@ fn runtime_connection_contract(facts) {
     out
 }
 
+/// Binding owns engineering compatibility; lint explains the same rejection.
+fn runtime_connection_engineering_contract(facts) {
+    let out = [];
+    if facts.runtime_connection_contracts == () { return out; }
+    for connection in facts.runtime_connection_contracts {
+        out.push(finding("connection-engineering-contract-invalid", "error", connection.subject,
+            connection.error + "; correct the endpoint units/frames or author an explicit transform."));
+    }
+    out
+}
+
 /// Duplicate public names are ambiguous on the access side that has multiple
 /// owners. The repair is to author distinct names at the owning boundary.
 fn port_owner_namespace(direction) {
@@ -593,6 +608,10 @@ fn runtime_joint_contract(facts) {
     let out = [];
     if facts.runtime_joints == () { return out; }
     for joint in facts.runtime_joints {
+        if joint.effort_error != () {
+            out.push(finding("joint-effort-contract-invalid", "error", joint.subject,
+                joint.effort_error + "; use one external torque/motion boundary and disable the native motor."));
+        }
         if !joint.graph_available {
             out.push(finding(
                 "runtime-joint-graph-unavailable",

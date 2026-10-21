@@ -44,8 +44,8 @@ pub fn avian_backend_aabb_is_valid(min: DVec3, max: DVec3) -> bool {
 /// Check a collider's local shape bounds before ECS insertion.
 #[inline]
 pub fn avian_backend_collider_shape_is_valid(collider: &Collider) -> bool {
-    let aabb = collider.aabb(DVec3::ZERO, DQuat::IDENTITY);
-    avian_backend_aabb_is_valid(aabb.min, aabb.max)
+    let aabb = collider.aabb(DVec3::ZERO, bevy::math::Quat::IDENTITY, 0.0);
+    avian_backend_aabb_is_valid(aabb.min.as_dvec3(), aabb.max.as_dvec3())
 }
 
 /// Check the structural precondition for a Parry compound child.
@@ -115,7 +115,7 @@ mod tests {
         assert!(!avian_backend_collider_is_leaf(&Collider::compound(vec![
             (
                 DVec3::ZERO,
-                DQuat::IDENTITY,
+                bevy::math::Quat::IDENTITY,
                 Collider::cuboid(1.0, 1.0, 1.0)
             ),
         ])));

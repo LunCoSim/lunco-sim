@@ -88,7 +88,7 @@ pub(super) fn build(app: &mut App) {
 }
 
 fn retire_removed_local_light_shadow_views(
-    event: On<Remove, ExtractedPointLight>,
+    event: On<Remove<ExtractedPointLight>>,
     mut commands: Commands,
 ) {
     let entity = event.entity;

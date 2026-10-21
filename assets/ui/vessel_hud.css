@@ -3,8 +3,8 @@
  * custom properties on the template root; no Rust system writes Node,
  * BackgroundColor, or TextColor after the template is built.
  */
-@import "ui/runtime_fonts.css";
-@import "ui/runtime_theme.css";
+@import "runtime_fonts.css";
+@import "runtime_theme.css";
 
 :root {
   --ui-tilt-color: var(--ok-color);

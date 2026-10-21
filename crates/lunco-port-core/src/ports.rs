@@ -764,17 +764,17 @@ impl PortTopologyState {
 /// is added. The owning plugin supplies the observer for the component types it
 /// registers in its backend.
 pub fn bump_port_topology_on_add<T: Component>(
-    _trigger: On<Add, T>,
+    _trigger: On<Add<T>>,
     mut revision: ResMut<PortTopologyRevision>,
 ) {
     revision.bump();
 }
 
 /// Advance the port-surface generation when a component-owned backend candidate
-/// is removed. `On<Remove, T>` also covers entity teardown, so a hidden panel
+/// is removed. `On<Remove<T>>` also covers entity teardown, so a hidden panel
 /// cannot retain a despawned candidate until its next full sample.
 pub fn bump_port_topology_on_remove<T: Component>(
-    trigger: On<Remove, T>,
+    trigger: On<Remove<T>>,
     mut revision: ResMut<PortTopologyRevision>,
     mut state: ResMut<PortTopologyState>,
 ) {

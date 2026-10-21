@@ -95,7 +95,7 @@ pub enum CelestialTerrainSet {
 /// exists. This lets generic camera/network state use the same framed-pose
 /// path in non-celestial scenes instead of falling back to an unnamed parent
 /// grid convention.
-fn tag_world_reference_frame(trigger: On<Add, lunco_spatial::WorldRoot>, mut commands: Commands) {
+fn tag_world_reference_frame(trigger: On<Add<lunco_spatial::WorldRoot>>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
         .try_insert(ReferenceFrame::World);

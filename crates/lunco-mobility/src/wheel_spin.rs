@@ -151,7 +151,7 @@ pub(crate) fn update_wheel_spin(
                 };
                 (motion.lin, motion.ang)
             } else {
-                (lin.0, ang.0)
+                (lin.0.as_dvec3(), ang.0.as_dvec3())
             };
             // Reconstruct the hub in the grid-absolute physics frame from the
             // resolved body pose and authored body-local mount —
@@ -160,12 +160,12 @@ pub(crate) fn update_wheel_spin(
             let wheel_local_rotation = mount.local.rotation.as_dquat() * wheel.heading_rotation;
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(pos.0),
-                GridRot(rot.0),
+                GridRot(rot.0.as_dquat()),
                 mount.local.translation.as_dvec3(),
                 wheel_local_rotation,
             );
             let Some((wheel_forward, wheel_right)) = wheel_heading(
-                GridRot(rot.0),
+                GridRot(rot.0.as_dquat()),
                 wheel_local_rotation,
                 wheel.axle_axis,
                 wheel.heading_axis,
@@ -181,17 +181,18 @@ pub(crate) fn update_wheel_spin(
                     hub_rot.0,
                     suspension.rest_length,
                     r,
-                    hit.distance,
+                    f64::from(hit.distance),
                 );
                 let contact_vel = body_point_velocity(
                     vlin,
                     vang,
                     GridPos(contact_pos),
                     GridPos(pos.0),
-                    GridRot(rot.0),
-                    center_of_mass.0,
+                    GridRot(rot.0.as_dquat()),
+                    center_of_mass.0.as_dvec3(),
                 );
-                basis = crate::contact_plane_basis(wheel_forward, wheel_right, hit.normal);
+                basis =
+                    crate::contact_plane_basis(wheel_forward, wheel_right, hit.normal.as_dvec3());
                 v_long = contact_vel.dot(basis.0);
                 v_lat = contact_vel.dot(basis.1);
             }

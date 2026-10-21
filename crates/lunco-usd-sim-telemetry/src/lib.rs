@@ -197,8 +197,8 @@ fn retain_physics_telemetry(
             .metadata_group_paths
             .get(&entity)
             .is_none_or(|path| path != &prim.path);
-        let linear_velocity = linear.map(|value| value.0);
-        let angular_velocity = angular.map(|value| value.0);
+        let linear_velocity = linear.map(|value| value.0.as_dvec3());
+        let angular_velocity = angular.map(|value| value.0.as_dvec3());
         if linear_velocity.is_some_and(|value| !value.is_finite())
             || angular_velocity.is_some_and(|value| !value.is_finite())
         {
@@ -310,7 +310,7 @@ fn retain_physics_telemetry(
             ));
         }
         if let Some(rotation) = rotation
-            .map(|value| value.0)
+            .map(|value| value.0.as_dquat())
             .filter(|value| value.is_finite())
         {
             samples.extend([
@@ -378,13 +378,13 @@ fn retain_physics_telemetry(
         if let Some(mass) = mass.filter(|value| value.is_finite()) {
             samples.push(PhysicsSample::scalar(
                 "mass",
-                mass.value(),
+                f64::from(mass.value()),
                 "kg",
                 "Computed rigid-body mass including admitted colliders.",
             ));
         }
         if let Some(center_of_mass) = center_of_mass
-            .map(|value| value.0)
+            .map(|value| value.0.as_dvec3())
             .filter(|value| value.is_finite())
         {
             samples.extend(explicit_vector_channels(
@@ -400,7 +400,7 @@ fn retain_physics_telemetry(
                     "inertia.xx",
                     "inertia",
                     "xx",
-                    inertia.m00,
+                    f64::from(inertia.m00),
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor diagonal.",
                 ),
@@ -408,7 +408,7 @@ fn retain_physics_telemetry(
                     "inertia.xy",
                     "inertia",
                     "xy",
-                    inertia.m01,
+                    f64::from(inertia.m01),
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor component.",
                 ),
@@ -416,7 +416,7 @@ fn retain_physics_telemetry(
                     "inertia.xz",
                     "inertia",
                     "xz",
-                    inertia.m02,
+                    f64::from(inertia.m02),
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor component.",
                 ),
@@ -424,7 +424,7 @@ fn retain_physics_telemetry(
                     "inertia.yy",
                     "inertia",
                     "yy",
-                    inertia.m11,
+                    f64::from(inertia.m11),
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor diagonal.",
                 ),
@@ -432,7 +432,7 @@ fn retain_physics_telemetry(
                     "inertia.yz",
                     "inertia",
                     "yz",
-                    inertia.m12,
+                    f64::from(inertia.m12),
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor component.",
                 ),
@@ -440,7 +440,7 @@ fn retain_physics_telemetry(
                     "inertia.zz",
                     "inertia",
                     "zz",
-                    inertia.m22,
+                    f64::from(inertia.m22),
                     "kg.m^2",
                     "Computed body-local angular-inertia tensor diagonal.",
                 ),
@@ -502,7 +502,7 @@ fn retain_physics_telemetry(
         let contact = hits
             .iter_sorted()
             .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
-        let distance = contact.map_or(suspension.rest_length, |hit| hit.distance);
+        let distance = contact.map_or(suspension.rest_length, |hit| f64::from(hit.distance));
         let samples = [
             PhysicsSample::scalar(
                 "suspension.compression",

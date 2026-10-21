@@ -69,7 +69,7 @@ impl SceneResource for SceneUiRetirement {
 pub(crate) fn install(app: &mut App) {
     app.init_scene_resource::<SceneUiRetirement>()
         .add_observer(
-            |event: On<Insert, EguiContext>,
+            |event: On<Insert<EguiContext>>,
              mut contexts: Query<&mut EguiContext>,
              mut retirement: ResMut<SceneUiRetirement>| {
                 if let Ok(mut ctx) = contexts.get_mut(event.entity) {
@@ -84,7 +84,7 @@ pub(crate) fn install(app: &mut App) {
             },
         )
         .add_observer(
-            |event: On<Remove, EguiContext>, mut retirement: ResMut<SceneUiRetirement>| {
+            |event: On<Remove<EguiContext>>, mut retirement: ResMut<SceneUiRetirement>| {
                 if let Some(ctx) = retirement.contexts.remove(&event.entity) {
                     clear_context(&ctx);
                     retirement.retiring.push(ctx);

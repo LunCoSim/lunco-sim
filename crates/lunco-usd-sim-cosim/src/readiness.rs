@@ -68,7 +68,7 @@ struct ProgramReadinessWait {
 }
 
 fn finish_program_readiness_wait(
-    removed: On<Remove, ProgramReadinessWait>,
+    removed: On<Remove<ProgramReadinessWait>>,
     waits: Query<&ProgramReadinessWait>,
     mut registry: ResMut<ReadinessRegistry>,
 ) {

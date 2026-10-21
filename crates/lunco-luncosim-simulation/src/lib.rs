@@ -163,8 +163,6 @@ fn luncosim_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default()
         .with_collision_hooks::<UsdCollisionFilter>()
         .build()
-        .disable::<avian3d::dynamics::ccd::CcdPlugin>()
-        .disable::<avian3d::dynamics::solver::xpbd::XpbdSolverPlugin>()
         .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
         .add(physics_presentation::PhysicsPresentationPlugin)
 }
@@ -490,7 +488,6 @@ impl Plugin for LunCoSimSimulationPlugin {
             // `UsdCollisionFilter`). Anything else that must veto a contact belongs
             // in that hook rather than in a second one — there is no second slot.
             .add_plugins(luncosim_physics_plugins())
-            .add_plugins(lunco_physics::ContinuousCollisionPlugin::<UsdCollisionFilter>::default())
             // Whoever installs physics installs its readiness gate: terrain/obstacle
             // subsystems suspend *integration* (avian's `Time<Physics>`) while their
             // colliders bake, instead of pausing the world clock. See `lunco-physics`.

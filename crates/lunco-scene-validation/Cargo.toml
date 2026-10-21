@@ -21,6 +21,8 @@ lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-port-core = { path = "../lunco-port-core" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-cosim = { path = "../lunco-cosim" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }

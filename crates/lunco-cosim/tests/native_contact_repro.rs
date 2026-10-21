@@ -1,19 +1,15 @@
-use avian3d::{
-    math::{Quaternion as AvianQuaternion, Scalar, Vector},
-    prelude::*,
-};
+use avian3d::prelude::*;
 use bevy::ecs::system::SystemParam;
-use bevy::math::DVec3;
 use bevy::prelude::*;
 
-const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: Scalar = 0.02;
+const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: f32 = 0.02;
 
 /// This fixture intentionally preserves the high-resolution numerical
 /// reproduction budget. It is not the production solver contract; the
 /// luncosim path gets its authoritative substeps from `lunco_physics`.
 const NUMERICAL_REPRODUCTION_SUBSTEPS: u32 = 32;
 
-fn native_prismatic_drive(stiffness: Scalar, damping: Scalar, max_force: Scalar) -> LinearMotor {
+fn native_prismatic_drive(stiffness: f32, damping: f32, max_force: f32) -> LinearMotor {
     LinearMotor::new(MotorModel::ForceBased { stiffness, damping })
         .with_target_position(0.0)
         .with_max_force(max_force)
@@ -36,31 +32,28 @@ impl CollisionHooks for StaticFrictionContactHook<'_, '_> {
                 .unwrap_or(self.default_friction.0)
         };
         let combined = friction(contacts.collider1).combine(friction(contacts.collider2));
-        let point_velocity = |body: Option<Entity>, anchor: Vector| {
+        let point_velocity = |body: Option<Entity>, anchor: Vec3| {
             let Some(body) = body else {
-                return Vector::ZERO;
+                return Vec3::ZERO;
             };
             let linear = self
                 .linear_velocity
                 .get(body)
-                .map_or(Vector::ZERO, |velocity| velocity.0);
+                .map_or(Vec3::ZERO, |velocity| velocity.0);
             let angular = self
                 .angular_velocity
                 .get(body)
-                .map_or(Vector::ZERO, |velocity| velocity.0);
+                .map_or(Vec3::ZERO, |velocity| velocity.0);
             linear + angular.cross(anchor)
         };
 
         for manifold in &mut contacts.manifolds {
-            let max_tangent_speed = manifold
-                .points
-                .iter()
-                .fold(0.0 as Scalar, |maximum, point| {
-                    let relative = point_velocity(contacts.body2, point.anchor2)
-                        - point_velocity(contacts.body1, point.anchor1);
-                    let tangent = relative - manifold.normal * relative.dot(manifold.normal);
-                    maximum.max(tangent.length())
-                });
+            let max_tangent_speed = manifold.points.iter().fold(0.0 as f32, |maximum, point| {
+                let relative = point_velocity(contacts.body2, point.anchor2)
+                    - point_velocity(contacts.body1, point.anchor1);
+                let tangent = relative - manifold.normal * relative.dot(manifold.normal);
+                maximum.max(tangent.length())
+            });
             manifold.friction = if max_tangent_speed <= STATIC_FRICTION_MAX_SLIP_SPEED_MPS {
                 combined.static_coefficient
             } else {
@@ -82,7 +75,7 @@ fn a_static_flat_friction_contact_does_not_self_accelerate() {
         PhysicsPlugins::default(),
     ));
     app.init_asset::<Mesh>();
-    app.insert_resource(Gravity(DVec3::new(0.0, -1.62, 0.0)));
+    app.insert_resource(Gravity(Vec3::new(0.0, -1.62, 0.0)));
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
@@ -132,11 +125,12 @@ fn four_raked_legs_do_not_create_unbounded_energy() {
     app.add_plugins((
         MinimalPlugins,
         AssetPlugin::default(),
+        bevy::diagnostic::DiagnosticsPlugin,
         TransformPlugin,
         PhysicsPlugins::default(),
     ));
     app.init_asset::<Mesh>();
-    app.insert_resource(Gravity(Vector::new(0.0, -1.6248896, 0.0)));
+    app.insert_resource(Gravity(Vec3::new(0.0, -1.6248896, 0.0)));
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
@@ -170,14 +164,14 @@ fn four_raked_legs_do_not_create_unbounded_energy() {
         ))
         .id();
 
-    let angle = 20.0_f64.to_radians();
+    let angle = 20.0_f32.to_radians();
     let sin = angle.sin();
     let cos = angle.cos();
     let leg_specs = [
-        (DVec3::new(sin, -cos, 0.0), DVec3::new(2.519, 1.388, 0.0)),
-        (DVec3::new(-sin, -cos, 0.0), DVec3::new(-2.519, 1.388, 0.0)),
-        (DVec3::new(0.0, -cos, sin), DVec3::new(0.0, 1.388, 2.519)),
-        (DVec3::new(0.0, -cos, -sin), DVec3::new(0.0, 1.388, -2.519)),
+        (Vec3::new(sin, -cos, 0.0), Vec3::new(2.519, 1.388, 0.0)),
+        (Vec3::new(-sin, -cos, 0.0), Vec3::new(-2.519, 1.388, 0.0)),
+        (Vec3::new(0.0, -cos, sin), Vec3::new(0.0, 1.388, 2.519)),
+        (Vec3::new(0.0, -cos, -sin), Vec3::new(0.0, 1.388, -2.519)),
     ];
 
     for (axis, mount) in leg_specs {
@@ -194,12 +188,6 @@ fn four_raked_legs_do_not_create_unbounded_energy() {
                 -angle as f32
             })
         };
-        let body_rotation_d = AvianQuaternion::from_xyzw(
-            body_rotation.x as f64,
-            body_rotation.y as f64,
-            body_rotation.z as f64,
-            body_rotation.w as f64,
-        );
         let leg = app
             .world_mut()
             .spawn((
@@ -211,8 +199,8 @@ fn four_raked_legs_do_not_create_unbounded_energy() {
                 NoAutoAngularInertia,
                 NoAutoCenterOfMass,
                 Collider::compound(vec![(
-                    DVec3::new(0.0, -7.2, 0.0),
-                    body_rotation_d.inverse(),
+                    bevy::math::DVec3::new(0.0, -7.2, 0.0),
+                    body_rotation.inverse(),
                     Collider::cuboid(0.455, 0.05, 0.455),
                 )]),
                 Friction {
@@ -220,17 +208,17 @@ fn four_raked_legs_do_not_create_unbounded_energy() {
                     static_coefficient: 0.65,
                     combine_rule: CoefficientCombine::Min,
                 },
-                Transform::from_translation(mount.as_vec3()).with_rotation(body_rotation),
+                Transform::from_translation(mount).with_rotation(body_rotation),
                 ChildOf(hull),
             ))
             .id();
         app.world_mut().spawn((
             PrismaticJoint::new(hull, leg)
                 .with_local_anchor1(mount)
-                .with_local_anchor2(DVec3::ZERO)
-                .with_local_basis1(body_rotation_d)
-                .with_local_basis2(AvianQuaternion::IDENTITY)
-                .with_slider_axis(DVec3::Y)
+                .with_local_anchor2(Vec3::ZERO)
+                .with_local_basis1(body_rotation)
+                .with_local_basis2(Quat::IDENTITY)
+                .with_slider_axis(Vec3::Y)
                 .with_limits(-0.8, 0.0)
                 .with_motor(native_prismatic_drive(1_800_000.0, 90_000.0, 42_000.0)),
             JointCollisionDisabled,
@@ -266,11 +254,12 @@ fn four_ball_jointed_pads_do_not_create_unbounded_energy() {
     app.add_plugins((
         MinimalPlugins,
         AssetPlugin::default(),
+        bevy::diagnostic::DiagnosticsPlugin,
         TransformPlugin,
         PhysicsPlugins::default().with_collision_hooks::<StaticFrictionContactHook>(),
     ));
     app.init_asset::<Mesh>();
-    app.insert_resource(Gravity(Vector::new(0.0, -1.6248896, 0.0)));
+    app.insert_resource(Gravity(Vec3::new(0.0, -1.6248896, 0.0)));
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
@@ -304,14 +293,14 @@ fn four_ball_jointed_pads_do_not_create_unbounded_energy() {
         ))
         .id();
 
-    let angle = 20.0_f64.to_radians();
+    let angle = 20.0_f32.to_radians();
     let sin = angle.sin();
     let cos = angle.cos();
     let leg_specs = [
-        (DVec3::new(sin, -cos, 0.0), DVec3::new(2.519, 1.388, 0.0)),
-        (DVec3::new(-sin, -cos, 0.0), DVec3::new(-2.519, 1.388, 0.0)),
-        (DVec3::new(0.0, -cos, sin), DVec3::new(0.0, 1.388, 2.519)),
-        (DVec3::new(0.0, -cos, -sin), DVec3::new(0.0, 1.388, -2.519)),
+        (Vec3::new(sin, -cos, 0.0), Vec3::new(2.519, 1.388, 0.0)),
+        (Vec3::new(-sin, -cos, 0.0), Vec3::new(-2.519, 1.388, 0.0)),
+        (Vec3::new(0.0, -cos, sin), Vec3::new(0.0, 1.388, 2.519)),
+        (Vec3::new(0.0, -cos, -sin), Vec3::new(0.0, 1.388, -2.519)),
     ];
 
     for (axis, mount) in leg_specs {
@@ -328,12 +317,6 @@ fn four_ball_jointed_pads_do_not_create_unbounded_energy() {
                 -angle as f32
             })
         };
-        let body_rotation_d = AvianQuaternion::from_xyzw(
-            body_rotation.x as f64,
-            body_rotation.y as f64,
-            body_rotation.z as f64,
-            body_rotation.w as f64,
-        );
         let leg = app
             .world_mut()
             .spawn((
@@ -370,15 +353,15 @@ fn four_ball_jointed_pads_do_not_create_unbounded_energy() {
         app.world_mut().spawn((
             SphericalJoint::new(leg, pad)
                 .with_local_anchor1(if axis.x > 0.0 {
-                    DVec3::new(0.017101, -7.153015, 0.0)
+                    Vec3::new(0.017101, -7.153015, 0.0)
                 } else if axis.x < 0.0 {
-                    DVec3::new(-0.017101, -7.153015, 0.0)
+                    Vec3::new(-0.017101, -7.153015, 0.0)
                 } else if axis.z > 0.0 {
-                    DVec3::new(0.0, -7.153015, 0.017101)
+                    Vec3::new(0.0, -7.153015, 0.017101)
                 } else {
-                    DVec3::new(0.0, -7.153015, -0.017101)
+                    Vec3::new(0.0, -7.153015, -0.017101)
                 })
-                .with_local_anchor2(DVec3::new(0.0, 0.05, 0.0)),
+                .with_local_anchor2(Vec3::new(0.0, 0.05, 0.0)),
             JointCollisionDisabled,
             JointDamping {
                 linear: 0.0,
@@ -388,10 +371,10 @@ fn four_ball_jointed_pads_do_not_create_unbounded_energy() {
         app.world_mut().spawn((
             PrismaticJoint::new(hull, leg)
                 .with_local_anchor1(mount)
-                .with_local_anchor2(DVec3::ZERO)
-                .with_local_basis1(body_rotation_d)
-                .with_local_basis2(AvianQuaternion::IDENTITY)
-                .with_slider_axis(DVec3::Y)
+                .with_local_anchor2(Vec3::ZERO)
+                .with_local_basis1(body_rotation)
+                .with_local_basis2(Quat::IDENTITY)
+                .with_slider_axis(Vec3::Y)
                 .with_limits(-0.8, 0.0)
                 .with_motor(native_prismatic_drive(1_800_000.0, 90_000.0, 42_000.0)),
             JointCollisionDisabled,
@@ -427,11 +410,12 @@ fn four_raked_legs_with_usd_contact_hook_do_not_create_unbounded_energy() {
     app.add_plugins((
         MinimalPlugins,
         AssetPlugin::default(),
+        bevy::diagnostic::DiagnosticsPlugin,
         TransformPlugin,
         PhysicsPlugins::default().with_collision_hooks::<StaticFrictionContactHook>(),
     ));
     app.init_asset::<Mesh>();
-    app.insert_resource(Gravity(Vector::new(0.0, -1.6248896, 0.0)));
+    app.insert_resource(Gravity(Vec3::new(0.0, -1.6248896, 0.0)));
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
@@ -466,14 +450,14 @@ fn four_raked_legs_with_usd_contact_hook_do_not_create_unbounded_energy() {
         ))
         .id();
 
-    let angle = 20.0_f64.to_radians();
+    let angle = 20.0_f32.to_radians();
     let sin = angle.sin();
     let cos = angle.cos();
     let leg_specs = [
-        (DVec3::new(sin, -cos, 0.0), DVec3::new(2.519, 1.388, 0.0)),
-        (DVec3::new(-sin, -cos, 0.0), DVec3::new(-2.519, 1.388, 0.0)),
-        (DVec3::new(0.0, -cos, sin), DVec3::new(0.0, 1.388, 2.519)),
-        (DVec3::new(0.0, -cos, -sin), DVec3::new(0.0, 1.388, -2.519)),
+        (Vec3::new(sin, -cos, 0.0), Vec3::new(2.519, 1.388, 0.0)),
+        (Vec3::new(-sin, -cos, 0.0), Vec3::new(-2.519, 1.388, 0.0)),
+        (Vec3::new(0.0, -cos, sin), Vec3::new(0.0, 1.388, 2.519)),
+        (Vec3::new(0.0, -cos, -sin), Vec3::new(0.0, 1.388, -2.519)),
     ];
 
     for (axis, mount) in leg_specs {
@@ -490,12 +474,6 @@ fn four_raked_legs_with_usd_contact_hook_do_not_create_unbounded_energy() {
                 -angle as f32
             })
         };
-        let body_rotation_d = AvianQuaternion::from_xyzw(
-            body_rotation.x as f64,
-            body_rotation.y as f64,
-            body_rotation.z as f64,
-            body_rotation.w as f64,
-        );
         let leg = app
             .world_mut()
             .spawn((
@@ -507,8 +485,8 @@ fn four_raked_legs_with_usd_contact_hook_do_not_create_unbounded_energy() {
                 NoAutoAngularInertia,
                 NoAutoCenterOfMass,
                 Collider::compound(vec![(
-                    DVec3::new(0.0, -7.2, 0.0),
-                    body_rotation_d.inverse(),
+                    bevy::math::DVec3::new(0.0, -7.2, 0.0),
+                    body_rotation.inverse(),
                     Collider::cuboid(0.455, 0.05, 0.455),
                 )]),
                 Friction {
@@ -524,10 +502,10 @@ fn four_raked_legs_with_usd_contact_hook_do_not_create_unbounded_energy() {
         app.world_mut().spawn((
             PrismaticJoint::new(hull, leg)
                 .with_local_anchor1(mount)
-                .with_local_anchor2(DVec3::ZERO)
-                .with_local_basis1(body_rotation_d)
-                .with_local_basis2(AvianQuaternion::IDENTITY)
-                .with_slider_axis(DVec3::Y)
+                .with_local_anchor2(Vec3::ZERO)
+                .with_local_basis1(body_rotation)
+                .with_local_basis2(Quat::IDENTITY)
+                .with_slider_axis(Vec3::Y)
                 .with_limits(-0.8, 0.0)
                 .with_motor(native_prismatic_drive(10_000.0, 6_500.0, 30_000.0)),
             JointCollisionDisabled,

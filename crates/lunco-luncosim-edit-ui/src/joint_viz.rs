@@ -54,10 +54,9 @@ const VELOCITY_COLOR: Color = Color::srgb(0.2, 1.0, 0.4);
 /// body's [`GlobalTransform`]. `Local` anchors are transformed by the
 /// body; `FromGlobal` anchors are already world-space.
 fn anchor_world(frame: &JointFrame, body_tf: &GlobalTransform) -> Vec3 {
-    let to_vec3 = |v: avian3d::math::Vector| Vec3::new(v.x as f32, v.y as f32, v.z as f32);
     match frame.anchor {
-        JointAnchor::Local(v) => body_tf.transform_point(to_vec3(v)),
-        JointAnchor::FromGlobal(v) => to_vec3(v),
+        JointAnchor::Local(v) => body_tf.transform_point(v),
+        JointAnchor::FromGlobal(v) => v.as_vec3(),
     }
 }
 
@@ -68,18 +67,13 @@ fn draw_joint_gizmo(
     gizmos: &mut Gizmos,
     a1: Vec3,
     a2: Vec3,
-    axis: Option<(avian3d::math::Vector, &GlobalTransform)>,
+    axis: Option<(Vec3, &GlobalTransform)>,
 ) {
     gizmos.sphere(a1, ANCHOR_RADIUS, ANCHOR_COLOR);
     gizmos.sphere(a2, ANCHOR_RADIUS, ANCHOR_COLOR);
     gizmos.line(a1, a2, LINK_COLOR);
     if let Some((local_axis, body_tf)) = axis {
-        let dir = body_tf.rotation()
-            * Vec3::new(
-                local_axis.x as f32,
-                local_axis.y as f32,
-                local_axis.z as f32,
-            );
+        let dir = body_tf.rotation() * local_axis;
         let dir = dir.normalize_or_zero() * AXIS_LEN;
         gizmos.arrow(a1 - dir, a1 + dir, AXIS_COLOR);
     }
@@ -174,14 +168,13 @@ pub fn draw_joint_viz(
             continue;
         };
         // DistanceJoint has anchor1/anchor2 (JointAnchor) directly, no JointFrame.
-        let to_vec3 = |v: avian3d::math::Vector| Vec3::new(v.x as f32, v.y as f32, v.z as f32);
         let a1 = match j.anchor1 {
-            JointAnchor::Local(v) => tf1.transform_point(to_vec3(v)),
-            JointAnchor::FromGlobal(v) => to_vec3(v),
+            JointAnchor::Local(v) => tf1.transform_point(v),
+            JointAnchor::FromGlobal(v) => v.as_vec3(),
         };
         let a2 = match j.anchor2 {
-            JointAnchor::Local(v) => tf2.transform_point(to_vec3(v)),
-            JointAnchor::FromGlobal(v) => to_vec3(v),
+            JointAnchor::Local(v) => tf2.transform_point(v),
+            JointAnchor::FromGlobal(v) => v.as_vec3(),
         };
         draw_joint_gizmo(&mut gizmos, a1, a2, None);
     }
@@ -248,8 +241,7 @@ pub fn draw_wheel_force_viz(
         // Avian writeback instead of treating the body accumulator as a wheel
         // force. The synthesized wheel joint owns this optional readback.
         if let Ok(joint_forces) = q_joint_forces.get(tire.drive_joint) {
-            if let Some(dir) = arrow_vector(joint_forces.force().as_vec3(), 1.0 / NEWTONS_PER_METER)
-            {
+            if let Some(dir) = arrow_vector(joint_forces.force(), 1.0 / NEWTONS_PER_METER) {
                 gizmos.arrow(pos, pos + dir, JOINT_FORCE_COLOR);
             }
         }

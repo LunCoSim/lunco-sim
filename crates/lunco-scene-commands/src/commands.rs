@@ -177,7 +177,7 @@ pub fn on_detach_joint(
         Option<&UsdPrimPath>,
         Option<&lunco_physics::PhysicsJointDetachRequested>,
         Option<&lunco_physics::PhysicsJointPending>,
-        Option<&avian3d::dynamics::solver::joint_graph::JointComponentId>,
+        Option<&avian3d::dynamics::joints::joint_graph::JointComponentId>,
     )>,
     q_detached: Query<Option<&lunco_physics::PhysicsJointDetachSet>>,
 ) -> Result<Ack, String> {
@@ -1037,6 +1037,17 @@ pub fn on_move_entity_command(
         (prev_abs, old_cell.copied(), new_cell, new_local)
     };
     let delta = target_abs - prev_abs;
+    if q_rb.contains(target)
+        && !lunco_physics::avian_backend_vector_is_valid(
+            delta / f64::from(time.delta_secs().max(1.0 / 240.0)),
+        )
+    {
+        warn!(
+            ?target,
+            "entity move rejected: velocity exceeds the native solver range"
+        );
+        return;
+    }
     let physics_body = q_rb
         .get(target)
         .is_ok_and(|rb| !matches!(rb, RigidBody::Static));
@@ -1108,7 +1119,7 @@ pub fn on_move_entity_command(
     // Active-frame delta: this remains precise and independent of the internal
     // cell split and of any translating/rotating celestial ancestors.
     if let Some(mut lin_vel) = lin_vel_opt {
-        lin_vel.0 = delta / dt;
+        lin_vel.0 = (delta / dt).as_vec3();
     }
     commands.entity(target).try_insert(JustMovedKinematic {
         restore,
@@ -1237,7 +1248,8 @@ pub fn on_rotate_entity_command(
     if let Some(mut angular_velocity) = angular_velocity {
         let dt = time.delta_secs().max(1.0 / 240.0) as f64;
         angular_velocity.0 = (shortest_angular_delta(previous_rotation, q_in) / dt)
-            .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED);
+            .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED)
+            .as_vec3();
     }
 
     // Same Kinematic pin as `MoveEntity`: an authored pose on a Dynamic body is
@@ -1381,6 +1393,17 @@ pub fn on_transform_entity_command(
     };
 
     let delta = target_position - previous_position;
+    if q_rb.contains(target)
+        && !lunco_physics::avian_backend_vector_is_valid(
+            delta / f64::from(time.delta_secs().max(1.0 / 240.0)),
+        )
+    {
+        warn!(
+            ?target,
+            "entity move rejected: velocity exceeds the native solver range"
+        );
+        return;
+    }
     let physics_body = q_rb
         .get(target)
         .is_ok_and(|rb| !matches!(rb, RigidBody::Static));
@@ -1419,12 +1442,13 @@ pub fn on_transform_entity_command(
         tf.rotation = new_rotation.as_quat();
         if let Some(mut lin_vel) = lin_vel_opt {
             let dt = time.delta_secs().max(1.0 / 240.0) as f64;
-            lin_vel.0 = delta / dt;
+            lin_vel.0 = (delta / dt).as_vec3();
         }
         if let Some(mut angular_vel) = angular_vel_opt {
             let dt = time.delta_secs().max(1.0 / 240.0) as f64;
             angular_vel.0 = (shortest_angular_delta(previous_rotation, rotation.normalize()) / dt)
-                .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED);
+                .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED)
+                .as_vec3();
         }
     }
     match (new_cell, old_cell) {
@@ -1815,7 +1839,7 @@ pub fn on_delete_entity(
         Or<(
             With<lunco_physics::PhysicsJointLink>,
             With<lunco_physics::PhysicsJointPending>,
-            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+            With<avian3d::dynamics::joints::joint_graph::JointComponentId>,
         )>,
     >,
     mut commands: Commands,
@@ -1913,7 +1937,7 @@ pub fn persist_delete_to_runtime_layer(
         Or<(
             With<lunco_physics::PhysicsJointLink>,
             With<lunco_physics::PhysicsJointPending>,
-            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+            With<avian3d::dynamics::joints::joint_graph::JointComponentId>,
         )>,
     >,
     mut commands: Commands,
@@ -2420,11 +2444,11 @@ pub fn clear_kinematic_pulse_velocity(
 ) {
     for (e, linear, angular, marker) in q.iter_mut() {
         if let Some(mut linear) = linear {
-            linear.0 = DVec3::ZERO;
+            linear.0 = Vec3::ZERO;
         }
         if marker.angular_pulse {
             if let Some(mut angular) = angular {
-                angular.0 = DVec3::ZERO;
+                angular.0 = Vec3::ZERO;
             }
         }
         // Put the pre-move body kind back ("for the duration of the move").

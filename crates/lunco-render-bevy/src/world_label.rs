@@ -33,7 +33,7 @@ fn text_bundle(label: &WorldLabel) -> (Text2d, TextFont, TextColor) {
     )
 }
 
-fn bind_world_label(add: On<Add, WorldLabel>, labels: Query<&WorldLabel>, mut commands: Commands) {
+fn bind_world_label(add: On<Add<WorldLabel>>, labels: Query<&WorldLabel>, mut commands: Commands) {
     let e = add.entity;
     let Ok(label) = labels.get(e) else { return };
     commands.entity(e).try_insert(text_bundle(label));

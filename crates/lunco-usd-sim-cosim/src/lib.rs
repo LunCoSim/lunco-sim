@@ -137,14 +137,14 @@ impl Default for UsdTelemetryProjectionIndex {
 }
 
 fn invalidate_usd_telemetry_projection_index_on_insert<T: Component>(
-    _: On<Insert, T>,
+    _: On<Insert<T>>,
     mut index: ResMut<UsdTelemetryProjectionIndex>,
 ) {
     index.invalidation_pending = true;
 }
 
 fn invalidate_usd_telemetry_projection_index_on_remove<T: Component>(
-    _: On<Remove, T>,
+    _: On<Remove<T>>,
     mut index: ResMut<UsdTelemetryProjectionIndex>,
 ) {
     index.invalidation_pending = true;
@@ -391,7 +391,7 @@ impl Default for PendingModelicaWrapWork {
 }
 
 fn queue_added_usd_cosim_prim(
-    trigger: On<Add, UsdPrimPath>,
+    trigger: On<Add<UsdPrimPath>>,
     unprocessed: Query<(), Without<UsdSourcedCosim>>,
     mut pending: ResMut<PendingUsdCosimPrimWork>,
 ) {
@@ -434,14 +434,14 @@ fn reset_standalone_modelica_projection(
 }
 
 fn forget_removed_usd_cosim_prim(
-    trigger: On<Remove, UsdPrimPath>,
+    trigger: On<Remove<UsdPrimPath>>,
     mut pending: ResMut<PendingUsdCosimPrimWork>,
 ) {
     pending.0.forget(trigger.entity);
 }
 
 fn queue_removed_usd_sourced_cosim(
-    trigger: On<Remove, UsdSourcedCosim>,
+    trigger: On<Remove<UsdSourcedCosim>>,
     prims: Query<(), With<UsdPrimPath>>,
     mut pending: ResMut<PendingUsdCosimPrimWork>,
 ) {
@@ -451,7 +451,7 @@ fn queue_removed_usd_sourced_cosim(
 }
 
 fn queue_modelica_wrap_for_new_model(
-    trigger: On<Add, ModelicaModel>,
+    trigger: On<Add<ModelicaModel>>,
     eligible: Query<(), (With<UsdSourcedCosim>, Without<SimComponent>)>,
     mut pending: ResMut<PendingModelicaWrapWork>,
 ) {
@@ -461,7 +461,7 @@ fn queue_modelica_wrap_for_new_model(
 }
 
 fn queue_modelica_wrap_for_new_cosim_owner(
-    trigger: On<Add, UsdSourcedCosim>,
+    trigger: On<Add<UsdSourcedCosim>>,
     eligible: Query<(), (With<ModelicaModel>, Without<SimComponent>)>,
     mut pending: ResMut<PendingModelicaWrapWork>,
 ) {
@@ -471,7 +471,7 @@ fn queue_modelica_wrap_for_new_cosim_owner(
 }
 
 fn queue_modelica_wrap_after_surface_removal(
-    trigger: On<Remove, SimComponent>,
+    trigger: On<Remove<SimComponent>>,
     eligible: Query<(), (With<UsdSourcedCosim>, With<ModelicaModel>)>,
     mut pending: ResMut<PendingModelicaWrapWork>,
 ) {
@@ -481,14 +481,14 @@ fn queue_modelica_wrap_after_surface_removal(
 }
 
 fn forget_removed_modelica_wrap_source(
-    trigger: On<Remove, ModelicaModel>,
+    trigger: On<Remove<ModelicaModel>>,
     mut pending: ResMut<PendingModelicaWrapWork>,
 ) {
     pending.0.forget(trigger.entity);
 }
 
 fn forget_removed_modelica_wrap_owner(
-    trigger: On<Remove, UsdSourcedCosim>,
+    trigger: On<Remove<UsdSourcedCosim>>,
     mut pending: ResMut<PendingModelicaWrapWork>,
 ) {
     pending.0.forget(trigger.entity);

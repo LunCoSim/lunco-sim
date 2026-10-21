@@ -92,17 +92,16 @@ fn body_state(
     };
     Some(BodyState {
         position: position.0,
-        rotation: rotation.0,
-        linear_velocity: linear.0,
-        angular_velocity: angular.0,
-        center_of_mass: center_of_mass.0,
+        rotation: rotation.0.as_dquat(),
+        linear_velocity: linear.0.as_dvec3(),
+        angular_velocity: angular.0.as_dvec3(),
+        center_of_mass: center_of_mass.0.as_dvec3(),
     })
 }
 
 /// Apply the shared tire law to touching Avian wheel contacts.
 ///
-/// The normal load combines Avian's prepared contacts and the physics owner's
-/// additional continuous reactions, each with its delivered contact geometry.
+/// The normal load and delivered contact geometry come from native Avian contacts.
 /// This system runs at the fixed-frame boundary, so impulses are converted with
 /// the fixed-frame duration rather than a solver-internal substep divisor. The axle
 /// solve runs once per
@@ -135,7 +134,6 @@ pub fn apply_jointed_tire_forces(
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,
     collisions: Collisions,
-    continuous: Option<Res<lunco_physics::ccd::ContinuousContacts>>,
     fixed_time: Res<Time<Fixed>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -190,11 +188,11 @@ pub fn apply_jointed_tire_forces(
             let Some(axle_world) = revolute_hinge_axis_world(joint, chassis_state.rotation) else {
                 continue;
             };
-            let heading_world = chassis_state.rotation * frame1 * tire.heading_local;
+            let heading_world = chassis_state.rotation * frame1.as_dquat() * tire.heading_local;
             let omega = (wheel_state.angular_velocity - chassis_state.angular_velocity)
                 .dot(axle_world)
-                * motor.drive_sign;
-            let drive_torque = match q_ports.p0().get(motor.port_entity) {
+                * motor.coordinate_sign();
+            let drive_torque = match q_ports.p0().get(motor.torque_endpoint()) {
                 Ok(port) => port.value,
                 Err(_) => continue,
             };
@@ -234,7 +232,7 @@ pub fn apply_jointed_tire_forces(
                         // relaxation accumulation to one physical load over
                         // the completed master interval.
                         let normal_force = lunco_physics::contact_force_from_impulse(
-                            point.normal_impulse,
+                            f64::from(point.normal_impulse),
                             full_dt,
                         );
                         if normal_force <= 0.0 {
@@ -259,36 +257,6 @@ pub fn apply_jointed_tire_forces(
                             v_lat,
                         });
                     }
-                }
-            }
-            // Fresh rolling witnesses can carry support outside the prepared
-            // graph. They are already physical impulses, not two-phase native
-            // accumulations. Use their own geometry and do not redistribute
-            // their load onto stale manifold points.
-            if let Some(continuous) = continuous.as_deref() {
-                for impulse in continuous.impulses() {
-                    let (normal, other) = if impulse.body1 == wheel {
-                        (-impulse.normal, impulse.body2)
-                    } else if impulse.body2 == wheel {
-                        (impulse.normal, impulse.body1)
-                    } else {
-                        continue;
-                    };
-                    let normal_force = impulse.impulse / full_dt;
-                    if normal_force <= 0.0 {
-                        continue;
-                    }
-                    let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
-                    let contact_velocity = wheel_state.velocity_at_point(wheel_state.position)
-                        - other_velocity_at(Some(other), wheel_state.position);
-                    contacts.push(TireContact {
-                        point: impulse.point,
-                        normal_force,
-                        forward,
-                        right,
-                        v_long: contact_velocity.dot(forward),
-                        v_lat: contact_velocity.dot(right),
-                    });
                 }
             }
             // Collision graph insertion order depends on collider admission.
@@ -422,6 +390,24 @@ pub fn apply_jointed_tire_forces(
                 // not a wake-up event. Preserve the command bit with the
                 // pending force so a real drive or brake command can wake a
                 // sleeping wheel island through Avian's regular accumulator.
+                if !lunco_physics::avian_backend_vector_is_valid(force) {
+                    if let Some(holds) = holds.as_deref_mut() {
+                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                    }
+                    if let Some(time) = physics_time.as_deref_mut() {
+                        time.pause();
+                        time.advance_by(std::time::Duration::ZERO);
+                    }
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "mobility-native-force-range-invalid",
+                            Some(wheel),
+                            "wheel force",
+                            "force exceeds the native solver range",
+                        );
+                    }
+                    return;
+                }
                 pending.push((wheel, force, contact.point, drive_torque != 0.0 || braking));
             }
         }
@@ -431,9 +417,11 @@ pub fn apply_jointed_tire_forces(
     for (wheel, force, point, commanded) in pending {
         if let Ok(mut forces) = q_forces.get_mut(wheel) {
             if commanded {
-                forces.apply_force_at_point(force, point);
+                forces.apply_force_at_point(force.as_vec3(), point);
             } else {
-                forces.non_waking().apply_force_at_point(force, point);
+                forces
+                    .non_waking()
+                    .apply_force_at_point(force.as_vec3(), point);
             }
         }
     }

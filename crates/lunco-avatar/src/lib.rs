@@ -161,7 +161,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_systems(lunco_core::SceneTeardown, clear_scene_possession_claims);
         app.add_systems(Update, sync_flight_authority);
         // Scene-click possession/follow/focus is now bevy_picking-driven: a
-        // global `Pointer<Click>` observer (egui occlusion handled by the
+        // global `PointerClick` observer (egui occlusion handled by the
         // framework), replacing the old `ScenePointer`-gated Update system.
         //
         // The observer reads two click-arbitration resources — `DragModeActive`
@@ -251,7 +251,7 @@ impl Plugin for LunCoAvatarPlugin {
 /// Local avatars are command endpoints with an authored-equivalent
 /// `ControlBinding` and `InputPorts` surface. The shared controller translates
 /// intents into ports, and the flight realization consumes only those ports.
-fn demote_former_avatar(trigger: On<Remove, LocalEmbodiment>, mut commands: Commands) {
+fn demote_former_avatar(trigger: On<Remove<LocalEmbodiment>>, mut commands: Commands) {
     let entity = trigger.entity;
     // Retirement is a presentation contract consumed by the one viewport
     // reconciler. Do not write Camera::is_active here: avatar role lifecycle
@@ -381,7 +381,7 @@ pub struct SceneInteractionGate<'w> {
 /// resolves to a valid input-port endpoint. Camera focus remains an explicit
 /// command; a model's domain label does not make it possessable.
 pub fn avatar_raycast_possession(
-    mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
+    mut click: On<bevy::picking::events::PointerClick>,
     keys: Res<ButtonInput<KeyCode>>,
     local_avatar: Query<Entity, (With<Embodiment>, With<LocalEmbodiment>)>,
     scene_interaction: SceneInteractionGate,

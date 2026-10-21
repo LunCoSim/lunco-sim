@@ -18,8 +18,7 @@ use bevy::{
     pbr::{
         EARLY_SHADOW_PASS, GpuMeshPreprocessPlugin, LATE_SHADOW_PASS, LightEntity,
         PreprocessBindGroups, Shadow, ShadowView, SkipGpuPreprocess, ViewLightEntities,
-        clear_indirect_parameters_metadata, early_gpu_preprocess,
-        early_prepass_build_indirect_parameters, late_gpu_preprocess,
+        early_gpu_preprocess, early_prepass_build_indirect_parameters, late_gpu_preprocess,
         late_prepass_build_indirect_parameters, main_build_indirect_parameters,
         per_view_shadow_pass, prepare_lights, shared_shadow_pass, unpack_bins,
     },
@@ -88,7 +87,6 @@ fn shared_shadow_schedule(gpu_preprocessing: bool) -> Schedule {
     if gpu_preprocessing {
         schedule.add_systems((
             (
-                clear_indirect_parameters_metadata,
                 unpack_bins,
                 early_gpu_preprocess,
                 early_prepass_build_indirect_parameters

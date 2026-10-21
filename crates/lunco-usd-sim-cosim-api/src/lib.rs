@@ -1218,8 +1218,9 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                         "path": body_path.map(|value| value.path.clone()),
                         "rigid_body": rb.map(|value| format!("{value:?}")),
                         "has_solver_body": world
-                            .get::<avian3d::dynamics::solver::solver_body::SolverBody>(entity)
-                            .is_some(),
+                            .get::<avian3d::dynamics::solver::solver_body::SolverBodyIndex>(entity)
+                            .is_some_and(|index| world.get_resource::<avian3d::dynamics::solver::solver_body::SolverBodies>()
+                                .is_some_and(|bodies| bodies.get_entity(*index) == Some(entity))),
                         "has_island_node": world
                             .get::<avian3d::dynamics::solver::islands::BodyIslandNode>(entity)
                             .is_some(),

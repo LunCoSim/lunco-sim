@@ -317,7 +317,7 @@ pub(super) fn drop_ui(
                         .raw
                         .dropped_files
                         .first()
-                        .and_then(|file| file.path.as_ref())
+                        .map(|file| file.path())
                         .map(|path| path.to_string_lossy().replace('\\', "/"))
                 })
             } else {

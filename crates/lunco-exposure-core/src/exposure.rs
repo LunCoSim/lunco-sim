@@ -302,7 +302,7 @@ mod tests {
                     .writer("shutdown")
                     .property("source", "old source");
             })
-            .add_observer(|_: On<Remove, TerminalPublisher>, mut commands: Commands| {
+            .add_observer(|_: On<Remove<TerminalPublisher>>, mut commands: Commands| {
                 commands.queue(|world: &mut World| {
                     world
                         .resource_mut::<EngineExposures>()

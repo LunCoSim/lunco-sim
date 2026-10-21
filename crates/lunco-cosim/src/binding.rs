@@ -173,7 +173,7 @@ pub(crate) fn reject_connection_contract(
 /// Every producer, including tests and runtime-created wheel edges, enters the
 /// same pending state. There is no direct active-wire construction path.
 pub fn on_add_connection(
-    trigger: On<Add, SimConnection>,
+    trigger: On<Add<SimConnection>>,
     mut commands: Commands,
     mut revision: ResMut<BindingRevision>,
 ) {
@@ -192,14 +192,14 @@ pub fn on_add_connection(
 /// published `PortSurfaceReady`, so that lifecycle marker alone cannot signal
 /// this later topology transition.
 pub fn on_port_surface_change(
-    _trigger: On<Add, lunco_port_core::PortSurface>,
+    _trigger: On<Add<lunco_port_core::PortSurface>>,
     mut revision: ResMut<BindingRevision>,
 ) {
     revision.request();
 }
 
 pub fn on_remove_port_surface(
-    _trigger: On<Remove, lunco_port_core::PortSurface>,
+    _trigger: On<Remove<lunco_port_core::PortSurface>>,
     mut revision: ResMut<BindingRevision>,
 ) {
     revision.request();
@@ -451,10 +451,10 @@ mod tests {
         let edge = world
             .spawn(SimConnection {
                 start_element: source,
-                start_connector: lunco_cosim_core::PORT_NAME.into(),
+                start_connector: lunco_port_core::PORT_NAME.into(),
                 start_is_input: false,
                 end_element: target,
-                end_connector: lunco_cosim_core::PORT_NAME.into(),
+                end_connector: lunco_port_core::PORT_NAME.into(),
                 scale: 1.0,
                 offset: 0.0,
             })

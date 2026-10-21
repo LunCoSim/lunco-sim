@@ -14,7 +14,7 @@ lunco-render = { path = "../lunco-render" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
-wgpu-types = "29"
+wgpu-types = "30"
 
 [lints]
 workspace = true

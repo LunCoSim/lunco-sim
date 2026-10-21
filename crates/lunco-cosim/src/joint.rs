@@ -41,12 +41,12 @@
 //! to `body1`), so the realized DOF flows back through wires like any other
 //! output.
 //!
-//! ## Driven only when wired
+//! ## Effort ownership
 //!
-//! Crucially, the motor is touched **only when a wire targets `angle`** — the
-//! write closure runs solely from the propagation master. An un-wired revolute
-//! joint (e.g. a rover wheel driven by the solved mechanical torque boundary)
-//! is left entirely alone, so the two never fight over `joint.motor`.
+//! The registry admits angle commands only while the native motor owns the
+//! joint. With `JointTorqueActuator` present, angle metadata is read-only, so
+//! both authored wires and direct commands reject competing native actuation.
+//! The external effort consumer validates that the native motor stays disabled.
 
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, JointForces, LinearVelocity, Position, PrismaticJoint,
@@ -91,7 +91,10 @@ pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
             name: JOINT_ANGLE_PORT,
             contract: AvianPortContract::JOINT_ANGLE,
             dir: PortDirection::In,
-            read: Some(|w, e| w.get::<RevoluteJoint>(e).map(|j| j.motor.target_position)),
+            read: Some(|w, e| {
+                w.get::<RevoluteJoint>(e)
+                    .map(|j| f64::from(j.motor.target_position))
+            }),
             write: Some(write_motor_angle),
         },
         AvianPort {
@@ -116,9 +119,19 @@ fn register_revolute_joint_topology(app: &mut App) {
     // Native reaction writeback is opt-in. The measured port must have a
     // producer even when no motor is installed and only passive damping acts.
     app.register_required_components::<RevoluteJoint, JointForces>();
-    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RevoluteJoint>)
-        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RevoluteJoint>)
-        .add_systems(PostUpdate, check_revolute_joint_structure);
+    app.add_observer(
+        lunco_port_core::ports::bump_port_topology_on_add::<
+            lunco_physics::joint::JointTorqueActuator,
+        >,
+    )
+    .add_observer(
+        lunco_port_core::ports::bump_port_topology_on_remove::<
+            lunco_physics::joint::JointTorqueActuator,
+        >,
+    )
+    .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RevoluteJoint>)
+    .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RevoluteJoint>)
+    .add_systems(PostUpdate, check_revolute_joint_structure);
 }
 
 fn revolute_joint_topology_key(world: &World, entity: Entity) -> u64 {
@@ -128,13 +141,26 @@ fn revolute_joint_topology_key(world: &World, entity: Entity) -> u64 {
     let measured = world.get::<Rotation>(joint.body1).is_some()
         && world.get::<Rotation>(joint.body2).is_some()
         && joint.local_hinge_axis1().is_some();
-    revolute_joint_identity_key(joint, measured, world.get::<JointForces>(entity).is_some())
+    revolute_joint_identity_key(
+        joint,
+        measured,
+        world.get::<JointForces>(entity).is_some(),
+        world
+            .get::<lunco_physics::joint::JointTorqueActuator>(entity)
+            .is_some(),
+    )
 }
 
-fn revolute_joint_identity_key(joint: &RevoluteJoint, measured: bool, reaction: bool) -> u64 {
+fn revolute_joint_identity_key(
+    joint: &RevoluteJoint,
+    measured: bool,
+    reaction: bool,
+    external_effort: bool,
+) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     measured.hash(&mut hasher);
     reaction.hash(&mut hasher);
+    external_effort.hash(&mut hasher);
     joint
         .angle_limit
         .map(|limit| (limit.min.to_bits(), limit.max.to_bits()))
@@ -146,6 +172,7 @@ fn check_revolute_joint_structure(
     changed: Query<(Entity, &RevoluteJoint), Or<(Changed<RevoluteJoint>, Added<JointForces>)>>,
     rotations: Query<(), With<Rotation>>,
     forces: Query<(), With<JointForces>>,
+    external_effort: Query<(), With<lunco_physics::joint::JointTorqueActuator>>,
     mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
     mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
@@ -153,7 +180,12 @@ fn check_revolute_joint_structure(
         let measured = rotations.get(joint.body1).is_ok()
             && rotations.get(joint.body2).is_ok()
             && joint.local_hinge_axis1().is_some();
-        let key = revolute_joint_identity_key(joint, measured, forces.contains(entity));
+        let key = revolute_joint_identity_key(
+            joint,
+            measured,
+            forces.contains(entity),
+            external_effort.contains(entity),
+        );
         if state.changed::<RevoluteJoint>(entity, key) {
             revision.bump();
         }
@@ -169,7 +201,8 @@ fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<RevoluteJoint>(entity)?;
     let r1 = world.get::<Rotation>(j.body1)?;
     let r2 = world.get::<Rotation>(j.body2)?;
-    lunco_physics::joint::revolute_coordinate(j, r1.0, r2.0).map(|(angle, _)| angle)
+    lunco_physics::joint::revolute_coordinate(j, r1.0.as_dquat(), r2.0.as_dquat())
+        .map(|(angle, _)| angle)
 }
 
 /// Measured revolute-coordinate rate (rad/s), projected onto the joint's
@@ -178,12 +211,12 @@ fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
 /// output unavailable instead of pretending it is stationary.
 fn read_measured_angular_velocity(world: &World, entity: Entity) -> Option<f64> {
     let joint = world.get::<RevoluteJoint>(entity)?;
-    let body1_rotation = world.get::<Rotation>(joint.body1)?.0;
+    let body1_rotation = world.get::<Rotation>(joint.body1)?.0.as_dquat();
     let axis = lunco_physics::joint::revolute_hinge_axis_world(joint, body1_rotation)?;
     let angular_rate = |body| {
         world
             .get::<AngularVelocity>(body)
-            .map(|velocity| velocity.0)
+            .map(|velocity| velocity.0.as_dvec3())
             .or_else(|| {
                 world
                     .get::<RigidBody>(body)
@@ -197,14 +230,17 @@ fn read_measured_angular_velocity(world: &World, entity: Entity) -> Option<f64> 
 }
 
 /// Completed pure-couple reaction on body2 along the positive hinge axis.
-/// Avian stores angular reactions on body2, whereas its linear reactions are
-/// stored on body1. Keeping that convention here avoids negating damping and
-/// motor torques differently at the public port boundary.
+/// Avian publishes completed linear and angular reactions on body2; this
+/// projection uses the same sign for damping, motor and constraint torques.
 fn joint_reaction_torque(world: &World, entity: Entity) -> Option<f64> {
     let joint = world.get::<RevoluteJoint>(entity)?;
-    let rotation = world.get::<Rotation>(joint.body1)?.0;
+    let rotation = world.get::<Rotation>(joint.body1)?.0.as_dquat();
     let axis = lunco_physics::joint::revolute_hinge_axis_world(joint, rotation)?;
-    let torque = world.get::<JointForces>(entity)?.torque().dot(axis);
+    let torque = world
+        .get::<JointForces>(entity)?
+        .torque()
+        .as_dvec3()
+        .dot(axis);
     torque.is_finite().then_some(torque)
 }
 
@@ -213,9 +249,9 @@ fn write_motor_angle(world: &mut World, entity: Entity, value: f64) {
     let mut j = world
         .get_mut::<RevoluteJoint>(entity)
         .expect("prepared revolute angle input retains its joint");
-    let wake_bodies = !j.motor.enabled || j.motor.target_position != value;
+    let wake_bodies = !j.motor.enabled || j.motor.target_position != value as f32;
     j.motor.enabled = true;
-    j.motor.target_position = value;
+    j.motor.target_position = value as f32;
     j.motor.target_velocity = 0.0;
     let bodies = [j.body1, j.body2];
     drop(j);
@@ -294,7 +330,10 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
             name: JOINT_DISPLACEMENT_PORT,
             contract: AvianPortContract::DISPLACEMENT,
             dir: PortDirection::In,
-            read: Some(|w, e| w.get::<PrismaticJoint>(e).map(|j| j.motor.target_position)),
+            read: Some(|w, e| {
+                w.get::<PrismaticJoint>(e)
+                    .map(|j| f64::from(j.motor.target_position))
+            }),
             write: Some(write_motor_displacement),
         },
         PRISMATIC_STATE_PORTS[1],
@@ -379,11 +418,11 @@ fn read_measured_displacement(world: &World, entity: Entity) -> Option<f64> {
     let r2 = world.get::<Rotation>(j.body2)?;
     Some(displacement_along_axis(
         p1.0,
-        r1.0,
-        j.local_anchor1().unwrap_or(DVec3::ZERO),
+        r1.0.as_dquat(),
+        j.local_anchor1().unwrap_or(Vec3::ZERO).as_dvec3(),
         p2.0,
-        r2.0,
-        j.local_anchor2().unwrap_or(DVec3::ZERO),
+        r2.0.as_dquat(),
+        j.local_anchor2().unwrap_or(Vec3::ZERO).as_dvec3(),
         slider_axis_world(world, j)?,
     ))
 }
@@ -396,7 +435,7 @@ fn read_measured_displacement(world: &World, entity: Entity) -> Option<f64> {
 /// two can never disagree about which way the joint slides.
 fn slider_axis_world(world: &World, j: &PrismaticJoint) -> Option<DVec3> {
     let r1 = world.get::<Rotation>(j.body1)?;
-    Some(slider_axis_world_from_rotation(r1.0, j))
+    Some(slider_axis_world_from_rotation(r1.0.as_dquat(), j))
 }
 
 /// Convert the joint's body-1-local slider axis into world space.
@@ -405,7 +444,7 @@ fn slider_axis_world(world: &World, j: &PrismaticJoint) -> Option<DVec3> {
 /// must never be projected in an unrotated frame: doing so changes the measured
 /// displacement as the whole vehicle yaws.
 fn slider_axis_world_from_rotation(rotation1: DQuat, j: &PrismaticJoint) -> DVec3 {
-    rotation1 * j.local_slider_axis1().unwrap_or(j.slider_axis)
+    rotation1 * j.local_slider_axis1().unwrap_or(j.slider_axis).as_dvec3()
 }
 
 /// Measured slide rate (m/s): the relative velocity of the two anchor points,
@@ -431,18 +470,20 @@ fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
     let anchor_vel = |body: Entity, local_anchor: DVec3| -> DVec3 {
         let lin = world
             .get::<LinearVelocity>(body)
-            .map_or(DVec3::ZERO, |v| v.0);
+            .map_or(DVec3::ZERO, |v| v.0.as_dvec3());
         let ang = world
             .get::<AngularVelocity>(body)
-            .map_or(DVec3::ZERO, |v| v.0);
-        let rot = world.get::<Rotation>(body).map_or(DQuat::IDENTITY, |r| r.0);
+            .map_or(DVec3::ZERO, |v| v.0.as_dvec3());
+        let rot = world
+            .get::<Rotation>(body)
+            .map_or(DQuat::IDENTITY, |r| r.0.as_dquat());
         let com = world
             .get::<ComputedCenterOfMass>(body)
-            .map_or(DVec3::ZERO, |com| com.0);
+            .map_or(DVec3::ZERO, |com| com.0.as_dvec3());
         lin + ang.cross(rot * (local_anchor - com))
     };
-    let v1 = anchor_vel(j.body1, j.local_anchor1().unwrap_or(DVec3::ZERO));
-    let v2 = anchor_vel(j.body2, j.local_anchor2().unwrap_or(DVec3::ZERO));
+    let v1 = anchor_vel(j.body1, j.local_anchor1().unwrap_or(Vec3::ZERO).as_dvec3());
+    let v2 = anchor_vel(j.body2, j.local_anchor2().unwrap_or(Vec3::ZERO).as_dvec3());
     Some(relative_anchor_velocity_along_axis(axis, v1, v2))
 }
 
@@ -464,8 +505,8 @@ pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
     let joint = world.get::<PrismaticJoint>(entity)?;
     let rotation = world.get::<Rotation>(joint.body1)?;
     let axis = rotation.0 * joint.local_basis1()? * joint.slider_axis;
-    let force = world.get::<JointForces>(entity)?.force().dot(axis) * -1.0;
-    force.is_finite().then_some(force)
+    let force = world.get::<JointForces>(entity)?.force().dot(axis);
+    force.is_finite().then_some(f64::from(force))
 }
 
 /// Commit a metadata-validated displacement without changing the configured drive law or limit.
@@ -473,9 +514,9 @@ fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) {
     let mut j = world
         .get_mut::<PrismaticJoint>(entity)
         .expect("prepared prismatic displacement input retains its joint");
-    let wake_bodies = !j.motor.enabled || j.motor.target_position != value;
+    let wake_bodies = !j.motor.enabled || j.motor.target_position != value as f32;
     j.motor.enabled = true;
-    j.motor.target_position = value;
+    j.motor.target_position = value as f32;
     j.motor.target_velocity = 0.0;
     let bodies = [j.body1, j.body2];
     drop(j);
@@ -579,8 +620,8 @@ mod tests {
 
     #[test]
     fn displacement_is_invariant_under_a_rigid_vehicle_rotation() {
-        let joint = PrismaticJoint::new(Entity::PLACEHOLDER, Entity::PLACEHOLDER)
-            .with_slider_axis(DVec3::X);
+        let joint =
+            PrismaticJoint::new(Entity::PLACEHOLDER, Entity::PLACEHOLDER).with_slider_axis(Vec3::X);
         let local_offset = DVec3::new(-0.30, 0.0, 0.0);
         let unrotated = displacement_along_axis(
             DVec3::ZERO,

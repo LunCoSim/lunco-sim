@@ -1,5 +1,8 @@
 //! Physical presentation uses the simulation clock's completed-state interval.
 
+#[cfg(test)]
+mod bridge_tests;
+
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_transform_interpolation::{

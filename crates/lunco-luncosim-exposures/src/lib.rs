@@ -389,7 +389,7 @@ fn runtime_ui_facts(
             HookValue::Array(
                 [position.0.x, position.0.y, position.0.z]
                     .into_iter()
-                    .map(HookValue::Float)
+                    .map(|value| HookValue::Float(f64::from(value)))
                     .collect(),
             )
         })
@@ -400,7 +400,7 @@ fn runtime_ui_facts(
             HookValue::Array(
                 [velocity.0.x, velocity.0.y, velocity.0.z]
                     .into_iter()
-                    .map(HookValue::Float)
+                    .map(|value| HookValue::Float(f64::from(value)))
                     .collect(),
             )
         })
@@ -411,7 +411,7 @@ fn runtime_ui_facts(
             HookValue::Array(
                 [velocity.0.x, velocity.0.y, velocity.0.z]
                     .into_iter()
-                    .map(HookValue::Float)
+                    .map(|value| HookValue::Float(f64::from(value)))
                     .collect(),
             )
         })
@@ -422,7 +422,7 @@ fn runtime_ui_facts(
             HookValue::Array(
                 [rotation.0.x, rotation.0.y, rotation.0.z, rotation.0.w]
                     .into_iter()
-                    .map(HookValue::Float)
+                    .map(|value| HookValue::Float(f64::from(value)))
                     .collect(),
             )
         })
@@ -1151,7 +1151,7 @@ fn resolve_driven(
     let (caution_deg, danger_deg, limits_derived) = if wheels > 0 {
         let com_above_contact = q_com
             .get(vessel)
-            .map(|c| c.0.y - contact_y)
+            .map(|c| f64::from(c.0.y) - contact_y)
             .unwrap_or(f64::NAN);
         let (c, d) = tilt_bands(min_mu, half_track, com_above_contact);
         (c, d, true)

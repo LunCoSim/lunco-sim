@@ -20,9 +20,9 @@
 
 use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties, ColliderOf,
-    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Forces, LinearVelocity, Mass,
-    NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position, RevoluteJoint,
-    RigidBody, Rotation, Sleeping, WriteRigidBodyForces,
+    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Forces, JointDisabled,
+    LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
+    RevoluteJoint, RigidBody, RigidBodyDisabled, Rotation, Sleeping, WriteRigidBodyForces,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -64,16 +64,28 @@ pub fn apply_joint_torque_actuators(
     physics_time: Res<Time<Physics>>,
     fixed_time: Res<Time<Fixed>>,
     virtual_time: Res<Time<Virtual>>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
-    q_actuators: Query<(&JointTorqueActuator, &RevoluteJoint)>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    q_actuators: Query<(
+        Entity,
+        &JointTorqueActuator,
+        Option<&RevoluteJoint>,
+        Has<JointDisabled>,
+    )>,
     mut q_ports: ParamSet<(
         Query<&lunco_port_core::Port>,
         Query<&mut lunco_port_core::Port>,
     )>,
+    q_contracts: Query<&lunco_port_core::ScalarPortContracts>,
     q_sleeping: Query<(), With<Sleeping>>,
     q_inputs: Query<&lunco_port_core::InputPorts>,
     mut bodies: ParamSet<(
-        Query<(&Rotation, &AngularVelocity)>,
+        Query<(
+            &Rotation,
+            &AngularVelocity,
+            &RigidBody,
+            Has<RigidBodyDisabled>,
+        )>,
         Query<Forces, lunco_physics::Integrable>,
     )>,
     mut commands: Commands,
@@ -83,38 +95,132 @@ pub fn apply_joint_torque_actuators(
     }
 
     let step_dt = fixed_time.timestep().as_secs_f64();
-    for (actuator, joint) in &q_actuators {
+    for (entity, actuator, joint, disabled) in &q_actuators {
+        let torque_contracts = q_contracts.get(actuator.torque_endpoint()).ok();
+        let speed_contracts = q_contracts.get(actuator.speed_endpoint()).ok();
+        if let Err(detail) = validate_joint_effort_contract(
+            actuator,
+            joint,
+            disabled,
+            torque_contracts,
+            speed_contracts,
+            [actuator.bearing_heat_port, actuator.brake_heat_port]
+                .map(|endpoint| endpoint.and_then(|entity| q_contracts.get(entity).ok())),
+        ) {
+            reject_joint_torque_coupling(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                entity,
+                &detail,
+            );
+            return;
+        }
+        let joint = joint.expect("validated revolute joint");
+        let torque_contracts = torque_contracts.expect("validated endpoint contracts");
+        let speed_contracts = speed_contracts.expect("validated endpoint contracts");
         let torque = {
             let q_read_ports = q_ports.p0();
-            let Ok(port) = q_read_ports.get(actuator.port_entity) else {
-                continue;
+            let Ok(port) = q_read_ports.get(actuator.torque_endpoint()) else {
+                reject_joint_torque_coupling(
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    entity,
+                    "external effort has no admitted torque endpoint",
+                );
+                return;
             };
             port.value
         };
-        if !torque.is_finite()
-            || !actuator.brake_torque.is_finite()
-            || !actuator.bearing_damping.is_finite()
-            || actuator.bearing_damping < 0.0
-            || !actuator.rotational_inertia.is_finite()
-            || !actuator.drive_sign.is_finite()
-        {
-            continue;
+        let torque_validation = torque_contracts
+            .get(lunco_port_core::PORT_NAME)
+            .expect("validated torque contract")
+            .metadata(PortDirection::In, "joint effort", "external effort owner")
+            .validate(torque);
+        if let Err(detail) = torque_validation {
+            reject_joint_torque_coupling(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                entity,
+                &detail,
+            );
+            return;
         }
-        let (axis, coordinate_speed) = {
+        let (axis, coordinate_speed, dynamic) = {
             let q_bodies = bodies.p0();
-            let Ok([(body1_rotation, body1_omega), (_, body2_omega)]) =
-                q_bodies.get_many([joint.body1, joint.body2])
+            let Ok(
+                [
+                    (body1_rotation, body1_omega, mode1, disabled1),
+                    (_, body2_omega, mode2, disabled2),
+                ],
+            ) = q_bodies.get_many([joint.body1, joint.body2])
             else {
-                continue;
+                reject_joint_torque_coupling(
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    entity,
+                    "external effort requires both admitted body motion states",
+                );
+                return;
             };
-            let Some(axis) = revolute_hinge_axis_world(joint, body1_rotation.0) else {
-                continue;
+            if disabled1 || disabled2 || !(mode1.is_dynamic() || mode2.is_dynamic()) {
+                reject_joint_torque_coupling(
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    entity,
+                    "external effort requires enabled rigid bodies with at least one dynamic state owner",
+                );
+                return;
+            }
+            let Some(axis) = revolute_hinge_axis_world(joint, body1_rotation.0.as_dquat()) else {
+                reject_joint_torque_coupling(
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    entity,
+                    "external effort joint coordinate frame is invalid",
+                );
+                return;
             };
-            let coordinate_speed = (body2_omega.0 - body1_omega.0).dot(axis) * actuator.drive_sign;
-            (axis, coordinate_speed)
+            let coordinate_speed = (body2_omega.0.as_dvec3() - body1_omega.0.as_dvec3()).dot(axis)
+                * actuator.coordinate_sign();
+            (
+                axis,
+                coordinate_speed,
+                [mode1.is_dynamic(), mode2.is_dynamic()],
+            )
         };
-        if let Ok(mut speed_port) = q_ports.p1().get_mut(actuator.speed_port_entity) {
+        if let Err(detail) = speed_contracts
+            .get(lunco_port_core::PORT_NAME)
+            .expect("validated motion contract")
+            .metadata(PortDirection::Out, "joint motion", "native physics")
+            .validate(coordinate_speed)
+        {
+            reject_joint_torque_coupling(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                entity,
+                &detail,
+            );
+            return;
+        }
+        if actuator.brake_torque > 0.0 && q_inputs.get(actuator.control_entity).is_err() {
+            reject_joint_torque_coupling(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                entity,
+                "braking requires a live admitted control surface",
+            );
+            return;
+        }
+        if let Ok(mut speed_port) = q_ports.p1().get_mut(actuator.speed_endpoint()) {
             speed_port.value = coordinate_speed;
+        } else {
+            reject_joint_torque_coupling(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                entity,
+                "external effort has no admitted motion-feedback endpoint",
+            );
+            return;
         }
         let brake = if q_inputs
             .get(actuator.control_entity)
@@ -150,29 +256,87 @@ pub fn apply_joint_torque_actuators(
                 (actuator.brake_heat_port, brake_heat),
             ] {
                 if let Some(endpoint) = endpoint {
+                    let Some(contract) = q_contracts
+                        .get(endpoint)
+                        .ok()
+                        .and_then(|contracts| contracts.get(lunco_port_core::PORT_NAME))
+                    else {
+                        reject_joint_torque_coupling(
+                            faults.as_deref_mut(),
+                            holds.as_deref_mut(),
+                            entity,
+                            "heat endpoint is missing its engineering contract",
+                        );
+                        return;
+                    };
+                    if let Err(detail) = contract
+                        .metadata(PortDirection::Out, "joint heat", "native physics")
+                        .validate(power)
+                    {
+                        reject_joint_torque_coupling(
+                            faults.as_deref_mut(),
+                            holds.as_deref_mut(),
+                            entity,
+                            &detail,
+                        );
+                        return;
+                    }
                     if let Ok(mut port) = ports.get_mut(endpoint) {
                         port.value = power;
+                    } else {
+                        reject_joint_torque_coupling(
+                            faults.as_deref_mut(),
+                            holds.as_deref_mut(),
+                            entity,
+                            "external effort has a retired heat endpoint",
+                        );
+                        return;
                     }
                 }
             }
         }
         let coordinate_torque = torque + brake + bearing_torque;
+        let world_torque = axis * (coordinate_torque * actuator.coordinate_sign());
+        if !lunco_physics::avian_backend_vector_is_valid(world_torque) {
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            }
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "cosim-joint-torque-range-invalid",
+                    Some(actuator.torque_endpoint()),
+                    "joint torque actuator",
+                    "delivered torque exceeds the native solver range",
+                );
+            }
+            return;
+        }
+        let mut q_forces = bodies.p1();
+        let receivers = [
+            (joint.body1, dynamic[0], -1.0),
+            (joint.body2, dynamic[1], 1.0),
+        ];
+        if receivers
+            .iter()
+            .any(|(body, dynamic, _)| *dynamic && !q_forces.contains(*body))
+        {
+            reject_joint_torque_coupling(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                entity,
+                "an admitted dynamic body is missing its native force receiver",
+            );
+            return;
+        }
         if coordinate_torque == 0.0 {
             continue;
         }
-        let world_torque = axis * (coordinate_torque * actuator.drive_sign);
-        let mut q_forces = bodies.p1();
-        if let Ok([mut body1_forces, mut body2_forces]) =
-            q_forces.get_many_mut([joint.body1, joint.body2])
-        {
-            body1_forces.apply_torque(-world_torque);
-            body2_forces.apply_torque(world_torque);
-        } else {
-            if let Ok(mut body1_forces) = q_forces.get_mut(joint.body1) {
-                body1_forces.apply_torque(-world_torque);
-            }
-            if let Ok(mut body2_forces) = q_forces.get_mut(joint.body2) {
-                body2_forces.apply_torque(world_torque);
+        for (body, dynamic, sign) in receivers {
+            if dynamic {
+                q_forces
+                    .get_mut(body)
+                    .expect("validated native force receiver")
+                    .apply_torque((world_torque * sign).as_vec3());
             }
         }
         if q_sleeping.contains(joint.body1) {
@@ -181,6 +345,109 @@ pub fn apply_joint_torque_actuators(
         if q_sleeping.contains(joint.body2) {
             commands.queue(avian3d::dynamics::solver::islands::WakeBody(joint.body2));
         }
+    }
+}
+
+/// Read the same physical contract used by the native effort consumer.
+/// A missing external boundary is not a lint candidate.
+pub fn joint_effort_contract_error(world: &World, entity: Entity) -> Option<String> {
+    let actuator = world.get::<JointTorqueActuator>(entity)?;
+    validate_joint_effort_contract(
+        actuator,
+        world.get::<RevoluteJoint>(entity),
+        world.get::<JointDisabled>(entity).is_some(),
+        world.get::<lunco_port_core::ScalarPortContracts>(actuator.torque_endpoint()),
+        world.get::<lunco_port_core::ScalarPortContracts>(actuator.speed_endpoint()),
+        [actuator.bearing_heat_port, actuator.brake_heat_port].map(|endpoint| {
+            endpoint.and_then(|entity| world.get::<lunco_port_core::ScalarPortContracts>(entity))
+        }),
+    )
+    .err()
+}
+
+fn validate_joint_effort_contract(
+    actuator: &JointTorqueActuator,
+    joint: Option<&RevoluteJoint>,
+    disabled: bool,
+    torque_contracts: Option<&lunco_port_core::ScalarPortContracts>,
+    speed_contracts: Option<&lunco_port_core::ScalarPortContracts>,
+    heat_contracts: [Option<&lunco_port_core::ScalarPortContracts>; 2],
+) -> Result<(), String> {
+    actuator.validate_joint(joint, disabled)?;
+    let mut frames = [None, None];
+    for (index, contracts, unit) in [
+        (
+            0,
+            torque_contracts,
+            lunco_port_core::EngineUnit::NewtonMeter,
+        ),
+        (
+            1,
+            speed_contracts,
+            lunco_port_core::EngineUnit::RadianPerSecond,
+        ),
+        (2, heat_contracts[0], lunco_port_core::EngineUnit::Watt),
+        (3, heat_contracts[1], lunco_port_core::EngineUnit::Watt),
+    ] {
+        if index >= 2 && [actuator.bearing_heat_port, actuator.brake_heat_port][index - 2].is_none()
+        {
+            continue;
+        }
+        let contract = contracts
+            .and_then(|contracts| contracts.get(lunco_port_core::PORT_NAME))
+            .ok_or(
+                "physical effort, motion and heat endpoints require explicit engineering contracts",
+            )?;
+        let conversion = contract
+            .unit
+            .as_ref()
+            .and_then(|unit| unit.definition())
+            .and_then(|actual| {
+                actual
+                    .conversion_to(unit.reference().definition().expect("engine SI unit"))
+                    .ok()
+            });
+        if conversion != Some((1.0, 0.0)) {
+            return Err("native effort, motion and heat endpoints require coherent SI units (N.m, rad/s and W); convert incoming wires through the registry".into());
+        }
+        contract
+            .metadata(
+                PortDirection::Out,
+                "joint physical boundary",
+                "native physics",
+            )
+            .validate_contract()
+            .map_err(|error| error.to_string())?;
+        if index < 2 {
+            frames[index] = contract.frame.as_ref();
+        }
+    }
+    if frames[0].is_none() || frames[0] != frames[1] {
+        return Err(
+            "conjugate torque and motion endpoints must declare the same joint coordinate frame"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn reject_joint_torque_coupling(
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+    entity: Entity,
+    detail: &str,
+) {
+    error!("[cosim] refusing invalid joint effort coupling {entity:?}: {detail}");
+    if let Some(holds) = holds {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+    }
+    if let Some(faults) = faults {
+        faults.raise(
+            "cosim-joint-coupling-invalid",
+            Some(entity),
+            "joint effort coupling",
+            detail,
+        );
     }
 }
 
@@ -328,7 +595,7 @@ fn register_collider_contact_topology(app: &mut App) {
         // Reattachment changes both bodies' contact surfaces. Re-admitting the
         // same owner changes native proxy state without changing the port schema.
         .add_observer(
-            |event: On<Insert, ColliderOf>,
+            |event: On<Insert<ColliderOf>>,
              owners: Query<&ColliderOf>,
              mut state: ResMut<PortTopologyState>,
              mut revision: ResMut<PortTopologyRevision>| {
@@ -508,21 +775,21 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "velocity_x",
             contract: AvianPortContract::SPEED_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.x)),
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| f64::from(v.0.x))),
             write: None,
         },
         AvianPort {
             name: "velocity_y",
             contract: AvianPortContract::SPEED_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.y)),
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| f64::from(v.0.y))),
             write: None,
         },
         AvianPort {
             name: "velocity_z",
             contract: AvianPortContract::SPEED_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| f64::from(v.0.z))),
             write: None,
         },
         // Solved navigation-frame acceleration for a rigid-body-mounted
@@ -694,37 +961,37 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "speed",
             contract: AvianPortContract::SPEED,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.length())),
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| f64::from(v.0.length()))),
             write: None,
         },
         // Attitude as a quaternion (canonical, gimbal-safe). Avian's `Rotation`
-        // wraps a `DQuat` in the f64 build. Read-only — write attitude via torque.
+        // uses the native quaternion. Read-only — write attitude via torque.
         AvianPort {
             name: "quat_w",
             contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.w)),
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| f64::from(r.0.w))),
             write: None,
         },
         AvianPort {
             name: "quat_x",
             contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.x)),
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| f64::from(r.0.x))),
             write: None,
         },
         AvianPort {
             name: "quat_y",
             contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.y)),
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| f64::from(r.0.y))),
             write: None,
         },
         AvianPort {
             name: "quat_z",
             contract: AvianPortContract::ROTATION_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.z)),
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| f64::from(r.0.z))),
             write: None,
         },
         // Euler convenience (radians). Order `YXZ` → (yaw, pitch, roll) for a
@@ -736,7 +1003,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<Rotation>(e)
-                    .map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).0)
+                    .map(|r| f64::from(r.0.to_euler(bevy::math::EulerRot::YXZ).0))
             }),
             write: None,
         },
@@ -746,7 +1013,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<Rotation>(e)
-                    .map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).1)
+                    .map(|r| f64::from(r.0.to_euler(bevy::math::EulerRot::YXZ).1))
             }),
             write: None,
         },
@@ -756,7 +1023,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 w.get::<Rotation>(e)
-                    .map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).2)
+                    .map(|r| f64::from(r.0.to_euler(bevy::math::EulerRot::YXZ).2))
             }),
             write: None,
         },
@@ -766,21 +1033,21 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "angvel_x",
             contract: AvianPortContract::ANGULAR_SPEED_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.x)),
+            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| f64::from(v.0.x))),
             write: None,
         },
         AvianPort {
             name: "angvel_y",
             contract: AvianPortContract::ANGULAR_SPEED_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.y)),
+            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| f64::from(v.0.y))),
             write: None,
         },
         AvianPort {
             name: "angvel_z",
             contract: AvianPortContract::ANGULAR_SPEED_WORLD,
             dir: PortDirection::Out,
-            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.z)),
+            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| f64::from(v.0.z))),
             write: None,
         },
         // Force inputs: additive sink into `PendingForces`. Reading returns the
@@ -1136,11 +1403,9 @@ fn write_kinematic_position_axis(world: &mut World, entity: Entity, value: f64, 
 
 // ── Mass-property read/write helpers ────────────────────────────────────────
 //
-// The f64 solver owns `Computed*`; Avian's local authoring overrides are f32.
-// Live writes remove the corresponding local override and install `NoAuto*`.
-// Avian's MassPropertyHelper retains the native computed value when automatic
-// computation is disabled and no local override exists. Thus collider changes
-// cannot overwrite the value or narrow it during a later recomputation.
+// Native computed properties use the solver's internal precision. Live input
+// metadata validates that range before this boundary explicitly converts f64
+// values. `NoAuto*` prevents collider recomputation from replacing live inputs.
 //
 // Scalar inertia inputs require an axis-aligned body tensor. The owner rejects
 // them before commit when cross terms are present; authored full tensors retain
@@ -1148,7 +1413,7 @@ fn write_kinematic_position_axis(world: &mut World, entity: Entity, value: f64, 
 // update or validate its positive definiteness.
 
 fn read_mass(w: &World, e: Entity) -> Option<f64> {
-    w.get::<ComputedMass>(e).map(|m| m.value())
+    w.get::<ComputedMass>(e).map(|m| f64::from(m.value()))
 }
 
 fn write_mass(w: &mut World, e: Entity, v: f64) {
@@ -1156,7 +1421,7 @@ fn write_mass(w: &mut World, e: Entity, v: f64) {
         w.get::<RigidBody>(e).is_some(),
         "prepared mass input retains RigidBody"
     );
-    let mass = ComputedMass::new(v);
+    let mass = ComputedMass::new(v as f32);
     if w.get::<ComputedMass>(e) != Some(&mass)
         || w.get::<NoAutoMass>(e).is_none()
         || w.get::<Mass>(e).is_some()
@@ -1170,16 +1435,16 @@ fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
         let inverse = inertia.inverse_tensor();
         if inverse.m01 == 0.0 && inverse.m02 == 0.0 && inverse.m12 == 0.0 {
             // Component-wise reciprocals avoid determinant overflow/underflow
-            // for diagonal tensors spanning the native f64 scalar range.
-            DVec3::from_array(
-                inverse.diagonal().to_array().map(
-                    |value| {
-                        if value == 0.0 { 0.0 } else { value.recip() }
-                    },
-                ),
-            )
+            // for diagonal tensors spanning the native scalar range.
+            DVec3::from_array(inverse.diagonal().to_array().map(|value| {
+                if value == 0.0 {
+                    0.0
+                } else {
+                    f64::from(value).recip()
+                }
+            }))
         } else {
-            inertia.tensor().diagonal()
+            inertia.tensor().diagonal().as_dvec3()
         }
     })
 }
@@ -1209,7 +1474,7 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
     let mut diagonal = inertia_diagonal(w, e)
         .expect("writable inertia ports require an effective native baseline");
     diagonal[axis] = v;
-    let inertia = ComputedAngularInertia::new(diagonal);
+    let inertia = ComputedAngularInertia::new(diagonal.as_vec3());
     if w.get::<ComputedAngularInertia>(e) != Some(&inertia)
         || w.get::<NoAutoAngularInertia>(e).is_none()
         || w.get::<AngularInertia>(e).is_some()
@@ -1221,7 +1486,7 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
 }
 
 fn center_of_mass(w: &World, e: Entity) -> Option<DVec3> {
-    w.get::<ComputedCenterOfMass>(e).map(|c| c.0)
+    w.get::<ComputedCenterOfMass>(e).map(|c| c.0.as_dvec3())
 }
 
 fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
@@ -1233,7 +1498,7 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
     let mut c = center_of_mass(w, e)
         .expect("writable centre-of-mass ports require an effective native baseline");
     c[axis] = v;
-    let center = ComputedCenterOfMass(c);
+    let center = ComputedCenterOfMass(c.as_vec3());
     if w.get::<ComputedCenterOfMass>(e) != Some(&center)
         || w.get::<NoAutoCenterOfMass>(e).is_none()
         || w.get::<CenterOfMass>(e).is_some()
@@ -1287,7 +1552,10 @@ pub fn apply_pending_forces(
     let physics_live =
         lunco_physics::physics_is_live_state(&physics_time, &virtual_time, faults.as_deref());
     for (e, mut pf) in &mut q_pending {
-        if !pf.f.is_finite() || !pf.f_local.is_finite() || !pf.torque.is_finite() {
+        if ![pf.f, pf.f_local, pf.torque]
+            .into_iter()
+            .all(lunco_physics::avian_backend_vector_is_valid)
+        {
             let detail = format!(
                 "force={:?}, force_local={:?}, torque={:?}",
                 pf.f, pf.f_local, pf.torque
@@ -1312,14 +1580,14 @@ pub fn apply_pending_forces(
         if physics_live && has_pending_force {
             if let Ok(mut f) = forces.get_mut(e) {
                 if pf.f != DVec3::ZERO {
-                    f.apply_force(pf.f);
+                    f.apply_force(pf.f.as_vec3());
                 }
                 if pf.f_local != DVec3::ZERO {
                     // Avian rotates this into world by the body's attitude.
-                    f.apply_local_force(pf.f_local);
+                    f.apply_local_force(pf.f_local.as_vec3());
                 }
                 if pf.torque != DVec3::ZERO {
-                    f.apply_torque(pf.torque);
+                    f.apply_torque(pf.torque.as_vec3());
                 }
             }
         }
@@ -1385,6 +1653,7 @@ pub fn apply_pending_forces(
     // center of mass.
     for (_, _, _, actuator_entity, actuator, force_n) in scratch.force.drain(..) {
         if !force_n.is_finite()
+            || force_n.abs() > f64::from(f32::MAX)
             || !actuator.local_position.is_finite()
             || !actuator.direction_local.is_finite()
             || !actuator.max_force_n.is_finite()
@@ -1430,9 +1699,9 @@ pub fn apply_pending_forces(
             continue;
         }
         let local_position = actuator.local_position.as_dvec3();
-        let world_point = position.0 + rotation.0 * local_position;
-        let world_force = rotation.0 * (direction * thrust);
-        body_forces.apply_force_at_point(world_force, world_point);
+        let world_point = position.0 + rotation.0.as_dquat() * local_position;
+        let world_force = rotation.0.as_dquat() * (direction * thrust);
+        body_forces.apply_force_at_point(world_force.as_vec3(), world_point);
     }
 
     // Torque actuators (reaction wheels, CMGs, and future devices) use the
@@ -1440,6 +1709,7 @@ pub fn apply_pending_forces(
     // no actuator-specific Rust or Modelica r×F calculation is involved.
     for (_, _, _, actuator_entity, actuator, torque_nm) in scratch.torque.drain(..) {
         if !torque_nm.is_finite()
+            || torque_nm.abs() > f64::from(f32::MAX)
             || !actuator.axis_local.is_finite()
             || !actuator.max_torque_nm.is_finite()
         {
@@ -1476,7 +1746,7 @@ pub fn apply_pending_forces(
         let torque = torque_nm.clamp(-actuator.max_torque_nm, actuator.max_torque_nm);
         if torque != 0.0 {
             let (_, _, rotation) = q_poses.get(body).expect("body found in pose query");
-            body_forces.apply_torque(rotation.0 * (axis * torque));
+            body_forces.apply_torque((rotation.0.as_dquat() * (axis * torque)).as_vec3());
         }
     }
 }
@@ -1502,6 +1772,124 @@ mod tests {
     use super::*;
 
     #[test]
+    fn effort_admission_and_lint_share_units_frame_and_authority_checks() {
+        use lunco_engineering_values::CoordinateFrameId;
+        use lunco_port_core::{
+            EngineUnit, PORT_NAME, Port, ScalarPortContract, ScalarPortContracts,
+        };
+        let mut world = World::new();
+        let contract = |unit: EngineUnit, frame: &str| ScalarPortContract {
+            unit: Some(unit.reference()),
+            frame: Some(CoordinateFrameId::new(frame).unwrap()),
+            ..default()
+        };
+        let torque = world
+            .spawn(Port::with_contract(0.0, contract(EngineUnit::NewtonMeter, "shaft:a")).unwrap())
+            .id();
+        let speed = world
+            .spawn(
+                Port::with_contract(0.0, contract(EngineUnit::RadianPerSecond, "shaft:a")).unwrap(),
+            )
+            .id();
+        let first = world.spawn_empty().id();
+        let second = world.spawn_empty().id();
+        let actuator = JointTorqueActuator::new(
+            torque,
+            speed,
+            first,
+            lunco_physics::joint::JointCoordinateSign::Positive,
+        )
+        .unwrap();
+        let joint = world
+            .spawn((RevoluteJoint::new(first, second), actuator))
+            .id();
+        assert!(joint_effort_contract_error(&world, joint).is_none());
+        let mut registry = lunco_port_core::ports::PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        assert!(matches!(
+            registry.write_port(&mut world, joint, "angle", 0.5),
+            Err(lunco_port_core::ports::PortWriteError {
+                kind: lunco_port_core::ports::PortWriteErrorKind::NotWritable,
+                ..
+            })
+        ));
+        assert!(!world.get::<RevoluteJoint>(joint).unwrap().motor.enabled);
+
+        world
+            .get_mut::<ScalarPortContracts>(speed)
+            .unwrap()
+            .set(PORT_NAME.into(), contract(EngineUnit::Newton, "shaft:a"))
+            .unwrap();
+        assert!(
+            joint_effort_contract_error(&world, joint)
+                .unwrap()
+                .contains("coherent SI")
+        );
+        world
+            .get_mut::<ScalarPortContracts>(speed)
+            .unwrap()
+            .set(
+                PORT_NAME.into(),
+                contract(EngineUnit::RadianPerSecond, "shaft:b"),
+            )
+            .unwrap();
+        assert!(
+            joint_effort_contract_error(&world, joint)
+                .unwrap()
+                .contains("coordinate frame")
+        );
+        world
+            .get_mut::<ScalarPortContracts>(speed)
+            .unwrap()
+            .set(
+                PORT_NAME.into(),
+                contract(EngineUnit::RadianPerSecond, "shaft:a"),
+            )
+            .unwrap();
+        world.get_mut::<RevoluteJoint>(joint).unwrap().motor.enabled = true;
+        assert!(
+            joint_effort_contract_error(&world, joint)
+                .unwrap()
+                .contains("native motor")
+        );
+        world.get_mut::<RevoluteJoint>(joint).unwrap().motor.enabled = false;
+        let heat = world
+            .spawn(Port::with_contract(0.0, contract(EngineUnit::Newton, "shaft:a")).unwrap())
+            .id();
+        world
+            .get_mut::<JointTorqueActuator>(joint)
+            .unwrap()
+            .bearing_heat_port = Some(heat);
+        assert!(
+            joint_effort_contract_error(&world, joint)
+                .unwrap()
+                .contains("coherent SI")
+        );
+        world
+            .get_mut::<ScalarPortContracts>(heat)
+            .unwrap()
+            .set(PORT_NAME.into(), contract(EngineUnit::Watt, "shaft:a"))
+            .unwrap();
+        assert!(joint_effort_contract_error(&world, joint).is_none());
+        world.despawn(heat);
+        assert!(
+            joint_effort_contract_error(&world, joint)
+                .unwrap()
+                .contains("engineering contracts")
+        );
+        world
+            .get_mut::<JointTorqueActuator>(joint)
+            .unwrap()
+            .bearing_heat_port = None;
+        world.despawn(speed);
+        assert!(
+            joint_effort_contract_error(&world, joint)
+                .unwrap()
+                .contains("engineering contracts")
+        );
+    }
+
+    #[test]
     fn joint_brake_uses_admitted_cycle_after_zero_delta_hold() {
         use avian3d::dynamics::integrator::VelocityIntegrationData;
         use avian3d::prelude::forces::AccumulatedLocalAcceleration;
@@ -1514,9 +1902,27 @@ mod tests {
         let mut inputs = lunco_port_core::InputPorts::new(&["brake"]);
         inputs.brake_active = true;
         let control = world.spawn(inputs).id();
-        let torque = world.spawn(lunco_port_core::Port { value: 0.0 }).id();
-        let speed = world.spawn(lunco_port_core::Port::default()).id();
-        let brake_heat = world.spawn(lunco_port_core::Port::default()).id();
+        let endpoint = |world: &mut World, unit: lunco_port_core::EngineUnit| {
+            world
+                .spawn(
+                    lunco_port_core::Port::with_contract(
+                        0.0,
+                        lunco_port_core::ScalarPortContract {
+                            unit: Some(unit.reference()),
+                            frame: Some(
+                                lunco_engineering_values::CoordinateFrameId::new("test:shaft")
+                                    .unwrap(),
+                            ),
+                            ..default()
+                        },
+                    )
+                    .unwrap(),
+                )
+                .id()
+        };
+        let torque = endpoint(&mut world, lunco_port_core::EngineUnit::NewtonMeter);
+        let speed = endpoint(&mut world, lunco_port_core::EngineUnit::RadianPerSecond);
+        let brake_heat = endpoint(&mut world, lunco_port_core::EngineUnit::Watt);
         let bodies = [0.0, 1.0].map(|omega| {
             world
                 .spawn((
@@ -1524,9 +1930,9 @@ mod tests {
                     Position::default(),
                     Rotation::default(),
                     LinearVelocity::default(),
-                    AngularVelocity(DVec3::X * omega),
+                    AngularVelocity(Vec3::X * omega),
                     ComputedMass::new(1.0),
-                    ComputedAngularInertia::new(DVec3::ONE),
+                    ComputedAngularInertia::new(Vec3::ONE),
                     ComputedCenterOfMass::default(),
                     VelocityIntegrationData::default(),
                     AccumulatedLocalAcceleration::default(),
@@ -1534,16 +1940,19 @@ mod tests {
                 .id()
         });
         world.spawn((
-            RevoluteJoint::new(bodies[0], bodies[1]).with_hinge_axis(DVec3::X),
-            JointTorqueActuator {
-                port_entity: torque,
-                speed_port_entity: speed,
-                control_entity: control,
-                brake_torque: 4_000.0,
-                rotational_inertia: 1.0,
-                drive_sign: 1.0,
-                brake_heat_port: Some(brake_heat),
-                ..default()
+            RevoluteJoint::new(bodies[0], bodies[1]).with_hinge_axis(Vec3::X),
+            {
+                let mut coupling = JointTorqueActuator::new(
+                    torque,
+                    speed,
+                    control,
+                    lunco_physics::joint::JointCoordinateSign::Positive,
+                )
+                .unwrap();
+                coupling.brake_torque = 4_000.0;
+                coupling.rotational_inertia = 1.0;
+                coupling.brake_heat_port = Some(brake_heat);
+                coupling
             },
         ));
 
@@ -1557,7 +1966,7 @@ mod tests {
                 .unwrap()
                 .angular_increment;
             assert!(
-                (acceleration.x - sign * expected).abs() < 1e-10,
+                (f64::from(acceleration.x) - sign * f64::from(expected as f32)).abs() < 1e-10,
                 "{acceleration:?}"
             );
         }
@@ -1648,7 +2057,7 @@ mod tests {
     }
 
     #[test]
-    fn native_live_mass_properties_preserve_precision_recomputation_and_change_detection() {
+    fn native_live_mass_properties_retain_native_values_after_recomputation() {
         let mut world = World::new();
         world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         let body = world
@@ -1658,8 +2067,8 @@ mod tests {
                 AngularInertia::new(Vec3::new(4625.0, 6250.0, 4625.0)),
                 CenterOfMass(Vec3::ZERO),
                 ComputedMass::new(4000.0),
-                ComputedAngularInertia::new(DVec3::new(4625.0, 6250.0, 4625.0)),
-                ComputedCenterOfMass(DVec3::ZERO),
+                ComputedAngularInertia::new(Vec3::new(4625.0, 6250.0, 4625.0)),
+                ComputedCenterOfMass(Vec3::ZERO),
             ))
             .id();
         let mut registry = lunco_port_core::ports::PortRegistry::default();
@@ -1695,10 +2104,9 @@ mod tests {
         for (name, expected) in values {
             let actual = registry.read_port(&world, body, name).unwrap();
             assert!(
-                (actual - expected).abs() <= expected.abs() * f64::EPSILON * 2.0,
+                (actual - expected).abs() <= expected.abs() * f64::from(f32::EPSILON) * 2.0,
                 "{name}: {actual} != {expected}"
             );
-            assert_ne!(actual, (expected as f32) as f64, "{name} narrowed to f32");
         }
         world.clear_trackers();
         for (name, value) in values {
@@ -1721,9 +2129,9 @@ mod tests {
         );
 
         for name in ["mass", "inertia_xx", "com_y"] {
-            registry.write_port(&mut world, body, name, 1.0e50).unwrap();
-            let actual = registry.read_port(&world, body, name).unwrap();
-            assert!((actual / 1.0e50 - 1.0).abs() <= f64::EPSILON * 2.0);
+            let before = registry.read_port(&world, body, name).unwrap();
+            assert!(registry.write_port(&mut world, body, name, 1.0e50).is_err());
+            assert_eq!(registry.read_port(&world, body, name).unwrap(), before);
         }
     }
 
@@ -1732,8 +2140,8 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         let inertia = ComputedAngularInertia::new_with_local_frame(
-            DVec3::new(4.0, 6.0, 8.0),
-            bevy::math::DQuat::from_rotation_z(0.4),
+            Vec3::new(4.0, 6.0, 8.0),
+            bevy::math::Quat::from_rotation_z(0.4),
         );
         let body = world.spawn((RigidBody::Dynamic, inertia)).id();
         let mut registry = lunco_port_core::ports::PortRegistry::default();

@@ -888,7 +888,7 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
 /// Despawn a single USD prim **subtree** (one runtime prim and its descendants).
 ///
 /// Under Bevy 0.19's relationship system, despawning the root entity recursively
-/// despawns all descendants. Component removal triggers (`On<Remove, T>`) fire automatically,
+/// despawns all descendants. Component removal triggers (`On<Remove<T>>`) fire automatically,
 /// freeing any worker-side state (such as Modelica steppers or Python script documents)
 /// via the reactive observers registered in `lunco-modelica-core` and `lunco-scripting`.
 pub fn despawn_usd_subtree(world: &mut World, root: Entity) {

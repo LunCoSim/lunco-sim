@@ -10,7 +10,7 @@ ui = ["dep:egui", "dep:egui_extras", "dep:image", "dep:mime_guess2"]
 
 [dependencies]
 egui = { workspace = true, optional = true }
-egui_extras = { version = "0.35", features = ["image"], optional = true }
+egui_extras = { version = "0.36", features = ["image"], optional = true }
 image = { workspace = true, optional = true }
 mime_guess2 = { version = "2.3.1", optional = true }
 anyhow = { workspace = true }

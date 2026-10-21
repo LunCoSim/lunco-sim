@@ -72,7 +72,7 @@ impl ApiEntityRegistry {
 }
 
 fn index_global_entity_id(
-    trigger: On<Insert, GlobalEntityId>,
+    trigger: On<Insert<GlobalEntityId>>,
     ids: Query<&GlobalEntityId>,
     mut registry: ResMut<ApiEntityRegistry>,
 ) {
@@ -91,7 +91,7 @@ fn index_existing_global_entity_ids(
 }
 
 fn unindex_global_entity_id(
-    trigger: On<Remove, GlobalEntityId>,
+    trigger: On<Remove<GlobalEntityId>>,
     mut registry: ResMut<ApiEntityRegistry>,
 ) {
     registry.remove(trigger.entity);

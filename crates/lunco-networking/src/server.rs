@@ -7,6 +7,7 @@ use lightyear::netcode::NetcodeServer;
 use lightyear::netcode::server_plugin::NetcodeConfig;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
+use lightyear::webtransport::prelude::endpoint::WebTransportEndpoint;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
@@ -426,7 +427,7 @@ pub(crate) fn setup_host(app: &mut App, prepared: PreparedHost) {
                 ..default()
             }),
             LocalAddr(server_addr),
-            WebTransportServerIo {
+            WebTransportEndpoint {
                 certificate: identity,
             },
         ))
@@ -632,7 +633,7 @@ fn update_host_netstatus(
 /// `SyncChannel`.
 fn server_send(
     sender: &mut ServerMultiMessageSender,
-    server: &Server,
+    server: &Endpoint,
     target: &NetworkTarget,
     channel: SyncChannel,
     env: &SyncEnvelope,
@@ -667,7 +668,7 @@ fn server_send(
 /// not entity state, and the assembler doesn't carry them.
 #[allow(clippy::too_many_arguments)]
 fn on_server_connected(
-    trigger: On<Add, Connected>,
+    trigger: On<Add<Connected>>,
     q_client: Query<&RemoteId, With<ClientOf>>,
     facts: lunco_networking_sync::scope::SceneScopeFacts,
     application: Res<lunco_networking_sync::scope::ApplicationJournalBinding>,
@@ -675,7 +676,7 @@ fn on_server_connected(
     profiles: Res<SessionProfiles>,
     scenario: Option<Res<ScenarioManifestResource>>,
     journal: Option<Res<JournalResource>>,
-    server: Single<&Server>,
+    server: Single<&Endpoint, With<Server>>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
     mut rbac: ResMut<lunco_core_session::SessionRbac>,
@@ -849,7 +850,7 @@ struct PendingJournalReplay(std::collections::VecDeque<PeerJournalReplay>);
 fn replay_journal_chunks(
     facts: lunco_networking_sync::scope::SceneScopeFacts,
     mut replay: ResMut<PendingJournalReplay>,
-    server: Single<&Server>,
+    server: Single<&Endpoint, With<Server>>,
     mut sender: ServerMultiMessageSender,
 ) {
     let scope = facts.host_document_scope();
@@ -967,7 +968,7 @@ mod journal_replay_tests {
 /// Client dropped: free everything its session owned (G5) and remove its profile.
 #[allow(clippy::too_many_arguments)]
 fn on_server_disconnected(
-    trigger: On<Add, Disconnected>,
+    trigger: On<Add<Disconnected>>,
     q_client: Query<&RemoteId, With<ClientOf>>,
     mut registry: ResMut<SessionRegistry>,
     mut profiles: ResMut<SessionProfiles>,
@@ -1051,7 +1052,7 @@ fn on_server_disconnected(
 /// spawn/despawn itself interest-scoped).
 fn host_send_outbox(
     mut outbox: ResMut<SyncOutbox>,
-    server: Single<&Server>,
+    server: Single<&Endpoint, With<Server>>,
     mut sender: ServerMultiMessageSender,
 ) {
     if outbox.0.is_empty() {
@@ -1089,7 +1090,7 @@ fn assemble_and_send_snapshots(
     config: Res<NetworkConfig>,
     assigned: Res<AssignedSessions>,
     q_client: Query<&RemoteId, With<ClientOf>>,
-    server: Single<&Server>,
+    server: Single<&Endpoint, With<Server>>,
     mut sender: ServerMultiMessageSender,
     mut last_gen: Local<u64>,
     mut last_scope: Local<Option<lunco_core_session::ReplicationScope>>,
@@ -1949,7 +1950,7 @@ fn drain_and_send_asset_chunks(
     mut tasks: ResMut<lunco_networking_sync::scenario_sync::AssetServeTasks>,
     assigned: Res<AssignedSessions>,
     q_client: Query<&RemoteId, With<ClientOf>>,
-    server: Single<&Server>,
+    server: Single<&Endpoint, With<Server>>,
     mut sender: ServerMultiMessageSender,
     time: Res<Time>,
     scenario: Res<ScenarioManifestResource>,

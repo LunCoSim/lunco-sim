@@ -1851,7 +1851,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// scripts on entities reclaimed through a scene hierarchy. The queued
     /// stop runs during the removal flush, before final scene resource resets.
     /// Independent script documents retain their document-owned lifetime.
-    pub fn retire_removed_model(event: On<Remove, ScriptedModel>, mut commands: Commands) {
+    pub fn retire_removed_model(event: On<Remove<ScriptedModel>>, mut commands: Commands) {
         let entity = event.entity;
         commands.queue(move |world: &mut World| Self::stop_entity(world, entity));
     }

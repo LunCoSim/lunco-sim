@@ -1116,7 +1116,7 @@ pub fn instantiate_light_prim(
 /// domes that currently exist, so recomputing it when the dome set changes is
 /// exactly right.
 pub(crate) fn on_usd_light_added(
-    _trigger: On<Add, UsdAuthoredLight>,
+    _trigger: On<Add<UsdAuthoredLight>>,
     domes: Query<&UsdDomeAmbient>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
 ) {

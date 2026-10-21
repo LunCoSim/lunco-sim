@@ -122,14 +122,14 @@ impl ClusterableObjectCount {
 }
 
 fn track_clusterable_object_added<T: Component>(
-    _trigger: On<Add, T>,
+    _trigger: On<Add<T>>,
     mut count: ResMut<ClusterableObjectCount>,
 ) {
     count.add();
 }
 
 fn track_clusterable_object_removed<T: Component>(
-    _trigger: On<Remove, T>,
+    _trigger: On<Remove<T>>,
     mut count: ResMut<ClusterableObjectCount>,
 ) {
     count.remove();
@@ -154,7 +154,7 @@ fn sync_auto_cluster_configs(
 }
 
 fn bind_camera_cluster_config(
-    add: On<Add, Camera3d>,
+    add: On<Add<Camera3d>>,
     existing_cluster_configs: Query<(), With<ClusterConfig>>,
     clusterable_objects: Res<ClusterableObjectCount>,
     mut commands: Commands,
@@ -314,7 +314,7 @@ fn configure_camera(camera: Option<&mut Camera>) {
 /// Configure the clear intent when `Camera3d` supplies a required `Camera`
 /// component after the `SceneCamera` observer has already run.
 fn configure_added_scene_camera(
-    add: On<Add, Camera>,
+    add: On<Add<Camera>>,
     scene_cameras: Query<(), With<SceneCamera>>,
     mut cameras: Query<&mut Camera>,
 ) {
@@ -327,7 +327,7 @@ fn configure_added_scene_camera(
 }
 
 fn bind_scene_camera(
-    add: On<Add, SceneCamera>,
+    add: On<Add<SceneCamera>>,
     cams: Query<&SceneCamera>,
     mut cameras: Query<&mut Camera>,
     profile: Res<RenderProfile>,

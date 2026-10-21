@@ -1,5 +1,5 @@
-@import "ui/runtime_fonts.css";
-@import "ui/runtime_theme.css";
+@import "runtime_fonts.css";
+@import "runtime_theme.css";
 
 #program-browser-root {
   display: flex;

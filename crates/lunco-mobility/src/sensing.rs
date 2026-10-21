@@ -192,12 +192,12 @@ fn cast_ray_response(world: &World, origin: GridPos, dir: Dir3, max: f64) -> Api
     };
     match hit {
         Some(hit) => {
-            let point = origin.0 + (*dir).as_dvec3() * hit.distance;
+            let point = origin.0 + (*dir).as_dvec3() * f64::from(hit.distance);
             let entity = registry.api_id_for(hit.entity).map(|g| g.get());
             Ok(Some(api_value!({
                 "hit": true,
                 "entity": entity,
-                "distance": hit.distance,
+                "distance": f64::from(hit.distance),
                 "point": api_value!([point.x, point.y, point.z]),
                 "normal": api_value!([hit.normal.x, hit.normal.y, hit.normal.z]),
             })))
@@ -527,10 +527,7 @@ mod tests {
             MinimalPlugins,
             AssetPlugin::default(),
             TransformPlugin,
-            PhysicsPlugins::default()
-                .build()
-                .disable::<avian3d::dynamics::solver::xpbd::XpbdSolverPlugin>(),
-            lunco_physics::DeterministicJointSolverPlugin,
+            PhysicsPlugins::default(),
             LunCoMobilityPlugin,
         ));
         app.init_asset::<Mesh>()

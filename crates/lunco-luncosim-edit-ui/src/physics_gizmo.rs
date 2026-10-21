@@ -191,7 +191,7 @@ pub fn draw_physics_gizmo(
         .get(subtree[0])
         .map(|tf| tf.rotation() * Vec3::Y)
         .unwrap_or(Vec3::Y);
-    let g = gravity.map(|g| g.0.as_vec3());
+    let g = gravity.map(|g| g.0);
     let npm = NEWTONS_PER_METER;
 
     for &entity in &subtree {
@@ -202,7 +202,7 @@ pub fn draw_physics_gizmo(
             // only — GlobalTransform scale is a render affordance and
             // must not stretch a mass property.
             let com_world = com
-                .map(|c| gtf.translation() + rot * c.0.as_vec3())
+                .map(|c| gtf.translation() + rot * c.0)
                 .unwrap_or_else(|| gtf.translation());
 
             // CoM marker — sphere + cross so it reads at any zoom.
@@ -230,7 +230,7 @@ pub fn draw_physics_gizmo(
                         (2.5 * (i3 + i1 - i2) / m).max(0.0).sqrt(),
                         (2.5 * (i1 + i2 - i3) / m).max(0.0).sqrt(),
                     );
-                    let world_q = rot * local_frame.as_quat();
+                    let world_q = rot * local_frame;
                     // Three principal-plane ellipses. Each permutation
                     // maps the ellipse's local XY plane onto a principal
                     // plane (right-handed cyclic, det = +1).
@@ -369,9 +369,8 @@ pub fn draw_frame_gizmo(
 /// `GlobalTransform` (same shape as `joint_viz::anchor_world`, which is
 /// private to that module).
 fn anchor_world(frame: &JointFrame, body_tf: &GlobalTransform) -> Vec3 {
-    let to_vec3 = |v: avian3d::math::Vector| Vec3::new(v.x as f32, v.y as f32, v.z as f32);
     match frame.anchor {
-        JointAnchor::Local(v) => body_tf.transform_point(to_vec3(v)),
-        JointAnchor::FromGlobal(v) => to_vec3(v),
+        JointAnchor::Local(v) => body_tf.transform_point(v),
+        JointAnchor::FromGlobal(v) => v.as_vec3(),
     }
 }

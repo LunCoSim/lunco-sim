@@ -6,8 +6,8 @@ layer-stack and SDK work is listed below.
 ## Dependency and ownership
 
 Cargo pins the maintained `openusd`, `openusd-schemas`, and `openusd-build`
-crates to 0.8.0. The pinned Rust toolchain is `nightly-2026-03-29`
-(Rust 1.96), satisfying the dependency's minimum compiler version.
+crates to 0.8.0. The pinned Rust toolchain is `1.97.1`, satisfying
+the OpenUSD and Bevy minimum compiler versions.
 The vendored 0.5 fork and its Cargo patches are removed.
 
 Native OpenUSD owns schema declarations/defaults, prim definitions, composed

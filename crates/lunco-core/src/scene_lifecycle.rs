@@ -203,7 +203,7 @@ mod tests {
                 state.values.push(100);
             })
             .add_observer(
-                |_: On<Remove, PublishesOnRemoval>, mut commands: Commands| {
+                |_: On<Remove<PublishesOnRemoval>>, mut commands: Commands| {
                     commands.queue(|world: &mut World| {
                         world.resource_mut::<RegisteredState>().values.push(200);
                     });
@@ -249,7 +249,7 @@ mod tests {
         })
         .init_scene_resource_with::<DependencyState>(|_| panic!("duplicate registration"));
         app.add_observer(
-            |_: On<Remove, PublishesOnRemoval>, mut commands: Commands| {
+            |_: On<Remove<PublishesOnRemoval>>, mut commands: Commands| {
                 commands.queue(|world: &mut World| {
                     world.resource_mut::<DependencyState>().values.push(200);
                 });
@@ -292,7 +292,7 @@ mod tests {
                 notices.write(SceneNotice(100));
             })
             .add_observer(
-                |_: On<Remove, PublishesOnRemoval>, mut notices: MessageWriter<SceneNotice>| {
+                |_: On<Remove<PublishesOnRemoval>>, mut notices: MessageWriter<SceneNotice>| {
                     notices.write(SceneNotice(200));
                 },
             );

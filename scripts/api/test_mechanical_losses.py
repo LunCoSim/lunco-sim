@@ -38,7 +38,7 @@ def main():
                 time.sleep(.1)
             generation = execute('GetDocumentSource', doc_id=doc)['generation']
             for target in ['MechanicalLossContracts', 'GearZeroEfficiency', 'GearExcessEfficiency',
-                           'GearZeroRatio', 'GearOverload', 'BearingNegativeDamping', 'GearDynamicOverload']:
+                           'GearZeroRatio', 'GearOverload', 'BearingNegativeDamping', 'GearDynamicOverload', 'MotorZeroResistance', 'MotorNegativeResistance']:
                 run = execute('RunModelicaSolve', doc_id=doc,
                               **{'class': target, 'source_generation': generation,
                                  't_start': 0., 't_end': 3., 'dt': .01, 'label': target})
@@ -46,7 +46,7 @@ def main():
             execute('SetTimeTransport', playing=True)
             try:
                 run_authored_scenario(session, 'lunco://scenarios/tests/mechanical_loss_contracts.rhai',
-                                      title='MECHANICAL LOSSES', check_count=46,
+                                      title='MECHANICAL LOSSES', check_count=51,
                                       params={'run': runs[0], 'invalid_runs': runs[1:]})
             finally:
                 execute('CloseDocument', doc_id=doc)
@@ -58,11 +58,11 @@ def main():
                 shutil.move(str(artifact), output / artifact.name)
         if artifact_root.is_dir() and not any(artifact_root.iterdir()):
             artifact_root.rmdir()
-    evidence = {'checks': 46, 'headless': args.headless, 'runs': runs,
+    evidence = {'checks': 51, 'headless': args.headless, 'runs': runs,
                 'port_released': not port_is_open(args.port)}
     (output / 'validation.json').write_text(json.dumps(evidence, indent=2))
     assert evidence['port_released']
-    print('PASS 46 authored mechanical checks; owned API Exit and port release')
+    print('PASS 51 authored mechanical checks; owned API Exit and port release')
 
 
 if __name__ == '__main__':

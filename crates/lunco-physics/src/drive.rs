@@ -5,7 +5,7 @@ use avian3d::dynamics::solver::{
     xpbd::AngularConstraint,
 };
 use avian3d::prelude::MotorModel;
-use bevy::math::DVec3;
+use bevy::math::Vec3;
 
 /// Dimensional or mass-normalized law for one generalized coordinate.
 #[derive(Clone, Copy, Debug)]
@@ -48,8 +48,12 @@ impl CoordinateDrive {
             );
         }
         let (stiffness, damping, normalized) = match self.model {
-            MotorModel::ForceBased { stiffness, damping } => (stiffness, damping, false),
-            MotorModel::AccelerationBased { stiffness, damping } => (stiffness, damping, true),
+            MotorModel::ForceBased { stiffness, damping } => {
+                (f64::from(stiffness), f64::from(damping), false)
+            }
+            MotorModel::AccelerationBased { stiffness, damping } => {
+                (f64::from(stiffness), f64::from(damping), true)
+            }
             MotorModel::SpringDamper {
                 frequency,
                 damping_ratio,
@@ -63,8 +67,8 @@ impl CoordinateDrive {
                         "coordinate drive frequency and damping ratio must be finite and nonnegative",
                     );
                 }
-                let omega = std::f64::consts::TAU * frequency;
-                (omega * omega, 2.0 * damping_ratio * omega, true)
+                let omega = std::f64::consts::TAU * f64::from(frequency);
+                (omega * omega, 2.0 * f64::from(damping_ratio) * omega, true)
             }
         };
         if ![stiffness, damping]
@@ -107,8 +111,8 @@ impl AngularConstraint for RotationKernel {}
 pub fn integrate_coordinate_drive<const N: usize>(
     mut bodies: [&mut SolverBody; N],
     inertias: [&SolverBodyInertia; N],
-    linear: [DVec3; N],
-    angular: [DVec3; N],
+    linear: [Vec3; N],
+    angular: [Vec3; N],
     drive: CoordinateDrive,
     coordinate: f64,
     dt: f64,
@@ -139,10 +143,10 @@ pub fn integrate_coordinate_drive<const N: usize>(
             inertia.effective_inv_mass(),
         ]
         .into_iter()
-        .all(DVec3::is_finite)
-            || !inertia.effective_inv_mass().cmpge(DVec3::ZERO).all()
+        .all(Vec3::is_finite)
+            || !inertia.effective_inv_mass().cmpge(Vec3::ZERO).all()
             || !inertia.effective_inv_angular_inertia().is_finite()
-            || !crate::avian_backend_rotation_is_valid(body.delta_rotation.0)
+            || !crate::avian_backend_rotation_is_valid(body.delta_rotation.as_dquat())
         {
             return Err("coordinate drive requires finite solver frames, velocities and inertia");
         }
@@ -151,18 +155,22 @@ pub fn integrate_coordinate_drive<const N: usize>(
         velocity +=
             linear[index].dot(body.linear_velocity) + angular[index].dot(body.angular_velocity);
     }
-    let impulse = drive.impulse(coordinate, velocity, inverse_mass, dt)?;
+    let impulse = drive.impulse(coordinate, f64::from(velocity), f64::from(inverse_mass), dt)?;
     if impulse == 0.0 {
         return Ok(0.0);
     }
-    let position_impulse = impulse * dt;
+    // Explicit native Avian solver boundary; authored drive values stay f64.
+    let position_impulse = (impulse * dt) as f32;
+    if !position_impulse.is_finite() {
+        return Err("coordinate drive impulse exceeds native solver range");
+    }
     let mut candidates: [SolverBody; N] = std::array::from_fn(|index| bodies[index].clone());
     for index in 0..N {
         let candidate = &mut candidates[index];
         let inertia = inertias[index];
         let rotation_vector =
             inertia.effective_inv_angular_inertia() * angular[index] * position_impulse;
-        if !rotation_vector.is_finite() || rotation_vector.length() >= std::f64::consts::PI {
+        if !rotation_vector.is_finite() || rotation_vector.length() >= std::f32::consts::PI {
             return Err(
                 "coordinate drive angular correction must be finite and below pi per substep",
             );
@@ -172,9 +180,9 @@ pub fn integrate_coordinate_drive<const N: usize>(
             angular[index] * position_impulse,
         );
         candidate.delta_position += inertia.effective_inv_mass() * linear[index] * position_impulse;
-        candidate.delta_rotation.0 = rotation * candidate.delta_rotation.0;
+        candidate.delta_rotation = rotation * candidate.delta_rotation;
         if !candidate.delta_position.is_finite()
-            || !crate::avian_backend_rotation_is_valid(candidate.delta_rotation.0)
+            || !crate::avian_backend_rotation_is_valid(candidate.delta_rotation.as_dquat())
         {
             return Err("coordinate drive position candidate is not a finite rigid state");
         }
@@ -189,10 +197,10 @@ pub fn integrate_coordinate_drive<const N: usize>(
 mod tests {
     use super::*;
 
-    use avian3d::{math::SymmetricMatrix, prelude::LockedAxes};
+    use avian3d::{math::SymmetricTensor, prelude::LockedAxes};
 
     fn inertia(locked: LockedAxes, dynamic: bool) -> SolverBodyInertia {
-        SolverBodyInertia::new(1.0, SymmetricMatrix::IDENTITY, locked, 0, dynamic)
+        SolverBodyInertia::new(1.0, SymmetricTensor::IDENTITY, locked, 0, dynamic)
     }
 
     fn law() -> CoordinateDrive {
@@ -216,24 +224,24 @@ mod tests {
         let impulse = integrate_coordinate_drive(
             [&mut dynamic, &mut kinematic],
             [&dynamic_inertia, &kinematic_inertia],
-            [-DVec3::X, DVec3::X],
-            [DVec3::ZERO; 2],
+            [-Vec3::X, Vec3::X],
+            [Vec3::ZERO; 2],
             law(),
             0.0,
             0.01,
         )
         .unwrap();
         assert!(impulse > 0.0);
-        assert!((dynamic.delta_position.x + impulse * 0.01).abs() < 1e-15);
-        assert_eq!(kinematic.delta_position, DVec3::ZERO);
-        assert_eq!(dynamic.linear_velocity, DVec3::ZERO);
+        assert!((f64::from(dynamic.delta_position.x) + impulse * 0.01).abs() < 1e-9);
+        assert_eq!(kinematic.delta_position, Vec3::ZERO);
+        assert_eq!(dynamic.linear_velocity, Vec3::ZERO);
         let before = dynamic.delta_position;
         assert_eq!(
             integrate_coordinate_drive(
                 [&mut dynamic, &mut kinematic],
                 [&dynamic_inertia, &kinematic_inertia],
-                [-DVec3::Y, DVec3::Y],
-                [DVec3::ZERO; 2],
+                [-Vec3::Y, Vec3::Y],
+                [Vec3::ZERO; 2],
                 law(),
                 0.0,
                 0.01
@@ -263,15 +271,15 @@ mod tests {
             integrate_coordinate_drive(
                 [&mut first, &mut second],
                 [&mass; 2],
-                [DVec3::X, DVec3::ZERO],
-                [DVec3::ZERO, DVec3::X],
+                [Vec3::X, Vec3::ZERO],
+                [Vec3::ZERO, Vec3::X],
                 fast,
                 0.0,
                 1.0
             )
             .is_err()
         );
-        assert_eq!(first.delta_position, DVec3::ZERO);
+        assert_eq!(first.delta_position, Vec3::ZERO);
         assert_eq!(second.delta_rotation, SolverBody::DUMMY.delta_rotation);
     }
 

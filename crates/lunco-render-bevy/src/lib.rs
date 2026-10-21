@@ -347,7 +347,7 @@ fn apply_usd_prim_display_modes(
 /// choice, including cameras created after startup by an asynchronously loaded
 /// USD scene.
 fn ensure_lunar_shadow_filtering(
-    add: On<Add, Camera3d>,
+    add: On<Add<Camera3d>>,
     profile: Res<RenderProfile>,
     settings: Res<lunco_render::RenderingQualitySettings>,
     cameras: Query<(), Without<bevy::light::ShadowFilteringMethod>>,
@@ -531,9 +531,9 @@ fn material_for(
     cache.resolve(look, materials, |look| standard_material(look, profile))
 }
 
-/// `On<Add, PbrLook>` — the moment intent appears, give it a material.
+/// `On<Add<PbrLook>>` — the moment intent appears, give it a material.
 fn bind_pbr_look(
-    add: On<Add, PbrLook>,
+    add: On<Add<PbrLook>>,
     looks: Query<&PbrLook>,
     profile: Res<RenderProfile>,
     mut cache: ResMut<PbrLookCache>,
@@ -704,7 +704,7 @@ mod tests {
     struct PbrMaterialInsertions(usize);
 
     fn count_pbr_material_insertions(
-        _: On<Insert, MeshMaterial3d<StandardMaterial>>,
+        _: On<Insert<MeshMaterial3d<StandardMaterial>>>,
         mut count: ResMut<PbrMaterialInsertions>,
     ) {
         count.0 += 1;

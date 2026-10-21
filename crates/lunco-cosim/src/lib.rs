@@ -73,7 +73,7 @@ use lunco_cosim_core::commands::{
 };
 
 fn endpoint_ready_on_add<T: Component>(
-    trigger: On<Add, T>,
+    trigger: On<Add<T>>,
     mut commands: Commands,
     mut revision: ResMut<BindingRevision>,
 ) {
@@ -90,7 +90,7 @@ fn endpoint_ready_on_add<T: Component>(
 }
 
 fn endpoint_pending_on_add<T: Component>(
-    trigger: On<Add, T>,
+    trigger: On<Add<T>>,
     mut commands: Commands,
     mut revision: ResMut<BindingRevision>,
 ) {
@@ -100,25 +100,23 @@ fn endpoint_pending_on_add<T: Component>(
     revision.request();
 }
 
-fn mark_causal_state_sink<T: Component>(trigger: On<Add, T>, mut commands: Commands) {
+fn mark_causal_state_sink<T: Component>(trigger: On<Add<T>>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
         .try_insert(lunco_port_core::CausalStateSink);
 }
 
 fn mark_joint_torque_port(
-    trigger: On<Add, lunco_physics::joint::JointTorqueActuator>,
+    trigger: On<Add<lunco_physics::joint::JointTorqueActuator>>,
     query: Query<&lunco_physics::joint::JointTorqueActuator>,
     mut commands: Commands,
 ) {
     let Ok(actuator) = query.get(trigger.entity) else {
         return;
     };
-    if actuator.port_entity != Entity::PLACEHOLDER {
-        commands
-            .entity(actuator.port_entity)
-            .try_insert(lunco_port_core::CausalStateSink);
-    }
+    commands
+        .entity(actuator.torque_endpoint())
+        .try_insert(lunco_port_core::CausalStateSink);
 }
 
 /// Publish Modelica endpoint transitions before the end-of-frame binding

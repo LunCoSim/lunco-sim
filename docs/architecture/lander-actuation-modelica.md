@@ -155,7 +155,8 @@ the control law; connecting those alone does not change physical inertia.
 Collinear tank stations and an axis-aligned dry tensor give zero cross terms,
 so the three live diagonal inertia inputs describe that complete hull tensor.
 
-The Avian port backend commits live values to native f64 `ComputedMass`,
+The Avian port backend validates and explicitly converts f64 domain values at
+the native internal-precision boundary for `ComputedMass`,
 `ComputedCenterOfMass`, and `ComputedAngularInertia`. It removes each corresponding
 local authoring override and installs the `NoAuto*` marker, so Avian retains
 the solver value through later collider mass recomputation. Positive mass and

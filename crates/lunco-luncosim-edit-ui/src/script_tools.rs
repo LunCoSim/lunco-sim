@@ -1290,7 +1290,7 @@ pub fn forget_missing_script_tool(mut armed: ResMut<lunco_interaction_core::Arme
 /// an empty-space/terrain click is still a valid context for tools that operate
 /// on positions rather than entities.
 pub(crate) fn on_scene_click_script_tool(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
@@ -1303,7 +1303,7 @@ pub(crate) fn on_scene_click_script_tool(
     if egui_focus.wants_pointer {
         return;
     }
-    // `Pointer<Click>` bubbles leaf→parent→…→window. We resolve the target
+    // `PointerClick` bubbles leaf→parent→…→window. We resolve the target
     // ourselves, so stop the bubble here (this runs target-first, i.e. at the
     // picked leaf) rather than firing the tool once per ancestor.
     click.propagate(false);
@@ -1343,7 +1343,7 @@ pub(crate) fn on_scene_click_script_tool(
 /// meaning of the gesture.
 #[allow(clippy::too_many_arguments)]
 fn scene_tool_context(
-    click: &Pointer<Click>,
+    click: &PointerClick,
     keys: &ButtonInput<KeyCode>,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: &Query<Entity, With<lunco_core::MobilityRoot>>,
@@ -1452,7 +1452,7 @@ fn scene_tool_context(
             "screen_position".to_string(),
             TelemetryValue::Array(
                 click
-                    .pointer_location
+                    .pointer
                     .position
                     .to_array()
                     .into_iter()
@@ -1718,7 +1718,7 @@ fn inherited_pointer_interaction(
 /// belongs to that terrain. Props, vehicles, and the sky keep their mesh hit
 /// or no-hit result; hidden analytic terrain is never an interaction target.
 fn canonical_pointer_render_position(
-    click: &Pointer<Click>,
+    click: &PointerClick,
     q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_parents: &Query<&ChildOf>,
     q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
@@ -1753,7 +1753,7 @@ fn canonical_pointer_render_position(
 /// the ordinary mesh hit may be local to a streamed tile, while this value is
 /// suitable for terrain-aware authored tools.
 fn pointer_surface_render_position(
-    click: &Pointer<Click>,
+    click: &PointerClick,
     q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_parents: &Query<&ChildOf>,
     q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
@@ -1773,7 +1773,7 @@ fn pointer_surface_render_position(
         false,
         camera,
         camera_transform,
-        click.pointer_location.position,
+        click.pointer.position,
     )?;
     let terrain_hit = surface.raycast_render(
         RenderPos(ray.origin.as_dvec3()),
@@ -1839,7 +1839,7 @@ fn coordinate_point(position: bevy::math::DVec3, frame: &str, source: &str) -> T
 /// no Rust code assigns meaning to Alt, Shift, or Ctrl.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn on_scene_pointer_event(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     keys: Res<ButtonInput<KeyCode>>,
     previous_hover_map: Res<PreviousHoverMap>,
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
@@ -1864,7 +1864,7 @@ pub(crate) fn on_scene_pointer_event(
     }
     let Some(target) = ordered_scene_pointer_target(
         &previous_hover_map,
-        click.pointer_id,
+        click.pointer.id,
         click.button,
         &world.q_ids,
         &world.q_prim,
@@ -1882,12 +1882,12 @@ pub(crate) fn on_scene_pointer_event(
         return;
     }
     let key = ScenePointerKey {
-        pointer: click.pointer_id,
+        pointer: click.pointer.id,
         button: click.button,
         click_count: click.count,
         screen_position: [
-            click.pointer_location.position.x.to_bits(),
-            click.pointer_location.position.y.to_bits(),
+            click.pointer.position.x.to_bits(),
+            click.pointer.position.y.to_bits(),
         ],
     };
     if !dispatch.seen.insert(key) {
@@ -2026,7 +2026,7 @@ fn ordered_scene_hit_target(
 /// Pointer movement is presentation input: it only updates a disposable view
 /// ghost and never waits for a physics event or rebuilds route geometry.
 pub(crate) fn on_scene_pointer_move_event(
-    mut pointer_move: On<Pointer<Move>>,
+    mut pointer_move: On<PointerMove>,
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
@@ -2068,9 +2068,9 @@ pub(crate) fn on_scene_pointer_move_event(
         return;
     }
     queue_scene_pointer_move(
-        pointer_move.pointer_id,
+        pointer_move.pointer.id,
         pointer_move.entity,
-        pointer_move.pointer_location.position,
+        pointer_move.pointer.position,
         pointer_move.hit.position,
         pointer_move
             .hit
@@ -2081,7 +2081,7 @@ pub(crate) fn on_scene_pointer_move_event(
 }
 
 pub(crate) fn on_scene_pointer_enter_event(
-    mut pointer_enter: On<Pointer<Enter>>,
+    mut pointer_enter: On<PointerEnter>,
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
@@ -2117,9 +2117,9 @@ pub(crate) fn on_scene_pointer_enter_event(
         return;
     }
     queue_scene_pointer_move(
-        pointer_enter.pointer_id,
+        pointer_enter.pointer.id,
         pointer_enter.entity,
-        pointer_enter.pointer_location.position,
+        pointer_enter.pointer.position,
         pointer_enter.hit.position,
         pointer_enter
             .hit

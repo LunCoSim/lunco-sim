@@ -40,7 +40,10 @@ that are part of a real-time engine invariant or a generic projection.
 Use Rhai's standard scalar math where it already provides the operation
 (`PI`, `acos`, `sqrt`, trigonometry, and finite checks). Keep the runtime's
 native engineering convention at `f64`; an explicit renderer/presentation
-lowering is the only normal `f32` boundary. Put shared hot vector operations
+lowering is the normal `f32` boundary. Avian 0.8 also uses internal f32 state;
+the user accepted that explicit native boundary for the 2026-10-21 migration.
+TODO: qualify and address local joint/contact precision and accumulated drift.
+Put shared hot vector operations
 in the Rust Rhai bridge over the existing native `DVec3`/`DQuat`/transform
 values: finite/validity predicates, dot/cross, clamped cosine, angle, component
 access, and explicit f64 conversion. Do not rebuild vectors as arrays inside a
@@ -141,6 +144,18 @@ the first entity, a fabricated value, or an older behavior.
   at their LunCoSim owners. See the
   [Rumoca ownership review](../../docs/architecture/29-rumoca-runtime-contracts.md#ownership-review)
   for the retained upstream extension boundaries.
+
+- Physical scalar endpoints use `lunco_port_core::Port::with_contract` and
+  `ScalarPortContract`; aliases share the endpoint's engineering metadata.
+  Use fixed `EngineUnit` definitions only for engine-owned SI endpoints.
+  `SimConnection::resolved_transform` owns unit and declared-frame admission.
+  Keep motor/gearbox/loss/thermal equations in Modelica, motion and contacts in
+  Avian, and one state owner for each inertia. External joint effort requires
+  its native motor to be disabled. Use `JointTorqueActuator::new` and
+  `JointCoordinateSign`; the runtime and lint share the physical-contract reader.
+  Compose `GearRatio.eta` and `DCMotor.resistance_scale` with Modelica speed and
+  thermal signals for variable losses. See
+  [the physical coupling contract](../../docs/architecture/22-domain-cosim.md#physical-coupling-contracts).
 
 - `lunco-hooks` is the backend-neutral typed hook registry; `lunco-hooks-rhai`
   is the one Rhai adapter.

@@ -65,7 +65,6 @@ use avian3d::dynamics::solver::xpbd::joints::{
     DistanceJointSolverData, FixedJointSolverData, PrismaticJointSolverData,
     RevoluteJointSolverData, SphericalJointSolverData,
 };
-use avian3d::math::Vector;
 use avian3d::physics_transform::{
     PhysicsTransformConfig, PhysicsTransformSystems, Position, Rotation,
 };
@@ -169,8 +168,8 @@ fn physics_subject(entity: Entity, name: Option<&Name>, prim_path: Option<&UsdPr
 #[derive(Resource, Default)]
 struct PhysicsFrameContractInputs;
 
-fn invalidate_physics_frame_contract<E: Event, B: Bundle>(
-    _: On<E, B>,
+fn invalidate_physics_frame_contract<E: bevy::ecs::event::EventPattern>(
+    _: On<E>,
     mut inputs: ResMut<PhysicsFrameContractInputs>,
 ) {
     inputs.set_changed();
@@ -179,17 +178,16 @@ fn invalidate_physics_frame_contract<E: Event, B: Bundle>(
 fn install_physics_frame_contract_tracking(app: &mut App) {
     app.init_resource::<PhysicsFrameContractInputs>()
         .add_observer(
-            invalidate_physics_frame_contract::<Add, (RigidBody, Collider, CellCoord, Grid)>,
+            invalidate_physics_frame_contract::<Add<(RigidBody, Collider, CellCoord, Grid)>>,
         )
         .add_observer(
             invalidate_physics_frame_contract::<
-                Remove,
-                (RigidBody, Collider, CellCoord, Grid, ChildOf),
+                Remove<(RigidBody, Collider, CellCoord, Grid, ChildOf)>,
             >,
         )
         // Relationships are immutable components: reparenting commits through
         // insertion, so this observes both new and replaced hierarchy edges.
-        .add_observer(invalidate_physics_frame_contract::<Insert, ChildOf>);
+        .add_observer(invalidate_physics_frame_contract::<Insert<ChildOf>>);
 }
 
 /// Pose values do not invalidate hierarchy connectivity. Structural lifecycle
@@ -355,7 +353,6 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PreUpdate,
             (
-                reconcile_collider_body_state,
                 propagate_collider_transforms_rootless,
                 seed_attached_collider_poses,
                 validate_physics_backend_state,
@@ -495,10 +492,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         );
         app.add_systems(
             FixedPostUpdate,
-            (
-                reconcile_collider_body_state,
-                propagate_collider_transforms_rootless,
-            )
+            (propagate_collider_transforms_rootless,)
                 .chain()
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsTransformSystems::Propagate)
@@ -765,8 +759,8 @@ fn seed_attached_collider_poses(
         let Ok((body_position, body_rotation)) = bodies.get(owner.body) else {
             continue;
         };
-        position.0 = body_position.0 + body_rotation.0 * mount.translation;
-        rotation.0 = (body_rotation.0 * mount.rotation.0).normalize();
+        position.0 = body_position.0 + (body_rotation.0 * mount.translation).as_dvec3();
+        rotation.0 = (body_rotation.0 * mount.rotation).normalize();
         commands
             .entity(entity)
             .insert(lunco_physics::PhysicsPoseSeeded);
@@ -926,7 +920,7 @@ fn validate_physics_backend_state(
         if !position.is_changed() && !rotation.is_changed() {
             continue;
         }
-        if !lunco_physics::avian_backend_pose_is_valid(position.0, rotation.0) {
+        if !lunco_physics::avian_backend_pose_is_valid(position.0, rotation.0.as_dquat()) {
             report_physics_runtime_fault(
                 faults.as_deref_mut(),
                 holds.as_deref_mut(),
@@ -1008,22 +1002,23 @@ fn validate_physics_backend_state(
                     continue;
                 };
                 (
-                    body_position.0 + body_rotation.0 * collider_transform.translation,
-                    body_rotation.0 * collider_transform.rotation.0,
+                    body_position.0 + (body_rotation.0 * collider_transform.translation).as_dvec3(),
+                    body_rotation.0 * collider_transform.rotation,
                     collider_transform.scale,
                 )
             } else {
                 (position.0, rotation.0, collider.scale())
             };
 
-        let tight_aabb =
-            if !lunco_physics::avian_backend_pose_is_valid(effective_position, effective_rotation)
-                || !lunco_physics::avian_backend_vector_is_valid(scale)
-            {
-                None
-            } else {
-                Some(collider.aabb(effective_position, effective_rotation))
-            };
+        let tight_aabb = if !lunco_physics::avian_backend_pose_is_valid(
+            effective_position,
+            effective_rotation.as_dquat(),
+        ) || !lunco_physics::avian_backend_vector_is_valid(scale.as_dvec3())
+        {
+            None
+        } else {
+            Some(collider.aabb(effective_position, effective_rotation, 0.0))
+        };
         let collision_margin = collision_margin.map_or(0.0, |margin| margin.0);
         let growth = contact_tolerance + collision_margin;
         let total_growth = growth + enlarged_aabb_margin;
@@ -1031,12 +1026,12 @@ fn validate_physics_backend_state(
             growth.is_finite()
                 && total_growth.is_finite()
                 && lunco_physics::avian_backend_aabb_is_valid(
-                    aabb.min - DVec3::splat(growth),
-                    aabb.max + DVec3::splat(growth),
+                    aabb.min.as_dvec3() - DVec3::splat(f64::from(growth)),
+                    aabb.max.as_dvec3() + DVec3::splat(f64::from(growth)),
                 )
                 && lunco_physics::avian_backend_aabb_is_valid(
-                    aabb.min - DVec3::splat(total_growth),
-                    aabb.max + DVec3::splat(total_growth),
+                    aabb.min.as_dvec3() - DVec3::splat(f64::from(total_growth)),
+                    aabb.max.as_dvec3() + DVec3::splat(f64::from(total_growth)),
                 )
         });
         if bounds_valid {
@@ -1151,7 +1146,7 @@ fn pose_to_position_fixed_step(params: PoseToPositionParams) {
     sync_pose_to_position(params, PoseToPositionPolicy::FixedStep);
 }
 
-/// READ: externally-moved `(cell, Transform)` → f64 `Position`/`Rotation`,
+/// READ: externally-moved `(cell, Transform)` → native `Position`/`Rotation`,
 /// carrying the change to descendant bodies (chassis teleport moves wheels).
 ///
 /// Admission seeds unseen bodies during preparation. Established-body pose
@@ -1362,9 +1357,15 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
             if shadow.is_seeded() {
                 let old_linear = linear.0;
                 let old_angular = angular.0;
-                rot.0 = frame_transform.transform_rotation(rot.0);
-                linear.0 = frame_transform.transform_vector(old_linear);
-                angular.0 = frame_transform.transform_vector(old_angular);
+                rot.0 = frame_transform
+                    .transform_rotation(rot.0.as_dquat())
+                    .as_quat();
+                linear.0 = frame_transform
+                    .transform_vector(old_linear.as_dvec3())
+                    .as_vec3();
+                angular.0 = frame_transform
+                    .transform_vector(old_angular.as_dvec3())
+                    .as_vec3();
                 if !hierarchy_reanchored {
                     pos.0 = frame_transform.transform_position(pos.0);
                 }
@@ -1433,7 +1434,12 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
         // same attitude. Preserve the seated solver hemisphere: Avian's XPBD
         // fixed-angle feedback uses the quaternion vector part, so a sign-only
         // refresh must not reverse its restoring correction.
-        rot.0 = if rot.0.dot(r.0) < 0.0 { -r.0 } else { r.0 };
+        let native_rotation = r.0.as_quat();
+        rot.0 = if rot.0.dot(native_rotation) < 0.0 {
+            -native_rotation
+        } else {
+            native_rotation
+        };
         shadow.capture(cell, tf, active_frame);
         if !q_pose_seeded.contains(e) {
             commands
@@ -1565,7 +1571,7 @@ fn clear_contact_warm_start(pair: &mut ContactPair) {
     }
 }
 
-/// WRITEBACK: solver f64 `Position`/`Rotation` → `Transform` relative to the
+/// WRITEBACK: native `Position`/`Rotation` → `Transform` relative to the
 /// parent frame and the CURRENT cell, for Dynamic bodies. Cells are never
 /// written; big_space's recentring owns the re-split.
 ///
@@ -1628,7 +1634,7 @@ fn position_to_pose(
     }
     for (e, p, r) in &q_poses {
         if (p.is_changed() || r.is_changed()) || !body_poses.contains_key(&e) {
-            body_poses.insert(e, (GridPos(p.0), GridRot(r.0)));
+            body_poses.insert(e, (GridPos(p.0), GridRot(r.0.as_dquat())));
         }
     }
 
@@ -1646,7 +1652,7 @@ fn position_to_pose(
         if matches!(rb, RigidBody::Static) {
             continue;
         }
-        if !lunco_physics::avian_backend_pose_is_valid(pos.0, rot.0) {
+        if !lunco_physics::avian_backend_pose_is_valid(pos.0, rot.0.as_dquat()) {
             let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
             report_physics_runtime_fault(
                 faults.as_deref_mut(),
@@ -1774,7 +1780,7 @@ fn position_to_pose(
         // `local` is a point in the parent GRID's frame (grid-absolute in
         // that grid), ready for the cell split below.
         let local = GridPos(inv * (solved - fp));
-        let local_rot = (inv * rot.0).normalize().as_quat();
+        let local_rot = (inv * rot.0.as_dquat()).normalize().as_quat();
 
         // Subtract the current cell only when the direct parent is a Grid —
         // the same convention `world_pose` reads with.
@@ -1812,45 +1818,6 @@ fn position_to_pose(
             commands
                 .entity(e)
                 .remove::<lunco_core::PhysicsPoseAuthoritative>();
-        }
-    }
-}
-
-/// Admit every attached proxy from the current native body state before scale,
-/// mass and broad-phase preparation. The native collider enable lifecycle
-/// retires contacts and rebuilds tree membership without detaching the shape.
-fn reconcile_collider_body_state(
-    mut commands: Commands,
-    colliders: Query<
-        (
-            Entity,
-            &ColliderOf,
-            &avian3d::collider_tree::ColliderTreeProxyKey,
-        ),
-        Without<ColliderDisabled>,
-    >,
-    bodies: Query<(&RigidBody, Has<RigidBodyDisabled>)>,
-    trees: Res<avian3d::collider_tree::ColliderTrees>,
-) {
-    use avian3d::collider_tree::{ColliderTreeProxyFlags, ColliderTreeType};
-    for (entity, owner, key) in &colliders {
-        let Ok((body, disabled)) = bodies.get(owner.body) else {
-            continue;
-        };
-        let Some(proxy) = trees.get_proxy(*key) else {
-            continue;
-        };
-        if key.tree_type() != ColliderTreeType::from_body(Some(*body))
-            || proxy.collider != entity
-            || proxy.body != Some(owner.body)
-            || proxy.flags.contains(ColliderTreeProxyFlags::BODY_DISABLED) != disabled
-        {
-            // Native disable/enable preserves ColliderOf while retiring contacts
-            // and rebuilding the proxy from the finalized body state.
-            commands
-                .entity(entity)
-                .try_insert(ColliderDisabled)
-                .try_remove::<ColliderDisabled>();
         }
     }
 }
@@ -1963,14 +1930,14 @@ fn propagate_collider_transforms_rootless(
                     let nt = ColliderTransform::from(*tf);
                     acc = if is_rb {
                         ColliderTransform {
-                            translation: Vector::ZERO,
+                            translation: Vec3::ZERO,
                             rotation: default(),
                             scale: acc.scale * nt.scale,
                         }
                     } else {
                         ColliderTransform {
                             translation: acc.transform_point(nt.translation),
-                            rotation: Rotation(acc.rotation.0 * nt.rotation.0),
+                            rotation: acc.rotation * nt.rotation,
                             scale: acc.scale * nt.scale,
                         }
                     };
@@ -1979,7 +1946,7 @@ fn propagate_collider_transforms_rootless(
                 // resets the frame.
                 Err(_) if is_rb => {
                     acc = ColliderTransform {
-                        translation: Vector::ZERO,
+                        translation: Vec3::ZERO,
                         rotation: default(),
                         scale: acc.scale,
                     };
@@ -2062,10 +2029,8 @@ mod tests {
     use lunco_spatial::coords::world_pose;
 
     #[test]
-    fn body_admission_updates_every_attached_collider_proxy() {
-        use avian3d::collider_tree::{
-            ColliderTreeProxyFlags, ColliderTreeProxyKey, ColliderTreeType, ColliderTrees,
-        };
+    fn native_collider_detach_keeps_its_tree_proxy_identity() {
+        use avian3d::collider_tree::{ColliderTreeProxyKey, ColliderTreeType, ColliderTrees};
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -2077,65 +2042,30 @@ mod tests {
         app.cleanup();
         let body = app
             .world_mut()
+            .spawn((RigidBody::Dynamic, GlobalTransform::default()))
+            .id();
+        let collider = app
+            .world_mut()
             .spawn((
-                RigidBody::Kinematic,
-                RigidBodyDisabled,
+                Collider::sphere(0.5),
+                Transform::default(),
                 GlobalTransform::default(),
+                ChildOf(body),
             ))
             .id();
-        let colliders = [0.0, 2.0].map(|x| {
-            app.world_mut()
-                .spawn((
-                    Collider::sphere(0.5),
-                    Transform::from_xyz(x, 0.0, 0.0),
-                    GlobalTransform::default(),
-                    ChildOf(body),
-                ))
-                .id()
-        });
         app.world_mut().flush();
-        app.world_mut()
-            .entity_mut(body)
-            .insert(RigidBody::Dynamic)
-            .remove::<RigidBodyDisabled>();
+        assert_eq!(app.world().get::<ColliderOf>(collider).unwrap().body, body);
+        app.world_mut().entity_mut(collider).remove::<ColliderOf>();
         app.world_mut().flush();
-        // A valid proxy handle alone does not establish attachment. Admission
-        // must also retire a proxy whose cached endpoints lost their owner.
-        let key = *app
+        let key = *app.world().get::<ColliderTreeProxyKey>(collider).unwrap();
+        assert_eq!(key.tree_type(), ColliderTreeType::Standalone);
+        let proxy = app
             .world()
-            .get::<ColliderTreeProxyKey>(colliders[1])
+            .resource::<ColliderTrees>()
+            .get_proxy(key)
             .unwrap();
-        let mut trees = app.world_mut().resource_mut::<ColliderTrees>();
-        let proxy = trees.get_proxy_mut(key).unwrap();
-        proxy.body = None;
-        proxy.collider = body;
-        drop(trees);
-        app.world_mut()
-            .run_system_once(reconcile_collider_body_state)
-            .unwrap();
-        app.world_mut().flush();
-        for collider in colliders {
-            let key = app.world().get::<ColliderTreeProxyKey>(collider).unwrap();
-            let proxy = app
-                .world()
-                .resource::<ColliderTrees>()
-                .get_proxy(*key)
-                .unwrap();
-            assert_eq!(key.tree_type(), ColliderTreeType::Dynamic);
-            assert_eq!(proxy.collider, collider);
-            assert_eq!(proxy.body, Some(body));
-            assert!(!proxy.flags.contains(ColliderTreeProxyFlags::BODY_DISABLED));
-            assert_eq!(app.world().get::<ColliderOf>(collider).unwrap().body, body);
-            assert!(app.world().get::<ColliderDisabled>(collider).is_none());
-        }
-        assert_eq!(
-            app.world()
-                .get::<RigidBodyColliders>(body)
-                .unwrap()
-                .iter()
-                .count(),
-            colliders.len()
-        );
+        assert_eq!(proxy.collider, collider);
+        assert_eq!(proxy.body, None);
     }
 
     #[test]
@@ -2161,7 +2091,7 @@ mod tests {
             ))
             .id();
         let mut collider = Collider::cuboid(1.0, 1.0, 1.0);
-        collider.set_scale(DVec3::splat(3.0), 10);
+        collider.set_scale(Vec3::splat(3.0), 10);
         let body = app
             .world_mut()
             .spawn((
@@ -2179,7 +2109,7 @@ mod tests {
         app.world_mut().run_schedule(FixedPostUpdate);
         assert_eq!(
             app.world().get::<Collider>(body).unwrap().scale(),
-            DVec3::splat(6.0)
+            Vec3::splat(6.0)
         );
         assert_eq!(
             app.world().get::<ComputedMass>(body).unwrap().value(),
@@ -2190,7 +2120,7 @@ mod tests {
         app.world_mut().run_schedule(FixedPostUpdate);
         assert_eq!(
             app.world().get::<Collider>(body).unwrap().scale(),
-            DVec3::splat(12.0)
+            Vec3::splat(12.0)
         );
         assert_eq!(
             app.world().get::<ComputedMass>(body).unwrap().value(),
@@ -2293,7 +2223,7 @@ mod tests {
 
     #[test]
     fn reversed_bvh_discovery_has_the_same_native_contact_trajectory() {
-        fn trial(reverse: bool) -> Vec<(DVec3, DQuat, DVec3, DVec3)> {
+        fn trial(reverse: bool) -> Vec<(DVec3, Quat, Vec3, Vec3)> {
             let mut app = App::new();
             app.add_plugins((
                 MinimalPlugins,
@@ -2318,7 +2248,7 @@ mod tests {
                     RigidBody::Dynamic,
                     Collider::cuboid(1.2, 0.7, 0.9),
                     Position(DVec3::ZERO),
-                    Rotation(DQuat::from_rotation_y(0.17)),
+                    Rotation(Quat::from_rotation_y(0.17)),
                     Transform::default(),
                     lunco_physics::PhysicsOrderKey("/A".into()),
                 ))
@@ -2329,7 +2259,7 @@ mod tests {
                     RigidBody::Dynamic,
                     Collider::cuboid(0.8, 0.6, 1.1),
                     Position(DVec3::new(0.78, 0.01, 0.02)),
-                    Rotation(DQuat::from_rotation_x(0.031)),
+                    Rotation(Quat::from_rotation_x(0.031)),
                     Transform::default(),
                     lunco_physics::PhysicsOrderKey("/B".into()),
                 ))
@@ -2388,14 +2318,14 @@ mod tests {
             frame: Some(frame),
             ..Default::default()
         });
-        let target = DQuat::from_rotation_y(-135.0_f64.to_radians());
-        let previous = Transform::from_xyz(2.0, 59.0, 2.0).with_rotation(target.as_quat());
+        let target = Quat::from_rotation_y(-135.0_f32.to_radians());
+        let previous = Transform::from_xyz(2.0, 59.0, 2.0).with_rotation(target);
         let mut shadow = BridgeShadow::default();
         shadow.capture(None, &previous, frame);
         let body = world
             .spawn((
                 ChildOf(frame),
-                Transform::from_xyz(2.0, 60.0, 2.0).with_rotation(-target.as_quat()),
+                Transform::from_xyz(2.0, 60.0, 2.0).with_rotation(-target),
                 Position(DVec3::new(2.0, 59.0, 2.0)),
                 Rotation(target),
                 LinearVelocity::ZERO,
@@ -2410,15 +2340,10 @@ mod tests {
             refreshed.dot(target) > 0.0,
             "pose refresh changed quaternion sign: {refreshed:?}"
         );
-        let basis = DQuat::from_rotation_x(0.4);
+        let basis = Quat::from_rotation_x(0.4);
         let mut constraint =
             avian3d::dynamics::solver::xpbd::joints::FixedAngleConstraintShared::default();
-        constraint.prepare(
-            &Rotation::IDENTITY,
-            &Rotation(refreshed),
-            target * basis,
-            basis,
-        );
+        constraint.prepare(Quat::IDENTITY, refreshed, target * basis, basis);
         assert!(constraint.rotation_difference.w > 0.0);
         assert!(
             (world.get::<Position>(body).unwrap().0 - DVec3::new(2.0, 60.0, 2.0)).length() < 1.0e-5
@@ -2644,7 +2569,7 @@ mod tests {
             .spawn((
                 RigidBody::Dynamic,
                 Position(DVec3::new(f64::MAX, 0.0, 0.0)),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
             ))
             .id();
 
@@ -2677,7 +2602,7 @@ mod tests {
             .spawn((
                 Collider::cuboid(1.0, 1.0, 1.0),
                 Position(DVec3::new(f64::MAX, 0.0, 0.0)),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
             ))
             .id();
 
@@ -2774,21 +2699,17 @@ mod tests {
             Entity::PLACEHOLDER,
             avian3d::collision::contact_types::ContactId::PLACEHOLDER,
         );
-        let mut point = ContactPoint::new(Vector::ZERO, Vector::ZERO, Vector::ZERO, 0.0);
+        let mut point = ContactPoint::new(Vec3::ZERO, Vec3::ZERO, DVec3::ZERO, 0.0);
         point.normal_impulse = 4.0;
         point.warm_start_normal_impulse = 3.0;
-        point.warm_start_tangent_impulse = avian3d::math::Vector2::new(2.0, -1.0);
-        pair.manifolds
-            .push(ContactManifold::new([point], Vector::Y));
+        point.warm_start_tangent_impulse = Vec2::new(2.0, -1.0);
+        pair.manifolds.push(ContactManifold::new([point], Vec3::Y));
 
         clear_contact_warm_start(&mut pair);
 
         let point = &pair.manifolds[0].points[0];
         assert_eq!(point.normal_impulse, 0.0);
         assert_eq!(point.warm_start_normal_impulse, 0.0);
-        assert_eq!(
-            point.warm_start_tangent_impulse,
-            avian3d::math::Vector2::ZERO
-        );
+        assert_eq!(point.warm_start_tangent_impulse, Vec2::ZERO);
     }
 }

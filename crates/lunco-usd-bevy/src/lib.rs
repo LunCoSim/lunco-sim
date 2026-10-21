@@ -33,7 +33,7 @@
 //!
 //! ## Why Not Use the Observer?
 //!
-//! The `On<Add, UsdPrimPath>` observer fires when the entity is spawned, but the USD
+//! The `On<Add<UsdPrimPath>>` observer fires when the entity is spawned, but the USD
 //! asset may not be loaded yet (async loading). The observer and the loaded-stage
 //! event both publish the same queue marker; `process_queued_usd_visuals` is the
 //! single reader and marks each projected entity with `UsdSceneProjected`.
@@ -1947,7 +1947,7 @@ fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
 /// operation, recursive child spawn) enters the same bounded queue. The queue
 /// is dormant when no prim is waiting.
 fn on_usd_prim_added(
-    trigger: On<Add, UsdPrimPath>,
+    trigger: On<Add<UsdPrimPath>>,
     q: Query<
         (&UsdPrimPath, Has<UsdSceneAwaitingStage>),
         (
@@ -1987,7 +1987,7 @@ fn on_usd_prim_added(
 /// entity receives a `CellCoord` (e.g. site anchor or DEM placement), its children
 /// immediately satisfy big_space's hierarchy validation rules (`ChildRootSpatialLowPrecision`).
 fn on_cell_coord_added(
-    trigger: On<Add, big_space::prelude::CellCoord>,
+    trigger: On<Add<big_space::prelude::CellCoord>>,
     q_children: Query<&Children>,
     q_spatial_child: Query<
         (),

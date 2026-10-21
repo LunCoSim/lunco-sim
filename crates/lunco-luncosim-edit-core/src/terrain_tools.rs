@@ -319,13 +319,13 @@ pub fn update_terrain_brush_ghost(
 
 /// Apply a terrain edit where the user clicks, driven by **bevy_picking**.
 ///
-/// Registered as a global `On<Pointer<Click>>` observer. Only acts while a
+/// Registered as a global `On<PointerClick>` observer. Only acts while a
 /// brush is armed; possession + selection stand down via
 /// [`lunco_interaction_core::TerrainToolActive`], so the click is ours. `hit.position` is
 /// the world point on the terrain mesh — no manual ray-cast. Emits the same
 /// [`BrushTerrain`] / [`FlattenTerrain`] command the scripting / API paths use.
 pub fn on_scene_click_terrain(
-    mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
+    mut click: On<bevy::picking::events::PointerClick>,
     state: Res<TerrainToolState>,
     // Gate on the SAME resource selection/possession read (not `state.armed()`
     // directly): `terrain_tool_state_system` mirrors `state` into `TerrainToolActive`

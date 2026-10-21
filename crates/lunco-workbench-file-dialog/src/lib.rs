@@ -617,7 +617,7 @@ mod web {
     }
 
     pub(super) fn retire_carrier(
-        trigger: On<Remove, PickInFlight>,
+        trigger: On<Remove<PickInFlight>>,
         picker: NonSend<BrowserPicker>,
     ) {
         picker.state.borrow_mut().retire(trigger.entity);

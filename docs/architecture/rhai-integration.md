@@ -195,8 +195,8 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   viewport-aware chrome capture. `EguiFocus` is published after picking, so
   its pointer bit can still describe the previous cursor location when the
   cursor first leaves a popup; it must not reject a valid scene hit. A consumer
-  that needs the first position sample on scene entry handles `Pointer<Enter>`
-  as well as `Pointer<Move>`. Continuous pointer-move hooks are opt-in through
+  that needs the first position sample on scene entry handles `PointerEnter`
+  as well as `PointerMove`. Continuous pointer-move hooks are opt-in through
   `SetScenePointerMoveHook { doc_id, interaction_id, tool, hook, context }`:
   one interaction owns a document at a time, `interaction_id` identifies that
   owner during cleanup, and `context` is a typed string map merged with each

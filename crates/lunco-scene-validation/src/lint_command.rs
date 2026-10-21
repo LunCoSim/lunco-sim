@@ -387,6 +387,48 @@ fn live_runtime_connection_facts(
     facts
 }
 
+/// Resolve engineering compatibility through the same reader used at binding.
+/// Pending participants retain their lifecycle diagnostic rather than a guessed
+/// missing-unit failure. Stage selection follows the actual endpoint lease.
+fn live_connection_contract_facts(
+    world: &World,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+) -> Vec<H> {
+    let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
+        return Vec::new();
+    };
+    let mut facts = Vec::new();
+    for edge in world.iter_entities() {
+        let Some(spec) = edge.get::<lunco_cosim_core::SimConnection>() else {
+            continue;
+        };
+        if edge.get::<lunco_cosim_core::ConnectionBinding>()
+            == Some(&lunco_cosim_core::ConnectionBinding::Pending)
+        {
+            continue;
+        }
+        let source = world.get::<UsdPrimPath>(spec.start_element);
+        let target = world.get::<UsdPrimPath>(spec.end_element);
+        if ![source, target]
+            .into_iter()
+            .flatten()
+            .any(|prim| prim.stage_handle.id() == stage_id)
+        {
+            continue;
+        }
+        if let Err(detail) = spec.resolved_transform(registry, world) {
+            let subject = target
+                .map(|prim| format!("{}.inputs:{}", prim.path, spec.end_connector))
+                .unwrap_or_else(|| format!("entity:{:?}.{}", spec.end_element, spec.end_connector));
+            facts.push(H::map([
+                ("subject", H::str(subject)),
+                ("error", H::str(detail)),
+            ]));
+        }
+    }
+    facts
+}
+
 /// Validate the projected joint lifecycle against the one generic detach
 /// marker. The Avian bridge owns the evidence; this layer only converts it to
 /// the shared Rhai fact shape so the authored policy decides severity/wording.
@@ -398,13 +440,13 @@ fn live_runtime_joint_facts(
         .into_iter()
         .map(|joint| {
             H::map([
-                ("entity_bits", H::Int(joint.entity_bits as i64)),
+                ("entity_bits", H::Int(joint.entity.to_bits() as i64)),
                 (
                     "subject",
                     H::str(
                         joint
                             .path
-                            .unwrap_or_else(|| format!("entity:{}", joint.entity_bits)),
+                            .unwrap_or_else(|| format!("entity:{}", joint.entity.to_bits())),
                     ),
                 ),
                 ("linked", H::Bool(joint.linked)),
@@ -413,6 +455,12 @@ fn live_runtime_joint_facts(
                 ("graph", H::Bool(joint.graph)),
                 ("graph_available", H::Bool(joint.graph_available)),
                 ("detach_requested", H::Bool(joint.detach_requested)),
+                (
+                    "effort_error",
+                    lunco_cosim::avian::joint_effort_contract_error(world, joint.entity)
+                        .map(H::str)
+                        .unwrap_or(H::Unit),
+                ),
             ])
         })
         .collect()
@@ -509,6 +557,10 @@ fn lint_stage_with_runtime(
         } else {
             entries.push(("runtime_connections".to_string(), runtime));
         }
+        entries.push((
+            "runtime_connection_contracts".to_string(),
+            H::Array(live_connection_contract_facts(world, stage_id)),
+        ));
         entries.push((
             "runtime_joints".to_string(),
             H::Array(live_runtime_joint_facts(world, stage_id)),

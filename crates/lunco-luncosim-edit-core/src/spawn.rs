@@ -300,7 +300,7 @@ fn corner_height(
                 false,
                 &avian3d::prelude::SpatialQueryFilter::default(),
             )
-            .map(|h| (ray_origin.0 + DVec3::NEG_Y * h.distance).y)
+            .map(|h| (ray_origin.0 + DVec3::NEG_Y * f64::from(h.distance)).y)
     };
     let terr_y = || surface.height_at(GridPos(corner));
     if terrain_primary {
@@ -570,13 +570,13 @@ pub fn spawn_tool_state_system(
 
 /// Places the selected asset where the user clicks, driven by **bevy_picking**.
 ///
-/// Registered as a global `On<Pointer<Click>>` observer. The pick's
+/// Registered as a global `On<PointerClick>` observer. The pick's
 /// `hit.position` is the world point on whatever mesh (terrain/prop) was under
 /// the cursor — no manual ray-cast needed. egui occlusion is handled by the
 /// framework; chrome clicks carry no `hit.position`, so they're rejected and
 /// never place. Triggers `SpawnEntity` so the path matches the CLI.
 pub fn on_scene_click_spawn(
-    mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
+    mut click: On<bevy::picking::events::PointerClick>,
     mut commands: Commands,
     mut spawn_state: ResMut<SpawnState>,
     footprint_cache: Res<FootprintCache>,
@@ -633,11 +633,11 @@ pub fn on_scene_click_spawn(
         egui_focus.wants_pointer,
         camera,
         cam_gtf,
-        click.pointer_location.position,
+        click.pointer.position,
     ) else {
         if diagnostics.enabled {
             info!(
-                pointer = ?click.pointer_location.position,
+                pointer = ?click.pointer.position,
                 egui_wants_pointer = egui_focus.wants_pointer,
                 "[spawn-trace] click rejected: no scene ray"
             );
@@ -666,7 +666,7 @@ pub fn on_scene_click_spawn(
     ) else {
         if diagnostics.enabled {
             info!(
-                pointer = ?click.pointer_location.position,
+                pointer = ?click.pointer.position,
                 ray_origin_grid = ?origin_grid,
                 ray_direction = ?direction_grid,
                 has_terrain = surface.has_terrain(),
@@ -731,7 +731,7 @@ pub fn on_scene_click_spawn(
     });
     info!(
         entry_id,
-        pointer = ?click.pointer_location.position,
+        pointer = ?click.pointer.position,
         ray_origin_grid = ?origin_grid,
         ray_direction = ?ray.direction,
         terrain_hit = ?hit.terrain,

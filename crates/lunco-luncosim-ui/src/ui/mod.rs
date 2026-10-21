@@ -372,7 +372,7 @@ impl Plugin for LunCoSimUiPlugin {
                         }
                     },
                 );
-                // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
+                // Attach is bevy_picking-driven (observes the same `PointerClick`
                 // as selection; egui occlusion handled by the framework).
                 app.add_observer(models_palette::on_scene_click_attach);
                 app.add_systems(Update, models_palette::attach_escape_system);

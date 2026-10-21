@@ -151,7 +151,7 @@ fn clear_script_card(
 }
 
 fn clear_removed_script_card(
-    trigger: On<Remove, lunco_scripting::ScriptedModel>,
+    trigger: On<Remove<lunco_scripting::ScriptedModel>>,
     identities: Query<&lunco_core::GlobalEntityId>,
     mut hud: ResMut<GuidedHuds>,
     mut commands: Commands,
@@ -607,7 +607,7 @@ mod tests {
                 });
             },
         )
-        .add_observer(|_: On<Remove, TerminalPublisher>, mut commands: Commands| {
+        .add_observer(|_: On<Remove<TerminalPublisher>>, mut commands: Commands| {
             commands.queue(|world: &mut World| {
                 world
                     .resource_mut::<GuidedHuds>()

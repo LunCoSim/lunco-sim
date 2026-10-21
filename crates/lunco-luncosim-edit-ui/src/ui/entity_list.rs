@@ -267,14 +267,14 @@ pub(crate) enum EntityTreeSourceInserted {
 }
 
 fn record_entity_tree_parent_insert(
-    trigger: On<Insert, ChildOf>,
+    trigger: On<Insert<ChildOf>>,
     mut insertions: MessageWriter<EntityTreeSourceInserted>,
 ) {
     insertions.write(EntityTreeSourceInserted::Parent(trigger.entity));
 }
 
 fn record_entity_tree_candidate_add<C: Component>(
-    trigger: On<Add, C>,
+    trigger: On<Add<C>>,
     mut insertions: MessageWriter<EntityTreeSourceInserted>,
 ) {
     insertions.write(EntityTreeSourceInserted::Candidate(trigger.entity));
@@ -916,6 +916,7 @@ pub(crate) fn scene_topology_changed(
     // on the native change query, including not-yet-published worker members.
     let named_changed = named_candidates
         .iter_many(changed.iter().chain(admitted_candidates.iter().copied()))
+        .flatten()
         .any(candidate_changed);
     drop(named_span);
     // ChildOf is immutable: native insert events cover both initial edges and

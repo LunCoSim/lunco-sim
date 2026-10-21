@@ -1097,7 +1097,7 @@ pub fn finish_shadow_cache_bake(
 }
 
 fn retire_shadow_cache_uploads(
-    event: On<Remove, HorizonShadowCache>,
+    event: On<Remove<HorizonShadowCache>>,
     caches: Query<&HorizonShadowCache>,
     mut uploads: ResMut<DataTextureUpdates>,
 ) {

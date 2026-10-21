@@ -2,57 +2,48 @@
 (
     defaultPrim = "ModelicaDriveLaw"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# Positive acceptance fixture for an authored Modelica drivetrain.
-# The skid rover composes its controller and mechanical network through the
-# authored DriveLaw reference arc. The attached Rhai scenario checks that the
-# resulting generic output surface is live and produces motion.
 
 def Xform "ModelicaDriveLaw" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "One skid rover driven by its authored Modelica controller on flat ground."
+    documentation = "One skid rover driven by its authored Modelica controller on flat ground."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (500.0, 1.0, 500.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </ModelicaDriveLaw/PhysicsMaterials/Friction_1_0>
     }
-
     over "Sun"
     {
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
-
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
+        double3 xformOp:translate = (0.0, 30.0, 175.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
-        double3 xformOp:translate = (0.0, 30.0, 175.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Camera "DriveLawCam" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
@@ -61,26 +52,22 @@ def Xform "ModelicaDriveLaw" (
         double3 xformOp:translate = (0.0, 45.0, 170.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 24.0
-        float2 clippingRange = (0.1, 100000.0)
+        float2 clippingRange = (0.10000000149011612, 100000.0)
     }
-
     def Xform "RoverModelica" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
-        double3 xformOp:translate = (0.0, 1.0, 50.0)
+        double3 xformOp:translate = (0.0, 1.1, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.20, 0.60, 0.90)]
+            color3f[] primvars:displayColor = [(0.20000000298023224, 0.6000000238418579, 0.8999999761581421)]
         }
     }
-
     def Scope "Scenario"
     {
         custom string lunco:scenario = "modelica-drive-law"
-
         def Scope "DriveLawTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )

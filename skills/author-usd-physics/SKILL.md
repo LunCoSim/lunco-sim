@@ -57,18 +57,18 @@ Revolute angle reads share `lunco-physics::joint::revolute_coordinate`, using
 both native joint frames and a signed f64 `atan2` coordinate.
 Do not derive a second coordinate or narrow physics rotations for telemetry.
 
-The shared headless/headful physics composition disables `XpbdSolverPlugin`;
-`lunco-physics::DeterministicJointSolverPlugin` owns ordered preparation,
-ordinary joint solving, hard closure and f64 velocity projection
-before contact relaxation. The native contact solver remains installed.
-Multi-axis hard rows use a coupled mass response in their authored constrained
-subspace; do not project a vector error using only its scalar directional mass.
-Existing native contact overlap must also close at the solved endpoint; a
-rolling contact needs a current native witness. Joint reactions stage across
-all types before one validated commit. A fault
-holds physics and refuses native body/contact writeback in that same step;
-each guarded phase checks the current fault state separately. Numerical seam
-tests do not replace the authored drive/contact acceptance gates.
+Avian 0.8 owns native joint preparation, XPBD constraints, motors, passive
+`JointDamping`, contact generation, contact solving, friction, and swept CCD.
+The shared headless and graphical compositions install those native plugins.
+Application integration owns authored SI conversion, validated admission,
+BigSpace frame transport, ordered multi-body gear relations, and typed telemetry.
+Contact provenance and impulses come from native `ContactGraph` pairs.
+The `native_force_drives`, joint, differential, and continuous-contact production
+scenes qualify behavior; compilation alone does not qualify physics.
+
+World positions and authored/domain values retain f64. Avian's internal solver
+state uses f32; its explicit conversion boundary and deferred precision work are
+documented in [Data precision](../../docs/principles.md#data-precision).
 
 Omitted joint limits retain standard unbounded travel. The native port adapter
 maps lower negative infinity and upper positive infinity to absent bounds;
@@ -815,42 +815,11 @@ must leave the collider transform unchanged and refuse the invalid update.
 Admission and fixed preparation share the frame diagnostic owner; rejecting a
 frame must publish its diagnostic and hold at the boundary that observes it.
 
-The shared simulation installs `lunco-physics::ContinuousCollisionPlugin` with
-Avian's body-only CCD disabled. Prepared native contact points supply continuous
-inequalities and receive the applied normal impulse through their native cache.
-Compound leaves are swept independently, so existing contact by one leaf cannot
-hide a different leaf's crossing. Mesh parts use Parry's BVH and conservative
-whole-arc bounds; touching one triangle cannot hide another's later impact.
-Swept normals consume the same native internal-edge and oriented-backface
-constraints as contact manifolds. Continuous contacts share the native substep's
-position solve and its existing position-only joint schedule. Sweeps use solved
-COM motion and bounds covering the entire rotational arc; corrected trajectories
-are re-evaluated until contacts and actual hard-joint residuals converge. Motor integration
-runs once per substep. Native contact relaxation and friction follow joint and
-continuous velocity projection. Unsupported kernels or a convergence failure fault and
-block pose writeback in that same tick. See the continuous-contact contract in
-`docs/architecture/terrain-substrate.md`.
-
-Initial and nonlinear contact samples share one relative-frame native adapter.
-Convex support-map pairs choose the larger native bounding-sphere frame before
-querying, keeping wide features out of a small body's rotated frame. Returned
-native witnesses and normals are flipped back to the admitted shape order.
-Analytic ball and non-support-map pairs retain native dispatch; other convex
-pairs use Parry's parameterized GJK/EPA API with a fresh nearest-feature seed.
-Subtract and normalize projection gaps in the projecting shape's local frame
-before rotating the direction, preserving small gaps near remote geometry.
-Fresh endpoint manifolds supply rolling witnesses for both convex floors and
-meshes, preserving native internal-edge and backface constraints. Additional
-continuous normal reactions supply a Coulomb budget after native relaxation;
-Avian's public tangent kernel consumes that budget once with fresh lever arms
-and contact normals. Material policy comes from the prepared collider pair.
-These reactions never enter an obsolete normal warm-start cache.
-Incomplete unbounded queries and invalid native witnesses fault the owner;
-they are not clear-space results. Verify finite edges, swapped local witness
-frames and production contact/landing/rover gates. The pinned Parry owner
-includes native GJK stall classification, certified thin-tetrahedron admission
-and reduction, and scalar enhanced determinism. Preserve overlapping cylinder
-intersections when updating it.
+The shared simulation uses Avian's native swept CCD and native contact solver.
+Verify the admitted `SweptCcd` filters: the native default covers static and
+kinematic targets; dynamic-to-dynamic sweeps need explicit admission. Use native
+collision filtering and current collider identities. Verify thin, rotating and
+offset compound contacts through production scenes before accepting behavior.
 
 Physical wheels retain their continuous-collision profile when the CCD field is
 omitted; an explicit `physxRigidBody:enableCCD` boolean is honored. Collider-axis
@@ -885,74 +854,25 @@ rotation or loosen physical admission to conceal extrapolation.
 
 ## Native drive integration and contact ownership
 
-USD force and acceleration coefficients retain their dimensional motor metadata.
-Omitted stiffness/damping use the standard zero defaults.
-`lunco-physics::drive` integrates ordinary joint and multi-body gear drives once
-per actual native substep, after free drift. Its implicit position/velocity law
-uses effective endpoint inertias and physical force/torque caps for every motor
-model. It writes position increments consumed by the shared f64 velocity
-projection; drives have no warm-start or repeated closure integration. The
-ordinary native joint pass disables its motor on a local definition copy while
-retaining its geometric/compliant channels. Gear components live on the gear
-prim and retain explicit hinge references and stable authored ordering. Gear
-and ordinary joint drives use the same schema reader and SI unit conversion;
-angular gains convert from per-degree to per-radian, and only force-based gains
-carry squared stage length. Use the
-`native_force_drives` and positive/negative `differential_rig` production gates and
-[the integration review](../../docs/reviews/upstream-only-physics-integration.md)
-before claiming correct actuation or completed reaction telemetry.
+USD force and acceleration drives map directly to native Avian motor models.
+Omitted stiffness and damping retain standard zero defaults; omitted or explicit
+positive-infinite force limits mean unlimited. Reject NaN, negative limits and
+non-finite targets or gains at the owner. Angular coefficients convert from
+per-degree to per-radian; only force-based gains carry squared stage length.
+Avian integrates ordinary joint motors and passive `JointDamping`.
 
-The prismatic `force` port reads the signed axial reaction from the completed
-solver tick on body2 along the slider axis. It does not infer newtons from an
-unsolved gain formula. Ordered hard closure and continuous contact constraints
-run before f64 velocity projection and contact relaxation. Closure integrates
-no compliant channel, drive or passive damping a second time. All reactions
-stage before a single validated commit; every guarded writeback phase checks
-current fault state independently.
+Multi-body gear components retain explicit hinge references and stable authored
+ordering. `lunco-physics::drive` applies their relation through Avian's native
+`SolverBodies` storage and effective inertias. Static and sleeping endpoints use
+the documented native zero-mobility state; missing active solver state faults
+and holds physics. Joint endpoints must resolve to distinct admitted bodies.
 
-Continuous contact preparation retains native pair filtering, collider identity
-and stable pair order. Sweeps use public Parry geometry queries and full-arc
-support bounds. Candidate axes provide no contact or clearance without a fresh
-bound. A missing or invalid native query result faults and refuses the affected
-step; it never becomes clear space or a guessed contact. Each worker owns a
-disjoint contact cache, and joined results commit in prepared order. The
-`minimum_query_batch_size` setting changes work assignment only. Verify touching,
-finite edges, offset pivots, large common translations and actual production
-landing/rover response; a kernel probe alone cannot qualify the vehicle.
+The prismatic force port reads the completed native signed axial reaction.
+Contact debug reports `total_normal_impulse` and exact collider/source pairs in
+`parts[].source1`, `parts[].source2`, and `parts[].normal_impulse`.
+Mesh subshape indices do not determine USD source identity. Use exact pair scope;
+an aggregate body impulse cannot identify an individual collision source.
 
-For a particular collision source, consume `parts[].source1`/`source2` and
-`normal_impulse`; both discrete and continuous contacts resolve provenance from
-the actual native collider. Native mesh subshape indices are optional and do
-not determine USD source identity. A body's aggregate impulse cannot identify
-an individual collision source. Read
-`total_normal_impulse + continuous_normal_impulse` for normal response, retaining
-exact collider pair scope.
-
-CCD trajectories and hard closure share
-`lunco-physics::joint::rotation_displacement`. Only zero-compliance geometry
-enters repeated closure. Completed force averages use actual physics/substep
-clocks; `clock_snapshot().physics_substep_dt_s` exposes the native duration for
-analytic scene gates.
-
-Passive joint damping is owned by `lunco-physics::joint::integrate_joint_damping`.
-The `LunCoJointDampingAPI` values are relative-velocity decay rates in 1/s;
-the solver integrates point-velocity decay followed by angular-velocity decay
-once per physics substep, outside position closure. Both flows use exponential
-decay. Equal/opposite point impulses include their moments at the midpoint of
-the current joint anchors. Full effective inertia responses conserve momentum
-and preserve locked or dominant endpoints. Invalid
-numeric state faults the operation before either endpoint is written. The
-ordered pass uses the prepared stable joint order. This passive damping is
-separate from the dimensional damping coefficient of `PhysicsDriveAPI`. Use the
-`native_force_drives` production scene gate to qualify the runtime contract.
-Joint endpoints must resolve to distinct bodies: the shared reader and generic admission owner
-reject aliases to the same body before installing a native constraint; the
-solver also guards this invariant before acquiring mutable endpoint references.
-
-Sleeping joint islands retain their last completed native reaction. Disabling
-a joint or endpoint clears that reaction; waking resumes native writeback.
-Use the production `prismatic_spring` gate for both boundaries.
-
-USD drives retain their standard unlimited force default when `maxForce` is
-omitted. Explicit positive infinity also denotes no limit; negative or NaN
-limits and non-finite targets/gains fail at the drive owner.
+Use the `native_force_drives`, `prismatic_spring`, differential and contact
+production gates before claiming correct actuation or reaction telemetry.
+`clock_snapshot().physics_substep_dt_s` exposes the native substep duration.

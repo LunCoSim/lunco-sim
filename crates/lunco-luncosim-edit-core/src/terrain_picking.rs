@@ -4,7 +4,7 @@
 //! terrain surface query and the collider ring are the authoritative CPU-side
 //! geometry. Bevy's mesh backend therefore cannot produce a pointer hit over open
 //! terrain. This backend feeds that existing analytic surface into the normal
-//! `Pointer<Click>` pipeline, so waypoint placement, terrain tools, and every other
+//! `PointerClick` pipeline, so waypoint placement, terrain tools, and every other
 //! scene-click observer retain one input path.
 
 use bevy::picking::backend::ray::RayMap;
@@ -19,7 +19,7 @@ use lunco_viewport_core::SceneViewport;
 /// The mesh backend remains responsible for props and vehicles. Its hits are
 /// coalesced with these terrain hits by `bevy_picking`, so a rover or marker in
 /// front of the ground still wins by depth and open DEM ground still produces a
-/// normal `Pointer<Click>` target. The egui backend has the higher camera order
+/// normal `PointerClick` target. The egui backend has the higher camera order
 /// and suppresses these hits over chrome.
 pub fn emit_terrain_hits(
     ray_map: Res<RayMap>,

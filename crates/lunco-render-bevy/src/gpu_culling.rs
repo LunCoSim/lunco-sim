@@ -92,7 +92,7 @@ fn publish_gpu_culling_capability(
 }
 
 fn on_camera_draw_configuration_added(
-    add: On<Add, (SceneCamera, NoIndirectDrawing)>,
+    add: On<Add<(SceneCamera, NoIndirectDrawing)>>,
     mut commands: Commands,
 ) {
     let entity = add.entity;
@@ -100,7 +100,7 @@ fn on_camera_draw_configuration_added(
 }
 
 fn on_camera_draw_configuration_removed(
-    remove: On<Remove, (SceneCamera, NoIndirectDrawing)>,
+    remove: On<Remove<(SceneCamera, NoIndirectDrawing)>>,
     mut commands: Commands,
 ) {
     let entity = remove.entity;

@@ -44,7 +44,7 @@ pub fn sync_collider(
                 }
                 let radius = ((3.0 * volume) / (4.0 * std::f64::consts::PI)).cbrt();
                 if let Ok(mut collider) = q_colliders.get_mut(entity) {
-                    *collider = Collider::sphere(radius);
+                    *collider = Collider::from(avian3d::parry::shape::SharedShape::ball(radius));
                     // `try_insert`, not `insert`: a `LoadScene` scene-reload or
                     // obstacle-field churn can despawn this body between the query
                     // and this deferred command applying. Plain `.insert` panics on

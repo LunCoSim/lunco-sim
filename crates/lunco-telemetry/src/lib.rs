@@ -973,7 +973,7 @@ fn retain_sample(
 /// A channel declaration may disappear while its sampled history is still a
 /// mission artifact. Mark only this channel inactive; do not erase the trace.
 fn drop_signal_of_removed_channel(
-    trigger: On<Remove, Parameter>,
+    trigger: On<Remove<Parameter>>,
     channels: Query<&Parameter>,
     mut signals: ResMut<lunco_signal::SignalRegistry>,
 ) {

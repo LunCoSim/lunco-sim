@@ -14,8 +14,6 @@ lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-spatial = { path = "../lunco-spatial" }
-
-[dev-dependencies]
 lunco-physics = { path = "../lunco-physics" }
 
 [lints]

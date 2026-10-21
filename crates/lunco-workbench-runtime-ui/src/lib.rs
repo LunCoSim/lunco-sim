@@ -8,7 +8,7 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::picking::Pickable;
-use bevy::picking::events::{Click, Drag, Pointer};
+use bevy::picking::events::{PointerClick, PointerDrag};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
@@ -109,7 +109,7 @@ struct RuntimeUiSurfaceReset {
 }
 
 fn emit_runtime_ui_surface_drag(
-    mut trigger: On<Pointer<Drag>>,
+    mut trigger: On<PointerDrag>,
     mut drags: MessageWriter<RuntimeUiSurfaceDragged>,
 ) {
     if trigger.button == PointerButton::Primary {
@@ -129,7 +129,7 @@ fn emit_runtime_ui_surface_drag(
 /// surface root remains the only entity that owns the reset message; this
 /// traversal only resolves that owner from the picked child.
 fn emit_runtime_ui_surface_reset(
-    mut trigger: On<Pointer<Click>>,
+    mut trigger: On<PointerClick>,
     roots: Query<(Entity, &RuntimeUiSurface)>,
     parents: Query<&ChildOf>,
     mut resets: MessageWriter<RuntimeUiSurfaceReset>,
@@ -1335,8 +1335,8 @@ fn acknowledge_runtime_ui_render_extraction(
 
     let mut extracted_roots = EntityHashSet::default();
     let mut parents = main_world.query::<&ChildOf>();
-    for node in &extracted_nodes.uinodes {
-        let mut current = node.main_entity.id();
+    for (main_entity, _) in &extracted_nodes.uinodes {
+        let mut current = main_entity.id();
         loop {
             if required_roots.contains(&current) {
                 extracted_roots.insert(current);

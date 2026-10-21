@@ -35,7 +35,7 @@ pub(crate) struct AuthoredRuntimeProjectionPending;
 
 /// Queue one newly projected authored owner for the shared runtime resolver.
 pub(crate) fn queue_authored_runtime_projection(
-    trigger: On<Add, UsdSceneProjected>,
+    trigger: On<Add<UsdSceneProjected>>,
     owners: Query<(), (With<UsdPrimPath>, Without<UsdPreviewOnly>)>,
     child_of: Query<&ChildOf>,
     preview_roots: Query<(), With<UsdPreviewOnly>>,

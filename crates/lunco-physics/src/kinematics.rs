@@ -143,14 +143,14 @@ pub(crate) fn install(app: &mut App) {
         );
 }
 
-fn retire_body_sample(event: On<Remove, RigidBody>, mut commands: Commands) {
+fn retire_body_sample(event: On<Remove<RigidBody>>, mut commands: Commands) {
     commands
         .entity(event.entity)
         .try_remove::<SolvedBodyAcceleration>();
 }
 
 fn invalidate_unready_sample(
-    event: On<Remove, PhysicsStateReady>,
+    event: On<Remove<PhysicsStateReady>>,
     mut samples: Query<&mut SolvedBodyAcceleration>,
 ) {
     if let Ok(mut sample) = samples.get_mut(event.entity) {
@@ -159,7 +159,7 @@ fn invalidate_unready_sample(
 }
 
 fn invalidate_disabled_sample(
-    event: On<Add, RigidBodyDisabled>,
+    event: On<Add<RigidBodyDisabled>>,
     mut samples: Query<&mut SolvedBodyAcceleration>,
 ) {
     if let Ok(mut sample) = samples.get_mut(event.entity) {
@@ -202,7 +202,7 @@ fn begin_interval(
             let field = gravity
                 .as_ref()
                 .map(|global| {
-                    global.0 * scale.map_or(1.0, |s| s.0)
+                    global.0.as_dvec3() * f64::from(scale.map_or(1.0, |s| s.0))
                         + local.map_or(DVec3::ZERO, |g| g.acceleration())
                 })
                 .filter(|g| g.is_finite());
@@ -212,8 +212,8 @@ fn begin_interval(
                 b.frame == frame && time.elapsed().checked_sub(time.delta()) == Some(b.time)
             });
             Some(IntervalStart {
-                linear: previous.map_or(linear.0, |b| b.linear),
-                angular: previous.map_or(angular.0, |b| b.angular),
+                linear: previous.map_or(linear.0.as_dvec3(), |b| b.linear),
+                angular: previous.map_or(angular.0.as_dvec3(), |b| b.angular),
                 gravity: field,
                 frame,
                 end_time: time.elapsed(),
@@ -253,8 +253,8 @@ fn finish_interval(
         {
             continue;
         }
-        let a = (linear.0 - start.linear) / dt;
-        let alpha = (angular.0 - start.angular) / dt;
+        let a = (linear.0.as_dvec3() - start.linear) / dt;
+        let alpha = (angular.0.as_dvec3() - start.angular) / dt;
         if !a.is_finite() || !alpha.is_finite() {
             continue;
         }
@@ -264,8 +264,8 @@ fn finish_interval(
         sample.tick = tick.as_ref().map(|t| t.0);
         sample.valid = true;
         sample.boundary = Some(VelocityBoundary {
-            linear: linear.0,
-            angular: angular.0,
+            linear: linear.0.as_dvec3(),
+            angular: angular.0.as_dvec3(),
             time: start.end_time,
             frame: start.frame,
         });
@@ -273,6 +273,6 @@ fn finish_interval(
         sample.specific_force_body = sample
             .specific_force_world
             .filter(|_| rotation.0.is_finite() && rotation.0.is_normalized())
-            .map(|force| rotation.0.inverse() * force);
+            .map(|force| rotation.0.as_dquat().inverse() * force);
     }
 }

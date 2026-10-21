@@ -78,7 +78,7 @@ bevy = { workspace = true, features = [
 ] }
 big_space = { workspace = true }
 bevy_egui = { workspace = true, features = ["render"] }
-bevy_winit = { version = "0.19" }
+bevy_winit = { version = "0.20" }
 winit = { version = "0.30.13" }
 num_cpus = { workspace = true }
 

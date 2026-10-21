@@ -109,17 +109,20 @@ pub(crate) fn move_avatar_with_collision(
     // shortest-arc rotation is the complete shape orientation contract.
     let shape_rotation = DQuat::from_rotation_arc(DVec3::Y, physics_up);
     let velocity = physics_delta / delta_secs;
-    let shape = Collider::capsule(
+    if !lunco_physics::avian_backend_vector_is_valid(velocity) {
+        return None;
+    }
+    let shape = Collider::from(avian3d::parry::shape::SharedShape::capsule_y(
+        collision_settings.capsule_length_m * 0.5,
         collision_settings.radius_m,
-        collision_settings.capsule_length_m,
-    );
+    ));
     let mut filter = SpatialQueryFilter::from_excluded_entities([avatar]);
     filter.mask = avian3d::prelude::LayerMask(!NON_PHYSICAL_QUERY_LAYERS);
     let output = move_and_slide.move_and_slide(
         &shape,
         physics_position,
-        shape_rotation,
-        velocity,
+        shape_rotation.as_quat(),
+        velocity.as_vec3(),
         delta_time,
         &MoveAndSlideConfig::default(),
         &filter,

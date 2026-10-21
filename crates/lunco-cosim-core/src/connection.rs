@@ -132,6 +132,19 @@ impl SimConnection {
         target
             .validate_contract()
             .map_err(|e| format!("invalid target contract: {e}"))?;
+        if !target.writable {
+            return Err(format!(
+                "target input '{}' is owned by '{}' and does not accept external writes",
+                self.end_connector, target.authority
+            ));
+        }
+        if let (Some(source_frame), Some(target_frame)) = (&source.frame, &target.frame)
+            && source_frame != target_frame
+        {
+            return Err(format!(
+                "connection coordinate frames differ: '{source_frame}' -> '{target_frame}'; an explicit frame transform is required"
+            ));
+        }
         let source_unit = source.unit.as_ref().and_then(|unit| unit.definition());
         let target_unit = target.unit.as_ref().and_then(|unit| unit.definition());
         let (unit_scale, unit_offset) = match (source_unit, target_unit) {

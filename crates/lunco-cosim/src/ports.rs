@@ -24,9 +24,7 @@
 
 use avian3d::prelude::ComputedCenterOfMass;
 use bevy::prelude::*;
-use lunco_engineering_values::{
-    CoordinateFrameId, Dimension, Unit, UnitReference, UnitScaleExactness,
-};
+use lunco_engineering_values::CoordinateFrameId;
 use std::hash::{Hash, Hasher};
 use std::sync::LazyLock;
 
@@ -34,11 +32,9 @@ use lunco_port_core::ports::{
     PortBackend, PortDeclarationQuery, PortDirection, PortMetadata, PortRegistry,
     PortTopologyRevision, PortTopologyState, declare_map, port_entity_map_key, port_name_set_key,
 };
-use lunco_port_core::{InputPorts, OutputPorts, Port, PortSurface};
+use lunco_port_core::{EngineUnit, InputPorts, OutputPorts, PORT_NAME, Port, PortSurface};
 
-use lunco_cosim_core::{DeclaredOutputPorts, PORT_NAME, SimComponent, SimConnection, SimStatus};
-
-/// The fixed port name a [`Port`] exposes (its `f64` `value`).
+use lunco_cosim_core::{DeclaredOutputPorts, SimComponent, SimConnection, SimStatus};
 
 /// One avian port: a named scalar on an avian component, with its causality,
 /// physical domain, and read/write realization. Part of an [`AvianGroup`].
@@ -66,7 +62,7 @@ pub struct AvianPort {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AvianPortContract {
     /// Physical dimension and exact display unit for this scalar.
-    pub unit: AvianUnit,
+    pub unit: EngineUnit,
     /// Coordinate frame used by this scalar, when it is frame-bound.
     pub frame: AvianFrame,
     /// Owner-enforced range, including limits read from the native component.
@@ -75,201 +71,147 @@ pub struct AvianPortContract {
 
 impl AvianPortContract {
     pub const DIMENSIONLESS: Self = Self::new(
-        AvianUnit::Dimensionless,
+        EngineUnit::Dimensionless,
         AvianFrame::None,
         AvianRange::Unbounded,
     );
-    pub const LENGTH: Self = Self::new(AvianUnit::Meter, AvianFrame::None, AvianRange::Unbounded);
+    pub const LENGTH: Self = Self::new(EngineUnit::Meter, AvianFrame::None, AvianRange::Unbounded);
     pub const LENGTH_WORLD: Self = Self::new(
-        AvianUnit::Meter,
+        EngineUnit::Meter,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const LENGTH_BODY: Self = Self::new(
-        AvianUnit::Meter,
+        EngineUnit::Meter,
         AvianFrame::OwningBody,
         AvianRange::Unbounded,
     );
     pub const SPEED: Self = Self::new(
-        AvianUnit::MeterPerSecond,
+        EngineUnit::MeterPerSecond,
         AvianFrame::None,
         AvianRange::Unbounded,
     );
     pub const SPEED_WORLD: Self = Self::new(
-        AvianUnit::MeterPerSecond,
+        EngineUnit::MeterPerSecond,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const ACCELERATION_WORLD: Self = Self::new(
-        AvianUnit::MeterPerSecondSquared,
+        EngineUnit::MeterPerSecondSquared,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const ACCELERATION: Self = Self::new(
-        AvianUnit::MeterPerSecondSquared,
+        EngineUnit::MeterPerSecondSquared,
         AvianFrame::None,
         AvianRange::Unbounded,
     );
     pub const ACCELERATION_BODY: Self = Self::new(
-        AvianUnit::MeterPerSecondSquared,
+        EngineUnit::MeterPerSecondSquared,
         AvianFrame::OwningBody,
         AvianRange::Unbounded,
     );
     pub const ANGLE_WORLD: Self = Self::new(
-        AvianUnit::Radian,
+        EngineUnit::Radian,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const ROTATION_WORLD: Self = Self::new(
-        AvianUnit::Dimensionless,
+        EngineUnit::Dimensionless,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const JOINT_ANGLE: Self = Self::new(
-        AvianUnit::Radian,
+        EngineUnit::Radian,
         AvianFrame::None,
         AvianRange::RevoluteLimits,
     );
     pub const ANGULAR_SPEED_WORLD: Self = Self::new(
-        AvianUnit::RadianPerSecond,
+        EngineUnit::RadianPerSecond,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const JOINT_ANGULAR_SPEED: Self = Self::new(
-        AvianUnit::RadianPerSecond,
+        EngineUnit::RadianPerSecond,
         AvianFrame::None,
         AvianRange::Unbounded,
     );
-    pub const FORCE: Self = Self::new(AvianUnit::Newton, AvianFrame::None, AvianRange::Unbounded);
+    pub const FORCE: Self = Self::new(EngineUnit::Newton, AvianFrame::None, AvianRange::Unbounded);
     pub const FORCE_WORLD: Self = Self::new(
-        AvianUnit::Newton,
+        EngineUnit::Newton,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const FORCE_BODY: Self = Self::new(
-        AvianUnit::Newton,
+        EngineUnit::Newton,
         AvianFrame::OwningBody,
         AvianRange::Unbounded,
     );
     pub const JOINT_FORCE: Self =
-        Self::new(AvianUnit::Newton, AvianFrame::None, AvianRange::Unbounded);
+        Self::new(EngineUnit::Newton, AvianFrame::None, AvianRange::Unbounded);
     pub const JOINT_TORQUE: Self = Self::new(
-        AvianUnit::NewtonMeter,
+        EngineUnit::NewtonMeter,
         AvianFrame::None,
         AvianRange::Unbounded,
     );
     pub const FORCE_ACTUATOR: Self = Self::new(
-        AvianUnit::Newton,
+        EngineUnit::Newton,
         AvianFrame::None,
         AvianRange::ForceActuatorLimit,
     );
     pub const TORQUE_WORLD: Self = Self::new(
-        AvianUnit::NewtonMeter,
+        EngineUnit::NewtonMeter,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const TORQUE_ACTUATOR: Self = Self::new(
-        AvianUnit::NewtonMeter,
+        EngineUnit::NewtonMeter,
         AvianFrame::None,
         AvianRange::TorqueActuatorLimit,
     );
-    pub const MASS: Self = Self::new(AvianUnit::Kilogram, AvianFrame::None, AvianRange::Positive);
+    pub const MASS: Self = Self::new(EngineUnit::Kilogram, AvianFrame::None, AvianRange::Positive);
     pub const INERTIA_BODY: Self = Self::new(
-        AvianUnit::KilogramMeterSquared,
+        EngineUnit::KilogramMeterSquared,
         AvianFrame::OwningBody,
         AvianRange::Positive,
     );
     pub const DISPLACEMENT: Self = Self::new(
-        AvianUnit::Meter,
+        EngineUnit::Meter,
         AvianFrame::None,
         AvianRange::PrismaticLimits,
     );
     pub const JOINT_SPEED: Self = Self::new(
-        AvianUnit::MeterPerSecond,
+        EngineUnit::MeterPerSecond,
         AvianFrame::None,
         AvianRange::Unbounded,
     );
     pub const RAY_DISTANCE: Self =
-        Self::new(AvianUnit::Meter, AvianFrame::None, AvianRange::Unbounded);
+        Self::new(EngineUnit::Meter, AvianFrame::None, AvianRange::Unbounded);
     pub const RAY_POSITION: Self = Self::new(
-        AvianUnit::Meter,
+        EngineUnit::Meter,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const RAY_NORMAL: Self = Self::new(
-        AvianUnit::Dimensionless,
+        EngineUnit::Dimensionless,
         AvianFrame::PhysicsWorld,
         AvianRange::Unbounded,
     );
     pub const RAY_TIME: Self =
-        Self::new(AvianUnit::Second, AvianFrame::None, AvianRange::Unbounded);
+        Self::new(EngineUnit::Second, AvianFrame::None, AvianRange::Unbounded);
     pub const RAY_ORIGIN: Self = Self::new(
-        AvianUnit::Meter,
+        EngineUnit::Meter,
         AvianFrame::ObservedBody,
         AvianRange::Unbounded,
     );
     pub const RAY_DIRECTION: Self = Self::new(
-        AvianUnit::Dimensionless,
+        EngineUnit::Dimensionless,
         AvianFrame::ObservedBody,
         AvianRange::Unbounded,
     );
 
-    pub const fn new(unit: AvianUnit, frame: AvianFrame, range: AvianRange) -> Self {
+    pub const fn new(unit: EngineUnit, frame: AvianFrame, range: AvianRange) -> Self {
         Self { unit, frame, range }
-    }
-}
-
-/// Unit identity and SI dimension for Avian scalar ports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AvianUnit {
-    Dimensionless,
-    Meter,
-    MeterPerSecond,
-    MeterPerSecondSquared,
-    Radian,
-    RadianPerSecond,
-    Newton,
-    NewtonMeter,
-    Kilogram,
-    KilogramMeterSquared,
-    Second,
-}
-
-impl AvianUnit {
-    fn reference(self) -> UnitReference {
-        // Only these built-in unit definitions are static. The port owner,
-        // direction, bounds and frame are still derived from the live world.
-        macro_rules! reference {
-            ($symbol:literal, $dimension:expr, $angle:literal) => {{
-                static UNIT: LazyLock<UnitReference> = LazyLock::new(|| {
-                    UnitReference::resolved(
-                        Unit::new_with_exactness(
-                            $symbol,
-                            $dimension,
-                            1.0,
-                            0.0,
-                            UnitScaleExactness::Exact,
-                        )
-                        .expect("Avian port unit definition is valid")
-                        .with_angle_power($angle),
-                    )
-                });
-                UNIT.clone()
-            }};
-        }
-        match self {
-            Self::Dimensionless => reference!("1", Dimension::NONE, 0),
-            Self::Meter => reference!("m", Dimension::LENGTH, 0),
-            Self::MeterPerSecond => reference!("m/s", Dimension([1, 0, -1, 0, 0, 0, 0]), 0),
-            Self::MeterPerSecondSquared => reference!("m/s²", Dimension([1, 0, -2, 0, 0, 0, 0]), 0),
-            Self::Radian => reference!("rad", Dimension::NONE, 1),
-            Self::RadianPerSecond => reference!("rad/s", Dimension([0, 0, -1, 0, 0, 0, 0]), 1),
-            Self::Newton => reference!("N", Dimension([1, 1, -2, 0, 0, 0, 0]), 0),
-            Self::NewtonMeter => reference!("N·m", Dimension([2, 1, -2, 0, 0, 0, 0]), 0),
-            Self::Kilogram => reference!("kg", Dimension([0, 1, 0, 0, 0, 0, 0]), 0),
-            Self::KilogramMeterSquared => reference!("kg·m²", Dimension([2, 1, 0, 0, 0, 0, 0]), 0),
-            Self::Second => reference!("s", Dimension([0, 0, 1, 0, 0, 0, 0]), 0),
-        }
     }
 }
 
@@ -444,7 +386,10 @@ fn avian_metadata(
         .expect("selected Avian declaration has its engineering contract");
     let (min, max) = match port.contract.range {
         AvianRange::Unbounded => (None, None),
-        AvianRange::Positive => (Some(f64::MIN_POSITIVE), Some(f64::MIN_POSITIVE.recip())),
+        AvianRange::Positive => (
+            Some(f64::from(f32::MIN_POSITIVE)),
+            Some(f64::from(f32::MIN_POSITIVE).recip()),
+        ),
         AvianRange::RevoluteLimits => world
             .get::<avian3d::prelude::RevoluteJoint>(entity)
             .and_then(|joint| joint.angle_limit)
@@ -468,8 +413,40 @@ fn avian_metadata(
                 (Some(-actuator.max_torque_nm), Some(actuator.max_torque_nm))
             }),
     };
+    // Native computed properties and motor targets use f32. World positions
+    // and the domain force accumulators retain their f64 contracts.
+    let (min, max) = if port.write.is_some()
+        && matches!(
+            port.name,
+            "mass"
+                | "inertia_xx"
+                | "inertia_yy"
+                | "inertia_zz"
+                | "com_x"
+                | "com_y"
+                | "com_z"
+                | "angle"
+                | "displacement"
+        ) {
+        let native_max = f64::from(f32::MAX);
+        (
+            Some(min.unwrap_or(-native_max).max(-native_max)),
+            Some(max.unwrap_or(native_max).min(native_max)),
+        )
+    } else {
+        (min, max)
+    };
     let writable = port.write.is_some()
         && match port.name {
+            lunco_physics::joint::JOINT_ANGLE_PORT
+                if world
+                    .get::<avian3d::prelude::RevoluteJoint>(entity)
+                    .is_some() =>
+            {
+                world
+                    .get::<lunco_physics::joint::JointTorqueActuator>(entity)
+                    .is_none()
+            }
             "inertia_xx" | "inertia_yy" | "inertia_zz" => {
                 crate::avian::scalar_inertia_writable(world, entity)
             }
@@ -482,7 +459,13 @@ fn avian_metadata(
         min,
         max,
         group.source,
-        if port.write.is_some() {
+        if port.name == lunco_physics::joint::JOINT_ANGLE_PORT
+            && world
+                .get::<lunco_physics::joint::JointTorqueActuator>(entity)
+                .is_some()
+        {
+            "external effort owner"
+        } else if port.write.is_some() {
             "control owner"
         } else {
             "physics solver"
@@ -800,6 +783,41 @@ fn write_port_value(world: &mut World, entity: Entity, value: f64) {
     }
 }
 
+fn scalar_endpoint_metadata(
+    world: &World,
+    endpoint: Entity,
+    direction: PortDirection,
+    source: &'static str,
+    authority: &'static str,
+) -> PortMetadata {
+    world
+        .get::<lunco_port_core::ScalarPortContracts>(endpoint)
+        .and_then(|contracts| contracts.get(PORT_NAME))
+        .cloned()
+        .unwrap_or_default()
+        .metadata(direction, source, authority)
+}
+
+fn scalar_endpoint_contract_key(world: &World, endpoint: Entity) -> u64 {
+    world
+        .get::<lunco_port_core::ScalarPortContracts>(endpoint)
+        .map_or(0, |contracts| contracts.topology_key())
+}
+
+fn endpoint_contracts_key<'a>(
+    world: &World,
+    ports: impl Iterator<Item = (&'a str, Entity)>,
+) -> u64 {
+    let mut entries = ports.collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(right.0));
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for (name, endpoint) in entries {
+        name.hash(&mut hash);
+        scalar_endpoint_contract_key(world, endpoint).hash(&mut hash);
+    }
+    hash.finish()
+}
+
 /// SysML/hardware [`Port`] — one bidirectional `f64` scalar named `value`.
 ///
 /// The value crosses this backend unchanged in both directions: a Modelica model
@@ -809,23 +827,16 @@ const PORT_BACKEND: PortBackend = PortBackend {
     list_entities: |world, out| {
         out.extend(world.query_filtered::<Entity, With<Port>>().iter(world));
     },
-    topology_key: |world, entity| u64::from(world.get::<Port>(entity).is_some()),
+    topology_key: |world, entity| {
+        u64::from(world.get::<Port>(entity).is_some()) ^ scalar_endpoint_contract_key(world, entity)
+    },
     declare_ports: |w, e, out| {
         if w.get::<Port>(e).is_some() {
             out.declare(PORT_NAME, PortDirection::InOut);
         }
     },
-    metadata: |_world, _entity, _name, direction| {
-        PortMetadata::scalar(
-            direction,
-            None,
-            None,
-            None,
-            "hardware port",
-            "controller / plant",
-            true,
-            None,
-        )
+    metadata: |world, entity, _name, direction| {
+        scalar_endpoint_metadata(world, entity, direction, "scalar endpoint", "port owner")
     },
     read_output: |w, e, n| {
         if n != PORT_NAME {
@@ -888,7 +899,15 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .values()
             .filter(|port_entity| world.get::<Port>(**port_entity).is_some())
             .count() as u64;
-        names ^ live.rotate_left(47)
+        names
+            ^ live.rotate_left(47)
+            ^ endpoint_contracts_key(
+                world,
+                outputs
+                    .ports
+                    .iter()
+                    .map(|(name, endpoint)| (name, *endpoint)),
+            )
     },
     declare_ports: |world, entity, out| {
         if !out.accepts_direction(PortDirection::Out) {
@@ -911,17 +930,12 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             }
         }
     },
-    metadata: |_world, _entity, _name, direction| {
-        PortMetadata::scalar(
-            direction,
-            None,
-            None,
-            None,
-            "runtime producer",
-            "producer",
-            false,
-            None,
-        )
+    metadata: |world, entity, name, direction| {
+        let endpoint = world
+            .get::<OutputPorts>(entity)
+            .and_then(|ports| ports.get(name))
+            .expect("metadata requires a declared runtime output");
+        scalar_endpoint_metadata(world, endpoint, direction, "runtime producer", "producer")
     },
     read_output: |world, entity, name| {
         world
@@ -976,7 +990,16 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
     topology_key: |world, entity| {
         world
             .get::<PortSurface>(entity)
-            .map(port_surface_topology_key)
+            .map(|surface| {
+                port_surface_topology_key(surface)
+                    ^ endpoint_contracts_key(
+                        world,
+                        surface
+                            .ports
+                            .iter()
+                            .map(|(name, port)| (name, port.endpoint)),
+                    )
+            })
             .unwrap_or(0)
     },
     declare_ports: |world, entity, out| {
@@ -999,20 +1022,21 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
             }
         }
     },
-    metadata: |_world, _entity, _name, direction| {
-        PortMetadata::scalar(
+    metadata: |world, entity, name, direction| {
+        let endpoint = world
+            .get::<PortSurface>(entity)
+            .and_then(|surface| surface.get(name))
+            .expect("metadata requires a declared component port");
+        scalar_endpoint_metadata(
+            world,
+            endpoint,
             direction,
-            None,
-            None,
-            None,
             "USD component",
             match direction {
                 PortDirection::In => "connected input",
                 PortDirection::Out => "component state",
                 PortDirection::InOut => "component / connection",
             },
-            true,
-            None,
         )
     },
     read_output: |world, entity, name| {
@@ -1176,6 +1200,10 @@ fn piloted_value(w: &World, e: Entity) -> f64 {
 /// cover candidate membership and foreign Avian components.
 pub(crate) fn check_port_owner_structure(
     input_ports: Query<(Entity, &InputPorts), Changed<InputPorts>>,
+    scalar_contracts: Query<
+        (Entity, &lunco_port_core::ScalarPortContracts),
+        (With<Port>, Changed<lunco_port_core::ScalarPortContracts>),
+    >,
     components: Query<
         (
             Entity,
@@ -1194,6 +1222,11 @@ pub(crate) fn check_port_owner_structure(
     mut state: ResMut<PortTopologyState>,
     mut revision: ResMut<PortTopologyRevision>,
 ) {
+    for (entity, contracts) in &scalar_contracts {
+        if state.changed::<lunco_port_core::ScalarPortContracts>(entity, contracts.topology_key()) {
+            revision.bump();
+        }
+    }
     for (entity, inputs) in &input_ports {
         if state.changed::<InputPorts>(entity, inputs.values.topology_key()) {
             revision.bump();
@@ -1305,6 +1338,7 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_engineering_values::{Dimension, Unit, UnitReference};
 
     #[test]
     fn connection_transform_uses_winning_metadata_before_authored_affine_terms() {
@@ -1370,6 +1404,86 @@ mod tests {
         assert_eq!(
             wire.resolved_transform(&registry, &world).unwrap(),
             (2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn scalar_surface_aliases_share_units_bounds_and_frame_validation() {
+        use lunco_port_core::{PORT_NAME, ScalarPortContract};
+        let mut world = World::new();
+        let endpoint = |world: &mut World, unit: EngineUnit, frame: &str| {
+            world
+                .spawn(
+                    Port::with_contract(
+                        0.0,
+                        ScalarPortContract {
+                            unit: Some(unit.reference()),
+                            min: Some(-10.0),
+                            max: Some(10.0),
+                            frame: Some(CoordinateFrameId::new(frame).unwrap()),
+                        },
+                    )
+                    .unwrap(),
+                )
+                .id()
+        };
+        let first = endpoint(&mut world, EngineUnit::NewtonMeter, "first-axis");
+        let second = endpoint(&mut world, EngineUnit::NewtonMeter, "second-axis");
+        let source = world
+            .spawn((OutputPorts::new(std::collections::HashMap::from([(
+                "effort".to_owned(),
+                first,
+            )])),))
+            .id();
+        let target = world
+            .spawn((
+                PortSurface::new(std::collections::HashMap::from([(
+                    "effort".to_owned(),
+                    lunco_port_core::PortSurfacePort::new(second, PortDirection::In),
+                )])),
+                lunco_port_core::PortSurfaceReady,
+            ))
+            .id();
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+        let direct = registry
+            .input_port_metadata(&world, second, PORT_NAME)
+            .unwrap();
+        let alias = registry
+            .input_port_metadata(&world, target, "effort")
+            .unwrap();
+        assert_eq!(alias.unit, direct.unit);
+        assert_eq!(alias.frame, direct.frame);
+        assert_eq!(alias.min, direct.min);
+        assert_eq!(alias.max, direct.max);
+        assert!(alias.validate(11.0).is_err());
+        let wire = SimConnection {
+            start_element: source,
+            start_connector: "effort".into(),
+            end_element: target,
+            end_connector: "effort".into(),
+            ..default()
+        };
+        assert!(
+            wire.resolved_transform(&registry, &world)
+                .unwrap_err()
+                .contains("coordinate frames differ")
+        );
+        world
+            .get_mut::<lunco_port_core::ScalarPortContracts>(second)
+            .unwrap()
+            .set(
+                PORT_NAME.to_owned(),
+                ScalarPortContract {
+                    unit: Some(EngineUnit::Newton.reference()),
+                    ..default()
+                },
+            )
+            .unwrap();
+        assert!(
+            wire.resolved_transform(&registry, &world)
+                .unwrap_err()
+                .contains("unit conversion")
         );
     }
 

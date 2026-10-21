@@ -39,7 +39,7 @@
 //!
 //! ## Why Deferred Processing?
 //!
-//! The `On<Add, UsdPrimPath>` observer fires when the entity is spawned, but the USD
+//! The `On<Add<UsdPrimPath>>` observer fires when the entity is spawned, but the USD
 //! asset may not be loaded yet (async loading). The `process_usd_sim_prims` system runs
 //! in the `Update` schedule **after** `sync_usd_visuals` so the canonical stage and
 //! render-free simulation intent are available before physics projection. Visual
@@ -2781,7 +2781,12 @@ fn process_usd_sim_prim_read(
             &sdf_path,
             attachment_susp.as_ref(),
             attachment_tire.as_ref(),
-        ) {
+        )
+        .and_then(|params| {
+            wheel_runtime::validate_native_parameters(&params)
+                .map(|()| params)
+                .map_err(|detail| vec![detail])
+        }) {
             Ok(p) => p,
             Err(missing) => {
                 error!(
@@ -2852,58 +2857,59 @@ fn process_usd_sim_prim_read(
         // `ChildOf` so the single recursive scene-clear reclaims them with the
         // wheel — synthesized backing entities are never left detached at the root
         // (the general lifecycle contract; see `setup_physical_wheel`'s joint).
-        let p_drive = commands
-            .spawn((Port::default(), Name::new("Port_Drive"), ChildOf(entity)))
-            .id();
-        let p_heading = commands
-            .spawn((Port::default(), Name::new("Port_Heading"), ChildOf(entity)))
-            .id();
-        let p_speed = commands
-            .spawn((
-                Port::default(),
-                Name::new("Port_ShaftSpeed"),
-                ChildOf(entity),
-            ))
-            .id();
-
-        let p_bearing_heat = commands
-            .spawn((
-                Port::default(),
-                Name::new("Port_BearingHeat"),
-                ChildOf(entity),
-            ))
-            .id();
-        let p_brake_heat = commands
-            .spawn((
-                Port::default(),
-                Name::new("Port_BrakeHeat"),
-                ChildOf(entity),
-            ))
-            .id();
-        // A raycast/shared tire owns its contact work. Native material contacts
-        // have no tire-law heat endpoint; an attempted wire fails at port binding.
-        let p_tire_heat = if !is_physical || native_material.is_none() {
-            Some(
-                commands
-                    .spawn((Port::default(), Name::new("Port_TireHeat"), ChildOf(entity)))
-                    .id(),
-            )
-        } else {
-            None
+        let shaft_frame = lunco_engineering_values::CoordinateFrameId::new(format!(
+            "lunco:wheel-shaft:{:?}:{}",
+            prim_path.stage_handle.id(),
+            prim_path.path
+        ))
+        .expect("a wheel coordinate has a stage and source path");
+        let mut scalar_endpoint = |name, unit: lunco_port_core::EngineUnit, min, max, frame| {
+            let contract = lunco_port_core::ScalarPortContract {
+                unit: Some(unit.reference()),
+                min,
+                max,
+                frame,
+            };
+            let bundle = Port::with_contract(0.0, contract)
+                .expect("engine wheel endpoint contracts admit their initial zero sample");
+            commands
+                .spawn((bundle, Name::new(name), ChildOf(entity)))
+                .id()
         };
-        let p_contact = if p_tire_heat.is_some() {
-            Some(
-                commands
-                    .spawn((
-                        Port::default(),
-                        Name::new("Port_WheelContact"),
-                        ChildOf(entity),
-                    ))
-                    .id(),
+        let native_max = f64::from(f32::MAX);
+        use lunco_port_core::EngineUnit;
+        let p_drive = scalar_endpoint(
+            "Port_Drive",
+            EngineUnit::NewtonMeter,
+            Some(-native_max),
+            Some(native_max),
+            Some(shaft_frame.clone()),
+        );
+        let p_heading = scalar_endpoint("Port_Heading", EngineUnit::Radian, None, None, None);
+        let p_speed = scalar_endpoint(
+            "Port_ShaftSpeed",
+            EngineUnit::RadianPerSecond,
+            Some(-native_max),
+            Some(native_max),
+            Some(shaft_frame),
+        );
+        let p_bearing_heat =
+            scalar_endpoint("Port_BearingHeat", EngineUnit::Watt, Some(0.0), None, None);
+        let p_brake_heat =
+            scalar_endpoint("Port_BrakeHeat", EngineUnit::Watt, Some(0.0), None, None);
+        // The tire realization owns contact work; native material contact has
+        // no separate tire-law heat output.
+        let p_tire_heat = (!is_physical || native_material.is_none())
+            .then(|| scalar_endpoint("Port_TireHeat", EngineUnit::Watt, Some(0.0), None, None));
+        let p_contact = p_tire_heat.map(|_| {
+            scalar_endpoint(
+                "Port_WheelContact",
+                EngineUnit::Dimensionless,
+                Some(0.0),
+                Some(1.0),
+                None,
             )
-        } else {
-            None
-        };
+        });
         let heat_ports = lunco_mobility::WheelHeatPorts {
             bearing: p_bearing_heat,
             brake: p_brake_heat,
@@ -3496,9 +3502,7 @@ fn setup_raycast_wheel(
     // traverse the entire collider tree every physics tick. The suspension
     // solver consumes only the nearest contact, so one bounded hit is the
     // complete physical query and keeps its cost independent of world extent.
-    .with_max_distance(lunco_mobility::suspension_ray_max_distance(
-        susp.rest_length,
-    ))
+    .with_max_distance(lunco_mobility::suspension_ray_max_distance(susp.rest_length) as f32)
     .with_max_hits(1);
     // Mask out the non-physical layers so suspension rays ignore trigger-zone
     // sensors (else the wheels ride up on an invisible waypoint sphere) and
@@ -3631,15 +3635,6 @@ fn setup_physical_wheel(
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
 
-    // `params.peak_torque` (N·m at full throttle) is the composed motor/gearbox
-    // axle torque, the SAME drive authority the raycast wheel uses — NOT the joint's
-    // `drive:angular:physics:maxForce`. That joint attribute is a PhysX
-    // joint-drive *saturation* limit (authored at 12000 in the demo scenes);
-    // feeding it straight into the motor made the rover apply ~30× its lunar
-    // weight in traction at full throttle and wheelie/launch on every forward
-    // input. Using the motor/gearbox reduction keeps joint and raycast rovers
-    // consistent. See `project_physical_rover_suspension`.
-
     // Move the visual projector's geometry basis onto the mesh child, keeping
     // the rigid body's authored pose independent of its generated geometry.
     let axle_local = params.axle_axis.normalize_or_zero();
@@ -3712,7 +3707,7 @@ fn setup_physical_wheel(
         ShouldBeDynamic,
         collider,
         lunco_usd_avian_contracts::UsdColliderSource(prim_path.path.clone()),
-        Friction::new(params.friction_mu),
+        Friction::new(params.friction_mu as f32),
         // Bearing drag belongs to the relative axle/housing coordinate in
         // JointTorqueActuator. World-axis damping would also resist steering
         // and chassis rotation and could not supply the same thermal work.
@@ -3720,15 +3715,11 @@ fn setup_physical_wheel(
         wheel_tf,
     ));
 
-    if continuous_collision {
-        commands
-            .entity(entity)
-            .try_insert(avian3d::prelude::SweptCcd::default());
-    } else {
-        commands
-            .entity(entity)
-            .try_remove::<avian3d::prelude::SweptCcd>();
-    }
+    commands
+        .entity(entity)
+        .try_insert(lunco_physics::continuous_collision_components(
+            continuous_collision,
+        ));
 
     // Spawn the avian joint. Anchors + axis are derived from the wheel's
     // own transform (which mirrors the USD `physics:localPos0` and
@@ -3787,20 +3778,20 @@ fn setup_physical_wheel(
         // wheel drive port. The generic co-simulation boundary applies that
         // scalar across this revolute joint; it never derives torque from a
         // command or from wheel speed.
-        JointTorqueActuator {
-            port_entity: p_drive,
-            speed_port_entity: p_speed,
-            control_entity,
-            brake_torque: params.brake_torque_max,
-            bearing_damping: params.bearing_damping,
-            bearing_heat_port: Some(heat_ports.bearing),
-            brake_heat_port: Some(heat_ports.brake),
-            rotational_inertia: params.axle_inertia(),
-            // The wheel hinge is authored about +X. Negative +X rotation is the
-            // demand-positive rolling sense for a chassis-forward -Z wheel;
-            // this is the convention used by both the Avian motor and shared
-            // tire solve.
-            drive_sign: -1.0,
+        {
+            let mut coupling = JointTorqueActuator::new(
+                p_drive,
+                p_speed,
+                control_entity,
+                lunco_physics::joint::JointCoordinateSign::Negative,
+            )
+            .expect("newly spawned wheel endpoints are distinct");
+            coupling.brake_torque = params.brake_torque_max;
+            coupling.bearing_damping = params.bearing_damping;
+            coupling.bearing_heat_port = Some(heat_ports.bearing);
+            coupling.brake_heat_port = Some(heat_ports.brake);
+            coupling.rotational_inertia = params.axle_inertia();
+            coupling
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
     ));
@@ -3872,7 +3863,10 @@ pub(crate) fn oriented_wheel_collider(collider: Collider, basis: DQuat) -> Colli
     if basis.abs_diff_eq(DQuat::IDENTITY, 1e-12) {
         collider
     } else {
-        Collider::compound(vec![(Position(DVec3::ZERO), Rotation(basis), collider)])
+        Collider::from(avian3d::parry::shape::SharedShape::compound(vec![(
+            avian3d::parry::math::Pose::from_parts(DVec3::ZERO, basis.into()),
+            collider.shape_scaled().clone(),
+        )]))
     }
 }
 
@@ -4017,9 +4011,9 @@ fn reconstruct_proxy_wheels(
         // World pose at the rigid mount offset. The cylinder
         // collider (axis baked into its compound) lands correctly for contact; the
         // visual child's spin is layered on by `animate_proxy_physical_wheels`.
-        let (p, q) = proxy_wheel_pose(c_pos.0, c_rot.0, wheel.mount_local.as_dvec3());
+        let (p, q) = proxy_wheel_pose(c_pos.0, c_rot.0.as_dquat(), wheel.mount_local.as_dvec3());
         pos.0 = p;
-        rot.0 = q;
+        rot.0 = q.as_quat();
     }
 }
 
@@ -4068,7 +4062,7 @@ fn animate_proxy_physical_wheels(
     use std::f64::consts::TAU;
     // Sign mapping rolling speed → roll about the axle so the contact patch
     // tracks the ground (matches the host's solved torque-driven body spin). Mirrors
-    // the `drive_sign = -1` axle convention used by `JointTorqueActuator`.
+    // the negative joint-coordinate sign used by `JointTorqueActuator`.
     const ROLL_SIGN: f64 = -1.0;
 
     let dt = time.delta_secs_f64();
@@ -4117,7 +4111,7 @@ fn animate_proxy_physical_wheels(
         let chassis_pos = GridPos(pos.0);
         let (hub_pos, _) = wheel_hub_pose(
             chassis_pos,
-            GridRot(rot.0),
+            GridRot(rot.0.as_dquat()),
             wheel.mount_local.as_dvec3(),
             DQuat::IDENTITY,
         );
@@ -4126,10 +4120,10 @@ fn animate_proxy_physical_wheels(
             vang,
             hub_pos,
             chassis_pos,
-            GridRot(rot.0),
-            center_of_mass.0,
+            GridRot(rot.0.as_dquat()),
+            center_of_mass.0.as_dvec3(),
         );
-        let forward = VehicleFrame::forward(GridRot(wheel_rot.0));
+        let forward = VehicleFrame::forward(GridRot(wheel_rot.0.as_dquat()));
         let Some(w) = wheel_roll_rate(hub_vel, forward, wheel.wheel_radius as f64) else {
             continue;
         };
@@ -4406,7 +4400,7 @@ mod authored_sun_direction_tests {
 
 /// Queue prim identity before its render projection becomes available.
 fn queue_added_usd_sim_prim(
-    trigger: On<Add, UsdPrimPath>,
+    trigger: On<Add<UsdPrimPath>>,
     unprocessed: Query<(), Without<UsdSimProcessed>>,
     mut pending: ResMut<PendingUsdSimPrimWork>,
 ) {
@@ -4418,7 +4412,7 @@ fn queue_added_usd_sim_prim(
 /// The visual projection marker is the readiness boundary for simulation
 /// projection, so its arrival reopens work even if the path arrived earlier.
 fn queue_projected_usd_sim_prim(
-    trigger: On<Add, lunco_usd_bevy_scene::UsdSceneProjected>,
+    trigger: On<Add<lunco_usd_bevy_scene::UsdSceneProjected>>,
     eligible: Query<(), (With<UsdPrimPath>, Without<UsdSimProcessed>)>,
     mut pending: ResMut<PendingUsdSimPrimWork>,
 ) {
@@ -4428,14 +4422,14 @@ fn queue_projected_usd_sim_prim(
 }
 
 fn forget_removed_usd_sim_prim(
-    trigger: On<Remove, UsdPrimPath>,
+    trigger: On<Remove<UsdPrimPath>>,
     mut pending: ResMut<PendingUsdSimPrimWork>,
 ) {
     pending.0.forget(trigger.entity);
 }
 
 fn forget_unprojected_usd_sim_prim(
-    trigger: On<Remove, lunco_usd_bevy_scene::UsdSceneProjected>,
+    trigger: On<Remove<lunco_usd_bevy_scene::UsdSceneProjected>>,
     mut pending: ResMut<PendingUsdSimPrimWork>,
 ) {
     pending.0.forget(trigger.entity);
@@ -4444,7 +4438,7 @@ fn forget_unprojected_usd_sim_prim(
 /// Live USD edits invalidate the processed marker; queue that prim again only
 /// while it still has the visual projection required by this owner.
 fn queue_invalidated_usd_sim_prim(
-    trigger: On<Remove, UsdSimProcessed>,
+    trigger: On<Remove<UsdSimProcessed>>,
     eligible: Query<
         (),
         (
@@ -5217,8 +5211,8 @@ fn activate_dynamic_bodies(
                 .unwrap_or(DVec3::ZERO);
             commands.entity(entity).try_insert((
                 RigidBody::Dynamic,
-                LinearVelocity(linear),
-                AngularVelocity(angular),
+                LinearVelocity(linear.as_vec3()),
+                AngularVelocity(angular.as_vec3()),
             ));
         }
 

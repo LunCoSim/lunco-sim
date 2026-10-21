@@ -76,6 +76,7 @@ Undocumented code is considered technical debt. All modules, functions, structs,
 
 ### Data Precision
 - **Physics**: All physical magnitudes, dimensions, and spatial vectors (forces, torques, axes) MUST use `f64` (double precision) to ensure simulation stability and accuracy at planetary scales.
+- **Avian 0.8 precision TODO (approved 2026-10-21)**: The native rigid-body solver uses f32 internally; world positions remain f64. This migration accepts that engine contract to use upstream CCD, contact recycling, and lifecycle fixes. Authored parameters, domain calculations, signals, and persistence retain their existing f64 contracts. TODO: evaluate and address the solver precision boundary against measured local-frame joint, contact, and long-duration accuracy requirements. Conversions must be explicit; widening native results does not restore lost precision.
 - **Signals & Control**: Every exchanged signal value — a control command, an actuator setpoint, a sensor reading — is one `Port` carrying `f64`, matching the FMI/SSP scalar-exchange contract. Command arguments COULD use `f32` (single precision) to optimize for memory and bandwidth in high-frequency messaging.
 
 ## Governance

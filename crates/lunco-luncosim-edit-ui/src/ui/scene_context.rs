@@ -69,7 +69,7 @@ pub fn sync_active_pointer_policy(
 /// `sync_active_pointer_policy` switches hit blocking before the next backend
 /// pass when the physical mouse button changes.
 pub fn apply_pointer_policy(
-    trigger: On<Insert, ScenePointerPolicy>,
+    trigger: On<Insert<ScenePointerPolicy>>,
     q_policy: Query<&ScenePointerPolicy>,
     active: Res<ActivePointerButton>,
     mut commands: Commands,

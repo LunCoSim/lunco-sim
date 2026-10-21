@@ -915,28 +915,28 @@ impl Default for PendingCelestialProjection {
 }
 
 fn queue_celestial_projection_on_prim_insert(
-    trigger: On<Insert, lunco_usd_bevy_scene::UsdPrimPath>,
+    trigger: On<Insert<lunco_usd_bevy_scene::UsdPrimPath>>,
     mut pending: ResMut<PendingCelestialProjection>,
 ) {
     pending.0.queue(trigger.entity);
 }
 
 fn queue_celestial_projection_on_root_insert(
-    trigger: On<Insert, lunco_usd_bevy_scene::UsdSceneRoot>,
+    trigger: On<Insert<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut pending: ResMut<PendingCelestialProjection>,
 ) {
     pending.0.queue(trigger.entity);
 }
 
 fn forget_removed_celestial_projection_prim(
-    trigger: On<Remove, lunco_usd_bevy_scene::UsdPrimPath>,
+    trigger: On<Remove<lunco_usd_bevy_scene::UsdPrimPath>>,
     mut pending: ResMut<PendingCelestialProjection>,
 ) {
     pending.0.forget(trigger.entity);
 }
 
 fn queue_celestial_projection_after_root_invalidation(
-    trigger: On<Remove, CelestialProjected>,
+    trigger: On<Remove<CelestialProjected>>,
     prims: Query<(), With<lunco_usd_bevy_scene::UsdPrimPath>>,
     mut pending: ResMut<PendingCelestialProjection>,
 ) {

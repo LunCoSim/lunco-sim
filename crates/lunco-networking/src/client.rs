@@ -161,7 +161,7 @@ pub(crate) fn spawn_client(commands: &mut Commands, prepared: PreparedClient) ->
         .spawn((
             Name::new("LunCoClient"),
             Client::default(),
-            Link::new(sim_latency_conditioner()),
+            Link::default().with_conditioner(sim_latency_conditioner()),
             LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)),
             netcode,
             io,
@@ -297,7 +297,7 @@ fn update_client_netstatus(local: Res<LocalSession>, mut status: ResMut<NetStatu
 /// `update_client_netstatus` then keeps `NetStatus` consistent with the cleared
 /// `LocalSession` on subsequent frames.
 fn on_client_disconnected(
-    trigger: On<Add, Disconnected>,
+    trigger: On<Add<Disconnected>>,
     mut local: ResMut<LocalSession>,
     mut connection: ResMut<ClientConnection>,
     mut status: ResMut<NetStatus>,
@@ -385,11 +385,10 @@ pub(crate) fn sim_latency_conditioner() -> Option<RecvLinkConditioner> {
         return None;
     }
     warn!("[net] SIMULATED inbound latency ENABLED: {ms} ms (LUNCO_SIM_LATENCY_MS)");
-    Some(RecvLinkConditioner::new(LinkConditionerConfig::new(
-        std::time::Duration::from_millis(ms),
-        std::time::Duration::ZERO,
-        0.0,
-    )))
+    Some(RecvLinkConditioner::new(
+        LinkConditionerConfig::default()
+            .with_incoming_latency(std::time::Duration::from_millis(ms)),
+    ))
 }
 
 /// Drain outgoing commands to the server on their declared channel.

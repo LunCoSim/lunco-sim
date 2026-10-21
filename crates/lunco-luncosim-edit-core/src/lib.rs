@@ -73,12 +73,12 @@ impl Plugin for SceneEditPlugin {
         // Scene picking is bevy_picking-driven (egui occlusion handled by the
         // framework's egui picking backend). Streamed DEM ground contributes
         // hits through the same backend set using GridSurfaceQuery. Selection,
-        // placement and terrain-sculpt observe Pointer<Click> and gate on the
+        // placement and terrain-sculpt observe PointerClick and gate on the
         // active mode resources; this does not arbitrate every viewport gesture.
         app.add_observer(spawn::on_scene_click_spawn);
         app.add_observer(terrain_tools::on_scene_click_terrain);
         // Streamed DEM tiles intentionally keep no CPU vertex copy, so the mesh
-        // picking backend cannot hit open terrain. Feed the same Pointer<Click>
+        // picking backend cannot hit open terrain. Feed the same PointerClick
         // pipeline from the analytic GridSurfaceQuery instead of adding a second
         // click path to every terrain-aware tool.
         app.add_systems(

@@ -219,13 +219,27 @@ pub(crate) fn on_inspector_component_edit(
             }
         }
         InspectorComponentEdit::LinearDamping { entity, value } => {
+            if !value.is_finite() || value < 0.0 || value > f64::from(f32::MAX) {
+                warn!(
+                    ?entity,
+                    "damping edit rejected: value exceeds the native solver range"
+                );
+                return;
+            }
             if let Ok(mut damping) = linear.get_mut(entity) {
-                damping.0 = value;
+                damping.0 = value as f32;
             }
         }
         InspectorComponentEdit::AngularDamping { entity, value } => {
+            if !value.is_finite() || value < 0.0 || value > f64::from(f32::MAX) {
+                warn!(
+                    ?entity,
+                    "damping edit rejected: value exceeds the native solver range"
+                );
+                return;
+            }
             if let Ok(mut damping) = angular.get_mut(entity) {
-                damping.0 = value;
+                damping.0 = value as f32;
             }
         }
         InspectorComponentEdit::JointSetpoint { holder, value } => {

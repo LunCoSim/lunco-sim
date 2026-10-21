@@ -36,6 +36,27 @@ pub struct Port {
     pub value: f64,
 }
 
+impl Port {
+    /// Build a scalar endpoint and its validated engineering contract together.
+    /// Domain projections use this bundle so the value's public aliases and
+    /// direct endpoint share one unit, range and frame owner.
+    pub fn with_contract(
+        value: f64,
+        contract: crate::ScalarPortContract,
+    ) -> Result<(Self, crate::ScalarPortContracts), String> {
+        contract
+            .metadata(
+                crate::ports::PortDirection::InOut,
+                "scalar endpoint",
+                "port owner",
+            )
+            .validate(value)
+            .map_err(|error| format!("invalid initial scalar value: {error}"))?;
+        let contracts = crate::ScalarPortContracts::new([(crate::PORT_NAME.to_owned(), contract)])?;
+        Ok((Self { value }, contracts))
+    }
+}
+
 /// Marks an endpoint whose input changes authoritative simulated state.
 ///
 /// Engine-owned backends add this marker to their actual state-writing

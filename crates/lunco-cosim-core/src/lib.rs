@@ -22,6 +22,3 @@ pub use connection::{PortHolds, RealtimeSafe, SimConnection};
 pub use contract::*;
 pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};
 pub use lunco_port_core::ports::ScalarPortMap;
-
-/// The fixed port name exposed by a generic scalar port endpoint.
-pub const PORT_NAME: &str = "value";

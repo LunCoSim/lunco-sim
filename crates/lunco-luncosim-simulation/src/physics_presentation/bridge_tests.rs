@@ -9,7 +9,6 @@
 //! A body under constant velocity must travel `v * t`, and its solved
 //! `Position` must never be dragged backwards by the render easing.
 
-use avian3d::math::Vector;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -62,18 +61,25 @@ fn shell(app: &mut App) -> Entity {
 /// solved one.
 fn make_app() -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        bevy::diagnostic::DiagnosticsPlugin,
+    ));
     app.init_asset::<Mesh>();
+    app.insert_resource(lunco_time::MissionClock::anchored(2451545.0, 0))
+        .init_resource::<lunco_physics::PhysicsHolds>()
+        .init_resource::<lunco_core::RuntimeFaults>();
     app.add_plugins((
         big_space::plugin::BigSpaceMinimalPlugins,
-        PhysicsPlugins::default().set(PhysicsInterpolationPlugin::interpolate_all()),
+        crate::luncosim_physics_plugins(),
         BigSpacePhysicsBridgePlugin,
     ));
     // 10 ms render frame vs the 15.625 ms fixed tick.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
         10_000,
     )));
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     app.insert_resource(SubstepCount(INTERPOLATION_REPRODUCTION_SUBSTEPS));
     app.finish();
     app.cleanup();
@@ -95,7 +101,7 @@ fn interpolation_does_not_drag_the_solved_position() {
         .spawn((
             RigidBody::Dynamic,
             Collider::cuboid(1.0, 1.0, 1.0),
-            LinearVelocity(Vector::new(4.0, 0.0, 0.0)),
+            LinearVelocity(Vec3::new(4.0, 0.0, 0.0)),
             CellCoord::ZERO,
             Transform::default(),
             GlobalTransform::default(),
@@ -144,7 +150,7 @@ fn queued_fixed_cycles_do_not_extrapolate_the_render_pose() {
         .world_mut()
         .spawn((
             RigidBody::Dynamic,
-            LinearVelocity(Vector::X),
+            LinearVelocity(Vec3::X),
             Transform::default(),
             ChildOf(grid),
         ))

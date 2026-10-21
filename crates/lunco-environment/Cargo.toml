@@ -28,7 +28,7 @@ bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh",
 # shadow-cache `Image`s. These are the POD descriptors `bevy_image` itself takes
 # from `wgpu-types`; `bevy::render::render_resource` only re-exports them, and
 # importing THAT would drag in wgpu + naga. `wgpu-types` is not `wgpu`.
-wgpu-types = "29"
+wgpu-types = "30"
 avian3d = { workspace = true }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }

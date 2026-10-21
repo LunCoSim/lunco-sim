@@ -283,15 +283,15 @@ fn valid_raycast_contact(
     let hit = hits
         .iter_sorted()
         .find(|h| h.normal.is_finite() && h.normal.length_squared() > 1.0e-12)?;
-    if !hit.distance.is_finite() || hit.distance >= suspension.rest_length {
+    if !hit.distance.is_finite() || f64::from(hit.distance) >= suspension.rest_length {
         return None;
     }
     let support_body = static_body_for_collider(hit.entity, rigid_bodies, collider_of)?;
-    let normal = support_normal(hit.normal)?;
+    let normal = support_normal(hit.normal.as_dvec3())?;
     let (position, rotation) = bodies.get(mount.body).ok()?;
     let (hub, heading) = wheel_hub_pose(
         GridPos(position.0),
-        GridRot(rotation.0),
+        GridRot(rotation.0.as_dquat()),
         mount.local.translation.as_dvec3(),
         mount.local.rotation.as_dquat() * wheel.heading_rotation,
     );
@@ -303,7 +303,7 @@ fn valid_raycast_contact(
         heading.0,
         suspension.rest_length,
         wheel.wheel_radius,
-        hit.distance,
+        f64::from(hit.distance),
     );
     let (support, terrain) = support_owner(hit.entity, support_body, tiles, terrains);
     TrailContact::new(point, normal, support, terrain)
@@ -342,7 +342,7 @@ fn physical_wheel_contact_point(
                 continue;
             };
             for point in &manifold.points {
-                let impulse = point.normal_impulse;
+                let impulse = f64::from(point.normal_impulse);
                 if impulse.is_finite() && impulse > 0.0 && point.point.is_finite() {
                     let sum =
                         supports
@@ -478,7 +478,7 @@ pub(crate) fn sample_vehicle_trails(
         let mut upright = false;
         while let Some(entity) = parent {
             if let Ok((_, rotation)) = bodies.get(entity) {
-                upright = (rotation.0 * DVec3::Y).y > TRAIL_MIN_SUPPORT_NORMAL_Y;
+                upright = (rotation.0.as_dquat() * DVec3::Y).y > TRAIL_MIN_SUPPORT_NORMAL_Y;
                 break;
             }
             parent = parents.get(entity).ok().map(ChildOf::parent);

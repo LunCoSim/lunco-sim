@@ -19,12 +19,13 @@ use bevy::ecs::{
     query::ROQueryItem,
     system::{SystemParamItem, lifetimeless::SRes},
 };
-use bevy::pbr::{MaterialBindGroupAllocators, PreparedMaterial, RenderMaterialBindings};
+use bevy::extract::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::pbr::PreparedMaterial;
 use bevy::prelude::*;
+use bevy::render::material_bind_groups::{MaterialBindGroupAllocators, RenderMaterialBindings};
 use bevy::render::{
     GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
     erased_render_asset::ErasedRenderAssets,
-    extract_component::{ExtractComponent, ExtractComponentPlugin},
     mesh::allocator::MeshSlabs,
     render_phase::{
         AddRenderCommand, BinnedRenderPhaseType, DrawFunctions, InputUniformIndex, PhaseItem,
@@ -54,10 +55,12 @@ use lunco_render::{EditorPreviewCamera, ProceduralSkybox, SceneCamera};
 // Use Bevy's render adapter marker parameter to extract the existing camera
 // role without adding render dependencies to the render-free intent crate.
 struct PreviewSkyIsolation;
-impl bevy::render::sync_component::SyncComponent<PreviewSkyIsolation> for EditorPreviewCamera {
+impl bevy::render::sync_component::SyncComponent<RenderApp, PreviewSkyIsolation>
+    for EditorPreviewCamera
+{
     type Target = Self;
 }
-impl ExtractComponent<PreviewSkyIsolation> for EditorPreviewCamera {
+impl ExtractComponent<RenderApp, PreviewSkyIsolation> for EditorPreviewCamera {
     type QueryData = &'static Self;
     type QueryFilter = ();
     type Out = Self;
@@ -73,6 +76,7 @@ use std::collections::HashMap;
 /// It lives on the main entity too so Bevy's normal `ShaderMaterial` asset
 /// extraction/allocator prepares the exact same bind group used by mesh looks.
 #[derive(Component, Clone, Debug, ExtractComponent)]
+#[extract_app(RenderApp)]
 pub(crate) struct ProceduralSkyboxMaterial {
     pub(crate) material: Handle<super::ShaderMaterial>,
     pub(crate) shader: Handle<Shader>,
@@ -164,9 +168,10 @@ impl SpecializedRenderPipeline for ProceduralSkyboxPipeline {
 }
 
 pub(crate) fn build(app: &mut App) {
-    app.add_plugins(ExtractComponentPlugin::<ProceduralSkyboxMaterial>::default())
+    app.add_plugins(ExtractComponentPlugin::<ProceduralSkyboxMaterial, RenderApp>::default())
         .add_plugins(ExtractComponentPlugin::<
             EditorPreviewCamera,
+            RenderApp,
             PreviewSkyIsolation,
         >::default())
         .add_observer(remove_skybox_material)
@@ -473,9 +478,14 @@ fn queue_procedural_skybox(
         .read()
         .id::<DrawProceduralSkyboxCommands>();
     let mut skyboxes = skyboxes.iter();
-    let mut skybox = skyboxes
-        .next()
-        .map(|(entity, main_entity, skybox)| (entity, *main_entity, skybox.shader.clone()));
+    let mut skybox = skyboxes.next().map(|(entity, main_entity, skybox)| {
+        (
+            entity,
+            *main_entity,
+            skybox.shader.clone(),
+            skybox.material.id().untyped(),
+        )
+    });
     if skyboxes.next().is_some() {
         warn_once!(
             "multiple procedural skybox owners are active; the background is disabled until the scene has one owner"
@@ -493,7 +503,7 @@ fn queue_procedural_skybox(
             }
             continue;
         }
-        let Some((render_entity, main_entity, shader)) = skybox.as_ref() else {
+        let Some((render_entity, main_entity, shader, material_id)) = skybox.as_ref() else {
             if let Some((previous, _)) = previous_skyboxes.remove(&view_entity) {
                 opaque_phase.remove(previous);
             }
@@ -520,7 +530,7 @@ fn queue_procedural_skybox(
                 lightmap_slab: None,
             },
             Opaque3dBinKey {
-                asset_id: AssetId::<Mesh>::invalid().untyped(),
+                asset_id: *material_id,
             },
             (*render_entity, *main_entity),
             InputUniformIndex::default(),
@@ -530,7 +540,7 @@ fn queue_procedural_skybox(
     }
 }
 
-fn remove_skybox_material(remove: On<Remove, ProceduralSkybox>, mut commands: Commands) {
+fn remove_skybox_material(remove: On<Remove<ProceduralSkybox>>, mut commands: Commands) {
     commands
         .entity(remove.entity)
         .try_remove::<ProceduralSkyboxMaterial>();

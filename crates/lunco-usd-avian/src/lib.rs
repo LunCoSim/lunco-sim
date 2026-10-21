@@ -38,11 +38,12 @@
 //!
 //! ## Why Deferred Processing?
 //!
-//! The `On<Add, UsdPrimPath>` observer fires when the entity is spawned, but the USD asset
+//! The `On<Add<UsdPrimPath>>` observer fires when the entity is spawned, but the USD asset
 //! may not be loaded yet (async loading). The `process_usd_avian_prims` system runs in the
 //! `Update` schedule and retries every frame until the asset is available.
 
-use avian3d::dynamics::solver::{islands::PhysicsIslands, joint_graph::JointGraph};
+use avian3d::dynamics::joints::joint_graph::JointGraph;
+use avian3d::dynamics::solver::islands::PhysicsIslands;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
@@ -89,8 +90,8 @@ use material::read_physics_material;
 /// owns the entity.
 #[derive(Clone, Debug)]
 pub struct RuntimeJointFact {
-    /// Live entity bits, stable for the current process/session.
-    pub entity_bits: u64,
+    /// Live entity in this World; transports lower its identity at their boundary.
+    pub entity: Entity,
     /// Authored USD path, when the entity came from a composed stage.
     pub path: Option<String>,
     /// Whether the generic `PhysicsJointLink` endpoint contract is present.
@@ -139,7 +140,7 @@ pub fn runtime_joint_facts(
         let linked = entity.get::<lunco_physics::PhysicsJointLink>().is_some();
         let pending = entity.get::<lunco_physics::PhysicsJointPending>().is_some();
         let native = entity
-            .get::<avian3d::dynamics::solver::joint_graph::JointComponentId>()
+            .get::<avian3d::dynamics::joints::joint_graph::JointComponentId>()
             .is_some_and(|id| id.id().is_some());
         let graph = graph_entities
             .as_ref()
@@ -151,7 +152,7 @@ pub fn runtime_joint_facts(
             continue;
         }
         facts.push(RuntimeJointFact {
-            entity_bits: entity.id().to_bits(),
+            entity: entity.id(),
             path,
             linked,
             pending,
@@ -164,7 +165,7 @@ pub fn runtime_joint_facts(
     facts.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
-            .then(left.entity_bits.cmp(&right.entity_bits))
+            .then(left.entity.to_bits().cmp(&right.entity.to_bits()))
     });
     facts
 }
@@ -366,7 +367,7 @@ pub fn subtree_requires_stage_projection_reset(
         world.get::<RigidBody>(*entity).is_some()
             || world.get::<Collider>(*entity).is_some()
             || world
-                .get::<avian3d::dynamics::solver::joint_graph::JointComponentId>(*entity)
+                .get::<avian3d::dynamics::joints::joint_graph::JointComponentId>(*entity)
                 .is_some()
             || world
                 .get::<lunco_physics::PhysicsJointLink>(*entity)
@@ -394,7 +395,7 @@ fn prepare_physics_teardown(
         world.get::<RigidBody>(*entity).is_some()
             || world.get::<Collider>(*entity).is_some()
             || world
-                .get::<avian3d::dynamics::solver::joint_graph::JointComponentId>(*entity)
+                .get::<avian3d::dynamics::joints::joint_graph::JointComponentId>(*entity)
                 .is_some()
             || world
                 .get::<lunco_physics::PhysicsJointLink>(*entity)
@@ -414,7 +415,7 @@ fn prepare_physics_teardown(
     }
 
     let graph_joints: Vec<Entity> = world
-        .resource::<avian3d::dynamics::solver::joint_graph::JointGraph>()
+        .resource::<avian3d::dynamics::joints::joint_graph::JointGraph>()
         .graph()
         .all_edge_weights()
         .filter(|edge| {
@@ -427,7 +428,7 @@ fn prepare_physics_teardown(
 
     let joints: Vec<Entity> = {
         let mut query = world.query_filtered::<Entity, (
-            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+            With<avian3d::dynamics::joints::joint_graph::JointComponentId>,
             Or<(
                 With<bevy::ecs::entity_disabling::Disabled>,
                 Without<bevy::ecs::entity_disabling::Disabled>,
@@ -457,9 +458,7 @@ fn prepare_physics_teardown(
             .collect()
     };
 
-    // Retire constraints before contacts and bodies. The public graph API lets
-    // us tolerate an edge whose island was already emptied by an earlier body
-    // teardown without asking Avian's observer to unlink it a second time.
+    // Native hooks retire constraints before the scene hierarchy is removed.
     lunco_usd_avian_joints::retire_native_joints(world, &joints)?;
 
     // Removing ColliderMarker is Avian's supported contact-graph removal path;
@@ -856,7 +855,7 @@ fn build_terrain_mesh_colliders(
 /// By that point the plan is committed and the same reader contract used by
 /// visual and simulation projection is available for physics components.
 fn process_usd_avian_prims(
-    trigger: On<Add, UsdSceneProjected>,
+    trigger: On<Add<UsdSceneProjected>>,
     query: Query<(&UsdPrimPath, Option<&UsdInstanceMember>), Without<UsdPhysicsProjected>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
@@ -1353,7 +1352,7 @@ fn extract_avian_prim(
     if has_rigid_body_api {
         // FIRST, before the `Collider` and `RigidBody` below, and that order is
         // load-bearing. `Commands` apply in insertion order and observers fire at
-        // apply time, so avian's `On<Add, RigidBody>` mass observer (avian3d
+        // apply time, so avian's `On<Add<RigidBody>>` mass observer (avian3d
         // `dynamics/rigid_body/mass_properties/mod.rs:284-289`) runs the instant
         // `RigidBody` lands. The overrides and their `NoAuto*` markers must already
         // be on the entity by then, or that observer derives
@@ -1466,11 +1465,11 @@ fn extract_avian_prim(
             prepared_colliders.push((part, source_path, material, density));
         }
         apply_collision_groups(commands, entity, groups, sdf_path);
-        if ccd && simulated && !kinematic {
-            commands.entity(entity).try_insert(SweptCcd::default());
-        } else {
-            commands.entity(entity).try_remove::<SweptCcd>();
-        }
+        commands
+            .entity(entity)
+            .try_insert(lunco_physics::continuous_collision_components(
+                ccd && simulated && !kinematic,
+            ));
 
         // The schema's own `physics:rigidBodyEnabled` (default true) says whether
         // this body is simulated; a disabled body is unmoving collision geometry.
@@ -1500,7 +1499,7 @@ fn extract_avian_prim(
             let mut collider = commands.spawn((
                 Name::new(format!("USD collider {}", part.source_path)),
                 Transform::from_translation(part.position.0.as_vec3())
-                    .with_rotation(part.rotation.0.as_quat()),
+                    .with_rotation(part.rotation.0),
                 GlobalTransform::default(),
                 ChildOf(entity),
                 ColliderOf { body: entity },
@@ -1606,7 +1605,7 @@ fn local_vector_to_world(
 /// stamps the deferred [`PendingUsdJoint`] carrier from the standard composed
 /// UsdPhysics joint attributes through the shared reader boundary.
 fn on_add_usd_prim(
-    trigger: On<Add, UsdPrimPath>,
+    trigger: On<Add<UsdPrimPath>>,
     query: Query<&UsdPrimPath>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
@@ -1940,9 +1939,9 @@ fn build_usd_physics_joints(
             "PhysicsPrismaticJoint" => {
                 let motor = pending.drive.map(|d| LinearMotor {
                     enabled: d.is_active(),
-                    target_position: d.target_position.unwrap_or(0.0),
-                    target_velocity: d.target_velocity.unwrap_or(0.0),
-                    max_force: d.max_force.unwrap_or(f64::INFINITY),
+                    target_position: d.target_position.unwrap_or(0.0) as f32,
+                    target_velocity: d.target_velocity.unwrap_or(0.0) as f32,
+                    max_force: d.max_force.unwrap_or(f64::INFINITY) as f32,
                     motor_model: resolved_drive_model.expect("resolved USD prismatic drive motor"),
                 });
                 lunco_usd_avian_joints::attach_prismatic_joint(
@@ -1965,9 +1964,9 @@ fn build_usd_physics_joints(
             "PhysicsRevoluteJoint" => {
                 let motor = pending.drive.map(|d| AngularMotor {
                     enabled: d.is_active(),
-                    target_position: d.target_position.unwrap_or(0.0),
-                    target_velocity: d.target_velocity.unwrap_or(0.0),
-                    max_torque: d.max_force.unwrap_or(f64::INFINITY),
+                    target_position: d.target_position.unwrap_or(0.0) as f32,
+                    target_velocity: d.target_velocity.unwrap_or(0.0) as f32,
+                    max_torque: d.max_force.unwrap_or(f64::INFINITY) as f32,
                     motor_model: resolved_drive_model.expect("resolved USD revolute drive motor"),
                 });
                 lunco_usd_avian_joints::attach_revolute_joint(
@@ -2179,18 +2178,22 @@ fn apply_rigid_body_mass_props(
     let center_of_mass = read_authored_vec3(reader, sdf_path, ptok::PHYSICS_CENTER_OF_MASS)?;
     let linear_damping = match read_authored_real(reader, sdf_path, PHYSX_LINEAR_DAMPING)? {
         None => None,
-        Some(value) if value.is_finite() && value >= 0.0 => Some(value),
+        Some(value) if value.is_finite() && value >= 0.0 && value <= f64::from(f32::MAX) => {
+            Some(value as f32)
+        }
         Some(_) => return Err(()),
     };
     let angular_damping = match read_authored_real(reader, sdf_path, PHYSX_ANGULAR_DAMPING)? {
         None => None,
-        Some(value) if value.is_finite() && value >= 0.0 => Some(value),
+        Some(value) if value.is_finite() && value >= 0.0 && value <= f64::from(f32::MAX) => {
+            Some(value as f32)
+        }
         Some(_) => return Err(()),
     };
     let authored_linear = match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_VELOCITY)? {
         Some(vel) => {
             let vel = local_vector_to_world(reader, sdf_path, conv.point_d(vel)).map_err(|_| ())?;
-            if !vel.is_finite() {
+            if !lunco_physics::avian_backend_vector_is_valid(vel) {
                 return Err(());
             }
             Some(vel)
@@ -2206,7 +2209,7 @@ fn apply_rigid_body_mass_props(
                     conv.dir_d(ang) * std::f64::consts::PI / 180.0,
                 )
                 .map_err(|_| ())?;
-                if !ang.is_finite() {
+                if !lunco_physics::avian_backend_vector_is_valid(ang) {
                     return Err(());
                 }
                 Some(ang)
@@ -2352,16 +2355,9 @@ pub fn insert_physics_material(
             };
             commands.entity(entity).try_insert(friction);
 
-            // Avian snapshots `ActiveCollisionHooks` when it creates the
-            // collider-tree proxy.  Adding MODIFY_CONTACTS later through a
-            // Changed<Friction> system updates only the broad-phase filter bit
-            // in Avian 0.7, not the contact-modification bit.  Arm this hook at
-            // the same load-time boundary as the material, before the collider
-            // is admitted, so authored static friction is actually part of the
-            // contact contract for compound and standalone surfaces alike.
-            if (friction.static_coefficient - friction.dynamic_coefficient).abs()
-                > avian3d::math::Scalar::EPSILON
-            {
+            // Arm material contact modification before collider admission so
+            // the native pair contract includes authored static friction.
+            if (friction.static_coefficient - friction.dynamic_coefficient).abs() > f32::EPSILON {
                 collision_filters::enable_collision_hook(
                     commands,
                     entity,
@@ -2614,7 +2610,9 @@ def Xform "World"
                 .map(|c| format!("{c:?}")),
             world.get::<Mass>(e).map(|m| m.0),
             world.get::<super::ShouldBeDynamic>(e).is_some(),
-            world.get::<SweptCcd>(e).is_some(),
+            world
+                .get::<SweptCcd>(e)
+                .is_some_and(|ccd| !ccd.filter.is_empty()),
         )
     }
 

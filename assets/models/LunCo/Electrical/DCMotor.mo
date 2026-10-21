@@ -17,6 +17,9 @@ model DCMotor
   input Real demand "Normalized motor demand, -1..1";
   input Real speed(unit="rad/s") "Measured shaft speed from the mechanical engine";
 
+  input Real resistance_scale(unit="1") = 1.0
+    "Winding resistance / nameplate resistance, supplied by an authored temperature/material law";
+
   Pin p;
 
   output Real electrical_power(unit="W") "Electrical power drawn by the motor drive";
@@ -43,7 +46,8 @@ equation
   // a continuous thermal nameplate rating does not specify stall current.
   back_emf_constant = v_rated / no_load_speed;
   torque_constant = back_emf_constant;
-  resistance = torque_constant * v_rated / stall_torque;
+  assert(resistance_scale > 0.0, "DCMotor requires a positive resistance scale");
+  resistance = torque_constant * v_rated / stall_torque * resistance_scale;
 
   shaft_speed = speed;
   winding_voltage = demand * p.v;

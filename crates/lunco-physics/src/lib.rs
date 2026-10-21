@@ -26,19 +26,12 @@ use bevy::prelude::*;
 use std::time::Duration;
 
 pub mod assembly;
-pub mod body_mass;
-pub mod ccd;
-pub mod drive;
-pub use ccd::{
-    ContinuousCollisionDiagnostics, ContinuousCollisionPlugin, ContinuousCollisionSettings,
-};
 pub mod avian_backend;
-mod constraint_response;
+pub mod body_mass;
+pub mod drive;
 pub mod escape;
 pub mod force_ports;
 pub mod joint;
-mod joint_projection;
-pub mod joint_solver;
 pub mod kinematics;
 pub mod occlusion;
 pub mod order;
@@ -58,7 +51,6 @@ pub use avian_backend::{
     avian_backend_vector_is_valid,
 };
 pub use escape::{EscapeDiagnosticPlugin, PhysicsObjectPaused, WorldBounds, pause_physics_members};
-pub use joint_solver::{DeterministicJointSolverPlugin, PhysicsJointSolvePass};
 pub use order::{
     PhysicsOrderError, PhysicsOrderKey, ordered_physics_entities, report_invalid_physics_order,
 };
@@ -86,6 +78,28 @@ pub use support::{
 /// changes the physical result and cannot be a hidden application fallback.
 ///
 pub const DEFAULT_SUBSTEP_COUNT: u32 = 8;
+
+/// Native CCD configuration for an explicitly admitted continuous body.
+/// Speculative contacts expand moving broad-phase bounds before solving;
+/// nonlinear sweeps additionally catch motion past thin or rotating geometry.
+/// Both mechanisms are disabled when the authored body opts out.
+pub fn continuous_collision_components(
+    enabled: bool,
+) -> (avian3d::prelude::SweptCcd, avian3d::prelude::SpeculativeCcd) {
+    use avian3d::prelude::{CcdFilter, SpeculativeCcd, SweptCcd};
+    (
+        SweptCcd::default().with_filter(if enabled {
+            CcdFilter::ALL
+        } else {
+            CcdFilter::NONE
+        }),
+        if enabled {
+            SpeculativeCcd::MAX
+        } else {
+            SpeculativeCcd::ZERO
+        },
+    )
+}
 
 /// Bounds for the live solver-resolution diagnostic control.
 ///
@@ -186,8 +200,8 @@ pub fn set_contact_friction(
         || !friction.static_coefficient.is_finite()
         || friction.dynamic < 0.0
         || friction.static_coefficient < 0.0
-        || friction.dynamic > avian3d::math::Scalar::MAX
-        || friction.static_coefficient > avian3d::math::Scalar::MAX
+        || friction.dynamic > f64::from(f32::MAX)
+        || friction.static_coefficient > f64::from(f32::MAX)
     {
         return Err(format!(
             "invalid contact friction: coefficients must be finite, non-negative, and representable by Avian, got {friction:?}"
@@ -196,8 +210,8 @@ pub fn set_contact_friction(
     let Some(mut value) = world.get_mut::<Friction>(entity) else {
         return Err(format!("entity {entity:?} has no Avian Friction component"));
     };
-    value.dynamic_coefficient = friction.dynamic as avian3d::math::Scalar;
-    value.static_coefficient = friction.static_coefficient as avian3d::math::Scalar;
+    value.dynamic_coefficient = friction.dynamic as f32;
+    value.static_coefficient = friction.static_coefficient as f32;
     Ok(())
 }
 
@@ -208,8 +222,8 @@ pub fn contact_friction_snapshot(
 ) -> Option<ContactFrictionParameters> {
     let value = world.get::<avian3d::prelude::Friction>(entity)?;
     Some(ContactFrictionParameters {
-        dynamic: value.dynamic_coefficient,
-        static_coefficient: value.static_coefficient,
+        dynamic: f64::from(value.dynamic_coefficient),
+        static_coefficient: f64::from(value.static_coefficient),
     })
 }
 
@@ -252,8 +266,8 @@ pub fn set_joint_damping(
         || !damping.angular.is_finite()
         || damping.linear < 0.0
         || damping.angular < 0.0
-        || damping.linear > avian3d::math::Scalar::MAX
-        || damping.angular > avian3d::math::Scalar::MAX
+        || damping.linear > f64::from(f32::MAX)
+        || damping.angular > f64::from(f32::MAX)
     {
         return Err(format!(
             "invalid joint damping: rates must be finite, non-negative, and representable by Avian, got {damping:?}"
@@ -264,8 +278,8 @@ pub fn set_joint_damping(
     }
 
     let value = avian3d::prelude::JointDamping {
-        linear: damping.linear as avian3d::math::Scalar,
-        angular: damping.angular as avian3d::math::Scalar,
+        linear: damping.linear as f32,
+        angular: damping.angular as f32,
     };
     if let Some(mut existing) = world.get_mut::<avian3d::prelude::JointDamping>(entity) {
         *existing = value;
@@ -286,8 +300,8 @@ pub fn joint_damping_snapshot(world: &World, entity: Entity) -> Option<JointDamp
         .copied()
         .unwrap_or_default();
     Some(JointDampingParameters {
-        linear: value.linear,
-        angular: value.angular,
+        linear: f64::from(value.linear),
+        angular: f64::from(value.angular),
     })
 }
 
@@ -308,8 +322,6 @@ pub struct ContactDebugSnapshot {
     pub manifold_count: u32,
     pub max_friction: f64,
     pub total_normal_impulse: f64,
-    /// Continuous impact response before native discrete contact preparation.
-    pub continuous_normal_impulse: f64,
     pub normal_impulse_vector: [f64; 3],
     pub max_normal_speed: f64,
     pub max_tangent_speed: f64,
@@ -328,7 +340,6 @@ pub struct ContactPartDebugSnapshot {
     pub part1: Option<usize>,
     pub part2: Option<usize>,
     pub normal_impulse: f64,
-    pub continuous: bool,
 }
 
 /// Native colliders currently attached to a body, or the selected standalone
@@ -408,69 +419,43 @@ fn contact_debug_snapshot_filtered(
                 collider2: pair.collider2,
                 part1: None,
                 part2: None,
-                normal_impulse: manifold.total_normal_impulse(),
-                continuous: false,
+                normal_impulse: f64::from(manifold.total_normal_impulse()),
             });
             snapshot.manifold_count += 1;
-            snapshot.max_friction = snapshot.max_friction.max(manifold.friction);
-            snapshot.contact_normal = [manifold.normal.x, manifold.normal.y, manifold.normal.z];
-            let normal_impulse = manifold.normal * manifold.total_normal_impulse();
+            snapshot.max_friction = snapshot.max_friction.max(f64::from(manifold.friction));
+            snapshot.contact_normal = manifold.normal.as_dvec3().to_array();
+            let normal_impulse = (manifold.normal * manifold.total_normal_impulse()).as_dvec3();
             snapshot.normal_impulse_vector[0] += normal_impulse.x;
             snapshot.normal_impulse_vector[1] += normal_impulse.y;
             snapshot.normal_impulse_vector[2] += normal_impulse.z;
             for point in &manifold.points {
-                snapshot.total_normal_impulse += point.normal_impulse;
-                snapshot.max_normal_speed = snapshot.max_normal_speed.max(point.normal_speed.abs());
-                snapshot.max_penetration = snapshot.max_penetration.max(point.penetration);
-                let velocity_at = |body: Option<Entity>, anchor: avian3d::math::Vector| {
+                snapshot.total_normal_impulse += f64::from(point.normal_impulse);
+                snapshot.max_normal_speed = snapshot
+                    .max_normal_speed
+                    .max(f64::from(point.normal_speed.abs()));
+                snapshot.max_penetration =
+                    snapshot.max_penetration.max(f64::from(point.penetration));
+                let velocity_at = |body: Option<Entity>, anchor: Vec3| {
                     let Some(body) = body else {
-                        return avian3d::math::Vector::ZERO;
+                        return Vec3::ZERO;
                     };
                     let linear = world
                         .get::<LinearVelocity>(body)
-                        .map_or(avian3d::math::Vector::ZERO, |velocity| velocity.0);
+                        .map_or(Vec3::ZERO, |velocity| velocity.0);
                     let angular = world
                         .get::<AngularVelocity>(body)
-                        .map_or(avian3d::math::Vector::ZERO, |velocity| velocity.0);
+                        .map_or(Vec3::ZERO, |velocity| velocity.0);
                     linear + angular.cross(anchor)
                 };
                 let relative =
                     velocity_at(pair.body2, point.anchor2) - velocity_at(pair.body1, point.anchor1);
                 let tangent = relative - manifold.normal * relative.dot(manifold.normal);
-                snapshot.max_tangent_speed = snapshot.max_tangent_speed.max(tangent.length());
+                snapshot.max_tangent_speed =
+                    snapshot.max_tangent_speed.max(f64::from(tangent.length()));
                 snapshot.total_warm_start_tangent_impulse +=
-                    point.warm_start_tangent_impulse.length();
+                    f64::from(point.warm_start_tangent_impulse.length());
                 snapshot.contact_point = [point.point.x, point.point.y, point.point.z];
             }
-        }
-    }
-    if let Some(impulses) = ccd::continuous_contact_impulses(world) {
-        for applied in impulses {
-            let owned = |collider| {
-                collider == entity
-                    || world
-                        .get::<avian3d::prelude::ColliderOf>(collider)
-                        .is_some_and(|owner| owner.body == entity)
-            };
-            if !owned(applied.collider1) && !owned(applied.collider2) {
-                continue;
-            }
-            if other.is_some_and(|root| {
-                ![applied.collider1, applied.collider2]
-                    .into_iter()
-                    .any(|candidate| belongs(candidate, root))
-            }) {
-                continue;
-            }
-            snapshot.continuous_normal_impulse += applied.impulse;
-            snapshot.parts.push(ContactPartDebugSnapshot {
-                collider1: applied.collider1,
-                collider2: applied.collider2,
-                part1: Some(applied.part1),
-                part2: Some(applied.part2),
-                normal_impulse: applied.impulse,
-                continuous: true,
-            });
         }
     }
     Some(snapshot)
@@ -499,10 +484,19 @@ pub fn force_drive_motor_model(
     stiffness: f64,
     damping: f64,
 ) -> Result<avian3d::prelude::MotorModel, ForceDriveMotorError> {
-    if !stiffness.is_finite() || !damping.is_finite() || stiffness < 0.0 || damping < 0.0 {
+    if !stiffness.is_finite()
+        || !damping.is_finite()
+        || stiffness < 0.0
+        || damping < 0.0
+        || stiffness > f64::from(f32::MAX)
+        || damping > f64::from(f32::MAX)
+    {
         return Err(ForceDriveMotorError::InvalidParameters);
     }
-    Ok(avian3d::prelude::MotorModel::ForceBased { stiffness, damping })
+    Ok(avian3d::prelude::MotorModel::ForceBased {
+        stiffness: stiffness as f32,
+        damping: damping as f32,
+    })
 }
 
 /// Read dimensional force coefficients. Frequency and acceleration models do
@@ -510,7 +504,7 @@ pub fn force_drive_motor_model(
 pub fn motor_model_force_coefficients(model: avian3d::prelude::MotorModel) -> Option<(f64, f64)> {
     match model {
         avian3d::prelude::MotorModel::ForceBased { stiffness, damping } => {
-            Some((stiffness, damping))
+            Some((f64::from(stiffness), f64::from(damping)))
         }
         _ => None,
     }
@@ -548,6 +542,7 @@ pub fn set_prismatic_drive(
         || drive.stiffness < 0.0
         || drive.damping < 0.0
         || drive.max_force < 0.0
+        || (drive.max_force.is_finite() && drive.max_force > f64::from(f32::MAX))
     {
         return Err(format!(
             "invalid prismatic drive: stiffness/damping must be non-negative and max_force non-negative, got {drive:?}"
@@ -560,7 +555,7 @@ pub fn set_prismatic_drive(
     };
     joint.motor.enabled = true;
     joint.motor.motor_model = model;
-    joint.motor.max_force = drive.max_force;
+    joint.motor.max_force = drive.max_force as f32;
     Ok(())
 }
 
@@ -574,11 +569,11 @@ pub fn prismatic_drive_snapshot(world: &World, entity: Entity) -> Option<Prismat
     Some(PrismaticDriveSnapshot {
         enabled: joint.motor.enabled,
         model: "force",
-        target_position: joint.motor.target_position,
-        target_velocity: joint.motor.target_velocity,
+        target_position: f64::from(joint.motor.target_position),
+        target_velocity: f64::from(joint.motor.target_velocity),
         stiffness,
         damping,
-        max_force: joint.motor.max_force,
+        max_force: f64::from(joint.motor.max_force),
     })
 }
 
@@ -643,7 +638,7 @@ fn contact_of_filtered(
         touching = true;
         for manifold in &pair.manifolds {
             for point in &manifold.points {
-                normal_impulse += point.normal_impulse;
+                normal_impulse += f64::from(point.normal_impulse);
             }
         }
     }
@@ -659,31 +654,15 @@ fn contact_of_filtered(
 /// Read contact for a caller holding only a `&World`.
 ///
 /// Contact timing belongs to [`contact_of`], independently of live admission.
-/// Include continuous reactions absent from the prepared graph exactly once;
-/// these are physical impulses and have no biased/relaxation sample factor.
 /// A missing graph means physics has not started and has no contact sample.
 pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
     let Some(graph) = world.get_resource::<ContactGraph>() else {
         return (false, 0.0);
     };
-    let (mut touching, mut force) =
+    let (touching, force) =
         contact_of_filtered(graph, collider_entities(world, entity), |candidate| {
             world.get::<Sensor>(candidate).is_some()
         });
-    if let Some(impulses) = ccd::continuous_contact_impulses(world) {
-        for applied in impulses {
-            if world.get::<Sensor>(applied.collider1).is_some()
-                || world.get::<Sensor>(applied.collider2).is_some()
-                || !collider_entities(world, entity)
-                    .any(|collider| collider == applied.collider1 || collider == applied.collider2)
-            {
-                continue;
-            }
-            touching |= applied.impulse > 0.0;
-            force += applied.impulse
-                / Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK).as_secs_f64();
-        }
-    }
     (touching, force)
 }
 
@@ -764,18 +743,21 @@ pub fn apply_kinematic_drives(
             position.0 = drive.position;
         }
 
-        let rotation_delta = target_rotation * rotation.0.inverse();
+        let rotation_delta = target_rotation * rotation.0.as_dquat().inverse();
         if rotation_delta.angle_between(DQuat::IDENTITY) > 1.0e-12 {
-            rotation.0 = target_rotation;
+            rotation.0 = target_rotation.as_quat();
         }
 
         if dt > 1e-6 {
-            linear.0 = (position_delta / dt).clamp_length_max(MAX_KINEMATIC_DRIVE_SPEED);
-            angular.0 =
-                (rotation_delta.to_scaled_axis() / dt).clamp_length_max(MAX_KINEMATIC_DRIVE_SPEED);
+            linear.0 = (position_delta / dt)
+                .clamp_length_max(MAX_KINEMATIC_DRIVE_SPEED)
+                .as_vec3();
+            angular.0 = (rotation_delta.to_scaled_axis() / dt)
+                .clamp_length_max(MAX_KINEMATIC_DRIVE_SPEED)
+                .as_vec3();
         } else {
-            linear.0 = DVec3::ZERO;
-            angular.0 = DVec3::ZERO;
+            linear.0 = Vec3::ZERO;
+            angular.0 = Vec3::ZERO;
         }
     }
 }
@@ -1019,7 +1001,7 @@ fn validate_surface_independent_initialization(
         let subject = subject.map(|subject| subject.0.as_str());
         let subject_label = subject.unwrap_or("<unidentified physics body>");
         let policy = policy.cloned().unwrap_or_default();
-        if !avian_backend::avian_backend_pose_is_valid(position.0, rotation.0) {
+        if !avian_backend::avian_backend_pose_is_valid(position.0, rotation.0.as_dquat()) {
             findings.push(lunco_core::RuntimeDiagnostic {
                 code: "physics-initialization-backend-invalid".to_string(),
                 severity: lunco_core::DiagnosticSeverity::Error,
@@ -1120,7 +1102,6 @@ impl Plugin for PhysicsGatePlugin {
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
             .init_resource::<PhysicsComputeProfile>()
             .init_scene_resource::<PhysicsHolds>()
-            .init_scene_resource::<joint_solver::JointSolverOrder>()
             .init_scene_resource_with::<ContactGraph>(ContactGraph::clear)
             .init_scene_resource_with::<avian3d::dynamics::solver::constraint_graph::ConstraintGraph>(
                 avian3d::dynamics::solver::constraint_graph::ConstraintGraph::clear,
@@ -1144,14 +1125,6 @@ impl Plugin for PhysicsGatePlugin {
             // Same reasoning: a readiness decision that nothing enforces is a
             // hold that silently does not hold.
             .add_plugins(readiness::ReadinessEffectPlugin);
-
-        // Avian's async collider-tree optimizer always joins its worker task in
-        // `EndOptimize`, which turns scheduler contention into an unbounded physics
-        // stall. Keep the supported optimizer on the owner schedule so its full
-        // cost stays contained in the physics step that admits it.
-        app.world_mut()
-            .resource_mut::<avian3d::collider_tree::ColliderTreeOptimization>()
-            .use_async_tasks = false;
     }
 }
 
@@ -1179,12 +1152,6 @@ mod tests {
             DEFAULT_SUBSTEP_COUNT
         );
         assert_eq!(DEFAULT_SUBSTEP_COUNT, 8);
-        assert!(
-            !app.world()
-                .resource::<avian3d::collider_tree::ColliderTreeOptimization>()
-                .use_async_tasks,
-            "physics-tree optimization must not join an async task inside PhysicsSchedule"
-        );
     }
 
     #[test]
@@ -1198,7 +1165,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Position(authored),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
                 PhysicsPoseSeeded,
                 PhysicsInitializationPending,
                 PhysicsInitializationPolicy::default(),
@@ -1226,7 +1193,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Position(authored),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
                 PhysicsPoseSeeded,
                 PhysicsInitializationPending,
                 PhysicsInitializationPolicy::default(),
@@ -1279,8 +1246,8 @@ mod tests {
         assert_eq!(
             contact_friction_snapshot(&world, entity),
             Some(ContactFrictionParameters {
-                dynamic: 0.4,
-                static_coefficient: 0.4,
+                dynamic: f64::from(0.4_f32),
+                static_coefficient: f64::from(0.4_f32),
             })
         );
         set_contact_friction(
@@ -1663,7 +1630,7 @@ mod tests {
                 RigidBody::Kinematic,
                 CustomPositionIntegration,
                 Position(DVec3::ZERO),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
                 LinearVelocity::default(),
                 AngularVelocity::default(),
                 KinematicDrive::new(target, target_rotation),
@@ -1679,10 +1646,13 @@ mod tests {
                 .get::<Rotation>(entity)
                 .unwrap()
                 .0
-                .angle_between(target_rotation)
+                .angle_between(target_rotation.as_quat())
                 < 1.0e-12
         );
-        assert_eq!(world.get::<LinearVelocity>(entity).unwrap().0, target / 0.1);
+        assert_eq!(
+            world.get::<LinearVelocity>(entity).unwrap().0,
+            (target / 0.1).as_vec3()
+        );
         assert!((world.get::<AngularVelocity>(entity).unwrap().0.y - 5.0).abs() < 1.0e-12);
     }
 }

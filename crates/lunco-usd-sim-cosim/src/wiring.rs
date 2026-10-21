@@ -209,7 +209,7 @@ pub(super) fn wiring_due(
 }
 
 pub(super) fn mark_wiring_dirty_on_remove<T: Component>(
-    trigger: On<Remove, T>,
+    trigger: On<Remove<T>>,
     usd_endpoints: Query<(), (With<UsdPrimPath>, With<T>)>,
     mut dirty: ResMut<UsdWiringDirty>,
 ) {
@@ -219,7 +219,7 @@ pub(super) fn mark_wiring_dirty_on_remove<T: Component>(
 }
 
 fn mark_wiring_dirty_for_endpoint_add<T: Component>(
-    trigger: On<Add, T>,
+    trigger: On<Add<T>>,
     endpoints: Query<
         (),
         (
@@ -240,7 +240,7 @@ fn mark_wiring_dirty_for_endpoint_add<T: Component>(
 }
 
 fn mark_wiring_dirty_for_usd_endpoint_remove<T: Component>(
-    trigger: On<Remove, T>,
+    trigger: On<Remove<T>>,
     endpoints: Query<
         (),
         (
@@ -261,7 +261,7 @@ fn mark_wiring_dirty_for_usd_endpoint_remove<T: Component>(
 }
 
 fn mark_wiring_dirty_for_path_remove(
-    trigger: On<Remove, UsdPrimPath>,
+    trigger: On<Remove<UsdPrimPath>>,
     endpoints: Query<
         (),
         Or<(
@@ -305,14 +305,14 @@ pub(super) struct BindingModelStatuses(HashMap<Entity, SimStatus>);
 pub struct BindingEpochWait(pub(crate) lunco_readiness::ReadinessTicket);
 
 pub(super) fn request_binding_epoch<T: Component>(
-    _trigger: On<Add, T>,
+    _trigger: On<Add<T>>,
     mut dirty: ResMut<BindingEpochDirty>,
 ) {
     dirty.0 = true;
 }
 
 pub(super) fn request_binding_epoch_on_remove<T: Component>(
-    _trigger: On<Remove, T>,
+    _trigger: On<Remove<T>>,
     mut dirty: ResMut<BindingEpochDirty>,
 ) {
     dirty.0 = true;
@@ -338,7 +338,7 @@ pub(super) fn request_binding_epoch_on_model_change(
 }
 
 pub(super) fn forget_binding_model_status(
-    trigger: On<Remove, SimComponent>,
+    trigger: On<Remove<SimComponent>>,
     mut statuses: ResMut<BindingModelStatuses>,
     mut dirty: ResMut<BindingEpochDirty>,
 ) {
@@ -774,7 +774,7 @@ pub(super) fn rewire_usd_connections(
                             .and_then(|outputs| outputs.get(name))
                         {
                             Some(port_entity) => {
-                                (port_entity, lunco_cosim_core::PORT_NAME.to_string())
+                                (port_entity, lunco_port_core::PORT_NAME.to_string())
                             }
                             None => (entity, name.to_string()),
                         },
@@ -1003,7 +1003,7 @@ pub(super) fn rewire_usd_connections(
                             })
                         {
                             start_element = port_entity;
-                            src_conn = lunco_cosim_core::PORT_NAME.to_string();
+                            src_conn = lunco_port_core::PORT_NAME.to_string();
                         }
                     }
 
@@ -1056,7 +1056,7 @@ pub(super) fn rewire_usd_connections(
                     let end = if let Some(surface) = wheel_endpoints {
                         surface
                             .get(sink_conn)
-                            .map(|port| (port, lunco_cosim_core::PORT_NAME.to_string()))
+                            .map(|port| (port, lunco_port_core::PORT_NAME.to_string()))
                     } else {
                         Some(
                             forward

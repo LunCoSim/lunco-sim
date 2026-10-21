@@ -196,17 +196,17 @@ pub fn populate_joint_state_view(
         };
 
         let Some((angle, axis_world)) =
-            lunco_physics::joint::revolute_coordinate(joint, rot1.0, rot2.0)
+            lunco_physics::joint::revolute_coordinate(joint, rot1.0.as_dquat(), rot2.0.as_dquat())
         else {
             continue;
         };
-        let omega = (av2.0 - av1.0).dot(axis_world);
+        let omega = (av2.0 - av1.0).as_dvec3().dot(axis_world);
 
         // Ordinary authored angle drives use Avian's AngularMotor. Wheel
         // joints are owned by the solved scalar torque boundary instead.
         let motor_on = joint.motor.enabled && torque_actuator.is_none();
         let solved_torque = torque_actuator
-            .and_then(|actuator| q_ports.get(actuator.port_entity).ok())
+            .and_then(|actuator| q_ports.get(actuator.torque_endpoint()).ok())
             .map(|port| port.value)
             .filter(|value| value.is_finite());
         view.rows.push(JointStateRow {
@@ -220,10 +220,10 @@ pub fn populate_joint_state_view(
             kind: JointRowKind::Revolute,
             angle,
             omega,
-            target: motor_on.then_some(joint.motor.target_velocity),
+            target: motor_on.then_some(f64::from(joint.motor.target_velocity)),
             torque: solved_torque.or_else(|| {
                 if motor_on {
-                    readable_torque(joint.motor.max_torque)
+                    readable_torque(f64::from(joint.motor.max_torque))
                 } else {
                     None
                 }

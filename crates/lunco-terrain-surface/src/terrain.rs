@@ -1038,7 +1038,7 @@ fn dem_worker_job_id(entity: Entity) -> u32 {
 /// in the worker client's in-flight set for the session, and a later
 /// worker-crash sweep emits a spurious error reply for an entity long gone.
 #[cfg(target_arch = "wasm32")]
-fn cancel_worker_job_on_remove(trigger: On<Remove, DemWorkerJob>, jobs: Query<&DemWorkerJob>) {
+fn cancel_worker_job_on_remove(trigger: On<Remove<DemWorkerJob>>, jobs: Query<&DemWorkerJob>) {
     if let Ok(job) = jobs.get(trigger.entity) {
         lunco_terrain_bake::worker_client::cancel(job.id);
     }

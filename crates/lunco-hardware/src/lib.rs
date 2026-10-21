@@ -50,8 +50,8 @@ fn sensor_velocity_system(
 ) {
     for (sensor, velocity, rotation) in q_sensors.iter() {
         if let Ok(mut port) = q_ports.get_mut(sensor.port_entity) {
-            let world_axis = rotation.0 * sensor.axis;
-            port.value = velocity.0.dot(world_axis);
+            let world_axis = rotation.0.as_dquat() * sensor.axis;
+            port.value = velocity.0.as_dvec3().dot(world_axis);
         }
     }
 }

@@ -5,10 +5,8 @@
 //! co-simulation force application system. It does not own port resolution or
 //! command transport.
 
-use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
-use avian3d::math::SymmetricMatrix;
-use avian3d::prelude::{JointDamping, RevoluteJoint};
-use bevy::math::{DMat3, DQuat, DVec3};
+use avian3d::prelude::RevoluteJoint;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
 /// The port name a revolute joint exposes in both directions.
@@ -37,14 +35,14 @@ pub const JOINT_TORQUE_PORT: &str = "torque";
 /// constraint. This is a reusable mechanical boundary, not a motor model:
 /// motors, brakes, hydraulic rotary actuators, and other domains can publish
 /// the scalar through the same port surface. The same boundary publishes the
-/// solved joint-coordinate speed through `speed_port_entity`.
+/// solved joint-coordinate speed through its speed endpoint.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
-#[reflect(Component, Default)]
+#[reflect(Component)]
 pub struct JointTorqueActuator {
     /// Runtime port carrying solved torque in the joint's positive coordinate.
-    pub port_entity: Entity,
+    port_entity: Entity,
     /// Runtime port receiving the measured joint-coordinate speed, rad/s.
-    pub speed_port_entity: Entity,
+    speed_port_entity: Entity,
     /// Authored command-surface owner. Mechanical and transform ancestry may
     /// differ, especially for bodies with a USD transform-stack reset.
     pub control_entity: Entity,
@@ -60,22 +58,111 @@ pub struct JointTorqueActuator {
     /// zero and reverse the joint every tick.
     pub rotational_inertia: f64,
     /// Mapping from the joint coordinate to body-2's world axis.
-    pub drive_sign: f64,
+    sign: JointCoordinateSign,
 }
 
-impl Default for JointTorqueActuator {
-    fn default() -> Self {
-        Self {
-            port_entity: Entity::PLACEHOLDER,
-            speed_port_entity: Entity::PLACEHOLDER,
-            control_entity: Entity::PLACEHOLDER,
+/// Orientation of the external effort/motion pair relative to the native joint.
+/// The same sign acts on torque and speed, preserving their power product.
+#[derive(Debug, Clone, Copy, Reflect)]
+pub enum JointCoordinateSign {
+    Positive,
+    Negative,
+}
+
+impl JointCoordinateSign {
+    pub const fn factor(self) -> f64 {
+        match self {
+            Self::Positive => 1.0,
+            Self::Negative => -1.0,
+        }
+    }
+}
+
+impl JointTorqueActuator {
+    /// Create a conjugate torque/speed boundary with no additional passive load.
+    /// Endpoints must be distinct live scalar ports with coherent SI contracts;
+    /// the co-simulation owner checks those contracts before applying effort.
+    pub fn new(
+        torque_endpoint: Entity,
+        speed_endpoint: Entity,
+        control_entity: Entity,
+        sign: JointCoordinateSign,
+    ) -> Result<Self, String> {
+        let actuator = Self {
+            port_entity: torque_endpoint,
+            speed_port_entity: speed_endpoint,
+            control_entity,
             brake_torque: 0.0,
             bearing_damping: 0.0,
             bearing_heat_port: None,
             brake_heat_port: None,
             rotational_inertia: 0.0,
-            drive_sign: 1.0,
+            sign,
+        };
+        actuator.validate_parameters()?;
+        Ok(actuator)
+    }
+
+    pub const fn torque_endpoint(&self) -> Entity {
+        self.port_entity
+    }
+    pub const fn speed_endpoint(&self) -> Entity {
+        self.speed_port_entity
+    }
+    pub const fn coordinate_sign(&self) -> f64 {
+        self.sign.factor()
+    }
+
+    /// Structural invariant shared by runtime admission and authoring diagnostics.
+    pub fn validate_parameters(&self) -> Result<(), String> {
+        if self.port_entity == Entity::PLACEHOLDER
+            || self.speed_port_entity == Entity::PLACEHOLDER
+            || self.port_entity == self.speed_port_entity
+        {
+            return Err("external effort requires distinct torque and motion endpoints".into());
         }
+        let heat = [self.bearing_heat_port, self.brake_heat_port];
+        if heat.into_iter().flatten().any(|endpoint| {
+            endpoint == Entity::PLACEHOLDER
+                || endpoint == self.port_entity
+                || endpoint == self.speed_port_entity
+        }) || self.bearing_heat_port.is_some() && self.bearing_heat_port == self.brake_heat_port
+        {
+            return Err(
+                "heat endpoints must be distinct from each other and the effort/motion pair".into(),
+            );
+        }
+        if !self.brake_torque.is_finite()
+            || self.brake_torque < 0.0
+            || !self.bearing_damping.is_finite()
+            || self.bearing_damping < 0.0
+            || !self.rotational_inertia.is_finite()
+            || self.rotational_inertia < 0.0
+            || (self.brake_torque > 0.0 && self.rotational_inertia == 0.0)
+        {
+            return Err("external effort requires finite nonnegative passive parameters and positive inertia when braking".into());
+        }
+        Ok(())
+    }
+
+    pub fn validate_joint(
+        &self,
+        joint: Option<&RevoluteJoint>,
+        disabled: bool,
+    ) -> Result<(), String> {
+        self.validate_parameters()?;
+        let Some(joint) = joint else {
+            return Err("external torque requires a revolute joint".into());
+        };
+        if disabled || joint.motor.enabled {
+            return Err(
+                "external effort requires an enabled joint with its native motor disabled".into(),
+            );
+        }
+        if joint.body1 == joint.body2 {
+            return Err("external effort requires two distinct bodies".into());
+        }
+        Ok(())
     }
 }
 
@@ -88,7 +175,7 @@ impl Default for JointTorqueActuator {
 /// joint frame.
 pub fn revolute_hinge_axis_world(joint: &RevoluteJoint, body1_rotation: DQuat) -> Option<DVec3> {
     let local_axis = joint.local_hinge_axis1()?;
-    (body1_rotation * local_axis).try_normalize()
+    (body1_rotation * local_axis.as_dvec3()).try_normalize()
 }
 
 /// Measure the signed revolute coordinate and its positive world-space axis.
@@ -101,8 +188,8 @@ pub fn revolute_coordinate(
     body1_rotation: DQuat,
     body2_rotation: DQuat,
 ) -> Option<(f64, DVec3)> {
-    let basis1 = joint.local_basis1()?;
-    let basis2 = joint.local_basis2()?;
+    let basis1 = joint.local_basis1()?.as_dquat();
+    let basis2 = joint.local_basis2()?.as_dquat();
     if ![body1_rotation, body2_rotation, basis1, basis2]
         .into_iter()
         .all(crate::avian_backend_rotation_is_valid)
@@ -114,7 +201,7 @@ pub fn revolute_coordinate(
     angular_frame_coordinate(
         body1_rotation * basis1,
         body2_rotation * basis2,
-        joint.hinge_axis,
+        joint.hinge_axis.as_dvec3(),
     )
 }
 
@@ -137,268 +224,6 @@ pub(crate) fn angular_frame_coordinate(
     let second = frame2 * perpendicular;
     let angle = first.cross(second).dot(axis).atan2(first.dot(second));
     angle.is_finite().then_some((angle, axis))
-}
-
-/// Shortest world-space angular displacement between admitted rigid rotations.
-///
-/// Evaluating the quaternion logarithm with `atan2` retains small increments
-/// and is invariant to quaternion hemisphere and admitted norm drift.
-pub fn rotation_displacement(start: DQuat, end: DQuat) -> Result<DVec3, &'static str> {
-    if !crate::avian_backend_rotation_is_valid(start)
-        || !crate::avian_backend_rotation_is_valid(end)
-    {
-        return Err("angular displacement requires finite unit rotations");
-    }
-    let relative = end * start.inverse();
-    let hemisphere = if relative.w < 0.0 { -1.0 } else { 1.0 };
-    let vector = hemisphere * DVec3::new(relative.x, relative.y, relative.z);
-    let length = vector.x.hypot(vector.y).hypot(vector.z);
-    if length == 0.0 {
-        return Ok(DVec3::ZERO);
-    }
-    Ok(vector * (2.0 * length.atan2(hemisphere * relative.w) / length))
-}
-
-/// Damping impulses retained for the completed joint's reaction report.
-pub(crate) struct JointDampingImpulse {
-    /// Point impulse received by the first endpoint.
-    pub linear: DVec3,
-    /// Pure angular impulse received by the first endpoint.
-    pub angular: DVec3,
-}
-
-/// Integrate passive relative-velocity damping for one physics substep.
-///
-/// The authored coefficients are decay rates in 1/s. The point-velocity and
-/// angular-velocity flows each use exponential decay, applied in that order.
-/// `levers` locate one common world-space damping point from each body's COM.
-/// Equal and opposite impulses, including their moments at that point,
-/// distribute the change through the full effective inertia response;
-/// locked axes and dominant endpoints cannot acquire velocity. This is not a
-/// spring drive and must run only once per substep, outside position closure.
-/// Invalid input or an unrepresentable result returns before either write.
-pub(crate) fn integrate_joint_damping(
-    bodies: [&mut SolverBody; 2],
-    inertias: [&SolverBodyInertia; 2],
-    levers: [DVec3; 2],
-    damping: JointDamping,
-    dt: f64,
-) -> Result<JointDampingImpulse, &'static str> {
-    let [first, second] = bodies;
-    if ![dt, damping.linear, damping.angular]
-        .into_iter()
-        .all(|x| x.is_finite() && x >= 0.0)
-        || ![
-            levers[0],
-            levers[1],
-            first.linear_velocity,
-            second.linear_velocity,
-            first.angular_velocity,
-            second.angular_velocity,
-        ]
-        .into_iter()
-        .all(DVec3::is_finite)
-    {
-        return Err("joint damping requires finite velocities, nonnegative rates and duration");
-    }
-    let [mut first_inertia, mut second_inertia] = inertias;
-    match first_inertia.dominance().cmp(&second_inertia.dominance()) {
-        std::cmp::Ordering::Greater => first_inertia = &SolverBodyInertia::DUMMY,
-        std::cmp::Ordering::Less => second_inertia = &SolverBodyInertia::DUMMY,
-        std::cmp::Ordering::Equal => {}
-    }
-    let mass1 = first_inertia.effective_inv_mass();
-    let mass2 = second_inertia.effective_inv_mass();
-    let angular1 = first_inertia.effective_inv_angular_inertia();
-    let angular2 = second_inertia.effective_inv_angular_inertia();
-    if ![mass1, mass2]
-        .into_iter()
-        .all(|x| x.is_finite() && x.cmpge(DVec3::ZERO).all())
-    {
-        return Err("joint damping requires nonnegative finite inverse masses");
-    }
-    // Avian locks rotations in world-coordinate axes. Invert only their
-    // movable subspace; a singular tensor with another nullspace is invalid
-    // at this boundary rather than a reason to discard its free-axis motion.
-    inverse_unlocked_inertia(angular1)?;
-    inverse_unlocked_inertia(angular2)?;
-    let angular_sum_inverse = inverse_unlocked_inertia(angular1 + angular2)?;
-    if dt == 0.0 || (damping.linear == 0.0 && damping.angular == 0.0) {
-        return Ok(JointDampingImpulse {
-            linear: DVec3::ZERO,
-            angular: DVec3::ZERO,
-        });
-    }
-    let fraction = |rate: f64| -(-rate * dt).exp_m1();
-    let mass_sum = mass1 + mass2;
-    if !mass_sum.is_finite() {
-        return Err("joint damping combined inverse mass is not representable");
-    }
-    let linear_fraction = fraction(damping.linear);
-    let [lever1, lever2] = levers;
-    let relative = second.velocity_at_point(lever2) - first.velocity_at_point(lever1);
-    let point_response = |axis: DVec3| {
-        mass_sum * axis
-            + (angular1 * lever1.cross(axis)).cross(lever1)
-            + (angular2 * lever2.cross(axis)).cross(lever2)
-    };
-    let linear_impulse = if linear_fraction == 0.0 {
-        DVec3::ZERO
-    } else {
-        let response = DMat3::from_cols(
-            point_response(DVec3::X),
-            point_response(DVec3::Y),
-            point_response(DVec3::Z),
-        );
-        responsive_impulse(response, relative * linear_fraction)?
-    };
-    let point_angular1 = first.angular_velocity + angular1 * lever1.cross(linear_impulse);
-    let point_angular2 = second.angular_velocity - angular2 * lever2.cross(linear_impulse);
-    let angular_impulse =
-        angular_sum_inverse * ((point_angular2 - point_angular1) * fraction(damping.angular));
-    let linear1 = first.linear_velocity + mass1 * linear_impulse;
-    let linear2 = second.linear_velocity - mass2 * linear_impulse;
-    let velocity1 = point_angular1 + angular1 * angular_impulse;
-    let velocity2 = point_angular2 - angular2 * angular_impulse;
-    if ![
-        linear_impulse,
-        angular_impulse,
-        linear1,
-        linear2,
-        velocity1,
-        velocity2,
-    ]
-    .into_iter()
-    .all(DVec3::is_finite)
-    {
-        return Err("joint damping impulse or resulting velocity is not representable");
-    }
-    first.linear_velocity = linear1;
-    second.linear_velocity = linear2;
-    first.angular_velocity = velocity1;
-    second.angular_velocity = velocity2;
-    Ok(JointDampingImpulse {
-        linear: linear_impulse,
-        angular: angular_impulse,
-    })
-}
-
-/// Native symmetric response decomposition, independent of the requested change.
-/// Reusing it preserves the original eigenbasis projection and rank policy.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PreparedPointResponse {
-    scale: f64,
-    values: DVec3,
-    vectors: DMat3,
-}
-
-impl PreparedPointResponse {
-    const RANK_TOLERANCE: f64 = 32.0 * f64::EPSILON;
-
-    pub(crate) fn new(response: DMat3) -> Result<Self, &'static str> {
-        if !response.is_finite() {
-            return Err("joint damping point response is not representable");
-        }
-        let scale = response
-            .x_axis
-            .abs()
-            .max(response.y_axis.abs())
-            .max(response.z_axis.abs())
-            .max_element();
-        if scale == 0.0 {
-            return Ok(Self {
-                scale,
-                values: DVec3::ZERO,
-                vectors: DMat3::IDENTITY,
-            });
-        }
-        // The maintained f64 symmetric eigensolver supplies a pseudoinverse for
-        // constrained point responses, whose nullspace need not follow world axes.
-        use avian3d::parry::utils::SymmetricEigen3;
-        let normalized = response / scale;
-        let values = SymmetricEigen3::eigenvalues(normalized);
-        if !values.is_finite() || values.min_element() < -Self::RANK_TOLERANCE {
-            return Err("joint damping point response is not positive semidefinite");
-        }
-        // eigenvector1 requires an isolated root. Start at the end separated by
-        // the larger gap, then let the public second-vector kernel handle the
-        // remaining eigenspace, including its repeated roots.
-        let values = if values.z - values.y > values.y - values.x {
-            DVec3::new(values.z, values.y, values.x)
-        } else {
-            values
-        };
-        let first = SymmetricEigen3::eigenvector1(normalized, values.x);
-        let second = SymmetricEigen3::eigenvector2(normalized, first, values.y);
-        let third = SymmetricEigen3::eigenvector3(first, second);
-        let vectors = DMat3::from_cols(first, second, third);
-        if !vectors.is_finite() {
-            return Err("joint damping point response eigenspace is not representable");
-        }
-        Ok(Self {
-            scale,
-            values,
-            vectors,
-        })
-    }
-
-    pub(crate) fn impulse(self, change: DVec3) -> Result<DVec3, &'static str> {
-        if !change.is_finite() {
-            return Err("joint damping point response is not representable");
-        }
-        if self.scale == 0.0 {
-            return Ok(DVec3::ZERO);
-        }
-        let coordinates = self.vectors.transpose() * change;
-        let impulse = DVec3::from_array(std::array::from_fn(|i| {
-            if self.values[i] <= Self::RANK_TOLERANCE {
-                0.0
-            } else {
-                coordinates[i] / self.values[i] / self.scale
-            }
-        }));
-        let impulse = self.vectors * impulse;
-        if !impulse.is_finite() {
-            return Err("joint damping point impulse is not representable");
-        }
-        Ok(impulse)
-    }
-}
-
-pub(crate) fn responsive_impulse(response: DMat3, change: DVec3) -> Result<DVec3, &'static str> {
-    PreparedPointResponse::new(response)?.impulse(change)
-}
-
-fn inverse_unlocked_inertia(matrix: SymmetricMatrix) -> Result<SymmetricMatrix, &'static str> {
-    let diagonal = matrix.diagonal();
-    if !matrix.is_finite() || !diagonal.cmpge(DVec3::ZERO).all() {
-        return Err("joint damping requires a finite positive inverse inertia on free axes");
-    }
-    let locked = diagonal.cmpeq(DVec3::ZERO);
-    if (locked.x && (matrix.m01 != 0.0 || matrix.m02 != 0.0))
-        || (locked.y && (matrix.m01 != 0.0 || matrix.m12 != 0.0))
-        || (locked.z && (matrix.m02 != 0.0 || matrix.m12 != 0.0))
-    {
-        return Err("joint damping inverse inertia has an invalid locked axis");
-    }
-    let scale = diagonal.max_element();
-    if scale == 0.0 {
-        return Ok(SymmetricMatrix::ZERO);
-    }
-    let lock_diagonal = DVec3::select(locked, DVec3::ONE, DVec3::ZERO);
-    let lock_matrix = SymmetricMatrix::from_diagonal(lock_diagonal);
-    let normalized = matrix / scale + lock_matrix;
-    if normalized.m00 <= 0.0
-        || normalized.m00 * normalized.m11 - normalized.m01 * normalized.m01 <= 0.0
-        || normalized.determinant() <= 0.0
-    {
-        return Err("joint damping inverse inertia is singular or not positive on free axes");
-    }
-    let inverse = (normalized.inverse() - lock_matrix) / scale;
-    if !inverse.is_finite() {
-        return Err("joint damping inverse inertia cannot be inverted at f64 precision");
-    }
-    Ok(inverse)
 }
 
 /// Return the first revolute joint in `root`'s subtree.
@@ -443,16 +268,57 @@ pub fn bounded_brake_torque(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        bounded_brake_torque, integrate_joint_damping, revolute_coordinate, rotation_displacement,
-    };
-    use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
-    use avian3d::math::SymmetricMatrix;
-    use avian3d::prelude::{JointDamping, LockedAxes, RevoluteJoint};
+    use super::{bounded_brake_torque, revolute_coordinate};
+    use avian3d::prelude::RevoluteJoint;
     use bevy::{
         math::{DQuat, DVec3, EulerRot},
         prelude::*,
     };
+
+    #[test]
+    fn effort_pair_requires_distinct_endpoints_and_exclusive_native_authority() {
+        use super::{JointCoordinateSign, JointTorqueActuator};
+        let mut world = World::new();
+        let endpoints = [world.spawn_empty().id(), world.spawn_empty().id()];
+        assert!(
+            JointTorqueActuator::new(
+                endpoints[0],
+                endpoints[0],
+                endpoints[0],
+                JointCoordinateSign::Positive
+            )
+            .is_err()
+        );
+        assert!(
+            JointTorqueActuator::new(
+                Entity::PLACEHOLDER,
+                endpoints[1],
+                endpoints[0],
+                JointCoordinateSign::Positive
+            )
+            .is_err()
+        );
+        let coupling = JointTorqueActuator::new(
+            endpoints[0],
+            endpoints[1],
+            endpoints[0],
+            JointCoordinateSign::Negative,
+        )
+        .unwrap();
+        assert_eq!(coupling.coordinate_sign(), -1.0);
+        let mut joint = RevoluteJoint::new(endpoints[0], endpoints[1]);
+        assert!(coupling.validate_joint(Some(&joint), false).is_ok());
+        joint.motor.enabled = true;
+        assert!(
+            coupling
+                .validate_joint(Some(&joint), false)
+                .unwrap_err()
+                .contains("native motor")
+        );
+        joint.motor.enabled = false;
+        assert!(coupling.validate_joint(Some(&joint), true).is_err());
+        assert!(coupling.validate_joint(None, false).is_err());
+    }
 
     #[test]
     fn revolute_coordinate_uses_both_joint_frames() {
@@ -463,10 +329,12 @@ mod tests {
         let basis2 = DQuat::from_rotation_x(-0.6);
         let body1 = DQuat::from_euler(EulerRot::XYZ, 0.2, -0.7, 0.3);
         let joint = RevoluteJoint::new(first, second)
-            .with_hinge_axis(DVec3::Y)
-            .with_local_basis1(basis1)
-            .with_local_basis2(basis2);
-        let expected_axis = body1 * basis1 * DVec3::Y;
+            .with_hinge_axis(Vec3::Y)
+            .with_local_basis1(basis1.as_quat())
+            .with_local_basis2(basis2.as_quat());
+        let basis1 = joint.local_basis1().unwrap().as_dquat();
+        let basis2 = joint.local_basis2().unwrap().as_dquat();
+        let expected_axis = (body1 * basis1 * DVec3::Y).normalize();
         for angle in [0.0, 2e-10, -2e-10, 0.3, -0.3, 3.0, -3.0] {
             let body2 = body1 * basis1 * DQuat::from_rotation_y(angle) * basis2.inverse();
             for sign in [-1.0, 1.0] {
@@ -483,337 +351,8 @@ mod tests {
             assert!(revolute_coordinate(&joint, invalid, body1).is_none());
             assert!(revolute_coordinate(&joint, body1, invalid).is_none());
         }
-        let invalid_axis = joint.clone().with_hinge_axis(DVec3::ZERO);
+        let invalid_axis = joint.clone().with_hinge_axis(Vec3::ZERO);
         assert!(revolute_coordinate(&invalid_axis, body1, body1).is_none());
-    }
-
-    #[test]
-    fn rotation_displacement_retains_small_increments_and_rejects_invalid_frames() {
-        let start = DQuat::from_euler(EulerRot::XYZ, 0.2, -0.7, 0.3);
-        let axis = DVec3::new(0.3, -0.4, 0.5).normalize();
-        for angle in [0.0, 2e-10, -2e-10, 0.3, -0.3, 3.0, -3.0] {
-            let end = DQuat::from_scaled_axis(axis * angle) * start;
-            for sign in [-1.0, 1.0] {
-                let measured = rotation_displacement(start, end * (sign * (1.0 - 1e-12))).unwrap();
-                assert!((measured - axis * angle).length() < 2e-15);
-            }
-        }
-        let invalid = DQuat::from_xyzw(0.0, 0.0, 0.0, 0.0);
-        assert!(rotation_displacement(invalid, start).is_err());
-        assert!(rotation_displacement(start, DQuat::NAN).is_err());
-    }
-
-    #[test]
-    fn joint_damping_conserves_momentum_and_integrates_the_decay_rate() {
-        // Distinct anisotropic inertias with nonzero off-diagonal terms ensure
-        // angular impulses use the full tensor rather than a mass or diagonal.
-        let inverse1 = SymmetricMatrix::new(2.0, 0.3, 0.1, 3.0, -0.2, 4.0);
-        let inverse2 = SymmetricMatrix::new(5.0, -0.4, 0.2, 2.0, 0.1, 3.0);
-        let inertia1 = SolverBodyInertia::new(0.25, inverse1, LockedAxes::new(), 0, true);
-        let inertia2 = SolverBodyInertia::new(2.0, inverse2, LockedAxes::new(), 0, true);
-        let first = SolverBody {
-            linear_velocity: DVec3::new(3.0, -1.0, 2.0),
-            angular_velocity: DVec3::new(0.3, 2.0, -0.5),
-            ..default()
-        };
-        let second = SolverBody {
-            linear_velocity: DVec3::new(-2.0, 0.5, 7.0),
-            angular_velocity: DVec3::new(-1.0, 0.2, 4.0),
-            ..default()
-        };
-        let damping = JointDamping {
-            linear: 7.0,
-            angular: 11.0,
-        };
-        let dt = 0.05;
-        let momentum =
-            |a: &SolverBody, b: &SolverBody| 4.0 * a.linear_velocity + 0.5 * b.linear_velocity;
-        let angular_momentum = |a: &SolverBody, b: &SolverBody| {
-            inverse1.inverse() * a.angular_velocity + inverse2.inverse() * b.angular_velocity
-        };
-        let energy = |a: &SolverBody, b: &SolverBody| {
-            0.5 * (4.0 * a.linear_velocity.length_squared()
-                + 0.5 * b.linear_velocity.length_squared()
-                + a.angular_velocity
-                    .dot(inverse1.inverse() * a.angular_velocity)
-                + b.angular_velocity
-                    .dot(inverse2.inverse() * b.angular_velocity))
-        };
-        let (mut a, mut b) = (first.clone(), second.clone());
-        integrate_joint_damping(
-            [&mut a, &mut b],
-            [&inertia1, &inertia2],
-            [DVec3::ZERO; 2],
-            damping,
-            dt,
-        )
-        .unwrap();
-        assert!((momentum(&a, &b) - momentum(&first, &second)).length() < 2e-14);
-        assert!((angular_momentum(&a, &b) - angular_momentum(&first, &second)).length() < 2e-14);
-        assert!(energy(&a, &b) < energy(&first, &second));
-        assert!(
-            (b.linear_velocity
-                - a.linear_velocity
-                - (second.linear_velocity - first.linear_velocity) * (-damping.linear * dt).exp())
-            .length()
-                < 3e-15
-        );
-        assert!(
-            (b.angular_velocity
-                - a.angular_velocity
-                - (second.angular_velocity - first.angular_velocity)
-                    * (-damping.angular * dt).exp())
-            .length()
-                < 3e-15
-        );
-        let (mut split_a, mut split_b) = (first, second);
-        for _ in 0..10 {
-            integrate_joint_damping(
-                [&mut split_a, &mut split_b],
-                [&inertia1, &inertia2],
-                [DVec3::ZERO; 2],
-                damping,
-                dt / 10.0,
-            )
-            .unwrap();
-        }
-        assert!((split_a.linear_velocity - a.linear_velocity).length() < 2e-14);
-        assert!((split_b.linear_velocity - b.linear_velocity).length() < 2e-14);
-        assert!((split_a.angular_velocity - a.angular_velocity).length() < 2e-14);
-        assert!((split_b.angular_velocity - b.angular_velocity).length() < 2e-14);
-    }
-
-    #[test]
-    fn joint_damping_respects_locked_and_dominant_endpoints() {
-        let inertia = SolverBodyInertia::new(
-            1.0,
-            SymmetricMatrix::IDENTITY,
-            LockedAxes::new().lock_rotation_x().lock_rotation_z(),
-            0,
-            true,
-        );
-        let mut fixed = SolverBody::DUMMY;
-        let mut body = SolverBody {
-            angular_velocity: DVec3::Y * 2.0,
-            ..default()
-        };
-        let damping = JointDamping {
-            linear: 0.0,
-            angular: 20.0,
-        };
-        integrate_joint_damping(
-            [&mut fixed, &mut body],
-            [&SolverBodyInertia::DUMMY, &inertia],
-            [DVec3::ZERO; 2],
-            damping,
-            1.0 / 480.0,
-        )
-        .unwrap();
-        assert!((body.angular_velocity.y - 2.0 * (-20.0_f64 / 480.0).exp()).abs() < 1e-15);
-        assert_eq!(fixed.angular_velocity, DVec3::ZERO);
-        assert_eq!(body.angular_velocity.x, 0.0);
-        assert_eq!(body.angular_velocity.z, 0.0);
-
-        let dominant =
-            SolverBodyInertia::new(1.0, SymmetricMatrix::IDENTITY, LockedAxes::new(), 1, true);
-        fixed.angular_velocity = DVec3::Y;
-        integrate_joint_damping(
-            [&mut fixed, &mut body],
-            [&dominant, &inertia],
-            [DVec3::ZERO; 2],
-            damping,
-            1000.0,
-        )
-        .unwrap();
-        assert_eq!(fixed.angular_velocity, DVec3::Y);
-        assert_eq!(body.angular_velocity, DVec3::Y);
-    }
-
-    #[test]
-    fn joint_damping_at_an_offset_point_conserves_total_angular_momentum() {
-        let levers = [DVec3::new(1.0, 0.2, 0.4), DVec3::new(-0.3, 0.5, 0.1)];
-        let inverse1 = SymmetricMatrix::from_diagonal(DVec3::new(2.0, 3.0, 4.0));
-        let inverse2 = SymmetricMatrix::from_diagonal(DVec3::new(5.0, 2.0, 3.0));
-        let inertia1 = SolverBodyInertia::new(0.25, inverse1, LockedAxes::new(), 0, true);
-        let inertia2 = SolverBodyInertia::new(2.0, inverse2, LockedAxes::new(), 0, true);
-        let first = SolverBody {
-            linear_velocity: DVec3::new(3.0, -1.0, 2.0),
-            angular_velocity: DVec3::new(0.3, 2.0, -0.5),
-            ..default()
-        };
-        let second = SolverBody {
-            linear_velocity: DVec3::new(-2.0, 0.5, 7.0),
-            angular_velocity: DVec3::new(-1.0, 0.2, 4.0),
-            ..default()
-        };
-        // The common damping point is the origin, so COM positions are -lever.
-        let momentum =
-            |a: &SolverBody, b: &SolverBody| 4.0 * a.linear_velocity + 0.5 * b.linear_velocity;
-        let angular_momentum = |a: &SolverBody, b: &SolverBody| {
-            (-levers[0]).cross(4.0 * a.linear_velocity)
-                + (-levers[1]).cross(0.5 * b.linear_velocity)
-                + inverse1.inverse() * a.angular_velocity
-                + inverse2.inverse() * b.angular_velocity
-        };
-        let energy = |a: &SolverBody, b: &SolverBody| {
-            0.5 * (4.0 * a.linear_velocity.length_squared()
-                + 0.5 * b.linear_velocity.length_squared()
-                + a.angular_velocity
-                    .dot(inverse1.inverse() * a.angular_velocity)
-                + b.angular_velocity
-                    .dot(inverse2.inverse() * b.angular_velocity))
-        };
-        for angular in [0.0, 11.0] {
-            let (mut a, mut b) = (first.clone(), second.clone());
-            integrate_joint_damping(
-                [&mut a, &mut b],
-                [&inertia1, &inertia2],
-                levers,
-                JointDamping {
-                    linear: 7.0,
-                    angular,
-                },
-                0.05,
-            )
-            .unwrap();
-            assert!((momentum(&a, &b) - momentum(&first, &second)).length() < 2e-14);
-            assert!(
-                (angular_momentum(&a, &b) - angular_momentum(&first, &second)).length() < 2e-14
-            );
-            assert!(energy(&a, &b) < energy(&first, &second));
-            if angular == 0.0 {
-                let relative =
-                    second.velocity_at_point(levers[1]) - first.velocity_at_point(levers[0]);
-                assert!(
-                    (b.velocity_at_point(levers[1])
-                        - a.velocity_at_point(levers[0])
-                        - relative * (-7.0_f64 * 0.05).exp())
-                    .length()
-                        < 2e-14
-                );
-            }
-        }
-        let integrate = |count: u32| {
-            let (mut a, mut b) = (first.clone(), second.clone());
-            for _ in 0..count {
-                integrate_joint_damping(
-                    [&mut a, &mut b],
-                    [&inertia1, &inertia2],
-                    levers,
-                    JointDamping {
-                        linear: 7.0,
-                        angular: 11.0,
-                    },
-                    0.1 / f64::from(count),
-                )
-                .unwrap();
-            }
-            [
-                a.linear_velocity,
-                b.linear_velocity,
-                a.angular_velocity,
-                b.angular_velocity,
-            ]
-        };
-        let reference = integrate(1024);
-        let error = |count| {
-            integrate(count)
-                .into_iter()
-                .zip(reference)
-                .map(|(x, y)| (x - y).length_squared())
-                .sum::<f64>()
-                .sqrt()
-        };
-        assert!(
-            error(20) < 0.6 * error(10),
-            "the split flows must converge under timestep refinement"
-        );
-    }
-
-    #[test]
-    fn joint_damping_point_response_retains_rotated_rank_one_motion() {
-        let inertia = SolverBodyInertia::new(
-            1.0,
-            SymmetricMatrix::IDENTITY,
-            LockedAxes::new()
-                .lock_translation_x()
-                .lock_translation_y()
-                .lock_translation_z()
-                .lock_rotation_x()
-                .lock_rotation_z(),
-            0,
-            true,
-        );
-        let mut fixed = SolverBody::DUMMY;
-        let mut body = SolverBody {
-            angular_velocity: DVec3::Y * 2.0,
-            ..default()
-        };
-        integrate_joint_damping(
-            [&mut fixed, &mut body],
-            [&SolverBodyInertia::DUMMY, &inertia],
-            [DVec3::ZERO, DVec3::new(1.0, 0.3, 2.0)],
-            JointDamping {
-                linear: 7.0,
-                angular: 0.0,
-            },
-            0.05,
-        )
-        .unwrap();
-        assert!(
-            (body.angular_velocity - DVec3::Y * (2.0 * (-7.0_f64 * 0.05).exp())).length() < 2e-14,
-            "actual {:?}, expected {:?}",
-            body.angular_velocity,
-            DVec3::Y * (2.0 * (-7.0_f64 * 0.05).exp())
-        );
-        assert_eq!(body.linear_velocity, DVec3::ZERO);
-        assert_eq!(fixed.angular_velocity, DVec3::ZERO);
-        assert_eq!(fixed.linear_velocity, DVec3::ZERO);
-    }
-
-    #[test]
-    fn joint_damping_rejects_invalid_input_without_partial_velocity_writes() {
-        let valid =
-            SolverBodyInertia::new(1.0, SymmetricMatrix::IDENTITY, LockedAxes::new(), 0, true);
-        let invalid = SolverBodyInertia::new(
-            1.0,
-            SymmetricMatrix::new(1.0, 2.0, 0.0, 1.0, 0.0, 1.0),
-            LockedAxes::new(),
-            0,
-            true,
-        );
-        let initial = SolverBody {
-            linear_velocity: DVec3::X,
-            angular_velocity: DVec3::Y,
-            ..default()
-        };
-        for (rate, dt, inertia) in [
-            (f64::NAN, 0.1, &valid),
-            (-1.0, 0.1, &valid),
-            (1.0, -0.1, &valid),
-            (1.0, f64::INFINITY, &valid),
-            (1.0, 0.1, &invalid),
-        ] {
-            let mut first = SolverBody::DUMMY;
-            let mut second = initial.clone();
-            assert!(
-                integrate_joint_damping(
-                    [&mut first, &mut second],
-                    [&valid, inertia],
-                    [DVec3::ZERO; 2],
-                    JointDamping {
-                        linear: rate,
-                        angular: rate
-                    },
-                    dt
-                )
-                .is_err()
-            );
-            assert_eq!(first.linear_velocity, DVec3::ZERO);
-            assert_eq!(first.angular_velocity, DVec3::ZERO);
-            assert_eq!(second.linear_velocity, initial.linear_velocity);
-            assert_eq!(second.angular_velocity, initial.angular_velocity);
-        }
     }
 
     #[test]

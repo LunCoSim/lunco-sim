@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use bevy::camera::primitives::Aabb;
 use bevy::math::Isometry3d;
-use bevy::math::primitives::Cuboid;
+use bevy::shape::Cuboid;
 
 use lunco_control_core::ControlLink;
 use lunco_core::{Command, on_command, register_commands};

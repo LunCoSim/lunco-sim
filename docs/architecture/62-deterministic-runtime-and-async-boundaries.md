@@ -50,136 +50,18 @@ cross-platform equality or acceptance of the whole mission.
 The runtime remains event driven. It does not poll for readiness on every
 simulation tick, and it does not add a second authoritative time source.
 
-Passive joint damping belongs to the ordered `lunco-physics` substep owner.
-The `LunCoJointDampingAPI` rates are in 1/s. Point-velocity and angular-velocity
-decay use exponential flows in that order, once per actual physics substep;
-position-closure iterations do not integrate them again. Point impulses act at
-one common midpoint of the current joint anchors and include their moments on
-both bodies. Effective inertia, locks and dominance define the movable response.
-The numerical owner validates the complete velocity candidate before either
-endpoint write; invalid state raises a runtime fault and safety hold. The
-`native_force_drives` authored gate owns runtime acceptance, while the shared
-joint module tests its numerical kernels and conservation properties.
+Avian 0.8 owns native joint preparation, XPBD constraints, motors, passive
+`JointDamping`, contact generation, contact solving, friction, and swept CCD.
+The shared headless and graphical compositions install those native plugins.
+Application integration owns authored SI conversion, validated admission,
+BigSpace frame transport, ordered multi-body gear relations, and typed telemetry.
+Contact provenance and impulses come from native `ContactGraph` pairs.
+The `native_force_drives`, joint, differential, and continuous-contact production
+scenes qualify behavior; compilation alone does not qualify physics.
 
-Hard joint closure is prepared by `lunco-physics::joint_projection` after native
-joint preparation, in the same stable per-type order used by the ordinary pass.
-Its fixed-size geometric rows cover fixed, revolute, prismatic, spherical and
-distance joints. Only zero-compliance channels enter repeated closure or CCD;
-motors and compliant channels retain one ordinary integration per substep.
-Rows retain full, axial or perpendicular constrained subspaces as typed
-geometry. Their current scalar gradients and native inertia responses enter
-`lunco-physics::constraint_response` together with admitted continuous-contact
-inequalities. Responsive body islands bound solver work; row order and
-principal-pivot choices remain deterministic. The sparse response operator packs
-the selected endpoints by body, preserving admitted row/endpoint order within
-each body. It gathers each body's linear/angular sum locally and stores its
-endpoint dot products, then combines those products in input endpoint order.
-Scaling, component dot-product grouping and every accumulation order remain
-unchanged for both the native response and its transpose. This avoids repeated
-scattered writes and forms no dense row matrix. Packed terms and stack workspace
-belong to that exact selected operator and expire with its active-set solve.
-Preparation counts supported native linear/angular response components to bound
-numerical rank. A common dominance mask per responsive body certifies the
-positive-semidefinite response required by feasible face updates. These islands
-materialize scaled coefficients once through the same native sparse operator,
-then factor full-rank and rank-deficient selected faces directly.
-Maintained faer column-pivoted QR and transpose QR recover the minimum-norm
-selected response. The numerical rank is bounded by native component support
-and the dimension-scaled f64 roundoff threshold. Coefficients and feasible
-multipliers expire with that immutable island preparation.
-
-These faces retain nonnegative contact multipliers between pivots.
-Native sign, slack and inactive-inequality checks recognize a finished face
-before further search. A nonterminal face follows a least-squares null residual
-to a blocking contact when one exists; otherwise a pulling target uses the
-feasible line toward its minimum-norm solution. All contacts attaining the
-first blocking ratio retire together, in admitted row order, at that same
-feasible point. The factorization publishes its left-null residual directly
-from the Householder tail, with a dimension-scaled projection roundoff bound.
-Search components with uncertain sign are zero only in the intermediate
-direction; every negative admitted component bounds the feasible step. The
-native terminal reaction is unchanged by that search preparation. Native
-geometric slack determines which faces are finished; it does not change
-reaction precision. Hard
-linearized rows may remain inconsistent inside their geometric bounds, retaining
-their selected minimum-norm contact share until nonlinear revalidation.
-
-Nonsymmetric islands use maintained faer LSMR with a zero initial guess, a 1e-12
-relative normal-residual bound and the owner's iteration limit. Both kernels use explicit
-`Par::Seq`, finite-result checks and fallible numerical workspace allocation.
-Reaction convergence is
-independent of geometric writeback tolerances. Those tolerances cannot bound
-the linear solve's normal residual: weak response directions can amplify that
-error, change a contact reaction's sign and cause repeated release/re-admission.
-The sparse allocation includes the published solver layout plus the live n-by-RHS
-search-history column retained while sparse operator products use their selected-endpoint workspace. Workspace admission remains fallible before the solve.
-
-Each nonlinear correction is checked against the geometric tolerances;
-least-squares convergence alone does not admit a pose. Unilateral rows release
-pulling reactions and redundant slack. Initial unilateral admission and later
-re-admission both require error beyond the row's declared residual tolerance.
-Excluded rows stay in the complete response check and enter if coupled motion
-crosses that bound. Active rows still target zero error; geometric writeback tolerances remain
-authoritative. Allocation failure, failed numerical
-convergence or an unresolved native fixed point rejects the operation visibly.
-
-The native zero-guess solve owns minimum-norm multiplier selection in the
-diagonally scaled coordinates. Preserving a body correction or equation residual
-alone does not preserve contact mechanics: the contact multiplier feeds native
-friction. A numerical acceleration must preserve that reaction selection in
-rank-deficient systems and when geometric tolerances are loose. The analytical
-heavy-attachment regression requires the same minimum-norm reactions at loose
-writeback tolerances; accepting the geometry alone is insufficient.
-The mechanism regression with two identical hard rows
-and one identical contact row requires the contact multiplier to remain `1/3`
-when their total response is one.
-
-The owner sums every generalized impulse before integrating any body's
-rotation, using the native positional and angular impulse kernels. It validates
-all body candidates before mutation and writes only prepared native solver
-state. Joint and contact reactions use the same solved multipliers. Current
-material trajectories, joint rows and full native geometry are revalidated
-before pose writeback. Any failure faults and holds that writeback boundary.
-Motors, compliant channels, locked axes, dominance and the existing convergence
-tolerances retain their owner contracts.
-
-Hook review: this owner consumes current f64 errors, gradients, native inertia
-and typed convergence bounds and produces coupled numerical corrections and
-reactions. Continuous constrained dynamics stay in Rust, installed in the shared
-headless/headful physics composition with per-substep lifetime. Failure raises
-a structured physics fault and safety hold. Production acceptance includes
-`continuous_articulated_mass`, `continuous_contacts`, the joint-kind and detach
-gates, and the held-contact-load Rhai observer.
-
-Prismatic alignment and travel-limit directions rotate with the first joint
-frame. Their differential includes the attachment separation: the first angular
-lever is `r1 + separation`, matching the coordinate drive's Jacobian. This retains
-angular coupling after free slider travel. A central finite-difference regression
-checks both geometric row types.
-
-Hard orientation and position rows share the coupled response owner above.
-Their current native inertia and constrained directions enter the same solve,
-including interactions with contact rows. The native point-response
-decomposition remains owned by joint damping, with f64 eigenbasis projection
-and its checked rank policy.
-
-The native-drive Rhai gate establishes its analytical mass/inertia baseline
-from the first completed physics step, after native mass preparation, then
-compares twenty consecutive samples. Tick-zero scenario initialization does
-not supply prepared native mass properties. Its angular-momentum tolerance
-accounts for the native shape mass properties' f32 source precision; the
-coordinate-law and completed-reaction checks retain their dimensional bounds.
-
-The shared headless/headful physics composition disables Avian's XPBD plugin.
-The application joint owner composes its public preparation and impulse kernels
-with ordered drive, geometric and closure passes, f64 velocity projection
-before contact relaxation, and reaction finalization. The native contact solver
-stays installed. The application finalizer stages all joint reactions before
-publishing any of them. `JointForces` retains the completed report while a body
-sleeps; disabled joints clear their report. A failed candidate faults and holds
-physics before native body and contact writeback.
-Each guarded solver phase evaluates its own fault condition at entry; a shared
-condition cached before earlier phases cannot protect against a later failure.
+World positions and authored/domain values retain f64. Avian's internal solver
+state uses f32; its explicit conversion boundary and deferred precision work are
+documented in [Data precision](../principles.md#data-precision).
 
 ## 2. Cycles, clocks, and invocation context
 

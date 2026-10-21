@@ -935,7 +935,7 @@ fn admit_requested_source(
 
 #[cfg(feature = "rhai")]
 pub fn release_requested_source(
-    event: On<Discard, PendingScenarioAsset>,
+    event: On<Discard<PendingScenarioAsset>>,
     requests: Query<&PendingScenarioAsset>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
 ) {
@@ -1282,7 +1282,7 @@ pub struct EmbeddedSourcePreparation {
 /// boundary; asset completion cannot choose the first simulation tick.
 #[cfg(feature = "rhai")]
 pub fn admit_embedded_source(
-    event: On<Insert, lunco_core::EmbeddedScenarioPath>,
+    event: On<Insert<lunco_core::EmbeddedScenarioPath>>,
     mut preparations: Query<&mut EmbeddedSourcePreparation>,
     mut admissions: ResMut<ScenarioPreparationAdmissions>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
@@ -1300,7 +1300,7 @@ pub fn admit_embedded_source(
 
 #[cfg(feature = "rhai")]
 pub fn retire_embedded_source(
-    event: On<Remove, lunco_core::EmbeddedScenarioPath>,
+    event: On<Remove<lunco_core::EmbeddedScenarioPath>>,
     sources: Query<(), With<lunco_core::EmbeddedScenarioSource>>,
     mut admissions: ResMut<ScenarioPreparationAdmissions>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,

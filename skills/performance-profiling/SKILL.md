@@ -31,16 +31,18 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   their scenario name and application binary match. Initialization-source and
   milestone equality alone do not prove exact native-state replay.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
-  start `tracy-capture` before the production binary and inspect the settled
-  window, not only startup.
+  start the matching `tracy-capture` before the production binary and inspect
+  the settled window, not only startup. Bevy 0.20 uses Tracy 0.14.1; the matching
+  official tools are `../tracy/capture/build/tracy-capture-0.14.1` and
+  `../tracy/csvexport/build/tracy-csvexport-0.14.1`. Older capture tools cannot
+  read the new client protocol.
   On Linux, the adjacent Tracy client supports `TRACY_SAMPLING_HZ`; record the
   requested rate and verify the saved capture's sampling period. Its default
   10 kHz CPU sampling can add substantial overhead. A lower sampling rate is
   useful for a separate zone-attribution run; it is still not FPS acceptance.
-  Select CCD debug zones with `RUST_LOG` when distinguishing initial geometry
-  from nonlinear cast samples. Keep `lunco_physics::order_audit` disabled and
-  suppress the hot `lunco_physics::ccd::minimum` and `::support` targets unless
-  those individual evaluations are the measurement subject.
+  Select native physics zones for broad phase, narrow phase, solver preparation,
+  substeps, integration and CCD. Keep `lunco_physics::order_audit` disabled
+  unless deterministic ordering itself is the measurement subject.
   Check the profiler listener and connection against the owned PID with
   `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
@@ -98,7 +100,8 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   type set alone preserves only dependencies targeting that set. Check the
   actual shadow image before admitting a capture as performance evidence.
   `SharedShadowView` uses the native single-threaded executor for its serial
-  eight-system GPU chain or two CPU-mode shadow passes. Attribute its inclusive
+  GPU chain or two CPU-mode shadow passes. Native render preparation clears
+  indirect parameter buffers once per frame before view work. Attribute its inclusive
   and self costs separately; frame-level Render and camera Core3d still use
   their existing executors. Verify native pass inventory and final buffer order
   before comparing executor costs. This render adapter does not change solver
@@ -115,22 +118,6 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   then run the same exact uninstrumented artifact separately. Failure to reproduce
   an earlier tail in a later run does not prove a fix. Record visible popup/UI
   state alongside camera and graphics settings.
-
-For a numerical constraint diagnosis, the opt-in trace target
-`lunco_physics::constraint_response::systems=trace` records admitted f64 row
-errors, tolerances, gradients and native body responses. Capture a bounded owned
-session with exact source/artifact hashes; keep this verbose target disabled for
-performance acceptance. Compare the complete unilateral solve and geometric
-owner checks, not just one matrix factorization. Matrix assembly can change
-floating-point accumulation order, so preserve the native body-reduction
-operator when evaluating the retained Krylov path.
-When a factorization experiment needs the native mass metric, also enable
-`lunco_physics::constraint_response::native_rows=trace`. Each constructed row
-records its exact paired `SolverBodyInertia` snapshots, including effective
-world inverse angular inertia, locked-axis flags and dominance. Match these
-construction records to the admitted system; construction alone does not prove
-the row participated in a solve. Do not reconstruct this metric from a later
-pose or fit it from rounded response coefficients.
 
 For Modelica native-construction costs, distinguish selected application work
 from whole-source preparation. Projection reuse storage is needed only for
@@ -165,25 +152,6 @@ built-in unit references. This storage sharing never caches the live port
 owner, bounds, frame or permission. The bounded debug spans
 `port_input_transaction_stage` and `port_input_transaction_commit` separate
 validation from application when `lunco_port_core::ports=debug` is enabled.
-
-For continuous-contact preparation, distinguish candidate enumeration from
-native geometry queries. The physics owner enumerates each unordered pair
-with a CCD owner once in stable collider order, without a candidate tree.
-Step-local body facts and dense collider/leaf slots avoid repeated owner lookups
-and identity hashing; lazy admission retains first-encounter shape order.
-Do not turn these per-step facts into a revision-only geometry/eligibility cache.
-The admitted leaf also owns its native local AABB, local bounding sphere and
-local COM offset for that step. Transform the prepared local box at corrected
-endpoints and retain the rotational arc remainder. This conservative enclosure
-avoids repeated hull-vertex scans; check admitted-query counts because rotated
-boxes can be looser than shape-tight bounds. Keep these immutable facts separate from
-fresh corrected trajectories and swept bounds. The low-level
-`continuous_prepared_leaf_bounds_enclose_native_trajectories` check
-requires native trajectory enclosure across geometry, scale and large-world inputs;
-retain production physics and separate FPS qualification as well.
-Keep the sparse static-population bound, native body/layer/hook filtering and
-pair order when optimizing this path; current-pose AABBs cannot replace the
-whole solved-trajectory bounds used during each substep.
 
 Before a wheel-shape comparison, verify the coordinate contract in
 `docs/architecture/21-domain-usd.md`. Compare the native collider's axial and
@@ -336,20 +304,6 @@ full-state replay.
 Compound audit rows include native scale and local part mass properties.
 If the first divergence is already in COM, compare admitted geometry and
 mass ownership before attributing later motion to the query dispatcher.
-
-For continuous-query dispatch, compare the CCD owner's bounded
-`minimum_query_batch_size` with its unconstrained zero setting using the same
-scene and ordered inputs. Small batches execute the same kernel directly;
-larger batches join before authoritative correction. Preserve native query
-results and compare complete physics time, including CCD and joints.
-The default minimum is eight queries per worker; joined chunks retain prepared order.
-Use `continuous_scoped_queries_preserve_order_geometry_and_errors` for bitwise
-witness/normal/contact-cache parity before production state replay.
-`ccd_query_dispatch` records bounded query and worker counts around the shared
-kernel and join. Match query population and simulation phase, retain power
-observations throughout each comparison, and separate dispatch duration from
-the enclosing sweep and complete physics tick. A changed worker distribution
-needs measured benefit in addition to numerical parity.
 
 When attributing native GPU preprocessing, trace allocation identity rather
 than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges
@@ -1322,70 +1276,15 @@ Do not add a second cache, a timer, a compatibility path, or a quality fallback.
 If the hot path is not established, stop after source inspection and capture a
 bounded profile rather than guessing.
 
-Hard joint rows distinguish positional geometry from angular error. Anchor
-rotations and separation belong only to positional rows; angular rows must not
-repeat that unused work. Residual reads retain typed full/axial/perpendicular
-subspaces. Current scalar gradients and native responses enter the coupled
-constraint solve with contact inequalities. Preserve row order, locked channels,
-native dominance, signed joint reactions, nonnegative contact reactions and
-convergence tolerances. Preserve the native zero-guess solve's scaled
-minimum-norm reaction selection in rank-deficient systems. A matching body
-correction is insufficient: contact multipliers also feed native friction.
-Keep the linear normal-residual precision independent of geometric writeback
-slack. A tolerance-scaled normal-residual floor can reverse reaction signs in
-weak directions and cycle otherwise feasible unilateral pivots. Qualify both
-small-scale and loose-tolerance heavy-attachment reactions, then replay the
-captured active sets at the production iteration limit.
-The response operator gathers packed selected terms by body. Preserve admitted
-row/endpoint order within each body, component dot grouping, endpoint combination
-order and scaling placement. Qualify layout changes against complete captured
-systems, including unilateral pivots and contact multipliers, then compare fixed
-input milestones in production with identical source and initial state.
-Exercise redundant hard rows together with contact rows before qualifying a
-preconditioner or factorization. Generalized body impulses must be summed before
-native rotation integration; large internal reactions can cancel. Rebuild geometry
-after each nonlinear correction and require a complete native sweep before
-writeback. `continuous_articulated_mass` exercises a heavy attachment, contact
-and an unconnected witness. `continuous_contacts` covers joint closure, nonlinear
-arcs and invalid initial overlap; retain joint-kind, detach and held-load gates.
-Profile `coupled_constraint_response`, `coupled_island_response`,
-`coupled_active_set` and `coupled_response_krylov` with
-`RUST_LOG=info,lunco_physics::constraint_response=debug`. Separate outer
-geometry corrections, active-set pivots and inner Krylov work: nested span
-totals overlap. Resolve sampled native addresses against the exact captured
-ELF and its recorded symbol relocation before attributing sparse-product cost.
-`coupled_response_coefficients` measures native coefficient construction for
-islands whose common per-body dominance masks certify a PSD response.
-`coupled_response_factorization` measures their full-rank and rank-deficient
-selected faces. Preserve the native support rank bound, PSD certificate,
-coefficient construction, scaled minimum-norm reactions and serial maintained
-QR kernels.
-Feasible multiplier updates retire all contacts attaining the first blocking
-ratio together at the same feasible point, in admitted row order. This includes
-simultaneous zero-length bounds; do not refactor the same face once per tie.
-Native sign, slack and inactive-row bounds recognize finished faces before any
-null-direction search, separately from linear precision.
-The factorization owns the orthogonal residual and its projection roundoff
-certificate. Do not reconstruct that residual by subtracting cancelling
-reactions. Uncertain signs are zero only in the intermediate null direction;
-all negative admitted directions participate in the blocking ratio.
-Qualify weak directions, redundant unequal clearances, inconsistent hard rows
-inside native slack, the redundant contact-reaction guard and nonsymmetric
-dominance exclusion. Replay failures with the actual production iteration cap.
-The response workspace retains typed linear/angular body gradients and admitted
-addition order in both products. For inner convergence attribution, explicitly
-enable `lunco_physics::constraint_response::iterations=trace`: each completed
-native solve records its row count, iteration count and residuals in a log event.
-Keep it disabled for product timing; these values do not create span identities.
-Maintained faer LSMR
-uses explicit serial parallelism and sparse native response/transpose products.
-Compare its iterations and cost with row assembly and native query time;
-geometric revalidation still owns admission after each least-squares correction.
-`PhysicsPerformance.continuous_projection_time_ms`
-reports the coupled correction phase separately from swept geometry; it includes
-joint/contact row preparation, numerical response and reaction application.
-The joint-only admission pass precedes that timer; inspect its schedule span
-when attributing total joint cost.
+Profile the installed Avian 0.8 systems for joint preparation, native XPBD,
+contact generation, contact recycling, constraint solving and swept CCD.
+`PhysicsPerformance` exposes native solver and collision durations alongside
+complete step samples. Validate graph endpoints after scene replacement before
+attributing contact cost to active geometry. Record source hashes, ordered
+inputs, collider counts, CCD filters, substeps and iteration settings for each
+comparison. Rerun the production joint, drive, gear and continuous-contact gates
+when changing those owners. Preserve native scheduling and enhanced determinism;
+thread or batch count is not a correctness verdict.
 
 ## Evidence
 
@@ -1409,6 +1308,13 @@ array after the measurement window. The query also returns the current
 `step_time_ms` and `step_number`, and the editor publishes the same current
 sample through `engine-health.physics_step_ms`. Query once per window because
 `PhysicsPerformance` also counts live topology and is not a per-step sampler.
+Compare its native `contact_graph_pairs` with
+`contact_graph_pairs_missing_entities` and
+`contact_graph_pairs_without_colliders` after replacement or live projection.
+The latter two count invalid endpoint pairs, including sleeping contacts;
+an excess graph-node count alone does not identify a retired contact. Keep
+the audit on demand and trace a confirmed invalid endpoint to its lifecycle
+owner before changing cleanup or contact admission.
 The editor-count diagnostic additionally checks it at one-second checkpoints
 to reject a stall after an early advance, along with full readiness and stable
 physics topology. It also rejects retained errors from `RuntimeDiagnostics`,
@@ -1464,53 +1370,6 @@ improve UI timing by silently discarding authoritative overstep. If both
 wall-clock physics cadence and UI isolation are required, measure the whole
 simulation-owner boundary and consume immutable snapshots from the UI/render
 side; separate cycle labels alone do not provide thread isolation.
-
-For articulated continuous-contact cost, enable
-`RUST_LOG=info,lunco_physics=debug` in the owned Tracy session and compare
-`ccd_sweep_geometry`, `ccd_support_gap_bound`, `ccd_initial_native_contact`,
-`ccd_native_shape_cast`, `ccd_cast_native_contact` and
-`ccd_cast_native_closest_points`. Shape-type fields identify
-the native pair kernels. Initial and nonlinear contact samples must use the
-same relative-frame native adapter. For asymmetric scales, choose the larger
-native bounding-sphere shape as the query frame before querying, then flip
-native contact ownership back. Retain near-zero gaps, reversed input order,
-penetration and large-world checks: one successful touching pose does not
-certify adjacent poses. For cuboid/support-map face contacts, preserve the
-native SAT/support/nearest-feature certificate in `lunco-physics::ccd`.
-Require the projected native face normal to equal the SAT axis before using
-its signed witness distance. The same certificate owns initial samples,
-cast witnesses at the unchanged native TOI, and native endpoint-manifold normal
-constraints. Exercise edges and incompatible contained supports that must
-retain GJK, as well as the touching-face rotation and scale sweep. A certified
-penetration without native manifold geometry must fault visibly.
-For the remaining non-ball convex pairs, preserve Parry's
-parameterized GJK/EPA API and its fresh feature seed: subtract and normalize
-point-projection gaps in the projecting shape's local frame before rotation.
-Do not substitute remote centre directions, retry failed queries with guessed
-axes, or reuse a cached seed as authoritative geometry. Nested spans overlap; do not add them to their parent.
-`ccd_leaf_trajectories`, `ccd_swept_bvh` and `ccd_candidate_geometry` separate
-the sweep's preparation, native broad phase and candidate work. To profile
-these stages without millions of support/witness zones, use
-`RUST_LOG=info,lunco_physics::ccd=debug,lunco_physics::ccd::support=info,lunco_physics::ccd::minimum=info`.
-The disabled spans are diagnostic only; physics still evaluates their bounds.
-Compare `ccd_query_dispatch` with each `ccd_query_chunk` on its actual thread.
-Dispatch self time can include waiting for scoped workers; it is not a measure
-of dispatch overhead. Chunk lifetimes expose scheduling gaps and imbalance
-without changing candidate assignment or deterministic result consumption.
-Keep fresh native geometry, whole-arc certification, stable part order and joint
-closure when optimizing these queries. Compare separate unprofiled runs over
-the same physics tick window, retaining `PhysicsPerformance.step_time_samples_ms`
-and recording sample coverage. Those samples establish physics-step timing;
-they do not establish the complete fixed transaction or uncontended viewport FPS.
-
-`ContactMotion` prepares the two current material trajectories once for a contact
-evaluation. Arc minimization retains its absolute endpoint along with the swept
-minimum; endpoint closure and correction gradients consume the same preparation.
-Rebuild it after corrections. Preserve the distinct initial-overlap-relative
-swept gap and absolute endpoint separation, and verify nonlinear arcs, large
-origins, fresh rolling witnesses and the production `continuous_contacts` verdict.
-The `ccd_minimum_gap` span measures arc bounding after preparation; include the
-constructor when attributing total witness cost.
 
 Inspect effective compiler profiles as well as runtime work. The root's explicit
 development overrides optimize `lunco-physics`, the workspace glam math owner

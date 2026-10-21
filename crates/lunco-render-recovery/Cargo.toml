@@ -15,7 +15,7 @@ lunco-render = { path = "../lunco-render" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-theme = { path = "../lunco-theme" }
-wgpu = { version = "29", default-features = false }
+wgpu = { version = "30", default-features = false }
 
 [lints]
 workspace = true

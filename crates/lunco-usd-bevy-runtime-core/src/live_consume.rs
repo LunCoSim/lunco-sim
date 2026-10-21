@@ -111,7 +111,7 @@ impl LiveUsdPrimEntities {
 }
 
 fn index_live_usd_prim(
-    trigger: On<Insert, UsdPrimPath>,
+    trigger: On<Insert<UsdPrimPath>>,
     prims: Query<&UsdPrimPath>,
     mut index: ResMut<LiveUsdPrimEntities>,
 ) {
@@ -120,7 +120,7 @@ fn index_live_usd_prim(
     }
 }
 
-fn unindex_live_usd_prim(trigger: On<Remove, UsdPrimPath>, mut index: ResMut<LiveUsdPrimEntities>) {
+fn unindex_live_usd_prim(trigger: On<Remove<UsdPrimPath>>, mut index: ResMut<LiveUsdPrimEntities>) {
     index.remove(trigger.entity);
 }
 

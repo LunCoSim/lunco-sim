@@ -8143,7 +8143,6 @@ fn contact_debug_value(world: &World, snapshot: lunco_physics::ContactDebugSnaps
                         "normal_impulse".into(),
                         Dynamic::from_float(part.normal_impulse),
                     );
-                    item.insert("continuous".into(), Dynamic::from_bool(part.continuous));
                     Dynamic::from_map(item)
                 })
                 .collect(),
@@ -8168,10 +8167,6 @@ fn contact_debug_value(world: &World, snapshot: lunco_physics::ContactDebugSnaps
     map.insert(
         "total_normal_impulse".into(),
         Dynamic::from_float(snapshot.total_normal_impulse),
-    );
-    map.insert(
-        "continuous_normal_impulse".into(),
-        Dynamic::from_float(snapshot.continuous_normal_impulse),
     );
     map.insert(
         "normal_impulse_vector".into(),

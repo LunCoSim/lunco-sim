@@ -2124,14 +2124,16 @@ pub fn gather_snapshot(
             continue;
         };
         let pos = frame_transform.transform_position(position.0);
-        let rot = frame_transform.transform_rotation(rotation.0).as_quat();
+        let rot = frame_transform
+            .transform_rotation(rotation.0.as_dquat())
+            .as_quat();
         // A cosim blow-up emits a NaN/inf `Position` — or velocity, which integrates
         // to inf a frame EARLIER than the pose does. A non-finite value poisons
         // client dead-reckoning (`pos += lv*dt` → ±inf), so drop the whole sample.
         // Check all four and drop the entry so the proxy latches its last good pose.
         // Warn once per gid (cleared on recovery) to avoid per-tick spam.
-        let lv = frame_transform.transform_vector(lin.map_or(DVec3::ZERO, |v| v.0));
-        let av = frame_transform.transform_vector(ang.map_or(DVec3::ZERO, |v| v.0));
+        let lv = frame_transform.transform_vector(lin.map_or(DVec3::ZERO, |v| v.0.as_dvec3()));
+        let av = frame_transform.transform_vector(ang.map_or(DVec3::ZERO, |v| v.0.as_dvec3()));
         if !pos.is_finite() || !rot.is_finite() || !lv.is_finite() || !av.is_finite() {
             if nonfinite_warned.insert(key) {
                 warn!(
@@ -2155,9 +2157,9 @@ pub fn gather_snapshot(
         let entry = snapshot_entry_in_frame(
             key,
             position.0,
-            rotation.0,
-            lin.map_or(DVec3::ZERO, |v| v.0),
-            ang.map_or(DVec3::ZERO, |v| v.0),
+            rotation.0.as_dquat(),
+            lin.map_or(DVec3::ZERO, |v| v.0.as_dvec3()),
+            ang.map_or(DVec3::ZERO, |v| v.0.as_dvec3()),
             last_input_seq,
             frame_transform,
         );

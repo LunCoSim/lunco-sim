@@ -1,4 +1,4 @@
-use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollPixelsPerLine};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{OrbitCameraTransition, OrbitUserInput};
@@ -61,18 +61,6 @@ pub(crate) fn capture_avatar_intent(
     }
 }
 
-/// Convert Bevy's accumulated mouse-scroll input to line units.
-///
-/// Bevy preserves the unit supplied by the OS/device. Leafwing's
-/// `MouseScrollAxis` exposes only a scalar, so using that axis here loses the
-/// distinction and makes pixel-mode touchpads produce enormous zoom deltas.
-pub(crate) fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
-    match scroll.unit {
-        MouseScrollUnit::Line => scroll.delta.y,
-        MouseScrollUnit::Pixel => scroll.delta.y / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
-    }
-}
-
 /// Mouse-wheel → per-avatar [`CameraZoomInput`], gated on egui pointer capture.
 ///
 /// Camera zoom is presentation state, not a vessel control port. It consumes the
@@ -83,9 +71,10 @@ pub(crate) fn collect_camera_zoom(
     egui_focus: Res<lunco_control_core::EguiFocus>,
     drag_mode: Option<Res<lunco_interaction_core::DragModeActive>>,
     scroll: Res<AccumulatedMouseScroll>,
+    pixels_per_line: Res<MouseScrollPixelsPerLine>,
     mut q_avatar: Query<&mut CameraZoomInput, (With<Embodiment>, With<LocalEmbodiment>)>,
 ) {
-    let d = normalized_scroll_delta(&scroll);
+    let d = scroll.to_lines(&pixels_per_line).delta.y;
     let accepted = !egui_focus.wants_pointer && !drag_mode.is_some_and(|drag| drag.active);
     for mut zoom in q_avatar.iter_mut() {
         // A neutral source frame is meaningful even while the pointer is
@@ -312,20 +301,6 @@ pub(crate) fn scene_keyboard_active(focus: Res<lunco_control_core::EguiFocus>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn scroll_units_are_normalized_before_zoom() {
-        let line = AccumulatedMouseScroll {
-            delta: Vec2::new(0.0, 1.0),
-            unit: MouseScrollUnit::Line,
-        };
-        let pixel = AccumulatedMouseScroll {
-            delta: Vec2::new(0.0, MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR),
-            unit: MouseScrollUnit::Pixel,
-        };
-        assert_eq!(normalized_scroll_delta(&line), 1.0);
-        assert_eq!(normalized_scroll_delta(&pixel), 1.0);
-    }
 
     #[test]
     fn semantic_look_intent_rotates_camera_angles() {

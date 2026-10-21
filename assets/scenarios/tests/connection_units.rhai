@@ -3,7 +3,7 @@
 // only their authored connection and checks the owning admission boundary.
 fn simulation_dependencies(me, ctx) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
-      query_reads: ["GetPort", "GetReadiness", "GetBrokenConnections"], required_inputs: []}
+      query_reads: ["GetPort", "GetReadiness", "GetBrokenConnections", "GetDiagnostics"], required_inputs: []}
 }
 fn require(result) { if result.ok != true { throw(result.to_string()); } }
 fn on_start(me, ctx) {
@@ -29,6 +29,20 @@ fn on_tick(me, ctx) {
         require(cmd("ApplyUsdOps", #{doc_id: this.doc, ops: [operation]}));
         this.phase = 1; return;
     }
+    if this.phase == 2 {
+        let diagnostics = query("GetDiagnostics", #{scope: "loaded_stages"});
+        if diagnostics.available != true || diagnostics.complete != true { return; }
+        let found = false;
+        for diagnostic in diagnostics.diagnostics {
+            if diagnostic.code == "connection-engineering-contract-invalid"
+                && diagnostic.subject == "/World/Target.inputs:mass"
+                && diagnostic.message.contains("unit conversion") { found = true; }
+        }
+        this.checks.push(t_true(found, "loaded-stage lint exposes the binding owner's incompatible-unit diagnostic"));
+        this.done = true;
+        report_verdict(this.checks, "CONNECTION UNITS", "CONNECTION_UNITS");
+        return;
+    }
     let ready = query("GetReadiness");
     if !ready.faulted { return; }
     let mass = query("GetPort", #{api_id: find_path("/World/Target"), name: "mass"});
@@ -39,6 +53,6 @@ fn on_tick(me, ctx) {
         t_true(mass.value == 5.0, "rejected metre-to-kilogram wiring preserves the native mass"),
         t_true(wiring.runtime_fault.kind == ready.fault.kind, "the public wiring report exposes the same structured failure")
     ];
-    this.done = true;
-    report_verdict(this.checks, "CONNECTION UNITS", "CONNECTION_UNITS");
+    require(cmd("RunLint", #{}));
+    this.phase = 2;
 }

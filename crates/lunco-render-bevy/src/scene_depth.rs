@@ -17,15 +17,15 @@ struct SceneDepthInvalidation;
 #[derive(Component)]
 struct AutomaticSceneDepth;
 
-fn added<T: Component>(_event: On<Add, T>, mut invalidation: ResMut<SceneDepthInvalidation>) {
+fn added<T: Component>(_event: On<Add<T>>, mut invalidation: ResMut<SceneDepthInvalidation>) {
     invalidation.set_changed();
 }
 
-fn inserted<T: Component>(_event: On<Insert, T>, mut invalidation: ResMut<SceneDepthInvalidation>) {
+fn inserted<T: Component>(_event: On<Insert<T>>, mut invalidation: ResMut<SceneDepthInvalidation>) {
     invalidation.set_changed();
 }
 
-fn removed<T: Component>(_event: On<Remove, T>, mut invalidation: ResMut<SceneDepthInvalidation>) {
+fn removed<T: Component>(_event: On<Remove<T>>, mut invalidation: ResMut<SceneDepthInvalidation>) {
     invalidation.set_changed();
 }
 

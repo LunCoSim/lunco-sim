@@ -7,6 +7,8 @@
 pub mod contracts;
 pub mod endpoints;
 pub mod ports;
+pub mod units;
+pub use units::EngineUnit;
 
 pub use contracts::{ScalarPortContract, ScalarPortContracts, ScalarPortContractsPlugin};
 
@@ -15,3 +17,6 @@ pub use endpoints::{
     PortSurfacePort, PortSurfaceReady, owning_input_ports, register_endpoint_types,
 };
 pub use ports::{PortMap, ScalarPortMap};
+
+/// Fixed scalar connector name of a [`Port`] endpoint.
+pub const PORT_NAME: &str = "value";

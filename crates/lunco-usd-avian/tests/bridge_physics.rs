@@ -5,7 +5,6 @@
 //! with `BigSpacePhysicsBridgePlugin` owning transform sync. Static bodies
 //! remain stable while dynamic bodies round-trip through the active frame.
 
-use avian3d::math::Vector;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
@@ -64,7 +63,11 @@ fn make_app() -> App {
     let mut app = App::new();
     // AssetPlugin + Mesh: avian's collider-from-mesh backend reads
     // `AssetEvent<Mesh>` messages, which only exist with assets registered.
-    app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        bevy::diagnostic::DiagnosticsPlugin,
+    ));
     app.init_asset::<Mesh>();
     // No bevy TransformPlugin — big_space forbids it and brings its own
     // propagation (the production shape).
@@ -87,7 +90,11 @@ fn make_app() -> App {
 
 fn make_app_with_usd_collision_hooks() -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        bevy::diagnostic::DiagnosticsPlugin,
+    ));
     app.init_asset::<Mesh>();
     app.add_plugins((
         big_space::plugin::BigSpaceMinimalPlugins,
@@ -413,9 +420,8 @@ fn external_teleport_carries_child_body() {
             ChildOf(chassis),
         ))
         .id();
-    app.world_mut().spawn(
-        FixedJoint::new(chassis, wheel).with_local_anchor1(bevy::math::DVec3::new(2.0, 0.0, 0.0)),
-    );
+    app.world_mut()
+        .spawn(FixedJoint::new(chassis, wheel).with_local_anchor1(Vec3::new(2.0, 0.0, 0.0)));
 
     // Let the pair free-fall a few ticks so the solver owns both.
     step(&mut app, 5);
@@ -447,7 +453,7 @@ fn external_teleport_carries_child_body() {
 #[test]
 fn grid_direct_body_keeps_its_render_subtree_across_repeated_cell_crossings() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let world_grid = shell(&mut app);
     let scene_grid = app
         .world_mut()
@@ -470,7 +476,7 @@ fn grid_direct_body_keeps_its_render_subtree_across_repeated_cell_crossings() {
             Visibility::Visible,
             InheritedVisibility::VISIBLE,
             ViewVisibility::default(),
-            LinearVelocity(Vector::new(1_200.0, 0.0, 0.0)),
+            LinearVelocity(Vec3::new(1_200.0, 0.0, 0.0)),
             ChildOf(scene_grid),
         ))
         .id();
@@ -549,7 +555,7 @@ fn grid_direct_body_keeps_its_render_subtree_across_repeated_cell_crossings() {
 #[test]
 fn paired_cell_transform_teleport_reaches_physics() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let grid = shell(&mut app);
     let body = app
         .world_mut()
@@ -584,7 +590,7 @@ fn paired_cell_transform_teleport_reaches_physics() {
 #[test]
 fn plain_ancestor_resplit_and_teleport_are_distinguished() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let grid = shell(&mut app);
     let carrier = app
         .world_mut()
@@ -714,7 +720,11 @@ fn surface_physics_frame_is_invariant_to_rotating_celestial_parent() {
         + 0.5 * final_angular_velocity.length_squared();
     assert!((final_pos - initial).length() < 0.05);
     assert!(
-        final_rotation.angle_between(initial_rotation) < 1e-4,
+        final_rotation
+            .as_dquat()
+            .normalize()
+            .angle_between(initial_rotation.as_dquat().normalize())
+            < 1e-4,
         "rotation above ActivePhysicsFrame leaked into Avian: before={initial_rotation:?}, after={final_rotation:?}"
     );
     assert!(final_linear_velocity.is_finite());
@@ -755,7 +765,7 @@ fn surface_physics_frame_is_invariant_to_rotating_celestial_parent() {
 #[test]
 fn active_frame_handoff_transports_velocity_into_the_new_grid() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let root = shell(&mut app);
 
     // Scene loading seeds bodies while WorldRoot is still the active Avian
@@ -776,8 +786,8 @@ fn active_frame_handoff_transports_velocity_into_the_new_grid() {
         .spawn((
             RigidBody::Dynamic,
             Collider::cuboid(1.0, 1.0, 1.0),
-            LinearVelocity(Vector::new(2.0, -0.5, 3.0)),
-            AngularVelocity(Vector::new(-0.2, 0.4, 0.1)),
+            LinearVelocity(Vec3::new(2.0, -0.5, 3.0)),
+            AngularVelocity(Vec3::new(-0.2, 0.4, 0.1)),
             CellCoord::ZERO,
             Transform::from_xyz(4.0, 8.0, -2.0),
             GlobalTransform::default(),
@@ -802,16 +812,16 @@ fn active_frame_handoff_transports_velocity_into_the_new_grid() {
 
     // Position/Rotation and both velocity vectors must now use the site Grid's
     // axes. A rebranch is not a physical impulse and must not alter magnitudes.
-    let expected_linear = frame_rotation.inverse() * old_linear;
-    let expected_angular = frame_rotation.inverse() * old_angular;
+    let expected_linear = frame_rotation.inverse() * old_linear.as_dvec3();
+    let expected_angular = frame_rotation.inverse() * old_angular.as_dvec3();
     let actual_linear = app.world().get::<LinearVelocity>(body).unwrap().0;
     let actual_angular = app.world().get::<AngularVelocity>(body).unwrap().0;
     assert!(
-        (actual_linear - expected_linear).length() < 1.0e-6,
+        (actual_linear.as_dvec3() - expected_linear).length() < 1.0e-6,
         "linear velocity was not rebased: old={old_linear:?} expected={expected_linear:?} actual={actual_linear:?}"
     );
     assert!(
-        (actual_angular - expected_angular).length() < 1.0e-6,
+        (actual_angular.as_dvec3() - expected_angular).length() < 1.0e-6,
         "angular velocity was not rebased: old={old_angular:?} expected={expected_angular:?} actual={actual_angular:?}"
     );
     assert!((actual_linear.length() - old_linear.length()).abs() < 1.0e-6);
@@ -821,7 +831,7 @@ fn active_frame_handoff_transports_velocity_into_the_new_grid() {
 #[test]
 fn reanchored_active_frame_seeds_existing_bodies_from_the_new_local_hierarchy() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let root = shell(&mut app);
     let host = app
         .world_mut()
@@ -849,7 +859,7 @@ fn reanchored_active_frame_seeds_existing_bodies_from_the_new_local_hierarchy() 
         .spawn((
             RigidBody::Dynamic,
             Collider::sphere(0.5),
-            LinearVelocity(Vector::new(2.0, 0.0, 3.0)),
+            LinearVelocity(Vec3::new(2.0, 0.0, 3.0)),
             CellCoord::ZERO,
             Transform::from_xyz(4.0, 8.0, -2.0),
             GlobalTransform::default(),
@@ -889,7 +899,7 @@ fn reanchored_active_frame_seeds_existing_bodies_from_the_new_local_hierarchy() 
 #[test]
 fn active_frame_handoff_is_transport_on_the_first_physics_read() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let root = shell(&mut app);
     let site = app
         .world_mut()
@@ -906,8 +916,8 @@ fn active_frame_handoff_is_transport_on_the_first_physics_read() {
         .spawn((
             RigidBody::Dynamic,
             Collider::sphere(0.5),
-            LinearVelocity(Vector::new(2.0, 0.0, 3.0)),
-            AngularVelocity(Vector::new(-0.2, 0.0, 0.1)),
+            LinearVelocity(Vec3::new(2.0, 0.0, 3.0)),
+            AngularVelocity(Vec3::new(-0.2, 0.0, 0.1)),
             CellCoord::ZERO,
             Transform::from_xyz(4.0, 8.0, -2.0),
             GlobalTransform::default(),
@@ -938,21 +948,23 @@ fn active_frame_handoff_is_transport_on_the_first_physics_read() {
     let actual_linear = app.world().get::<LinearVelocity>(body).unwrap().0;
     let actual_angular = app.world().get::<AngularVelocity>(body).unwrap().0;
     assert!(
-        (actual_linear - frame_rotation.inverse() * old_linear).length() < 1.0e-6,
+        (actual_linear.as_dvec3() - frame_rotation.inverse() * old_linear.as_dvec3()).length()
+            < 1.0e-6,
         "first-read linear rebase failed: old={old_linear:?} expected={:?} actual={actual_linear:?}",
-        frame_rotation.inverse() * old_linear
+        frame_rotation.inverse() * old_linear.as_dvec3()
     );
     assert!(
-        (actual_angular - frame_rotation.inverse() * old_angular).length() < 1.0e-6,
+        (actual_angular.as_dvec3() - frame_rotation.inverse() * old_angular.as_dvec3()).length()
+            < 1.0e-6,
         "first-read angular rebase failed: old={old_angular:?} expected={:?} actual={actual_angular:?}",
-        frame_rotation.inverse() * old_angular
+        frame_rotation.inverse() * old_angular.as_dvec3()
     );
 }
 
 #[test]
 fn frame_handoff_seeds_late_bodies_in_the_committed_frame() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let root = shell(&mut app);
     let site_rotation = Quat::from_rotation_y(0.7);
     let site = app
@@ -965,7 +977,7 @@ fn frame_handoff_seeds_late_bodies_in_the_committed_frame() {
             ChildOf(root),
         ))
         .id();
-    let old_linear = Vector::new(2.0, -0.5, 3.0);
+    let old_linear = Vec3::new(2.0, -0.5, 3.0);
     let existing = app
         .world_mut()
         .spawn((
@@ -1001,7 +1013,10 @@ fn frame_handoff_seeds_late_bodies_in_the_committed_frame() {
     app.world_mut().run_schedule(FixedPostUpdate);
 
     let rebased = app.world().get::<LinearVelocity>(existing).unwrap().0;
-    assert!((rebased - site_rotation.inverse().as_dquat() * old_linear).length() < 1.0e-6);
+    assert!(
+        (rebased.as_dvec3() - site_rotation.inverse().as_dquat() * old_linear.as_dvec3()).length()
+            < 1.0e-6
+    );
     let late_position = app.world().get::<Position>(late).unwrap().0;
     assert!(
         (late_position - late_local).length() < 1.0e-6,
@@ -1017,7 +1032,7 @@ fn frame_handoff_seeds_late_bodies_in_the_committed_frame() {
 #[test]
 fn active_site_frame_seeds_initial_pose_in_site_coordinates() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let root = shell(&mut app);
     let site_rotation = Quat::from_rotation_y(0.7);
     let site_translation = Vec3::new(120.0, -30.0, 75.0);
@@ -1066,7 +1081,7 @@ fn active_site_frame_seeds_initial_pose_in_site_coordinates() {
 #[test]
 fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
     let mut app = make_app();
-    app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(Gravity(Vec3::ZERO));
     let root_grid = shell(&mut app);
     let rotating_parent = app
         .world_mut()
@@ -1121,7 +1136,7 @@ fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
             ))
             .id();
         app.world_mut()
-            .spawn(FixedJoint::new(chassis, leg).with_local_anchor1(offset));
+            .spawn(FixedJoint::new(chassis, leg).with_local_anchor1(offset.as_vec3()));
         legs.push(leg);
     }
 
@@ -1161,7 +1176,7 @@ fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
 #[test]
 fn nested_body_strut_contact_preserves_mass_frame() {
     let mut app = make_app_with_usd_collision_hooks();
-    app.insert_resource(Gravity(Vector::new(0.0, -1.6248896, 0.0)));
+    app.insert_resource(Gravity(Vec3::new(0.0, -1.6248896, 0.0)));
     app.insert_resource(SubstepCount(NESTED_BODY_SUBSTEPS));
     let grid = shell(&mut app);
 
@@ -1258,12 +1273,6 @@ fn nested_body_strut_contact_preserves_mass_frame() {
                 ChildOf(leg),
             ))
             .id();
-        let rotation_d = DQuat::from_xyzw(
-            rotation.x as f64,
-            rotation.y as f64,
-            rotation.z as f64,
-            rotation.w as f64,
-        );
         let pad_anchor1 = match axis {
             _ if axis.x > 0.0 => DVec3::new(0.017101, -7.153015, 0.0),
             _ if axis.x < 0.0 => DVec3::new(-0.017101, -7.153015, 0.0),
@@ -1272,8 +1281,8 @@ fn nested_body_strut_contact_preserves_mass_frame() {
         };
         app.world_mut().spawn((
             SphericalJoint::new(leg, pad)
-                .with_local_anchor1(pad_anchor1)
-                .with_local_anchor2(DVec3::new(0.0, 0.05, 0.0)),
+                .with_local_anchor1(pad_anchor1.as_vec3())
+                .with_local_anchor2(Vec3::new(0.0, 0.05, 0.0)),
             JointCollisionDisabled,
             JointDamping {
                 linear: 0.0,
@@ -1282,11 +1291,11 @@ fn nested_body_strut_contact_preserves_mass_frame() {
         ));
         app.world_mut().spawn((
             PrismaticJoint::new(hull, leg)
-                .with_local_anchor1(mount)
-                .with_local_anchor2(DVec3::ZERO)
-                .with_local_basis1(rotation_d)
-                .with_local_basis2(DQuat::IDENTITY)
-                .with_slider_axis(DVec3::Y)
+                .with_local_anchor1(mount.as_vec3())
+                .with_local_anchor2(Vec3::ZERO)
+                .with_local_basis1(rotation)
+                .with_local_basis2(Quat::IDENTITY)
+                .with_slider_axis(Vec3::Y)
                 .with_limits(-0.8, 0.0)
                 .with_motor(
                     LinearMotor::new(MotorModel::ForceBased {

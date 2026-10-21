@@ -84,14 +84,14 @@ impl Plugin for DynamicJointIslandMassPlugin {
         macro_rules! track {
             ($component:ty) => {
                 app.add_observer(
-                    |_: On<Insert, $component>, mut cache: ResMut<DynamicJointIslandMasses>| {
+                    |_: On<Insert<$component>>, mut cache: ResMut<DynamicJointIslandMasses>| {
                         if !cache.topology_dirty {
                             cache.topology_dirty = true;
                         }
                     },
                 )
                 .add_observer(
-                    |_: On<Remove, $component>, mut cache: ResMut<DynamicJointIslandMasses>| {
+                    |_: On<Remove<$component>>, mut cache: ResMut<DynamicJointIslandMasses>| {
                         if !cache.topology_dirty {
                             cache.topology_dirty = true;
                         }
@@ -238,7 +238,7 @@ pub fn refresh_dynamic_joint_island_masses(
     let dynamic_bodies = bodies
         .iter()
         .filter(|(_, mode, _, _)| **mode == RigidBody::Dynamic)
-        .map(|(entity, _, computed, _)| (entity, computed.map(|mass| mass.value())))
+        .map(|(entity, _, computed, _)| (entity, computed.map(|mass| f64::from(mass.value()))))
         .collect::<Vec<_>>();
     let dynamic_entities = dynamic_bodies
         .iter()
@@ -299,6 +299,14 @@ pub fn refresh_dynamic_joint_island_masses(
 
 #[cfg(test)]
 mod tests {
+    fn assert_native_mass(actual: Option<f64>, expected: f64) {
+        let actual = actual.expect("admitted native mass");
+        assert!(
+            (actual - expected).abs() <= expected * f64::from(f32::EPSILON) * 2.0,
+            "native mass {actual}, expected {expected}"
+        );
+    }
+
     use super::*;
 
     fn entity(raw: u32) -> Entity {
@@ -413,8 +421,8 @@ mod tests {
         app.update();
 
         let cache = app.world().resource::<DynamicJointIslandMasses>();
-        assert_eq!(cache.get(lander).unwrap().mass_kg, Some(2_180.0));
-        assert_eq!(cache.get(leg).unwrap().mass_kg, Some(2_180.0));
+        assert_native_mass(cache.get(lander).unwrap().mass_kg, 2_180.0);
+        assert_native_mass(cache.get(leg).unwrap().mass_kg, 2_180.0);
         assert_eq!(cache.get(ramp).unwrap().mass_kg, Some(32.0));
         assert_eq!(cache.get(detached).unwrap().mass_kg, Some(450.0));
     }
@@ -475,13 +483,13 @@ mod tests {
             .unwrap()
             .set(7.0);
         app.update();
-        assert_eq!(
+        assert_native_mass(
             app.world()
                 .resource::<DynamicJointIslandMasses>()
                 .get(body)
                 .unwrap()
                 .mass_kg,
-            Some(7.0)
+            7.0,
         );
         app.world_mut()
             .entity_mut(body)
@@ -544,13 +552,13 @@ mod tests {
         );
         app.world_mut().entity_mut(joint).remove::<JointDisabled>();
         app.update();
-        assert_eq!(
+        assert_native_mass(
             app.world()
                 .resource::<DynamicJointIslandMasses>()
                 .get(root)
                 .unwrap()
                 .mass_kg,
-            Some(10.0)
+            10.0,
         );
         app.world_mut().resource_mut::<RefreshEnabled>().0 = false;
         app.world_mut().entity_mut(part).remove::<ComputedMass>();
@@ -642,13 +650,13 @@ mod tests {
             .entity_mut(joint)
             .remove::<PhysicsJointTopologyPending>();
         app.update();
-        assert_eq!(
+        assert_native_mass(
             app.world()
                 .resource::<DynamicJointIslandMasses>()
                 .get(a)
                 .unwrap()
                 .mass_kg,
-            Some(7.0)
+            7.0,
         );
         app.world_mut()
             .get_mut::<PhysicsJointLink>(joint)

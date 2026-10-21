@@ -1400,7 +1400,7 @@ pub struct LunCoControllerPlugin;
 // Semantic control state belongs to the controller even when the host has no
 // render projection. Camera realization must not decide whether a pilot exists.
 fn initialize_local_controller(
-    trigger: On<Add, lunco_embodiment_core::roles::LocalEmbodiment>,
+    trigger: On<Add<lunco_embodiment_core::roles::LocalEmbodiment>>,
     mut commands: Commands,
     settings: Res<InputBindingsSettings>,
     state: Query<(

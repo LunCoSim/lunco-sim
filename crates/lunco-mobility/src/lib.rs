@@ -24,7 +24,7 @@
 
 use avian3d::dynamics::solver::{
     schedule::SolverSystems,
-    solver_body::{SolverBody, SolverBodyInertia},
+    solver_body::{SolverBodies, SolverBody, SolverBodyIndex, SolverBodyInertia},
 };
 use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
@@ -54,9 +54,9 @@ pub fn contact_normal_for_body(
     body: Entity,
 ) -> Option<DVec3> {
     if pair.body1 == Some(body) {
-        Some(-manifold.normal)
+        Some(-manifold.normal.as_dvec3())
     } else if pair.body2 == Some(body) {
-        Some(manifold.normal)
+        Some(manifold.normal.as_dvec3())
     } else {
         None
     }
@@ -94,7 +94,7 @@ pub struct WheelRaycastResultsSet;
 struct DynamicFixedBodies(HashSet<Entity>);
 
 fn mark_wheel_ports_causal(
-    trigger: On<Add, WheelRaycast>,
+    trigger: On<Add<WheelRaycast>>,
     query: Query<&WheelRaycast>,
     mut commands: Commands,
 ) {
@@ -117,7 +117,7 @@ fn mark_wheel_ports_causal(
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct RaycastSupportGeometryDirty;
 
-fn mark_raycast_support_geometry_dirty(trigger: On<Add, WheelRaycast>, mut commands: Commands) {
+fn mark_raycast_support_geometry_dirty(trigger: On<Add<WheelRaycast>>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
         .try_insert(RaycastSupportGeometryDirty);
@@ -192,7 +192,9 @@ impl Plugin for LunCoMobilityPlugin {
                 // close the same XPBD iteration.
                 SubstepSchedule,
                 solve_differential_gear
-                    .in_set(lunco_physics::PhysicsJointSolvePass::BeforeRevolute)
+                    .in_set(
+                        avian3d::dynamics::solver::xpbd::XpbdSolverSystems::SolveUserConstraints,
+                    )
                     .run_if(any_with_component::<DifferentialCoupling>)
                     // Same live-physics gate as the wheel systems: a frozen scene
                     // must not have its linkage projected while it is mounting.
@@ -322,7 +324,7 @@ impl Plugin for LunCoMobilityPlugin {
 /// collider owned by one of those bodies to the caster's filter. No vehicle
 /// path, name, or drivetrain variant participates in the result.
 fn sync_raycast_assembly_filters(
-    joints: Option<Res<avian3d::dynamics::solver::joint_graph::JointGraph>>,
+    joints: Option<Res<avian3d::dynamics::joints::joint_graph::JointGraph>>,
     mut raycasters: Query<
         (
             &WheelBodyMount,
@@ -596,7 +598,7 @@ fn update_raycast_support_state(
                 && hit.distance >= 0.0
                 && hit.normal.is_finite()
                 && hit.normal.length_squared() > 1.0e-12
-                && hit.distance < suspension.rest_length
+                && f64::from(hit.distance) < suspension.rest_length
         });
         if grounded {
             if let Ok(mut state) = roots.get_mut(mount.body) {
@@ -690,9 +692,9 @@ fn publish_raycast_wheel_contact_diagnostics(
         let (hit_entity, distance_m, normal, contact_valid) = match hit {
             Some(hit) => (
                 Some(hit.entity),
-                Some(hit.distance),
-                hit.normal,
-                hit.distance < suspension.rest_length,
+                Some(f64::from(hit.distance)),
+                hit.normal.as_dvec3(),
+                f64::from(hit.distance) < suspension.rest_length,
             ),
             None => (None, None, DVec3::ZERO, false),
         };
@@ -731,7 +733,7 @@ fn publish_raycast_wheel_contact_diagnostics(
             .map(|raycaster| raycaster.global_direction().as_dvec3())
             .unwrap_or(DVec3::ZERO);
         snapshot.ray_max_distance_m = raycaster
-            .map(|raycaster| raycaster.max_distance)
+            .map(|raycaster| f64::from(raycaster.max_distance))
             .unwrap_or(0.0);
         snapshot.sample_tick = tick.0;
     }
@@ -878,7 +880,7 @@ pub fn fold_raycast_wheel_mass(
         // authors one); otherwise avian's collider-derived value is the truth.
         let com_carrier = com_override
             .map(|c| c.0.as_dvec3())
-            .or_else(|| com_computed.map(|c| c.0))
+            .or_else(|| com_computed.map(|c| c.0.as_dvec3()))
             .unwrap_or(DVec3::ZERO);
         let carrier_mass = mass.0 as f64;
 
@@ -1867,8 +1869,8 @@ fn apply_wheel_suspension(
             let apply_force = !matches!(body, RigidBody::Kinematic)
                 && !fixed_dynamic_bodies.0.contains(&parent_entity);
             let (world_pos, world_rot) = wheel_hub_pose(
-                GridPos(forces.position().0),
-                GridRot(forces.rotation().0),
+                GridPos(forces.position()),
+                GridRot(forces.rotation().as_dquat()),
                 mount.local.translation.as_dvec3(),
                 mount.local.rotation.as_dquat() * wheel.heading_rotation,
             );
@@ -1889,7 +1891,7 @@ fn apply_wheel_suspension(
                 .iter_sorted()
                 .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
             if let Some(hit) = contact {
-                let distance = hit.distance;
+                let distance = f64::from(hit.distance);
                 if distance < susp.rest_length {
                     current_distance = distance;
                     // Suspension is compressed: apply spring-damper force.
@@ -1902,7 +1904,7 @@ fn apply_wheel_suspension(
                     // Positive relative_vel = wheel moving toward ground (compressing).
                     // Negative relative_vel = wheel moving away from ground (extending).
                     let velocity_at_wheel = forces.velocity_at_point(world_pos.0);
-                    let relative_vel = -velocity_at_wheel.dot(hit.normal);
+                    let relative_vel = -f64::from(velocity_at_wheel.dot(hit.normal));
 
                     let total_force_mag = suspension_force_mag(
                         compression,
@@ -1911,7 +1913,25 @@ fn apply_wheel_suspension(
                         susp.damping_c,
                     );
 
-                    let force_vec = hit.normal * total_force_mag;
+                    let force_vec = hit.normal.as_dvec3() * total_force_mag;
+                    if !lunco_physics::avian_backend_vector_is_valid(force_vec) {
+                        if let Some(holds) = holds.as_deref_mut() {
+                            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                        }
+                        if let Some(time) = physics_time.as_deref_mut() {
+                            time.pause();
+                            time.advance_by(std::time::Duration::ZERO);
+                        }
+                        if let Some(faults) = faults.as_deref_mut() {
+                            faults.raise(
+                                "mobility-native-force-range-invalid",
+                                Some(parent_entity),
+                                "wheel force",
+                                "force exceeds the native solver range",
+                            );
+                        }
+                        return;
+                    }
                     if apply_force {
                         // Suspension is a persistent contact-support reaction,
                         // not a wake-up event. The chassis can remain asleep
@@ -1920,7 +1940,7 @@ fn apply_wheel_suspension(
                         // awake. Drive, tire, and actuator forces below keep
                         // the waking path for actual commanded motion.
                         forces.non_waking().apply_force_at_point(
-                            force_vec,
+                            force_vec.as_vec3(),
                             raycast_contact_point(
                                 world_pos.0,
                                 world_rot.0,
@@ -2005,7 +2025,7 @@ fn sync_raycast_wheel_physics_pose(
         if let Ok((cpos, crot)) = q_chassis.get(mount.body) {
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(cpos.0),
-                GridRot(crot.0),
+                GridRot(crot.0.as_dquat()),
                 mount.local.translation.as_dvec3(),
                 mount.local.rotation.as_dquat() * wheel.heading_rotation,
             );
@@ -2050,8 +2070,8 @@ fn sync_raycast_wheel_physics_pose(
             if raycaster.origin != ray_origin {
                 raycaster.origin = ray_origin;
             }
-            if wrot.0 != hub_rot.0 {
-                wrot.0 = hub_rot.0;
+            if wrot.0 != hub_rot.0.as_quat() {
+                wrot.0 = hub_rot.0.as_quat();
             }
         }
     }
@@ -2228,8 +2248,8 @@ fn apply_wheel_drive(
                 .ok();
             if let Some(drive_torque) = drive_torque {
                 let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
-                    GridPos(forces.position().0),
-                    GridRot(forces.rotation().0),
+                    GridPos(forces.position()),
+                    GridRot(forces.rotation().as_dquat()),
                     mount.local.translation.as_dvec3(),
                     mount.local.rotation.as_dquat() * wheel.heading_rotation,
                 );
@@ -2260,7 +2280,7 @@ fn apply_wheel_drive(
                         hub_rot_world.0,
                         susp.rest_length,
                         wheel.wheel_radius,
-                        hit.distance,
+                        f64::from(hit.distance),
                     );
                     // The tire force was already solved this tick, from the real
                     // contact slip `ω·r − v` and the wheel's own lateral slip —
@@ -2280,11 +2300,12 @@ fn apply_wheel_drive(
                             .map(|g| {
                                 parking_brake_force_with_velocity(
                                     g.acceleration(),
-                                    hit.normal,
+                                    hit.normal.as_dvec3(),
                                     normal_force,
-                                    mass.value() * normal_force / total_normal_load[&parent_entity],
+                                    f64::from(mass.value()) * normal_force
+                                        / total_normal_load[&parent_entity],
                                     wheel.friction_mu,
-                                    forces.velocity_at_point(contact_point),
+                                    forces.velocity_at_point(contact_point).as_dvec3(),
                                     dt,
                                 )
                             })
@@ -2317,16 +2338,35 @@ fn apply_wheel_drive(
                             if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
                                 // This is the delivered locked-patch force and
                                 // its conjugate slip, not the rolling predictor.
-                                port.value = -force.dot(forces.velocity_at_point(contact_point));
+                                port.value =
+                                    -force.dot(forces.velocity_at_point(contact_point).as_dvec3());
                             }
                         }
                     }
+                    if !lunco_physics::avian_backend_vector_is_valid(force) {
+                        if let Some(holds) = holds.as_deref_mut() {
+                            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                        }
+                        if let Some(time) = physics_time.as_deref_mut() {
+                            time.pause();
+                            time.advance_by(std::time::Duration::ZERO);
+                        }
+                        if let Some(faults) = faults.as_deref_mut() {
+                            faults.raise(
+                                "mobility-native-force-range-invalid",
+                                Some(parent_entity),
+                                "wheel force",
+                                "force exceeds the native solver range",
+                            );
+                        }
+                        return;
+                    }
                     if commanded {
-                        forces.apply_force_at_point(force, contact_point);
+                        forces.apply_force_at_point(force.as_vec3(), contact_point);
                     } else {
                         forces
                             .non_waking()
-                            .apply_force_at_point(force, contact_point);
+                            .apply_force_at_point(force.as_vec3(), contact_point);
                     }
                 }
             }
@@ -2422,15 +2462,15 @@ pub struct DifferentialCoupling {
 /// body orientation and `delta_rotation` is the accumulated substep correction.
 fn native_revolute_state(
     joint: &RevoluteJoint,
-    body1_rotation: DQuat,
-    body2_rotation: DQuat,
-    body1_delta: DQuat,
-    body2_delta: DQuat,
+    body1_rotation: Quat,
+    body2_rotation: Quat,
+    body1_delta: Quat,
+    body2_delta: Quat,
 ) -> Option<(f64, DVec3)> {
     lunco_physics::joint::revolute_coordinate(
         joint,
-        body1_delta * body1_rotation,
-        body2_delta * body2_rotation,
+        (body1_delta * body1_rotation).as_dquat(),
+        (body2_delta * body2_rotation).as_dquat(),
     )
 }
 
@@ -2464,16 +2504,16 @@ fn solve_differential_gear(
     order: Res<DifferentialSolverOrder>,
     q_coupling: Query<&DifferentialCoupling>,
     q_revolute: Query<&RevoluteJoint, Without<JointDisabled>>,
-    mut q_solver: Query<
+    q_solver: Query<
         (
             &RigidBody,
             &Rotation,
             Has<Sleeping>,
-            Option<&mut SolverBody>,
-            Option<&SolverBodyInertia>,
+            Option<&SolverBodyIndex>,
         ),
         Without<RigidBodyDisabled>,
     >,
+    mut solver_bodies: ResMut<SolverBodies>,
     time: Res<Time<Substeps>>,
     mut holds: ResMut<lunco_physics::PhysicsHolds>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
@@ -2497,70 +2537,73 @@ fn solve_differential_gear(
             {
                 return Err("gear hinge endpoints differ from admitted body topology");
             }
-            let [
-                (ba, ra, sleeping_a, sa, ia),
-                (bb, rb, sleeping_b, sb, ib),
-                (bc, rc, sleeping_c, sc, ic),
-            ] = q_solver
-                .get_many_mut([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
+            let endpoints = [coupling.rocker_a, coupling.rocker_b, coupling.chassis];
+            let states = q_solver
+                .get_many(endpoints)
                 .map_err(|_| "gear requires three distinct admitted rigid bodies")?;
-            for (body, sleeping, has_solver, has_inertia) in [
-                (ba, sleeping_a, sa.is_some(), ia.is_some()),
-                (bb, sleeping_b, sb.is_some(), ib.is_some()),
-                (bc, sleeping_c, sc.is_some(), ic.is_some()),
-            ] {
-                if has_solver != has_inertia || (!has_solver && !body.is_static() && !sleeping) {
-                    return Err("active movable gear endpoint has no complete solver state");
+            let indices =
+                states.map(|(_, _, _, index)| index.copied().filter(SolverBodyIndex::is_valid));
+            for (i, ((body, _, sleeping, _), index)) in states.iter().zip(indices).enumerate() {
+                if let Some(index) = index {
+                    if solver_bodies.get_entity(index) != Some(endpoints[i]) {
+                        return Err("gear solver index does not identify its admitted endpoint");
+                    }
+                    if indices[..i].contains(&Some(index)) {
+                        return Err("gear endpoints share a solver index");
+                    }
+                } else if !body.is_static() && !sleeping {
+                    return Err("active movable gear endpoint has no solver state");
                 }
             }
-            // Native static and sleeping endpoints have no SolverBody. Their
-            // actual orientation still defines the coordinate; DUMMY supplies
-            // their documented zero mobility and zero substep increment.
+            let [(_, ra, _, _), (_, rb, _, _), (_, rc, _, _)] = states;
+            let access = solver_bodies.access();
+            // The entity checks above establish in-bounds, distinct indices.
+            // The serial gear pass holds the resource exclusively; native static
+            // and sleeping endpoints use Avian's documented zero-mobility state.
+            let [a, b, c] = indices.map(|index| {
+                index.map(|index| unsafe {
+                    (
+                        access.body_unchecked_mut(index),
+                        &*access.inertia_unchecked_mut(index),
+                    )
+                })
+            });
             let (mut dummy_a, mut dummy_b, mut dummy_c) =
                 (SolverBody::DUMMY, SolverBody::DUMMY, SolverBody::DUMMY);
-            let sa = sa.map(Mut::into_inner).unwrap_or(&mut dummy_a);
-            let sb = sb.map(Mut::into_inner).unwrap_or(&mut dummy_b);
-            let sc = sc.map(Mut::into_inner).unwrap_or(&mut dummy_c);
-            let (ia, ib, ic) = (
-                ia.unwrap_or(&SolverBodyInertia::DUMMY),
-                ib.unwrap_or(&SolverBodyInertia::DUMMY),
-                ic.unwrap_or(&SolverBodyInertia::DUMMY),
-            );
-            let (angle_a, axis_a) = native_revolute_state(
-                joint_a,
-                rc.0,
-                ra.0,
-                sc.delta_rotation.0,
-                sa.delta_rotation.0,
-            )
-            .ok_or("gear first hinge frame is invalid")?;
-            let (angle_b, axis_b) = native_revolute_state(
-                joint_b,
-                rc.0,
-                rb.0,
-                sc.delta_rotation.0,
-                sb.delta_rotation.0,
-            )
-            .ok_or("gear second hinge frame is invalid")?;
+            let (sa, ia) = a.unwrap_or((&mut dummy_a, &SolverBodyInertia::DUMMY));
+            let (sb, ib) = b.unwrap_or((&mut dummy_b, &SolverBodyInertia::DUMMY));
+            let (sc, ic) = c.unwrap_or((&mut dummy_c, &SolverBodyInertia::DUMMY));
+            let (angle_a, axis_a) =
+                native_revolute_state(joint_a, rc.0, ra.0, sc.delta_rotation, sa.delta_rotation)
+                    .ok_or("gear first hinge frame is invalid")?;
+            let (angle_b, axis_b) =
+                native_revolute_state(joint_b, rc.0, rb.0, sc.delta_rotation, sb.delta_rotation)
+                    .ok_or("gear second hinge frame is invalid")?;
             let r = coupling.ratio;
             if !r.is_finite() || r == 0.0 {
                 return Err("gear ratio must be finite and nonzero");
             }
+            if ![coupling.stiffness, coupling.damping]
+                .into_iter()
+                .all(|value| value.is_finite() && value >= 0.0 && value <= f64::from(f32::MAX))
+            {
+                return Err("gear gains exceed the native solver range");
+            }
             let model = match coupling.drive_type {
                 DifferentialDriveType::Force => MotorModel::ForceBased {
-                    stiffness: coupling.stiffness,
-                    damping: coupling.damping,
+                    stiffness: coupling.stiffness as f32,
+                    damping: coupling.damping as f32,
                 },
                 DifferentialDriveType::Acceleration => MotorModel::AccelerationBased {
-                    stiffness: coupling.stiffness,
-                    damping: coupling.damping,
+                    stiffness: coupling.stiffness as f32,
+                    damping: coupling.damping as f32,
                 },
             };
             integrate_coordinate_drive(
                 [sa, sb, sc],
                 [ia, ib, ic],
-                [DVec3::ZERO; 3],
-                [axis_a, -r * axis_b, -axis_a + r * axis_b],
+                [Vec3::ZERO; 3],
+                [axis_a, -r * axis_b, -axis_a + r * axis_b].map(DVec3::as_vec3),
                 CoordinateDrive {
                     model,
                     target_position: coupling.rest_offset,
@@ -3497,8 +3540,8 @@ fn update_suspension_visuals(
 
         let mut current_distance = susp.rest_length;
         if let Some(hit) = hits.iter_sorted().next() {
-            if hit.distance < susp.rest_length {
-                current_distance = hit.distance;
+            if f64::from(hit.distance) < susp.rest_length {
+                current_distance = f64::from(hit.distance);
             }
         }
 

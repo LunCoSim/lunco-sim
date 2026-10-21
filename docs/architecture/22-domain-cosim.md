@@ -42,11 +42,84 @@ one component. Topology fingerprints include complete unit definitions and
 bounds, update at contract mutation, and exclude changing scalar samples.
 `UnitReference` shares its immutable identity and complete definition across
 metadata clones. Equality and serialized values retain the full unit contract;
-owner replacement creates a distinct reference. Avian's fixed unit definitions
-are initialized once from its port table vocabulary. Owner precedence, group
+owner replacement creates a distinct reference. Fixed engine endpoint units
+come from `lunco-port-core::EngineUnit`; authored participants retain their own
+resolved unit definitions. Owner precedence, group
 membership, direction, bounds, frame and topology are still checked live.
 FMI unit lowering retains the separate radian exponent and relative-quantity
 semantics as required by the [FMI unit contract](https://fmi-standard.org/docs/3.0.2/#_unit_definitions).
+
+## Physical coupling contracts
+
+Rust projections create engineering endpoints with
+`Port::with_contract(value, ScalarPortContract)`. This validates the initial
+sample and returns the `Port` plus its `ScalarPortContracts` bundle. Direct
+scalar access, `PortSurface` aliases and `OutputPorts` aliases read that same
+contract. Wheel drive, shaft-speed, heading and heat endpoints declare coherent
+SI units and their owner-enforced ranges. Contract mutation invalidates binding
+and compiled exchange; changing a numerical sample does not.
+
+`SimConnection::resolved_transform` is the shared connection admission path.
+It checks input write authority, units, finite affine coefficients and conflicting declared coordinate
+frames before binding, initialization or steady exchange. A scalar affine gain
+cannot substitute for a coordinate-frame transform. An omitted frame or unit is
+explicitly unspecified; it does not certify a physical power coupling.
+
+Modelica owns motor, gearbox, efficiency, electrical-loss and thermal equations.
+`GearRatio.eta` accepts speed/temperature-dependent efficiency and
+`DCMotor.resistance_scale` accepts a positive temperature/material law. The
+mechanical-loss production gate checks variable laws, energy balance and rejected
+operating points without a new Rust motor or thermal model.
+Avian owns rigid-body motion, contact and joint geometry. The mechanical
+projection consumes a solved effort and publishes the conjugate measured rate;
+it applies equal and opposite body torques in the joint's coordinate convention.
+`JointTorqueActuator::new(torque_endpoint, speed_endpoint, control_entity,
+JointCoordinateSign)` creates a checked pair with distinct endpoints. Its typed
+sign acts on both torque and speed, preserving power. The runtime requires both
+live motion states and coherent SI endpoint contracts (N.m and rad/s) in the
+same explicitly declared joint coordinate frame. Optional heat endpoints require
+coherent watts; published effort, speed and heat samples must pass their endpoint
+bounds and finite-value validation. Wheel frames use the exact
+source-stage lease and wheel prim identity; the measured axis comes from the
+native joint frame and the same typed sign as the torque projection. A missing or disabled joint,
+a concurrent enabled native motor, malformed mechanics or a retired required
+endpoint raises `cosim-joint-coupling-invalid` and holds physics before integration.
+The native angle-command port is read-only while external effort owns the
+joint. `SetPorts` rejects the command before changing the motor; authored wires
+fail binding at the same ownership boundary. `RunLint` reuses connection admission for `connection-engineering-contract-invalid`
+and joint admission for `joint-effort-contract-invalid`; Rhai owns diagnostic policy.
+
+A Rust projection uses the same contract for both endpoints:
+
+```rust
+let frame = CoordinateFrameId::new("assembly:shaft")?;
+let endpoint = |unit: EngineUnit| Port::with_contract(0.0, ScalarPortContract {
+    unit: Some(unit.reference()),
+    frame: Some(frame.clone()),
+    ..Default::default()
+});
+let torque = world.spawn(endpoint(EngineUnit::NewtonMeter)?).id();
+let speed = world.spawn(endpoint(EngineUnit::RadianPerSecond)?).id();
+let coupling = JointTorqueActuator::new(
+    torque, speed, control_entity, JointCoordinateSign::Positive,
+)?;
+world.entity_mut(revolute_joint_entity).insert(coupling);
+```
+
+`Port`, `ScalarPortContract` and `EngineUnit` come from `lunco_port_core`;
+`CoordinateFrameId` comes from `lunco_engineering_values`; the joint boundary
+and sign come from `lunco_physics::joint`. The projection supplies its actual
+source-scoped shaft identity, not a shared constant. Runtime admission validates
+the live joint, endpoints, native motor and motion states before integration.
+
+Each physical inertia has one state owner. A wheel's Avian inertia must not also
+be integrated as the same wheel inertia in Modelica. A distinct motor rotor may
+have its own inertia only with an explicit mechanical partition. General causal
+connections use the existing fixed-tick zero-order hold; they do not provide a
+simultaneous constraint solve. A rigid transmission between two independently
+imposed motion boundaries requires a well-posed partition or an engine constraint.
+Compilation, initialization and energy/step-size qualification must establish
+that partition before accepting a new drivetrain.
 
 Native host pacing uses core runtime `SimulationCompletionSources`, registering
 each worker's typed result channel and retaining a worker-lifetime lease. The

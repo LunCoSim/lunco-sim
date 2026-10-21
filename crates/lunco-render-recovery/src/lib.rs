@@ -54,10 +54,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
+use bevy::extract::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::prelude::*;
 use bevy::render::{
     Render, RenderApp, RenderStartup, RenderSystems,
-    extract_resource::{ExtractResource, ExtractResourcePlugin},
     renderer::{RenderAdapterInfo, RenderDevice},
 };
 use bevy_egui::{EguiContexts, egui};
@@ -268,6 +268,7 @@ pub struct RenderGaveUp {
 /// into the render world and gates every render-stage set, so presentation and
 /// GPU submission actually stop while the main simulation/API keeps running.
 #[derive(Resource, Clone, Copy, Default, ExtractResource)]
+#[extract_app(RenderApp)]
 pub(crate) struct PresentationState {
     pub stopped: bool,
 }
@@ -597,7 +598,7 @@ pub fn install_wgpu_error_handler(app: &mut App) {
     app.init_resource::<RenderCapabilities>();
     app.init_resource::<Ladder>();
     app.init_resource::<PresentationState>();
-    app.add_plugins(ExtractResourcePlugin::<PresentationState>::default());
+    app.add_plugins(ExtractResourcePlugin::<PresentationState, RenderApp>::default());
     app.add_systems(
         Update,
         (
@@ -948,7 +949,7 @@ fn set_error_handler(
 ) {
     // Captured once, by value: the callbacks below run on the render thread with
     // no access to the world, and adapter identity is exactly what triage needs.
-    let info = &adapter.0;
+    let info = &**adapter;
     let adapter_desc = format!(
         "{} ({:?}, backend {:?}, driver {} {})",
         info.name, info.device_type, info.backend, info.driver, info.driver_info

@@ -3,7 +3,7 @@ model MechanicalLossContracts
   model GearCase
     input Real torque = 1.0;
     input Real speed = 1.0;
-    parameter Real efficiency = 0.8;
+    input Real efficiency = 0.8;
     parameter Real reduction = 10.0;
     LunCo.Mechanics.Torque source(tau_ref=torque);
     LunCo.Mechanics.GearRatio gear(ratio=reduction, eta=efficiency,
@@ -30,13 +30,17 @@ model MechanicalLossContracts
   GearCase ideal(efficiency=1.0);
   GearCase negative_ratio(reduction=-10.0);
   GearCase reversal(speed=2.0*time-3.0);
+  GearCase speed_mapped(speed=0.5+0.5*time,
+    efficiency=0.7+0.05*speed_mapped.speed);
   BearingCase bearing_forward;
   BearingCase bearing_reverse(speed=-2.0);
   BearingCase bearing_ideal(damping=0.0);
   LunCo.Electrical.IdealVoltageSource rail(voltage=28.0);
-  LunCo.Electrical.DCMotor motor(demand=1.0, speed=gear.speed_a);
+  LunCo.Electrical.DCMotor motor(demand=1.0, speed=gear.speed_a,
+    resistance_scale=1.0+0.0039*(body.temp_k-293.15));
   LunCo.Mechanics.Torque source(tau_ref=motor.shaft_torque);
-  LunCo.Mechanics.GearRatio gear(ratio=10.0, eta=0.8);
+  LunCo.Mechanics.GearRatio gear(ratio=10.0,
+    eta=0.8-0.0001*(body.temp_k-293.15));
   LunCo.Mechanics.BearingFriction bearing(d=0.01);
   LunCo.Mechanics.AvianShaft load(speed=120.0);
   LunCo.Thermal.HeatLoad losses(heat_w=motor.heat+gear.heat+bearing.heat);
@@ -107,3 +111,11 @@ equation
   connect(source.flange, gear.flange_a);
   connect(gear.flange_b, shaft.flange);
 end GearDynamicOverload;
+
+model MotorZeroResistance
+  extends MechanicalLossContracts(motor(resistance_scale=0.0));
+end MotorZeroResistance;
+
+model MotorNegativeResistance
+  extends MechanicalLossContracts(motor(resistance_scale=-1.0));
+end MotorNegativeResistance;

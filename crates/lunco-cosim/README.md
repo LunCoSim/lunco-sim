@@ -142,8 +142,15 @@ backing-component presence that changes the emitted rows.
 | **Avian prismatic actuator** (`PRISMATIC_JOINT_GROUP`) | `displacement` — out (slider offset) + in (drives the `LinearMotor`) |
 | **Avian observations** | Native rigid-body/contact facts plus a port adapter for physics-owned `RaycastObservation` → ray_distance, ray_hit_valid, hit point/normal, and sample time |
 | **Modelica sensor conversions** | IMU, altimeter, attitude, and touchdown semantics are ordinary Modelica inputs/outputs wired in USD |
-| **Hardware** (`Port`) | `value` (f64) |
+| **Hardware** (`Port`) | `value` (f64), with `ScalarPortContracts` when the endpoint has an engineering contract |
 | **USD component** (`PortSurface`) | authored input/output names backed by scalar `Port` endpoints |
+
+Build physical scalar endpoints with `lunco_port_core::Port::with_contract` and
+`ScalarPortContract`. The returned bundle validates the initial sample; aliases
+on `PortSurface` and `OutputPorts` preserve that endpoint's units, bounds and
+frame. `EngineUnit` supplies fixed engine SI contracts. The canonical mechanical
+partition and runtime admission rules are in
+[the co-simulation architecture](../../docs/architecture/22-domain-cosim.md#physical-coupling-contracts).
 
 Avian's foreign components are exposed declaratively via the `AVIAN` spec table
 (`ports.rs`). **Adding a port group:** declare the `AvianGroup` (present-predicate,
@@ -233,3 +240,11 @@ target/debug/luncosim test --scene scenes/tests/modelica_balloon_earth.usda
 `lunco-cosim`'s dep graph is small, so these tests recompile in a few seconds
 on an incremental build — unlike `luncosim` / `lunco-luncosim` tests, which pull in the full
 Bevy renderer.
+
+Native joint effort couples through `JointTorqueActuator::new` and the closed
+`JointCoordinateSign` enum. The constructor rejects aliased or missing endpoint
+identities; runtime validates coherent SI torque/speed contracts and their shared
+frame, both body states, finite samples, passive parameters and exclusive native
+motor authority. Use `Port::with_contract` for the endpoint bundle and ordinary
+`SimConnection` wires for conversions. `RunLint` reports connection engineering
+and external joint authority failures using the same owner validation.

@@ -54,9 +54,9 @@ pub struct SnapshotSample {
     pub tick: u64,
     pub t: [f32; 3],
     pub r: [f32; 4],
-    /// Authoritative Avian f64 linear velocity in this peer's active physics frame.
+    /// Canonical f64 linear velocity from the native backend in this peer's active physics frame.
     pub lv: [f64; 3],
-    /// Authoritative Avian f64 angular velocity in this peer's active physics frame.
+    /// Canonical f64 angular velocity from the native backend in this peer's active physics frame.
     pub av: [f64; 3],
     /// The highest input `seq` the host has applied for this gid (0 = none). The
     /// owning client uses it to drop acked inputs and replay the rest.

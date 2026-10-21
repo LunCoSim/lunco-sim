@@ -148,7 +148,7 @@ pub(crate) fn publish_sun_visibility(
             lunco_physics::occlusion::CollisionOccluder {
                 entity,
                 position: position.0,
-                rotation: rotation.0,
+                rotation: rotation.0.as_dquat(),
                 shape: collider.shape_scaled().clone(),
             }
         })

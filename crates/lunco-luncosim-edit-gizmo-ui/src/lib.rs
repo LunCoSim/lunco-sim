@@ -922,10 +922,10 @@ fn restore_gizmo_dynamic(
 
         if let Ok((linear, angular)) = q_vel.get_mut(entity) {
             if let Some(mut linear) = linear {
-                linear.0 = DVec3::ZERO;
+                linear.0 = Vec3::ZERO;
             }
             if let Some(mut angular) = angular {
-                angular.0 = DVec3::ZERO;
+                angular.0 = Vec3::ZERO;
             }
         }
 

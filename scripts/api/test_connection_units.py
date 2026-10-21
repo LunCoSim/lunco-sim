@@ -47,7 +47,7 @@ def main():
         execute(session, "SetTimeTransport", playing=True)
         run_authored_scenario(
             session, "lunco://scenarios/tests/connection_units.rhai",
-            title="CONNECTION UNITS", check_count=5, allow_runtime_fault=True, timeout_s=60,
+            title="CONNECTION UNITS", check_count=6, allow_runtime_fault=True, timeout_s=60,
         )
     print(f"API Exit completed; port {args.port} released", flush=True)
 

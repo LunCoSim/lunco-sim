@@ -490,7 +490,7 @@ fn models_palette_content(
 /// `AttachProgram` command for the selected USD prim. Raw scene files without a
 /// doc-backed source are refused; no ECS-only attachment is created.
 pub(crate) fn on_scene_click_attach(
-    mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
+    mut click: On<bevy::picking::events::PointerClick>,
     mut state: ResMut<AttachState>,
     keys: Res<ButtonInput<KeyCode>>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,

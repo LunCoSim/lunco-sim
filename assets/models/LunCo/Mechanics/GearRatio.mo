@@ -1,12 +1,12 @@
 within LunCo.Mechanics;
-// Rigid, grounded transmission with constant mesh efficiency in either power
+// Rigid, grounded transmission with imposed mesh efficiency in either power
 // direction. Positive terminal power enters the gearbox; the sum leaves as heat.
 // This reduced model has no backlash, slip, static friction, or stored energy.
 // The torque rating is an operating-envelope check, not a slipping clutch.
 model GearRatio
   extends LunCo.Icons.Mechanics;
   parameter Real ratio = 1200.0 "Signed fast/slow shaft speed ratio, nonzero";
-  parameter Real eta = 0.85 "Mesh efficiency in either power direction, 0 < eta <= 1";
+  input Real eta(unit="1") = 0.85 "Mesh efficiency from an authored speed/temperature law, 0 < eta <= 1";
   parameter Real max_output_torque(unit="N.m") = 400.0 "Output-shaft torque rating";
 
   Flange flange_a "Fast side";

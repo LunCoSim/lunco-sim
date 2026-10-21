@@ -151,7 +151,7 @@ pub(crate) fn spring_arm_system(
                     filter,
                 )
             })
-            .map(|hit| hit.distance);
+            .map(|hit| f64::from(hit.distance));
         let damping = arm.damping.unwrap_or(defaults.damping);
         let base = FollowPlan {
             distance: arm.distance,
@@ -173,13 +173,13 @@ pub(crate) fn spring_arm_system(
             (
                 "body_velocity",
                 subject
-                    .and_then(|s| Some(vector(s.3?.0.inverse() * s.4?.0)))
+                    .and_then(|s| Some(vector((s.3?.0.inverse() * s.4?.0).as_dvec3())))
                     .unwrap_or(F::Unit),
             ),
             (
                 "body_angular_velocity",
                 subject
-                    .and_then(|s| Some(vector(s.3?.0.inverse() * s.5?.0)))
+                    .and_then(|s| Some(vector((s.3?.0.inverse() * s.5?.0).as_dvec3())))
                     .unwrap_or(F::Unit),
             ),
             (
@@ -306,7 +306,7 @@ pub(crate) fn spring_arm_system(
                     filter,
                 )
             })
-            .map(|hit| vertical_offset * ((hit.distance - 0.1).max(0.0) / focus_length))
+            .map(|hit| vertical_offset * ((f64::from(hit.distance) - 0.1).max(0.0) / focus_length))
             .unwrap_or(vertical_offset);
         let ray_origin = target_pos + focus_offset;
         let desired_pos = ray_origin + offset;
@@ -327,7 +327,7 @@ pub(crate) fn spring_arm_system(
 
         let desired_len = ray_len;
         let target_len = match hit {
-            Some(hit_data) => ((hit_data.distance - 0.5).min(desired_len)).max(0.0),
+            Some(hit_data) => ((f64::from(hit_data.distance) - 0.5).min(desired_len)).max(0.0),
             None => desired_len,
         };
         let Some(current_pos) =

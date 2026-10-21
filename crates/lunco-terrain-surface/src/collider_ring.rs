@@ -470,15 +470,15 @@ fn collider_bounds(
     position: &Position,
     rotation: &Rotation,
 ) -> Option<Bounds3> {
-    let aabb = collider.aabb(position.0, *rotation);
+    let aabb = collider.aabb(position.0, *rotation, 0.0);
     (aabb.min.is_finite()
         && aabb.max.is_finite()
         && aabb.min.x <= aabb.max.x
         && aabb.min.y <= aabb.max.y
         && aabb.min.z <= aabb.max.z)
         .then_some(Bounds3 {
-            min: aabb.min,
-            max: aabb.max,
+            min: aabb.min.as_dvec3(),
+            max: aabb.max.as_dvec3(),
         })
 }
 
@@ -845,8 +845,8 @@ fn runtime_collider_bounds(
                 && aabb.min.z <= aabb.max.z =>
         {
             Bounds3 {
-                min: aabb.min,
-                max: aabb.max,
+                min: aabb.min.as_dvec3(),
+                max: aabb.max.as_dvec3(),
             }
         }
         _ => Bounds3::point(position.0),
@@ -892,7 +892,7 @@ fn runtime_support_bounds(
     footprint: Option<&lunco_physics::PhysicsSupportFootprint>,
 ) -> Bounds3 {
     let bounds = runtime_collider_bounds(position, collider_aabb);
-    let rotation = rotation.map_or(DQuat::IDENTITY, |rotation| rotation.0);
+    let rotation = rotation.map_or(DQuat::IDENTITY, |rotation| rotation.0.as_dquat());
     contact_footprint_bounds(position, rotation, footprint)
         .map_or(bounds, |contact_bounds| bounds.union(contact_bounds))
 }
@@ -1215,7 +1215,7 @@ pub(crate) fn update_collider_ring(
                         cell,
                         Transform::from_translation(local).with_rotation(local_rotation),
                         Position(world_center),
-                        Rotation(terrain_rotation.0),
+                        Rotation(terrain_rotation.0.as_quat()),
                     ));
                 }
                 continue;
@@ -1232,7 +1232,7 @@ pub(crate) fn update_collider_ring(
                     // Position::ZERO and makes their later ECS AABB diverge
                     // from the proxy that physics actually queries.
                     Position(world_center),
-                    Rotation(terrain_rotation.0),
+                    Rotation(terrain_rotation.0.as_quat()),
                     ColliderTileOf(terrain),
                     lunco_physics::PhysicsOrderKey(format!(
                         "{}|collider/{}/{}/{}",
@@ -1696,6 +1696,9 @@ fn cast_initial_support_ray(
     max_distance: f64,
     filter: &SpatialQueryFilter,
 ) -> Result<Option<RayHitData>, InitialSupportRayError> {
+    if !max_distance.is_finite() || max_distance < 0.0 || max_distance > f64::from(f32::MAX) {
+        return Err(InitialSupportRayError::InvalidContact);
+    }
     let mut closest = None;
     for initial in colliders {
         if filter.excluded_entities.contains(&initial.entity)
@@ -1706,10 +1709,10 @@ fn cast_initial_support_ray(
         }
         let Some((distance, normal)) = initial.collider.cast_ray(
             initial.position,
-            initial.rotation,
+            initial.rotation.as_quat(),
             origin,
-            direction.as_dvec3(),
-            max_distance,
+            *direction,
+            max_distance as f32,
             true,
         ) else {
             continue;
@@ -1720,7 +1723,7 @@ fn cast_initial_support_ray(
         let Some(normal) = normal.try_normalize() else {
             return Err(InitialSupportRayError::InvalidContact);
         };
-        let alignment = -direction.as_dvec3().dot(normal);
+        let alignment = -f64::from(direction.dot(normal));
         if !alignment.is_finite() {
             return Err(InitialSupportRayError::InvalidContact);
         }
@@ -1779,10 +1782,10 @@ fn exact_static_support_penetration(
             let contact = avian3d::collision::collider::contact_query::contact(
                 &dynamic.collider,
                 dynamic.position,
-                dynamic.rotation,
+                dynamic.rotation.as_quat(),
                 &support.collider,
                 support.position,
-                support.rotation,
+                support.rotation.as_quat(),
                 0.0,
             )
             .map_err(|_| InitialContactError::UnsupportedShape)?;
@@ -1792,10 +1795,12 @@ fn exact_static_support_penetration(
             if !contact.penetration.is_finite() {
                 return Err(InitialContactError::NonFinitePenetration);
             }
-            if contact.penetration > INITIAL_POSE_TOLERANCE {
-                penetration = Some(penetration.map_or(contact.penetration, |previous: f64| {
-                    previous.max(contact.penetration)
-                }));
+            if f64::from(contact.penetration) > INITIAL_POSE_TOLERANCE {
+                penetration = Some(
+                    penetration.map_or(f64::from(contact.penetration), |previous: f64| {
+                        previous.max(f64::from(contact.penetration))
+                    }),
+                );
             }
         }
     }
@@ -2176,7 +2181,7 @@ pub(crate) fn validate_initial_physics_poses(
     let mut rotation_of: HashMap<Entity, DQuat> = HashMap::default();
     for (e, pos, rotation, _, _, _, _) in avian.p0().iter() {
         pos_of.insert(e, GridPos(pos.0));
-        rotation_of.insert(e, rotation.0);
+        rotation_of.insert(e, rotation.0.as_dquat());
     }
     // Evaluate each Avian shape at its current authoritative pose. Child
     // colliders point to their body through `ColliderOf`, so aggregate their
@@ -2213,13 +2218,13 @@ pub(crate) fn validate_initial_physics_poses(
                 continue;
             };
             (
-                body_position.0 + *body_rotation * collider_transform.translation,
-                *body_rotation * collider_transform.rotation.0,
+                body_position.0 + *body_rotation * collider_transform.translation.as_dvec3(),
+                *body_rotation * collider_transform.rotation.as_dquat(),
             )
         } else {
-            (position.0, rotation.0)
+            (position.0, rotation.0.as_dquat())
         };
-        let aabb = collider.aabb(shape_position, shape_rotation);
+        let aabb = collider.aabb(shape_position, shape_rotation.as_quat(), 0.0);
         let bounds_live = aabb.min.is_finite() && aabb.max.is_finite();
         let is_authored_support = dynamics.get(body).is_ok_and(|(rb, state_pending)| {
             matches!(rb, RigidBody::Static)
@@ -2231,7 +2236,7 @@ pub(crate) fn validate_initial_physics_poses(
             static_support_present = true;
             static_support_live |= bounds_live;
             if bounds_live {
-                static_support_bounds.push((aabb.min, aabb.max));
+                static_support_bounds.push((aabb.min.as_dvec3(), aabb.max.as_dvec3()));
             }
         }
         if !bounds_live {
@@ -2252,10 +2257,10 @@ pub(crate) fn validate_initial_physics_poses(
         collider_bounds
             .entry(body)
             .and_modify(|(min, max)| {
-                *min = min.min(aabb.min);
-                *max = max.max(aabb.max);
+                *min = min.min(aabb.min.as_dvec3());
+                *max = max.max(aabb.max.as_dvec3());
             })
-            .or_insert((aabb.min, aabb.max));
+            .or_insert((aabb.min.as_dvec3(), aabb.max.as_dvec3()));
     }
     let adj = joints.adjacency(|e| {
         dynamics
@@ -2566,8 +2571,8 @@ pub(crate) fn validate_initial_physics_poses(
                 };
                 // Project the probe's authored travel onto the actual collider
                 // normal. Airborne probes are valid initial conditions.
-                let alignment = -direction.as_dvec3().dot(hit.normal);
-                let required = (contact.probe_length - hit.distance) / alignment;
+                let alignment = -direction.as_dvec3().dot(hit.normal.as_dvec3());
+                let required = (contact.probe_length - f64::from(hit.distance)) / alignment;
                 // Positive displacement means the authored probe is below the
                 // support surface. Negative displacement means it starts above
                 // the surface, which is a valid airborne state.
@@ -2767,7 +2772,7 @@ fn on_recover_vessel(
             })
             .unwrap_or(DVec3::Y)
             .normalize_or(DVec3::Y);
-        let up = rot.0 * DVec3::Y;
+        let up = rot.0.as_dquat() * DVec3::Y;
         // Rigid righting transform about the target's own position: shortest arc
         // from the current up to the active terrain normal. An active surface
         // grid is not required to use root +Y (it may be body-fixed and rotated).
@@ -2823,7 +2828,7 @@ fn recover_assembly(
             };
             let rotated = pivot + q_fix * (GridPos(pos.0) - pivot);
             pos.0 = rotated.0;
-            rot.0 = (q_fix * rot.0).normalize();
+            rot.0 = (q_fix * rot.0.as_dquat()).normalize().as_quat();
             post.push(rotated);
         }
         // Reseat: the deepest post-rotation member ends RESCUE_CLEARANCE above
@@ -2856,10 +2861,10 @@ fn recover_assembly(
                 pos.0 += terrain_up * lift;
             }
             if let Some(mut v) = lin {
-                v.0 = DVec3::ZERO;
+                v.0 = Vec3::ZERO;
             }
             if let Some(mut w) = ang {
-                w.0 = DVec3::ZERO;
+                w.0 = Vec3::ZERO;
             }
         }
         // ONE line per invocation, and it says what the user asked for and what

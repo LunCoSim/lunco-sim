@@ -246,16 +246,6 @@ default-members = [
 ]
 resolver = "2"
 
-[patch.crates-io]
-# Avian's contacts, spatial queries and CCD share this kernel. Keep them on the
-# same reviewed 0.27 revision with robust convex intersection and witness tests.
-parry3d-f64 = { git = "https://github.com/LunCoSim/parry", rev = "fbef896f85d04dada74bec54ff7c64de77589705" }
-# transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
-# Pin the fork revision because its Bevy picking backend must apply the same
-# GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews,
-# and manipulation must read the same native PointerLocation as picking.
-transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "1de3502749617ed63bd35f407a3e4734aa79930f" }
-
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
 # Matches the Apache-2.0 text in ./LICENSE. Declared here so every member inherits
@@ -282,7 +272,7 @@ celestial-time = { git = "https://github.com/LunCoSim/celestial", rev = "c4c6f17
 # If a build break surfaces something that was silently relying on a
 # default-on feature, add it here with a `# used by …` comment rather
 # than re-enabling `default` (which un-strips the lot).
-bevy = { version = "0.19.1", default-features = false, features = [
+bevy = { version = "0.20.0", default-features = false, features = [
     # ── 2D / UI-only core. Anything 3D-shaped (PBR, GLTF, scenes,
     # meshes, post-processing, mesh picking) is *not* in this list —
     # crates that need 3D opt in via their own Cargo.toml so the
@@ -310,7 +300,7 @@ bevy = { version = "0.19.1", default-features = false, features = [
                                    # Enables `#[Command]` to always derive serde without per-field worry.
 ] }
 # ECS-only substrate for small protocol crates that do not need the Bevy facade.
-bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
+bevy_ecs = { version = "0.20.0", default-features = false, features = ["std"] }
 lunco-assets = { path = "crates/lunco-assets" }
 lunco-assets-datasets = { path = "crates/lunco-assets-datasets" }
 lunco-assets-transport = { path = "crates/lunco-assets-transport" }
@@ -326,31 +316,24 @@ sysmlv2-stdlib = "=0.1.0"
 # here) if collider debug-draw is ever wired up.
 # Stable contact-subdetector ordering is part of same-build scene replay.
 # Use the maintained feature for ordered Parry caches and deterministic math.
-avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints", "enhanced-determinism"] }
-# big_space bevy-0.19 support is not released yet; consume the upstream
-# compatibility branch. Cargo.lock pins the exact reviewed revision.
-# TODO(deps): swap back to a crates.io release once one ships for bevy 0.19.
-big_space = { git = "https://github.com/aevyrie/big_space", branch = "bevy-0.19" }
-leafwing-input-manager = "0.21.0"
-# egui 0.35 row. bevy_egui 0.41 = egui 0.35. The whole egui ecosystem must
+avian3d = { version = "0.8.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints", "enhanced-determinism"] }
+# Bevy 0.20 support with native mixed-child transform propagation fixed.
+big_space = { git = "https://github.com/LunCoSim/big_space", rev = "581295f909ddddad138a876b497dbc1fdff389b6" }
+leafwing-input-manager = "0.22.0"
+# bevy_egui 0.43 uses egui 0.36. The whole egui ecosystem must
 # agree on the egui minor or it dual-links. Keep the workspace integration
 # baseline to rendering; the concrete workbench host opts into picking,
 # Bevy-UI ordering, clipboard, external links, and default fonts where those
 # behaviors are actually owned.
-bevy_egui = { version = "0.41", default-features = false, features = ["serde"] }
+bevy_egui = { version = "0.43.1", default-features = false, features = ["serde"] }
 # UI component crates that only exchange egui values should not depend on the
 # Bevy integration. Bevy hosts opt into `bevy_egui` separately.
-egui = "0.35"
-# Runtime-authored View HUD templates. Both target Bevy 0.19; they are optional
+egui = "0.36"
+# Runtime-authored View HUD templates. Both target Bevy 0.20; they are optional
 # so the headless luncosim server does not link Bevy UI/text presentation.
-bevy_hui = "0.7"
-bevy_flair = "0.8.1"
-# `mouse_interaction` (default) fires a gizmo drag on ANY left-press held over
-# the gizmo, with no handle check. The gizmo renders ON the selected object,
-# so that driver can make a selecting click immediately grab the gizmo. We
-# drop it and drive drags ourselves, gated to focused handles and no selection
-# modifier — see `lunco-luncosim-edit-gizmo-ui::drive_gizmo_drag`. Keep
-# `gizmo_picking_backend` (hover/handle hit-testing).
+bevy_hui = "0.8"
+bevy_flair = "0.9.0"
+# The Bevy integration owns viewport-aware handle rendering and picking.
 transform-gizmo-bevy = { version = "0.9.0", default-features = false, features = ["gizmo_picking_backend"] }
 chrono = "0.4.45"
 num_cpus = "1.17"
@@ -388,7 +371,7 @@ truck-geometry = "0.5.0"
 # `lightyear_replication`. 0.27 split these out of an implicit bundle into
 # standalone features (they sit in lightyear's `default`, which we disable), and we
 # replicate snapshots + client-predict, so prediction/interpolation are needed too.
-lightyear = { version = "0.28.0", default-features = false, features = [
+lightyear = { version = "0.31.0", default-features = false, features = [
   "client",
   "replication",
   "prediction",
@@ -453,7 +436,7 @@ crossbeam-channel = "0.5"
 # and the pre-AssetPlugin registrar drains them — no central hardcoded scheme
 # list. wasm-safe (collected via wasm-bindgen module init).
 inventory = "0.3"
-egui_plot = "0.36.0"
+egui_plot = "0.37.0"
 rfd = "0.17"
 tempfile = "3.27"
 thiserror = "2.0"
@@ -473,6 +456,7 @@ rand_chacha = "0.10"
 # `web-sys = { workspace = true, features = ["…"] }`; Cargo unions them.
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
 js-sys = "0.3"
 web-sys = "0.3"
 console_error_panic_hook = "0.1"
@@ -507,14 +491,14 @@ multihash-codetable = { version = "0.2", default-features = false, features = ["
 
 # ── Bevy sub-crates — pinned to the exact `bevy` version above ────────
 # These ship in lock-step with bevy; a skewed release (e.g. bevy_reflect
-# "0.19" resolving ahead of bevy "0.19.1") risks subtle ABI/derive
+# "0.20" resolving ahead of the workspace Bevy pin) risks subtle ABI/derive
 # breakage. Keep every entry == the `bevy` pin.
-bevy_reflect = "0.19.1"
-bevy_math = "0.19.1"
-bevy_mesh = "0.19.1"
-bevy_shader = "0.19.1"
-bevy_asset = "0.19.1"
-bevy_picking = "0.19.1"
+bevy_reflect = "0.20.0"
+bevy_math = "0.20.0"
+bevy_mesh = "0.20.0"
+bevy_shader = "0.20.0"
+bevy_asset = "0.20.0"
+bevy_picking = "0.20.0"
 
 # ── Lints (inherited via `[lints] workspace = true` per crate) ───────
 # Encodes policy decisions:
@@ -672,3 +656,7 @@ incremental = true
 inherits = "release"
 debug = "line-tables-only"
 strip = "none"
+
+[patch.crates-io]
+avian3d = { git = "https://github.com/LunCoSim/avian", rev = "559d2d0ab896afa884139234c8bb83eb8a6c71df" }
+transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "01302a171ac3db662c0c322ef9e98fe7d5f33a6a" }

@@ -148,7 +148,7 @@ impl CameraPathScanState {
 
 /// Queue a newly projected prim identity for render-free camera-path discovery.
 pub(super) fn queue_camera_path_candidate(
-    trigger: On<Add, UsdPrimPath>,
+    trigger: On<Add<UsdPrimPath>>,
     mut scan: ResMut<CameraPathScanState>,
 ) {
     scan.enqueue_identity(trigger.entity);

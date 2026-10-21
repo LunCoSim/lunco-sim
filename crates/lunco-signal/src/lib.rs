@@ -947,7 +947,7 @@ pub struct SignalSource;
 /// signal it owned inactive. History remains graphable within the current scene;
 /// scene teardown retires it. Registered by `SignalRegistryPlugin` in every host.
 pub fn drop_signals_of_removed_source(
-    trigger: On<Remove, SignalSource>,
+    trigger: On<Remove<SignalSource>>,
     mut signals: ResMut<SignalRegistry>,
 ) {
     signals.deactivate_entity(trigger.entity);

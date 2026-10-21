@@ -438,17 +438,33 @@ pub fn sync_local_gravity_to_avian(
 ) {
     let mut accelerations = Vec::new();
     for (entity, gravity, existing) in &mut changed {
+        let acceleration = gravity.acceleration();
+        if !lunco_physics::avian_backend_vector_is_valid(acceleration) {
+            commands.queue(move |world: &mut World| {
+                world
+                    .resource_mut::<lunco_physics::PhysicsHolds>()
+                    .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+                    "physics-gravity-range-invalid",
+                    Some(entity),
+                    "local gravity",
+                    "gravity acceleration exceeds the native solver range",
+                );
+            });
+            continue;
+        }
+        let native_acceleration = acceleration.as_vec3();
         if let Some(mut existing) = existing {
-            if existing.0 == gravity.acceleration() {
+            if existing.0 == native_acceleration {
                 continue;
             }
             if gravity.change_origin() == GravityChangeOrigin::ConsumerPose {
-                existing.bypass_change_detection().0 = gravity.acceleration();
+                existing.bypass_change_detection().0 = native_acceleration;
             } else {
-                existing.0 = gravity.acceleration();
+                existing.0 = native_acceleration;
             }
         } else {
-            accelerations.push((entity, ConstantLinearAcceleration(gravity.acceleration())));
+            accelerations.push((entity, ConstantLinearAcceleration(native_acceleration)));
         }
     }
     if !accelerations.is_empty() {

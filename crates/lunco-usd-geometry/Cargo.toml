@@ -10,8 +10,9 @@ description = "Reusable geometry evaluators and mesh builders for OpenUSD projec
 # crates provide POD math, mesh containers, and asset usage flags without
 # enabling bevy_render, wgpu, or a window backend.
 bevy_asset = { workspace = true }
-bevy_log = "0.19.1"
-bevy_math = "0.19.1"
+bevy_log = "0.20.0"
+bevy_math = "0.20.0"
+bevy_curve = "0.20.0"
 bevy_mesh = { workspace = true }
 spade = "2.15.1"
 truck-geometry = { workspace = true }

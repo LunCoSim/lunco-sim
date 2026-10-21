@@ -18,13 +18,13 @@ use lunco_core_runtime::SimTick;
 use lunco_physics::PrescribedSimulationPose;
 use lunco_spatial::coords::{GridPos, GridRot, grid_relative_pose, pose_in_grid};
 
-pub(crate) fn claim_body(trigger: On<Add, CelestialBody>, mut commands: Commands) {
+pub(crate) fn claim_body(trigger: On<Add<CelestialBody>>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
         .try_insert(PrescribedSimulationPose::Pending);
 }
 
-pub(crate) fn release_body(trigger: On<Remove, CelestialBody>, mut commands: Commands) {
+pub(crate) fn release_body(trigger: On<Remove<CelestialBody>>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
         .try_remove::<PrescribedSimulationPose>();

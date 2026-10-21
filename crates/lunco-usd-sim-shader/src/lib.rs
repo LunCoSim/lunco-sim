@@ -9,7 +9,7 @@
 //!
 //! ## Why a system, not an observer
 //!
-//! The obvious implementation is an `On<Add, UsdSceneProjected>` observer that
+//! The obvious implementation is an `On<Add<UsdSceneProjected>>` observer that
 //! swaps in the look. That works for prims nobody else touches
 //! (balloons, panels), but it **races** any consumer that runs synchronously in
 //! the same frame and mutates the prim's appearance — notably the wheel

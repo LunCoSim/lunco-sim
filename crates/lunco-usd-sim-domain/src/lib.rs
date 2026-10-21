@@ -722,14 +722,14 @@ impl Default for PendingGeneratedSourceDocuments {
 }
 
 pub fn queue_generated_source_document_sync(
-    trigger: On<Insert, GeneratedModelicaSource>,
+    trigger: On<Insert<GeneratedModelicaSource>>,
     mut pending: ResMut<PendingGeneratedSourceDocuments>,
 ) {
     pending.0.queue(trigger.entity);
 }
 
 pub fn queue_model_document_sync_for_generated_source(
-    trigger: On<Insert, ModelicaModel>,
+    trigger: On<Insert<ModelicaModel>>,
     generated_sources: Query<(), With<GeneratedModelicaSource>>,
     mut pending: ResMut<PendingGeneratedSourceDocuments>,
 ) {
@@ -739,7 +739,7 @@ pub fn queue_model_document_sync_for_generated_source(
 }
 
 pub fn forget_generated_source_document_sync(
-    trigger: On<Remove, GeneratedModelicaSource>,
+    trigger: On<Remove<GeneratedModelicaSource>>,
     mut pending: ResMut<PendingGeneratedSourceDocuments>,
 ) {
     pending.0.forget(trigger.entity);
@@ -750,7 +750,7 @@ pub fn generated_source_document_sync_due(pending: Res<PendingGeneratedSourceDoc
 }
 
 pub fn mark_generated_sources_dirty_on_insert(
-    _: On<Insert, GeneratedModelicaSource>,
+    _: On<Insert<GeneratedModelicaSource>>,
     mut generated: ResMut<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
 ) {
     generated.dirty = true;
@@ -970,7 +970,7 @@ pub fn reset_scene_projection_work(
 }
 
 pub fn queue_added_domain_prim(
-    trigger: On<Add, UsdPrimPath>,
+    trigger: On<Add<UsdPrimPath>>,
     mut pending: ResMut<PendingDomainProjectionCandidates>,
 ) {
     pending.discovery.insert(trigger.entity);
@@ -988,7 +988,7 @@ fn identity_can_affect_domain_namespace(
 }
 
 pub fn queue_added_domain_identity(
-    trigger: On<Add, lunco_core::GlobalEntityId>,
+    trigger: On<Add<lunco_core::GlobalEntityId>>,
     prims: Query<
         (
             Option<&lunco_core::Provenance>,
@@ -1008,7 +1008,7 @@ pub fn queue_added_domain_identity(
 }
 
 pub fn queue_removed_domain_identity(
-    trigger: On<Remove, lunco_core::GlobalEntityId>,
+    trigger: On<Remove<lunco_core::GlobalEntityId>>,
     prims: Query<
         (
             Option<&lunco_core::Provenance>,
@@ -1028,7 +1028,7 @@ pub fn queue_removed_domain_identity(
 }
 
 pub fn forget_domain_projection_entity(
-    trigger: On<Remove, UsdPrimPath>,
+    trigger: On<Remove<UsdPrimPath>>,
     mut users: ResMut<DomainClassUsers>,
     mut pending: ResMut<PendingDomainProjectionCandidates>,
     telemetry_indexes: Option<ResMut<AuthoredTelemetryIndexes>>,
@@ -2140,7 +2140,7 @@ pub fn sync_generated_network_documents(
 /// cleanup intentionally keeps authored documents, so generated lifecycle has
 /// its own narrowly classified observer.
 pub fn on_remove_generated_source(
-    trigger: On<Remove, GeneratedModelicaSource>,
+    trigger: On<Remove<GeneratedModelicaSource>>,
     source_query: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
     mut documents: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,

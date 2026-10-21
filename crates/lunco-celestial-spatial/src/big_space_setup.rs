@@ -412,7 +412,7 @@ pub fn setup_big_space_hierarchy(
             Name::new("Sun Body"),
             // PICKING-ONLY COLLISION. The empty filter keeps the identity out of
             // Avian's contact graph while preserving body queries.
-            Collider::sphere(sun.radius_m),
+            Collider::from(avian3d::parry::shape::SharedShape::ball(sun.radius_m)),
             CELESTIAL_PICKING_LAYERS,
             ChildOf(solar_grid),
         ))
@@ -540,7 +540,7 @@ pub fn setup_big_space_hierarchy(
             // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
             // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
             // the whole local scene and otherwise returns a distance-0 hit.
-            Collider::sphere(earth.radius_m),
+            Collider::from(avian3d::parry::shape::SharedShape::ball(earth.radius_m)),
             CELESTIAL_PICKING_LAYERS,
             Name::new("Earth Body (Rotating)"),
             ChildOf(earth_grid),
@@ -641,7 +641,7 @@ pub fn setup_big_space_hierarchy(
             // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
             // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
             // the whole local scene and otherwise returns a distance-0 hit.
-            Collider::sphere(moon.radius_m),
+            Collider::from(avian3d::parry::shape::SharedShape::ball(moon.radius_m)),
             CELESTIAL_PICKING_LAYERS,
             Name::new("Moon Body (Rotating)"),
             ChildOf(moon_grid),
@@ -719,7 +719,7 @@ pub fn setup_big_space_hierarchy(
             // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
             // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
             // the whole local scene and otherwise returns a distance-0 hit.
-            Collider::sphere(body_desc.radius_m),
+            Collider::from(avian3d::parry::shape::SharedShape::ball(body_desc.radius_m)),
             CELESTIAL_PICKING_LAYERS,
             ChildOf(solar_grid),
         ));

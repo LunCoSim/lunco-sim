@@ -127,7 +127,7 @@ pub fn sample_raycast_observations(
             continue;
         };
 
-        let body_rotation = body_rotation.0;
+        let body_rotation = body_rotation.0.as_dquat();
         let ray_origin_body_local =
             mount.translation.as_dvec3() + mount.rotation.as_dquat() * observation.offset;
         let direction_body_local = mount.rotation.as_dquat() * observation.axis;
@@ -162,9 +162,10 @@ pub fn sample_raycast_observations(
             continue;
         };
 
-        observation.distance = hit.distance;
-        observation.hit_position = origin + direction.as_vec3().as_dvec3() * hit.distance;
-        observation.hit_normal = hit.normal;
+        observation.distance = f64::from(hit.distance);
+        observation.hit_position =
+            origin + direction.as_vec3().as_dvec3() * f64::from(hit.distance);
+        observation.hit_normal = hit.normal.as_dvec3();
         observation.hit_valid = true;
         observation.sample_time_s = time.elapsed_secs_f64();
     }

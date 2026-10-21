@@ -74,7 +74,7 @@
 //!
 //! # Cost
 //!
-//! One `Vector` comparison per body whose `Position` was written this tick
+//! One `DVec3` comparison per body whose `Position` was written this tick
 //! (awake dynamics; statics and sleepers are change-tick-filtered out of the
 //! query), and a [`HashSet`] insert on the first (and only) report per entity.
 //! The bounds themselves are recomputed only when a static collider's AABB
@@ -94,9 +94,9 @@
 
 use lunco_core::AppSceneExt;
 
-use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashSet;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::{
     GlobalEntityId, RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
@@ -123,15 +123,15 @@ lunco_hooks::declare_hook! {
 /// Fraction of the static world's largest extent added as lateral/downward
 /// slack. Ten percent is comfortably more than terrain-tile paging jitter and
 /// far less than the scale of a genuine escape.
-pub const ESCAPE_MARGIN_FRACTION: Scalar = 0.1;
+pub const ESCAPE_MARGIN_FRACTION: f64 = 0.1;
 
 /// Floor for the computed margin, in metres. Keeps a small scene (a unit-test
 /// rig with a 2 m ground plane) from flagging a body that hopped a metre.
-pub const ESCAPE_MARGIN_MIN: Scalar = 100.0;
+pub const ESCAPE_MARGIN_MIN: f64 = 100.0;
 
 /// Additional local-world height, in multiples of the static world's largest
 /// extent. This catches runaway integration without rewriting physics state.
-pub const ESCAPE_VERTICAL_FACTOR: Scalar = 10.0;
+pub const ESCAPE_VERTICAL_FACTOR: f64 = 10.0;
 
 /// Marks a disabled body, collider, or joint that a physics policy has paused.
 /// Readiness release leaves Avian's disable in place while this marker remains.
@@ -218,7 +218,7 @@ impl EscapePolicyAction {
     }
 }
 
-fn hook_vector(value: Vector) -> HookValue {
+fn hook_vector(value: DVec3) -> HookValue {
     HookValue::Array(vec![
         HookValue::Float(value.x as f64),
         HookValue::Float(value.y as f64),
@@ -230,8 +230,8 @@ fn escape_policy_action(
     kind: EscapeKind,
     path: Option<&Name>,
     global_id: Option<u64>,
-    position: Vector,
-    velocity: Vector,
+    position: DVec3,
+    velocity: DVec3,
     bounds: WorldBounds,
     runtime_context: RuntimeExecutionContext,
 ) -> Result<EscapePolicyAction, String> {
@@ -355,13 +355,13 @@ pub enum WorldBounds {
     #[default]
     None,
     /// Inclusive bounds in avian's `Position` frame.
-    Some { min: Vector, max: Vector },
+    Some { min: DVec3, max: DVec3 },
 }
 
 impl WorldBounds {
     /// Is `p` outside the world? Always true for a non-finite position.
     #[inline]
-    pub fn escaped(&self, p: Vector) -> bool {
+    pub fn escaped(&self, p: DVec3) -> bool {
         if !p.is_finite() {
             return true;
         }
@@ -412,8 +412,8 @@ fn update_world_bounds(
         return;
     }
 
-    let mut min = Vector::INFINITY;
-    let mut max = Vector::NEG_INFINITY;
+    let mut min = DVec3::INFINITY;
+    let mut max = DVec3::NEG_INFINITY;
     let mut any = false;
     for (aabb, collider_of) in &q_static {
         // Only STATIC geometry defines the world — see the module docs.
@@ -425,8 +425,8 @@ fn update_world_bounds(
         if !aabb.min.is_finite() || !aabb.max.is_finite() {
             continue;
         }
-        min = min.min(aabb.min);
-        max = max.max(aabb.max);
+        min = min.min(aabb.min.as_dvec3());
+        max = max.max(aabb.max.as_dvec3());
         any = true;
     }
 
@@ -434,10 +434,10 @@ fn update_world_bounds(
         let extent = (max - min).max_element();
         let margin = (extent * ESCAPE_MARGIN_FRACTION).max(ESCAPE_MARGIN_MIN);
         WorldBounds::Some {
-            min: min - Vector::splat(margin),
+            min: min - DVec3::splat(margin),
             // Local static geometry defines the scale. Orbital scenes have no
             // static union and remain unbounded through `WorldBounds::None`.
-            max: Vector::new(
+            max: DVec3::new(
                 max.x + margin,
                 max.y + extent * ESCAPE_VERTICAL_FACTOR + margin,
                 max.z + margin,
@@ -547,7 +547,7 @@ fn report_escaped_bodies(
                     name,
                     global_id_value,
                     pos.0,
-                    vel.0,
+                    vel.0.as_dvec3(),
                     *bounds,
                     context,
                 )
@@ -729,9 +729,9 @@ mod tests {
     #[test]
     fn no_static_geometry_means_no_opinion() {
         let b = WorldBounds::None;
-        assert!(!b.escaped(Vector::new(1.5e11, -4.0e10, 0.0)));
+        assert!(!b.escaped(DVec3::new(1.5e11, -4.0e10, 0.0)));
         // …but NaN is always wrong, in every regime.
-        assert!(b.escaped(Vector::new(Scalar::NAN, 0.0, 0.0)));
+        assert!(b.escaped(DVec3::new(f64::NAN, 0.0, 0.0)));
     }
 
     /// The motivating failure: `y = -1510` under a site-sized terrain must be
@@ -740,31 +740,31 @@ mod tests {
     #[test]
     fn catches_the_measured_failure_below_a_site_terrain() {
         let b = WorldBounds::Some {
-            min: Vector::new(-600.0, -100.0, -600.0),
-            max: Vector::new(600.0, 10_100.0, 600.0),
+            min: DVec3::new(-600.0, -100.0, -600.0),
+            max: DVec3::new(600.0, 10_100.0, 600.0),
         };
         assert!(
-            b.escaped(Vector::new(0.0, -1510.0, 0.0)),
+            b.escaped(DVec3::new(0.0, -1510.0, 0.0)),
             "y=-1510 must flag"
         );
         assert!(
-            b.escaped(Vector::new(0.0, -737.0, 0.0)),
+            b.escaped(DVec3::new(0.0, -737.0, 0.0)),
             "elev=-737 must flag"
         );
         // A body resting on the terrain is fine.
-        assert!(!b.escaped(Vector::new(10.0, 0.5, -20.0)));
+        assert!(!b.escaped(DVec3::new(10.0, 0.5, -20.0)));
         // A body a metre under the surface — settling, not escaping — is fine.
-        assert!(!b.escaped(Vector::new(10.0, -1.0, -20.0)));
+        assert!(!b.escaped(DVec3::new(10.0, -1.0, -20.0)));
     }
 
     /// A local-world ceiling is finite and derived from scene scale.
     #[test]
     fn a_local_world_has_a_finite_vertical_escape_bound() {
         let b = WorldBounds::Some {
-            min: Vector::new(-600.0, -100.0, -600.0),
-            max: Vector::new(600.0, 10_100.0, 600.0),
+            min: DVec3::new(-600.0, -100.0, -600.0),
+            max: DVec3::new(600.0, 10_100.0, 600.0),
         };
-        assert!(b.escaped(Vector::new(0.0, 1.0e9, 0.0)));
+        assert!(b.escaped(DVec3::new(0.0, 1.0e9, 0.0)));
     }
 
     /// End-to-end wiring: a static ground collider must actually produce bounds,
@@ -827,7 +827,7 @@ mod tests {
             );
         }
         assert!(
-            bounds.escaped(Vector::new(0.0, -1510.0, 0.0)),
+            bounds.escaped(DVec3::new(0.0, -1510.0, 0.0)),
             "a body 1.5 km below a 1 km ground plane must read as escaped: {bounds:?}"
         );
         assert!(
@@ -914,8 +914,8 @@ mod tests {
 
         let mut world = World::new();
         world.insert_resource(WorldBounds::Some {
-            min: Vector::splat(-100.0),
-            max: Vector::splat(100.0),
+            min: DVec3::splat(-100.0),
+            max: DVec3::splat(100.0),
         });
         world.insert_resource(ReportedEscapes::default());
         world.insert_resource(PhysicsHolds::default());
@@ -923,8 +923,8 @@ mod tests {
         world.insert_resource(lunco_core_runtime::SimTick(1));
         world.insert_resource(Time::<Fixed>::from_hz(lunco_core_runtime::FIXED_HZ));
 
-        let position = Vector::new(0.0, -1510.0, 0.0);
-        let velocity = Vector::new(0.0, -100.0, 0.0);
+        let position = DVec3::new(0.0, -1510.0, 0.0);
+        let velocity = Vec3::new(0.0, -100.0, 0.0);
         let entity = world
             .spawn((
                 RigidBody::Dynamic,
@@ -978,8 +978,8 @@ mod tests {
         app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
         app.add_plugins(MinimalPlugins);
         app.insert_resource(WorldBounds::Some {
-            min: Vector::splat(-100.0),
-            max: Vector::splat(100.0),
+            min: DVec3::splat(-100.0),
+            max: DVec3::splat(100.0),
         });
         app.init_scene_resource::<ReportedEscapes>();
         app.insert_resource(PhysicsHolds::default());
@@ -1004,8 +1004,8 @@ mod tests {
             .world_mut()
             .spawn((
                 RigidBody::Dynamic,
-                Position(Vector::new(0.0, -1510.0, 0.0)),
-                LinearVelocity(Vector::new(0.0, -100.0, 0.0)),
+                Position(DVec3::new(0.0, -1510.0, 0.0)),
+                LinearVelocity(Vec3::new(0.0, -100.0, 0.0)),
                 Name::new("escaped-body"),
                 GlobalEntityId::from_raw(42),
             ))
