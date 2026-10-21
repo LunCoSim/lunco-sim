@@ -27,6 +27,17 @@ The coupled initializer alone reports 17.193 s of session construction with
 12,391 native compilations and evictions, so preparation/cache churn remains
 an actionable startup cost without changing physical equations.
 
+A same-process headless follow-up separates those misses from reconstruction.
+`RestartScene` admits a fresh generation with unchanged source hashes, clear
+readiness/diagnostics and verified API 4760 shutdown. The prepared initializer
+is a memory hit and 16,414 of 16,482 native requests hit, yet its session still
+takes 4.730 s to construct. Restart admission to coupled certification takes
+11.234 s. Larger cache limits alone therefore cannot meet the startup target.
+Evidence is in `griffin-reload-preparation-qualified/` beside the rendered run;
+use `analysis.json` and `restart-command.json`. The raw second `ready_s` includes
+an intervening no-op `LoadScene` and is not the restart duration. Concurrent
+workloads still prevent portable timing acceptance.
+
 An earlier Summer run exhausted GPU memory alongside other rendered sessions;
 its continuing application-frame samples are invalid graphics-performance
 evidence. The new diagnostics make that retained renderer state observable to
