@@ -1,5 +1,38 @@
 # High-quality realtime performance handover
 
+## Native presentation diagnostics — 2026-10-21
+
+The renderer now publishes its retained warning or terminal stop through
+`RuntimeDiagnostics`, using the existing recovery state as its sole owner.
+See the lifetime and API contract in
+[`render-decoupling.md`](../architecture/render-decoupling.md). The focused
+native lifecycle test passes, including device-loss retention across teardown,
+withdrawal after recovery and preservation of unrelated diagnostics. The
+production engine-performance scenario passes six checks in each of headless
+and rendered hosts. Both expose clear diagnostics and release owned ports
+4760/4761. Terminal native failure injection is covered by the resource seam,
+not by deliberately exhausting the production GPU.
+
+Production artifact SHA-256
+`0fe5c3594f65e4fd6c11deecd73393b7c474874c1a09c8cee55d6a61499a79d6`
+at `9b0fc3c49` also opens the isolated Griffin Twin, reaches engine cutoff,
+retains unchanged source hashes and clear readiness/diagnostics, and releases
+owned API 4761. Its screenshot shows the lander and terrain. Evidence is in
+the `perf-health` worktree's
+`.cache/codex-evidence/performance-20261021/griffin-render-health/`.
+Readiness is 51.660 s and the complete measured window yields 19.825 FPS.
+Other rendered sessions are recorded in the report; this is a
+contention-affected observation, not a speedup or performance acceptance.
+The coupled initializer alone reports 17.193 s of session construction with
+12,391 native compilations and evictions, so preparation/cache churn remains
+an actionable startup cost without changing physical equations.
+
+An earlier Summer run exhausted GPU memory alongside other rendered sessions;
+its continuing application-frame samples are invalid graphics-performance
+evidence. The new diagnostics make that retained renderer state observable to
+API consumers. No quality, numerical algorithm or physical model was changed
+by this repair. Loading, physics, FPS and macOS acceptance remain open.
+
 ## Entity-tree source invalidation — 2026-10-21
 
 The tree build owner now remembers observed mount identity, mount diagnostic
