@@ -193,7 +193,8 @@ lowering, or transport-selection capabilities. Numeric literals retain their
 authored source identity and provide a validated native finite `number_value`;
 consumers use that value instead of reparsing literal text in Rhai. The same
 projection now includes finite unitless numeric source constants, resolved
-across package/local references and numeric tuple members. The AST preserves
+across package/local references and numeric tuple members, including nested
+collections of structured vector types. The AST preserves
 the authored expression and uses its existing resolved-expression projection
 with the shared semantic unit-factor arithmetic. Runtime adapters all read
 that projection; no Twin-side arithmetic parser or second numeric table is

@@ -102,8 +102,9 @@ BDD/IBD diagram authoring or a general-purpose SysML editor.
 Read model values through the typed `SysmlModel.value` projection. Finite,
 unitless numeric constant initializers support resolved feature references,
 unary signs, and `+`, `-`, `*`, `/`, and integer powers, including each member
-of numeric tuples. Cross-package and local references use the same source
-snapshot. Authored expression text and classification stay intact alongside
+of numeric tuples and structured vector collections, including derived
+`CartesianThreeVectorValue` types. Cross-package and local references use the
+same source snapshot. Authored expression text and classification stay intact alongside
 the numeric projection. This bounded source fold reuses the semantic unit-factor
 evaluator; it does not execute domain state or general KerML programs. Cycles,
 missing references, zero division, non-finite results, and unsupported

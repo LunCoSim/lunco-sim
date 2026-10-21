@@ -3320,14 +3320,15 @@ fn project_attributes(
                     source_fingerprint,
                 );
                 if declared_type.as_ref().is_some_and(|ty| {
-                    matches!(
-                        ty.primitive,
-                        Some(
-                            SysmlPrimitiveType::Real
-                                | SysmlPrimitiveType::Rational
-                                | SysmlPrimitiveType::Integer
+                    ty.value_category == SysmlTypeCategory::Structured
+                        || matches!(
+                            ty.primitive,
+                            Some(
+                                SysmlPrimitiveType::Real
+                                    | SysmlPrimitiveType::Rational
+                                    | SysmlPrimitiveType::Integer
+                            )
                         )
-                    )
                 }) {
                     bind_literal_numeric_constants(
                         &mut parsed,
@@ -4040,7 +4041,7 @@ mod tests {
             ),
             (
                 "runtime.sysml",
-                "package Runtime { private import ScalarValues::*; part def Rover { attribute radius : Real = Cad::Study::radius / Cad::Study::mm; attribute diameter : Real = 2.0 * radius; attribute stations : Real[2] = (-Cad::Study::base / (2.0 * Cad::Study::mm), Cad::Study::base / (2.0 * Cad::Study::mm)); } }",
+                "package Runtime { private import ScalarValues::*; private import VectorValues::CartesianThreeVectorValue; attribute def Position :> CartesianThreeVectorValue; part def Rover { attribute radius : Real = Cad::Study::radius / Cad::Study::mm; attribute diameter : Real = 2.0 * radius; attribute stations : Real[2] = (-Cad::Study::base / (2.0 * Cad::Study::mm), Cad::Study::base / (2.0 * Cad::Study::mm)); attribute mounts : Position[2] = ((radius, 1.0, diameter), (-radius, 1.0, diameter)); } }",
             ),
         ]);
         let value = |name: &str| {
@@ -4070,6 +4071,12 @@ mod tests {
         let stations = value("Runtime::Rover::stations").elements.as_ref().unwrap();
         assert_eq!(stations[0].number_value.unwrap().as_f64(), -0.85);
         assert_eq!(stations[1].number_value.unwrap().as_f64(), 0.85);
+        let mounts = value("Runtime::Rover::mounts").elements.as_ref().unwrap();
+        for (mount, expected_x) in mounts.iter().zip([0.45, -0.45]) {
+            let coordinates = mount.elements.as_ref().unwrap();
+            assert_eq!(coordinates[0].number_value.unwrap().as_f64(), expected_x);
+            assert_eq!(coordinates[2].number_value.unwrap().as_f64(), 0.9);
+        }
         assert_eq!(
             value("Runtime::Rover::radius").literal_kind,
             SysmlLiteralKind::Expression
