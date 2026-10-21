@@ -1,5 +1,38 @@
 # High-quality realtime performance handover
 
+## Native response metric capture — 2026-10-21
+
+`constraint_response::native_rows=trace` records each constructed row with its
+paired native `SolverBodyInertia` snapshots. The existing admitted-system trace
+identifies actual solve membership. This diagnostic is disabled in normal runs;
+it changes no row, factorization, tolerance, ordering or physical equation.
+
+Production artifact SHA-256
+`f57a662c7084ba784209bde1bcd5cfe1127866ba28e3a147f842f177e479cdfb`
+uses base `b8c3fb6d0` plus that trace. An early owned headless run retains eight
+104-row/14-body systems. A separate run reaches tick 1,603 and the authored
+touchdown confirmation, retaining 32 later systems with 92–210 rows and 14–18
+bodies. Both have clear readiness, no retained errors, unchanged Twin/model
+source hashes and verified API 4758 shutdown. Concurrent workloads are recorded;
+neither run is FPS or timing acceptance.
+
+For all forty captured systems, the exact native metric reproduces each row's
+response within 6.94e-18 absolute error. Diagnostic square-root body factors have
+84 columns and reproduce the response Gram matrix within 2.23e-16 absolute
+error. The comparison retains uncancelled native tensor and factor magnitudes
+when bounding roundoff; a near-zero projected coefficient cannot provide its own
+relative error scale. No negative pivot is discarded or regularized. This is
+input/representation evidence for a thinner factorization experiment, not a
+qualified replacement solver or a speedup claim. Native minimum-norm reactions,
+unilateral pivots and production geometric closure still require comparison.
+
+Evidence: `.cache/codex-evidence/performance-20261020/`:
+`griffin-native-metric-2/`, `griffin-native-metric-settled-1/`, their captured
+native rows, exported `.problem`/`.basis` pairs and `metric-analysis.json`.
+The first driver's query before any completed physics step was rejected; that
+attempt is excluded. The corrected collector waits for admitted solve work.
+Main's later Roadster traction/acceleration merge is a separate code cohort.
+
 ## Scoped native compiler artifacts — 2026-10-21
 
 The approved Rumoca worktree now exposes an explicit synchronous native-cache

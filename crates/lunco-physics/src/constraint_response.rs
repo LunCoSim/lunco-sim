@@ -91,7 +91,7 @@ impl Row {
         if !responses.into_iter().all(Gradient::is_finite) {
             return Err("coupled constraint native response is not finite");
         }
-        Ok(Self {
+        let row = Self {
             bodies,
             gradients,
             applied_gradients,
@@ -99,7 +99,14 @@ impl Row {
             error,
             tolerance,
             unilateral,
-        })
+        };
+        bevy::log::trace!(
+            target: "lunco_physics::constraint_response::native_rows",
+            ?row,
+            ?inertias,
+            "constructed native coupled row"
+        );
+        Ok(row)
     }
 
     fn response_to(&self, other: &Self) -> f64 {

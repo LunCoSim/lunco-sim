@@ -119,6 +119,13 @@ performance acceptance. Compare the complete unilateral solve and geometric
 owner checks, not just one matrix factorization. Matrix assembly can change
 floating-point accumulation order, so preserve the native body-reduction
 operator when evaluating the retained Krylov path.
+When a factorization experiment needs the native mass metric, also enable
+`lunco_physics::constraint_response::native_rows=trace`. Each constructed row
+records its exact paired `SolverBodyInertia` snapshots, including effective
+world inverse angular inertia, locked-axis flags and dominance. Match these
+construction records to the admitted system; construction alone does not prove
+the row participated in a solve. Do not reconstruct this metric from a later
+pose or fit it from rounded response coefficients.
 
 For Modelica native-construction costs, distinguish selected application work
 from whole-source preparation. Projection reuse storage is needed only for
