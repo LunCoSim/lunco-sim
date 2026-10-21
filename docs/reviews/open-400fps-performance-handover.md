@@ -33,6 +33,34 @@ The first driver's query before any completed physics step was rejected; that
 attempt is excluded. The corrected collector waits for admitted solve work.
 Main's later Roadster traction/acceleration merge is a separate code cohort.
 
+### Rank qualification of the native factor
+
+Frozen-system replay now covers all forty exports using the current response
+operator and unilateral pivot procedure. The rectangular QR diagnostic and an
+independent rectangular QR/SVD diagnostic both finish every replay, but each
+matches the current contact mask in only 33 cases. An independent SVD of the
+native response matrix agrees with the rectangular SVD's mask in 39 cases.
+The remaining case has almost identical body response but different internal
+reactions. None of these diagnostics is a qualified production replacement;
+contact admission, minimum-norm reactions and nonlinear closure remain required.
+
+The current rank selection needs a stronger certificate. In the captured
+`system-13746` replay, one 107-row face has a QR diagonal of approximately
+2.74e-16 followed by 2.04e-11 and 1.73e-12. Its cutoff is 6.12e-14. The owner's
+`take_while` stops at the first small diagonal, so it omits later coefficients
+above its own cutoff. This captured faer 0.24.4 factor lacks the monotone
+diagonal that the application-side rank test assumes. Verify the omitted
+subspace when qualifying a replacement; changing storage layout, discarding
+weak directions, or accepting geometric tolerance alone would not establish
+the required minimum-norm contract.
+
+Replay inputs and results are retained beside the captures:
+`native-basis-replay-analysis.json`, `native-svd-replay-analysis.json`,
+`response-svd-reference-analysis.json` and their driver/rank logs. These are
+offline numerical diagnostics. Their provisional residual error certificates
+and elapsed times are not production correctness or performance acceptance.
+The production solver and its tolerances remain unchanged.
+
 ## Scoped native compiler artifacts — 2026-10-21
 
 The approved Rumoca worktree now exposes an explicit synchronous native-cache
