@@ -30,6 +30,7 @@
 //! entity. Document queries instead return the authored placement in canonical
 //! stage coordinates through the shared USD transform reader, marked with
 //! `position_frame: "canonical_stage"`; they do not read a preview physics pose.
+//! The canonical placement uses the f64 USD matrix without render conversion.
 //! Quaternion attributes are arrays in USD component order `[w, x, y, z]`,
 //! at authored precision promoted to f64, without a coordinate-basis change.
 //! A request with `collision_bounds: true` adds the aggregate composed
@@ -672,7 +673,7 @@ fn runtime_binding_api_value(world: &World, entity: Option<Entity>) -> ApiValue 
 }
 
 type PrimRead = (
-    Option<Vec3>,
+    Option<DVec3>,
     String,
     Vec<(String, ApiValue)>,
     Vec<(String, ApiValue)>,
@@ -1376,9 +1377,10 @@ fn read_prim_from_reader(
 
     let authored_position = if doc.is_some() {
         Some(
-            lunco_usd_bevy_stage::world_transform(view, prim)
+            lunco_usd_bevy_stage::world_transform_matrix_d_at(view, prim, 0.0)
                 .map_err(|error| format!("QueryUsdPrim: invalid authored transform: {error}"))?
-                .translation,
+                .w_axis
+                .truncate(),
         )
     } else {
         None

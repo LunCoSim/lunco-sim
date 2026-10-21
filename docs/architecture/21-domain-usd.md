@@ -488,6 +488,13 @@ has a distinct lifetime and write path:
   stage. Pending document operations remain a visible projection-not-current
   error. ECS consumers continue to use the durable projection cursor.
   Projection retains its separate generation-zero prepared-plan contract.
+  Explicit-document `QueryUsdPrim` / `QueryUsdPrims` placement reads the
+  canonical f64 USD matrix directly. Its `world_position` in `canonical_stage`
+  coordinates must not pass through the rendering `Transform`; live physics
+  pose queries retain their separate frame owner. The production `usd_query_api`
+  gate composes a large parent translation with fractional child coordinates
+  and checks exact single/batch readback, alongside schema-rejection and
+  document-history boundaries.
 
 The `Send`/`!Send` boundary falls on this same seam by nature, so the two stay even if
 openusd ever makes `Stage` `Send`. Save / journal / net-sync touch the cheap serializable

@@ -198,6 +198,11 @@ For a placed rover, pair the live pose with `QueryUsdPrim` on the composed rover
 prim. Confirm the local forward-axis contract, the effective rotation op and
 its `xformOpOrder`; do not infer orientation from a screenshot chosen on a
 symmetry axis.
+With an explicit `doc_id`, `world_position` is the authored canonical-stage
+placement, composed in f64 through the USD matrix stack. It is independent of
+the rendered preview and its f32 projection. Use the live pose queries for
+current simulated motion. The `usd_query_api` production gate checks large
+parent translations and fractional child placement through both query forms.
 
 For a selected Editor prim, use `QueryUsdPrim { topology: true }` when the
 question is why a part is visible, collidable, or not attached as expected.
