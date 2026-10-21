@@ -127,7 +127,7 @@ where
             )
             .add_systems(
                 SubstepSchedule,
-                solve_continuous_friction
+                solve_continuous_friction::<H>
                     .after(avian3d::dynamics::solver::schedule::SubstepSolverSystems::Relax)
                     .before(avian3d::dynamics::solver::schedule::SubstepSolverSystems::Damping),
             );
@@ -2464,7 +2464,11 @@ fn record_contact_response(
     } else {
         let mut response = plane.clone();
         attach_native_contact_response(&mut response, &contacts.prepared);
-        if response.native_point.is_some() {
+        {
+            // A new CCD contact has a real normal reaction even when no
+            // manifold existed at native contact preparation. Retain its
+            // friction budget as well; the native material/hook owner is
+            // resolved below when there is no prepared policy to reuse.
             if let Some((owner, total)) = contacts.responses.iter_mut().find(|(p, _)| {
                 p.collider1 == response.collider1
                     && p.collider2 == response.collider2
@@ -2510,37 +2514,186 @@ fn record_contact_response(
     Ok(())
 }
 
+/// Resolve a newly touching continuous surface through the same material
+/// precedence and contact hook contract used by Avian's native narrow phase.
+/// No prepared graph index is invented for a contact discovered after preparation.
+fn new_continuous_surface<H: CollisionHooks + 'static>(
+    In(plane): In<Plane>,
+    friction: Query<&Friction>,
+    restitution: Query<&Restitution>,
+    default_friction: Res<DefaultFriction>,
+    default_restitution: Res<DefaultRestitution>,
+    active: Query<&ActiveCollisionHooks>,
+    bodies: Query<&SolverBody>,
+    kinds: Query<Option<&RigidBody>>,
+    hooks: StaticSystemParam<H>,
+    mut commands: Commands,
+) -> Result<(f64, DVec3), String>
+where
+    for<'w, 's> bevy::ecs::system::SystemParamItem<'w, 's, H>: CollisionHooks,
+{
+    use avian3d::collision::contact_types::{ContactId, ContactPairFlags};
+    let body = |entity| -> Result<SolverBody, String> {
+        if let Ok(body) = bodies.get(entity) {
+            return Ok(body.clone());
+        }
+        if kinds
+            .get(entity)
+            .is_ok_and(|kind| kind.is_none_or(RigidBody::is_static))
+        {
+            return Ok(SolverBody::default());
+        }
+        Err(format!(
+            "continuous material contact body {entity:?} has no admitted solver state"
+        ))
+    };
+    let first = body(plane.body1)?;
+    let second = body(plane.body2)?;
+    let r1 = first.delta_rotation * plane.point1;
+    let r2 = second.delta_rotation * plane.point2;
+    let p1 = plane.center1 + first.delta_position + r1;
+    let p2 = plane.center2 + second.delta_position + r2;
+    let point = ContactPoint::new(
+        r1,
+        r2,
+        (p1 + p2) * 0.5,
+        -(p2 - p1).dot(plane.normal) - plane.offset,
+    );
+    let mut manifold = ContactManifold::new([point], plane.normal);
+    let material = |collider, body| {
+        friction
+            .get(collider)
+            .or_else(|_| friction.get(body))
+            .copied()
+            .unwrap_or(default_friction.0)
+    };
+    manifold.friction = material(plane.collider1, plane.body1)
+        .combine(material(plane.collider2, plane.body2))
+        .dynamic_coefficient;
+    manifold.restitution = restitution
+        .get(plane.collider1)
+        .copied()
+        .unwrap_or(default_restitution.0)
+        .combine(
+            restitution
+                .get(plane.collider2)
+                .copied()
+                .unwrap_or(default_restitution.0),
+        )
+        .coefficient;
+    let mut pair = ContactPair::new(plane.collider1, plane.collider2, ContactId::PLACEHOLDER);
+    pair.body1 = Some(plane.body1);
+    pair.body2 = Some(plane.body2);
+    pair.flags = ContactPairFlags::TOUCHING | ContactPairFlags::GENERATE_CONSTRAINTS;
+    pair.flags.set(
+        ContactPairFlags::STATIC1,
+        kinds
+            .get(plane.body1)
+            .is_ok_and(|kind| kind.is_none_or(RigidBody::is_static)),
+    );
+    pair.flags.set(
+        ContactPairFlags::STATIC2,
+        kinds
+            .get(plane.body2)
+            .is_ok_and(|kind| kind.is_none_or(RigidBody::is_static)),
+    );
+    pair.manifolds.push(manifold);
+    let modify = [plane.collider1, plane.collider2]
+        .into_iter()
+        .any(|entity| {
+            active
+                .get(entity)
+                .is_ok_and(|flags| flags.contains(ActiveCollisionHooks::MODIFY_CONTACTS))
+        });
+    if modify {
+        pair.flags.insert(ContactPairFlags::MODIFY_CONTACTS);
+        if !hooks.modify_contacts(&mut pair, &mut commands) {
+            return Err(
+                "contact hook rejected a continuous normal candidate; writeback refused".into(),
+            );
+        }
+    }
+    let surface = pair
+        .manifolds
+        .first()
+        .ok_or("contact hook removed a continuous normal candidate; writeback refused")?;
+    if pair.manifolds.len() != 1
+        || surface.points.len() != 1
+        || surface.normal != plane.normal
+        || surface.points[0].anchor1 != r1
+        || surface.points[0].anchor2 != r2
+    {
+        return Err("contact hook changed continuous contact geometry after its normal solve; writeback refused".into());
+    }
+    if !surface.friction.is_finite()
+        || surface.friction < 0.0
+        || !surface.tangent_velocity.is_finite()
+    {
+        return Err("continuous contact material must supply finite nonnegative friction and finite surface velocity".into());
+    }
+    Ok((surface.friction, surface.tangent_velocity))
+}
+
 /// Consume only the additional continuous normal reaction after position
 /// corrections have been projected to velocity. Reuse the native Coulomb kernel
 /// and the prepared patch's material policy, with the fresh rolling lever arms.
-fn solve_continuous_friction(world: &mut World) {
+fn solve_continuous_friction<H: CollisionHooks + 'static>(world: &mut World)
+where
+    for<'w, 's> bevy::ecs::system::SystemParamItem<'w, 's, H>: CollisionHooks,
+{
     use avian3d::dynamics::solver::contact::ContactTangentPart;
     if world.resource::<lunco_core::RuntimeFaults>().active() {
         return;
     }
     let responses = std::mem::take(&mut world.resource_mut::<ContinuousContacts>().responses);
     for (plane, impulse) in responses {
-        let Some((color, index, _)) = plane.native_point else {
-            continue;
-        };
-        let graph = world.resource::<ConstraintGraph>();
-        let constraint = &graph.colors[color].contact_constraints[index];
-        if constraint.friction <= 0.0 {
+        let (friction, surface_velocity, prepared_tangent) =
+            if let Some((color, index, _)) = plane.native_point {
+                let graph = world.resource::<ConstraintGraph>();
+                let constraint = &graph.colors[color].contact_constraints[index];
+                (
+                    constraint.friction,
+                    if constraint.body1 == plane.body1 {
+                        constraint.tangent_velocity
+                    } else {
+                        -constraint.tangent_velocity
+                    },
+                    Some(constraint.tangent1),
+                )
+            } else {
+                let response = world
+                    .run_system_cached_with(new_continuous_surface::<H>, plane.clone())
+                    .map_err(|error| {
+                        format!("continuous contact material owner could not run: {error}")
+                    })
+                    .and_then(|response| response);
+                match response {
+                    Ok((friction, velocity)) => (friction, velocity, None),
+                    Err(detail) => {
+                        if let Some(mut holds) = world.get_resource_mut::<PhysicsHolds>() {
+                            holds.set(PhysicsHolds::SAFETY_FAILURE, true);
+                        }
+                        world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+                            "physics-continuous-material-invalid",
+                            Some(plane.body1),
+                            "continuous contact material",
+                            detail,
+                        );
+                        return;
+                    }
+                }
+            };
+        if friction <= 0.0 {
             continue;
         }
-        let friction = constraint.friction;
         // Transport the prepared tangent into the fresh contact plane. Isotropic
         // Coulomb friction is basis independent; reusing a stale normal would
         // omit traction on curves or apply a spurious normal impulse.
-        let tangent1 = (constraint.tangent1 - plane.normal * constraint.tangent1.dot(plane.normal))
+        let tangent = prepared_tangent.unwrap_or_else(|| plane.normal.any_orthonormal_vector());
+        let tangent1 = (tangent - plane.normal * tangent.dot(plane.normal))
             .try_normalize()
             .unwrap_or_else(|| plane.normal.any_orthonormal_vector());
         let tangents = [tangent1, tangent1.cross(plane.normal)];
-        let surface_velocity = if constraint.body1 == plane.body1 {
-            constraint.tangent_velocity
-        } else {
-            -constraint.tangent_velocity
-        };
         let mut body1 = world
             .get::<SolverBody>(plane.body1)
             .cloned()
@@ -2936,88 +3089,95 @@ mod tests {
     #[test]
     fn continuous_friction_reuses_patch_policy_without_replaying_normal_impulse() {
         use avian3d::dynamics::solver::contact::ContactConstraint;
-        for friction in [0.0, 0.8] {
-            for angle in [0.0, 0.2] {
-                let normal = DQuat::from_rotation_x(angle) * DVec3::Y;
-                let mut world = World::new();
-                world.init_resource::<lunco_core::RuntimeFaults>();
-                world.init_resource::<ContinuousContacts>();
-                let ground = world.spawn_empty().id();
-                let initial = SolverBody {
-                    angular_velocity: -DVec3::X * 60.0,
-                    ..default()
-                };
-                let wheel = world
-                    .spawn((
-                        initial.clone(),
-                        SolverBodyInertia::new(
-                            1.0 / 24.0,
-                            SymmetricMatrix::from_diagonal(DVec3::new(
-                                1.0 / 1.4,
-                                1.0 / 0.8,
-                                1.0 / 0.8,
-                            )),
-                            LockedAxes::default(),
-                            0,
-                            true,
-                        ),
-                    ))
-                    .id();
-                let mut graph = ConstraintGraph::default();
-                graph.colors[0].contact_constraints.push(ContactConstraint {
-                    body1: ground,
-                    body2: wheel,
-                    relative_dominance: 0,
-                    friction,
-                    restitution: 0.0,
-                    tangent_velocity: DVec3::ZERO,
-                    normal: DVec3::Y,
-                    tangent1: DVec3::Z,
-                    points: Vec::new(),
-                    contact_id: avian3d::collision::contact_types::ContactId::PLACEHOLDER,
-                    manifold_index: 0,
-                });
-                world.insert_resource(graph);
-                let plane = Plane {
-                    collider1: ground,
-                    collider2: wheel,
-                    body1: ground,
-                    body2: wheel,
-                    part1: 0,
-                    part2: 0,
-                    center1: DVec3::ZERO,
-                    center2: DVec3::ZERO,
-                    point1: DVec3::ZERO,
-                    point2: -normal * 0.34,
-                    normal,
-                    offset: 0.0,
-                    native_point: Some((0, 0, 0)),
-                    close_endpoint: true,
-                };
-                world
-                    .resource_mut::<ContinuousContacts>()
-                    .responses
-                    .push((plane, 100.0));
-                solve_continuous_friction(&mut world);
-                let after = world.get::<SolverBody>(wheel).unwrap().clone();
-                let momentum = after.linear_velocity * 24.0;
-                assert!(momentum.length() <= friction * 100.0 + 1e-10);
-                assert!(momentum.dot(normal).abs() < 1e-12);
-                assert_eq!(after.delta_position, initial.delta_position);
-                let energy = 0.5 * 24.0 * after.linear_velocity.length_squared()
-                    + 0.5 * 1.4 * after.angular_velocity.x.powi(2);
-                assert!(energy <= 0.5 * 1.4 * 60.0f64.powi(2));
-                if friction == 0.0 {
-                    assert_eq!(after.angular_velocity, initial.angular_velocity);
-                } else {
-                    assert!(momentum.z < 0.0);
-                    assert!(after.angular_velocity.x > -60.0);
+        for prepared in [false, true] {
+            for friction in [0.0, 0.8] {
+                for angle in [0.0, 0.2] {
+                    let normal = DQuat::from_rotation_x(angle) * DVec3::Y;
+                    let mut world = World::new();
+                    world.init_resource::<lunco_core::RuntimeFaults>();
+                    world.init_resource::<ContinuousContacts>();
+                    world.init_resource::<DefaultFriction>();
+                    world.init_resource::<DefaultRestitution>();
+                    let ground = world
+                        .spawn((RigidBody::Static, Friction::new(friction)))
+                        .id();
+                    let initial = SolverBody {
+                        angular_velocity: -DVec3::X * 60.0,
+                        ..default()
+                    };
+                    let wheel = world
+                        .spawn((
+                            initial.clone(),
+                            Friction::new(friction),
+                            SolverBodyInertia::new(
+                                1.0 / 24.0,
+                                SymmetricMatrix::from_diagonal(DVec3::new(
+                                    1.0 / 1.4,
+                                    1.0 / 0.8,
+                                    1.0 / 0.8,
+                                )),
+                                LockedAxes::default(),
+                                0,
+                                true,
+                            ),
+                        ))
+                        .id();
+                    let mut graph = ConstraintGraph::default();
+                    graph.colors[0].contact_constraints.push(ContactConstraint {
+                        body1: ground,
+                        body2: wheel,
+                        relative_dominance: 0,
+                        friction,
+                        restitution: 0.0,
+                        tangent_velocity: DVec3::ZERO,
+                        normal: DVec3::Y,
+                        tangent1: DVec3::Z,
+                        points: Vec::new(),
+                        contact_id: avian3d::collision::contact_types::ContactId::PLACEHOLDER,
+                        manifold_index: 0,
+                    });
+                    world.insert_resource(graph);
+                    let plane = Plane {
+                        collider1: ground,
+                        collider2: wheel,
+                        body1: ground,
+                        body2: wheel,
+                        part1: 0,
+                        part2: 0,
+                        center1: DVec3::ZERO,
+                        center2: DVec3::ZERO,
+                        point1: DVec3::ZERO,
+                        point2: -normal * 0.34,
+                        normal,
+                        offset: 0.0,
+                        native_point: prepared.then_some((0, 0, 0)),
+                        close_endpoint: true,
+                    };
+                    world
+                        .resource_mut::<ContinuousContacts>()
+                        .responses
+                        .push((plane, 100.0));
+                    solve_continuous_friction::<()>(&mut world);
+                    let after = world.get::<SolverBody>(wheel).unwrap().clone();
+                    let momentum = after.linear_velocity * 24.0;
+                    assert!(momentum.length() <= friction * 100.0 + 1e-10);
+                    assert!(momentum.dot(normal).abs() < 1e-12);
+                    assert_eq!(after.delta_position, initial.delta_position);
+                    let energy = 0.5 * 24.0 * after.linear_velocity.length_squared()
+                        + 0.5 * 1.4 * after.angular_velocity.x.powi(2);
+                    assert!(energy <= 0.5 * 1.4 * 60.0f64.powi(2));
+                    if friction == 0.0 {
+                        assert_eq!(after.angular_velocity, initial.angular_velocity);
+                    } else {
+                        assert!(momentum.z < 0.0);
+                        assert!(after.angular_velocity.x > -60.0);
+                    }
+                    solve_continuous_friction::<()>(&mut world);
+                    assert_eq!(
+                        world.get::<SolverBody>(wheel).unwrap().linear_velocity,
+                        after.linear_velocity
+                    );
                 }
-                solve_continuous_friction(&mut world);
-                assert_eq!(
-                    world.get::<SolverBody>(wheel).unwrap().linear_velocity,
-                    after.linear_velocity
-                );
             }
         }
     }

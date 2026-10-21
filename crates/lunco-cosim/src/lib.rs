@@ -460,10 +460,7 @@ impl Plugin for CoSimPlugin {
         // headless cosim without Avian safe.
         app.add_systems(
             FixedPostUpdate,
-            (
-                lunco_physics::raycast::sample_raycast_observations,
-                avian::sample_solved_acceleration,
-            )
+            lunco_physics::raycast::sample_raycast_observations
                 .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
                 .after(avian3d::prelude::PhysicsSystems::Writeback),
         );
@@ -476,16 +473,7 @@ impl Plugin for CoSimPlugin {
         // — the render layer reads its stored result and re-casts nothing.
         // See `docs/architecture/render-decoupling.md`.
 
-        // The acceleration sample is a component-backed sensor fact. Ensure it
-        // exists before the USD fabric resolves the body's output surface;
-        // sampling itself remains after the solver writeback above.
-        app.add_systems(
-            Update,
-            (
-                systems::collider::sync_collider,
-                avian::ensure_acceleration_samples,
-            ),
-        );
+        app.add_systems(Update, systems::collider::sync_collider);
 
         // A model's own variables — the INTERNAL Modelica state included — become
         // retained, plottable history without anyone authoring a channel per

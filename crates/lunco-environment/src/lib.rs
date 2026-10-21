@@ -123,36 +123,8 @@ pub enum EnvironmentSet {
     Apply,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LocalGravity — the gravity vector at an entity's position
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Gravity vector at this entity's position, in the entity's Avian physics
-/// frame (m/s²).
-///
-/// Computed in [`FixedUpdate`] when gravity, frame, provider, transform, or
-/// body-link inputs change. Surface gravity uses the [`GravityProvider`] on
-/// the entity's gravitational parent body (linked via [`GravityBody`]).
-///
-/// - **Magnitude:** `length()` gives `g` in m/s²
-/// - **Direction:** `normalize()` gives the gravity unit vector
-///
-/// Read this instead of querying the [`Gravity`] resource directly — it's
-/// position-dependent and cached. Multiple consumers (Avian acceleration,
-/// cosim input injection, UI display) can read it without recomputation.
-#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
-#[reflect(Component)]
-pub struct LocalGravity {
-    acceleration: DVec3,
-    change_origin: GravityChangeOrigin,
-}
-
-#[derive(Debug, Clone, Copy, Reflect, Default, PartialEq, Eq)]
-enum GravityChangeOrigin {
-    #[default]
-    Source,
-    ConsumerPose,
-}
+// Gravity computation publishes the physics-owned field and sample provenance.
+use lunco_physics::kinematics::{GravityChangeOrigin, LocalGravity};
 
 #[derive(Clone, Copy)]
 struct SampledGravityProviderPose {
@@ -166,36 +138,6 @@ struct SampledGravityProviderPose {
 pub struct GravityProviderPoseCache(HashMap<Entity, SampledGravityProviderPose>);
 
 impl lunco_core::SceneResource for GravityProviderPoseCache {}
-
-impl LocalGravity {
-    /// An externally supplied field; a changed value may wake native physics.
-    pub fn new(acceleration: DVec3) -> Self {
-        Self {
-            acceleration,
-            change_origin: GravityChangeOrigin::Source,
-        }
-    }
-
-    /// Exact acceleration in the active physics frame, in m/s².
-    pub fn acceleration(&self) -> DVec3 {
-        self.acceleration
-    }
-
-    /// Magnitude in m/s² (always non-negative).
-    pub fn magnitude(&self) -> f64 {
-        self.acceleration.length()
-    }
-
-    /// Unit vector in the direction of gravity (downward).
-    /// Returns [`DVec3::NEG_Y`] if the gravity vector is zero.
-    pub fn direction(&self) -> DVec3 {
-        if self.acceleration.length_squared() > 0.0 {
-            self.acceleration.normalize()
-        } else {
-            DVec3::NEG_Y
-        }
-    }
-}
 
 fn clear_unresolved_local_gravity(
     commands: &mut Commands,
@@ -279,19 +221,19 @@ fn update_local_gravity_for_entity(
     };
     // Don't re-insert (and re-trigger) when the value is unchanged — e.g. a
     // global invalidation that recomputes the same field.
-    if existing.is_some_and(|previous| previous.acceleration == g) {
+    if existing.is_some_and(|previous| previous.acceleration() == g) {
         return;
     }
     updates.push((
         entity,
-        LocalGravity {
-            acceleration: g,
-            change_origin: if source_changed {
+        LocalGravity::sampled(
+            g,
+            if source_changed {
                 GravityChangeOrigin::Source
             } else {
                 GravityChangeOrigin::ConsumerPose
             },
-        },
+        ),
     ));
 }
 
@@ -497,16 +439,16 @@ pub fn sync_local_gravity_to_avian(
     let mut accelerations = Vec::new();
     for (entity, gravity, existing) in &mut changed {
         if let Some(mut existing) = existing {
-            if existing.0 == gravity.acceleration {
+            if existing.0 == gravity.acceleration() {
                 continue;
             }
-            if gravity.change_origin == GravityChangeOrigin::ConsumerPose {
-                existing.bypass_change_detection().0 = gravity.acceleration;
+            if gravity.change_origin() == GravityChangeOrigin::ConsumerPose {
+                existing.bypass_change_detection().0 = gravity.acceleration();
             } else {
-                existing.0 = gravity.acceleration;
+                existing.0 = gravity.acceleration();
             }
         } else {
-            accelerations.push((entity, ConstantLinearAcceleration(gravity.acceleration)));
+            accelerations.push((entity, ConstantLinearAcceleration(gravity.acceleration())));
         }
     }
     if !accelerations.is_empty() {
@@ -557,15 +499,15 @@ pub fn inject_local_gravity_into_cosim(
                 );
                 changed |= outputs.set(
                     lunco_cosim_core::GRAVITY_X_SOURCE_CONNECTOR,
-                    gravity.acceleration.x,
+                    gravity.acceleration().x,
                 );
                 changed |= outputs.set(
                     lunco_cosim_core::GRAVITY_Y_SOURCE_CONNECTOR,
-                    gravity.acceleration.y,
+                    gravity.acceleration().y,
                 );
                 changed |= outputs.set(
                     lunco_cosim_core::GRAVITY_Z_SOURCE_CONNECTOR,
-                    gravity.acceleration.z,
+                    gravity.acceleration().z,
                 );
                 changed
             } else {
@@ -1116,10 +1058,12 @@ mod tests {
         assert_eq!(app.world().resource::<AccelerationChangeCount>().0, 0);
 
         let sampled = DVec3::new(1.0e-12, -1.6200000000001, 0.0);
-        app.world_mut().entity_mut(entity).insert(LocalGravity {
-            acceleration: sampled,
-            change_origin: GravityChangeOrigin::ConsumerPose,
-        });
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(LocalGravity::sampled(
+                sampled,
+                GravityChangeOrigin::ConsumerPose,
+            ));
         app.update();
         assert_eq!(
             app.world()
@@ -1154,10 +1098,7 @@ mod tests {
         let sampled = DVec3::new(0.0, -1.700000000001, 1.0e-12);
         app.world_mut().entity_mut(entity).insert((
             avian3d::prelude::Sleeping,
-            LocalGravity {
-                acceleration: sampled,
-                change_origin: GravityChangeOrigin::ConsumerPose,
-            },
+            LocalGravity::sampled(sampled, GravityChangeOrigin::ConsumerPose),
         ));
         app.update();
         assert_eq!(
@@ -1349,7 +1290,7 @@ mod tests {
                 app.world()
                     .get::<LocalGravity>(entity)
                     .unwrap()
-                    .change_origin,
+                    .change_origin(),
                 GravityChangeOrigin::ConsumerPose
             );
         }
@@ -1464,13 +1405,19 @@ mod tests {
         app.world_mut().get_mut::<Position>(body).unwrap().0.x += 1.0;
         app.update();
         assert_eq!(
-            app.world().get::<LocalGravity>(body).unwrap().change_origin,
+            app.world()
+                .get::<LocalGravity>(body)
+                .unwrap()
+                .change_origin(),
             GravityChangeOrigin::Source
         );
         app.world_mut().get_mut::<Position>(body).unwrap().0.x += 1.0;
         app.update();
         assert_eq!(
-            app.world().get::<LocalGravity>(body).unwrap().change_origin,
+            app.world()
+                .get::<LocalGravity>(body)
+                .unwrap()
+                .change_origin(),
             GravityChangeOrigin::ConsumerPose
         );
         app.insert_resource(lunco_core_runtime::SimTick(1));
@@ -1484,7 +1431,10 @@ mod tests {
             });
         app.update();
         assert_eq!(
-            app.world().get::<LocalGravity>(body).unwrap().change_origin,
+            app.world()
+                .get::<LocalGravity>(body)
+                .unwrap()
+                .change_origin(),
             GravityChangeOrigin::Source
         );
         // A timestamp refresh with an identical physical pose is not source
@@ -1501,7 +1451,10 @@ mod tests {
         app.world_mut().get_mut::<Position>(body).unwrap().0.x += 1.0;
         app.update();
         assert_eq!(
-            app.world().get::<LocalGravity>(body).unwrap().change_origin,
+            app.world()
+                .get::<LocalGravity>(body)
+                .unwrap()
+                .change_origin(),
             GravityChangeOrigin::ConsumerPose
         );
         app.insert_resource(lunco_core_runtime::SimTick(3));
@@ -1515,7 +1468,10 @@ mod tests {
             });
         app.update();
         assert_eq!(
-            app.world().get::<LocalGravity>(body).unwrap().change_origin,
+            app.world()
+                .get::<LocalGravity>(body)
+                .unwrap()
+                .change_origin(),
             GravityChangeOrigin::Source
         );
         assert!(
@@ -1665,10 +1621,8 @@ mod tests {
             "identical gravity values must not invalidate the shared component"
         );
 
-        app.world_mut()
-            .get_mut::<LocalGravity>(entity)
-            .unwrap()
-            .acceleration = DVec3::new(0.0, -1.63, 0.0);
+        *app.world_mut().get_mut::<LocalGravity>(entity).unwrap() =
+            LocalGravity::new(DVec3::new(0.0, -1.63, 0.0));
         app.update();
         assert_eq!(
             app.world().resource::<SimComponentChangeCount>().0,
