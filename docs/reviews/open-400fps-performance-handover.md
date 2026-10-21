@@ -9735,16 +9735,13 @@ entity-local. `cargo +nightly-2026-02-27 check --locked -j 4 -p
 lunco-modelica-worker` passed. This change has not been profiled, and no timing
 gain is claimed. The other three long Sandbox model lowerings remain distinct.
 
-### 2026-09-28 — batch accelerometer sample initialization
+### Rigid-body acceleration ownership
 
-The same Tracy capture shows `ensure_acceleration_samples` with a 46.135 ms
-maximum deferred-command flush over 1,061 calls, while its system body peaked at
-46.7 microseconds. The system only initializes `SolvedLinearAcceleration` for
-newly physics-ready bodies. It now collects these identical initial states and
-inserts them through one fallible typed batch in query order; steady fixed-step
-sampling is unchanged. `cargo +nightly-2026-02-27 check --locked -j 4 -p
-lunco-cosim` passed. There is no post-change Tracy capture, so no timing gain is
-claimed.
+`lunco-physics::kinematics` installs `SolvedBodyAcceleration` as a required
+rigid-body component and samples completed native intervals. Co-simulation
+and telemetry consume that shared result. See the
+[measurement contract](../architecture/body-acceleration.md). No current
+Tracy timing or performance gain is claimed for this producer.
 
 ### 2026-09-28 — batch readiness freeze inserts
 

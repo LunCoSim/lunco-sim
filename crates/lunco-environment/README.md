@@ -87,6 +87,9 @@ environment resolves its target bearing in that probe's own BigSpace frame.
 
 ### `LocalGravity`
 
+The field contract belongs to `lunco-physics::kinematics`; environment computes
+and publishes it for physics, sensors and telemetry.
+
 Gravity vector at an entity's active physics-frame position, in m/s². Computed in
 `FixedUpdate` when gravity, frame, provider, pose, or body-link inputs change.
 `lunco-physics::SimulationPoseQuery` supplies both consumer and provider poses
@@ -107,7 +110,9 @@ consumers and existing fields, excluding unlinked entities with nothing to
 produce or remove, including on provider or frame invalidation. Flat-field
 global invalidations check all spatial entities. Provider-pose changes also
 invalidate linked fields. `LocalGravity::new(acceleration)` supplies an external
-field; `acceleration()` reads its exact f64 vector. The sample also retains whether
+field; `LocalGravity::sampled(acceleration, origin)` publishes a computed sample
+with explicit `GravityChangeOrigin`, and `change_origin()` reads that provenance.
+`acceleration()` reads its exact f64 vector. The sample also retains whether
 a changed field came from consumer motion or from its source. The provider-pose
 cache compares actual active-frame poses once per system pass; a new prescribed
 sample timestamp alone does not imply source motion. The environment owner registers the provider-pose
@@ -127,7 +132,7 @@ The source is this crate's
   with a `GravityProvider`
 
 ```rust
-use lunco_environment::LocalGravity;
+use lunco_physics::kinematics::LocalGravity;
 
 fn read_gravity(q: Query<&LocalGravity>) {
     for grav in &q {

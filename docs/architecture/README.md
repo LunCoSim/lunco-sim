@@ -70,6 +70,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`../../crates/lunco-networking/SYNC_ARCHITECTURE.md`](../../crates/lunco-networking/SYNC_ARCHITECTURE.md) | The replication mechanisms, wire, prediction, and convergence contract |
 | [`33-spacecraft-modeling.md`](33-spacecraft-modeling.md) | The lander slice |
 | [`lander-actuation-modelica.md`](lander-actuation-modelica.md) | The powered lander actuation boundary: USD topology, Modelica control/fluids, and Avian force application |
+| [`body-acceleration.md`](body-acceleration.md) | Physics-owned net acceleration and gravity-removed accelerometer measurements shared by ports, sensors and graphs |
 | [`34-scenario-and-multidomain.md`](34-scenario-and-multidomain.md) | Scenarios, multi-domain vehicles |
 | [`35-animate-perspective.md`](35-animate-perspective.md) | Timeline / sequence editor |
 | [`38-domains-as-packages.md`](38-domains-as-packages.md) | Composition; the domain-neutral-core thesis (absorbs the deleted 36/37 analyses) |
