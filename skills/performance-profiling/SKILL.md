@@ -21,6 +21,11 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   verdict before comparing completed-mission windows. A tick threshold or zero
   process exit does not prove acceptance. Exclude source/API errors, and require
   readiness and diagnostics to pass for the measured cohort.
+  Native presentation failure appears in `RuntimeDiagnostics` under producer
+  `render-recovery`; `presentation-stopped` is an error even when physics and
+  the API remain usable. Application-frame FPS can keep advancing without
+  rendered scene output. Reject such a cohort; do not interpret its frame rate
+  as graphics performance or cure it by lowering quality implicitly.
   Compare the recorded Twin commits explicitly; two individually clean checkouts
   can have different revisions. Such runs are different source cohorts, even if
   their scenario name and application binary match. Initialization-source and

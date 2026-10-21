@@ -304,6 +304,63 @@ pub struct RenderWarning {
     pub message: String,
 }
 
+/// Project the renderer's retained state into the shared API/UI diagnostics.
+/// This does not turn a presentation failure into a simulation fault.
+fn publish_render_diagnostics(
+    warning: Option<Res<RenderWarning>>,
+    gave_up: Option<Res<RenderGaveUp>>,
+    diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    let Some(mut diagnostics) = diagnostics else {
+        return;
+    };
+    let finding = if let Some(gave_up) = gave_up {
+        Some(lunco_core::RuntimeDiagnostic {
+            code: "presentation-stopped".into(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "render-recovery".into(),
+            subject: "renderer".into(),
+            message: gave_up.reason.clone(),
+        })
+    } else {
+        warning.map(|warning| lunco_core::RuntimeDiagnostic {
+            code: match warning.kind {
+                RenderWarningKind::GraphicsSettings => "graphics-settings",
+                RenderWarningKind::RuntimeFailure => "rendering-degraded",
+            }
+            .into(),
+            severity: lunco_core::DiagnosticSeverity::Warning,
+            producer: "render-recovery".into(),
+            subject: "renderer".into(),
+            message: warning.message.clone(),
+        })
+    };
+    diagnostics.replace_producer("render-recovery", finding);
+}
+
+fn register_render_diagnostics(app: &mut App) {
+    use bevy::ecs::schedule::common_conditions::{resource_added, resource_changed_or_removed};
+    app.add_systems(
+        PostUpdate,
+        publish_render_diagnostics
+            .in_set(lunco_core::RuntimeCycleSet::Presentation)
+            .after(apply_shadow_caster_policy)
+            .run_if(
+                resource_changed_or_removed::<RenderWarning>
+                    .or_eager(resource_changed_or_removed::<RenderGaveUp>)
+                    .or_eager(resource_added::<lunco_core::RuntimeDiagnostics>),
+            ),
+    );
+    // Ordinary recovery rearms on teardown. Device loss remains terminal and
+    // must still be visible after the scene-scoped diagnostics are cleared.
+    app.add_systems(
+        lunco_core::SceneTeardown,
+        publish_render_diagnostics
+            .after(reset_render_recovery)
+            .after(lunco_core::faults::clear_runtime_diagnostics),
+    );
+}
+
 /// Keep a render-health decision visible in the surviving workbench UI.
 pub fn draw_render_recovery_banner(
     mut egui_ctx: EguiContexts,
@@ -559,6 +616,7 @@ pub fn install_wgpu_error_handler(app: &mut App) {
         PostUpdate,
         apply_shadow_caster_policy.in_set(lunco_core::RuntimeCycleSet::Presentation),
     );
+    register_render_diagnostics(app);
 
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
@@ -1421,6 +1479,75 @@ fn escalate_render_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_diagnostics_follow_recovery_and_scene_lifetime() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::RuntimeDiagnostics>();
+        app.init_resource::<lunco_core::RuntimeFaults>();
+        register_render_diagnostics(&mut app);
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeDiagnostics>()
+            .findings
+            .push(lunco_core::RuntimeDiagnostic {
+                code: "other-owner".into(),
+                severity: lunco_core::DiagnosticSeverity::Info,
+                producer: "other-owner".into(),
+                subject: "fixture".into(),
+                message: "retained independently".into(),
+            });
+
+        app.world_mut().insert_resource(RenderWarning {
+            kind: RenderWarningKind::RuntimeFailure,
+            message: "GPU allocation failed".into(),
+        });
+        app.update();
+        let diagnostics = app.world().resource::<lunco_core::RuntimeDiagnostics>();
+        assert_eq!(diagnostics.findings.len(), 2);
+        assert!(diagnostics.findings.iter().any(|finding| {
+            finding.code == "rendering-degraded"
+                && finding.severity == lunco_core::DiagnosticSeverity::Warning
+        }));
+
+        let health = Arc::new(RenderHealth::default());
+        health.device_lost.store(true, Ordering::Relaxed);
+        app.insert_resource(RenderHealthHandle(health));
+        app.world_mut().insert_resource(RenderGaveUp {
+            reason: "the GPU device was lost".into(),
+        });
+        app.update();
+        let diagnostics = app.world().resource::<lunco_core::RuntimeDiagnostics>();
+        assert_eq!(diagnostics.findings.len(), 2);
+        assert!(diagnostics.findings.iter().any(|finding| {
+            finding.code == "presentation-stopped"
+                && finding.severity == lunco_core::DiagnosticSeverity::Error
+                && finding.message == "the GPU device was lost"
+        }));
+        assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
+
+        // Device loss survives scene retirement; scene diagnostics must republish it.
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            (
+                lunco_core::faults::clear_runtime_diagnostics,
+                reset_render_recovery,
+            ),
+        );
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+        let diagnostics = app.world().resource::<lunco_core::RuntimeDiagnostics>();
+        assert_eq!(diagnostics.findings.len(), 1);
+        assert_eq!(diagnostics.findings[0].code, "presentation-stopped");
+
+        app.world_mut().remove_resource::<RenderGaveUp>();
+        app.world_mut().remove_resource::<RenderWarning>();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .is_empty()
+        );
+    }
 
     #[test]
     fn warning_titles_distinguish_invalid_configuration_from_render_failure() {

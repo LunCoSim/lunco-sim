@@ -33,6 +33,25 @@ wgpu, naga, or `bevy_render` — achieved **without a single `#[cfg(feature = "r
 code.** The gate is *which plugins you add*, not conditional compilation sprinkled through the
 simulation.
 
+## Presentation health and performance evidence
+
+`lunco-render-recovery` owns native GPU failure and presentation-stop state.
+Its change-gated diagnostic projection publishes `RenderWarning` as a warning
+and `RenderGaveUp` as the `presentation-stopped` error through the existing
+`RuntimeDiagnostics` owner. API, authoring review and performance consumers read
+that same diagnostic; the renderer does not raise a simulation fault or change
+physics, camera quality or authored settings. A warning is replaced by the
+terminal error, rather than counted twice. Repair removes only this producer's
+findings. Scene teardown resets ordinary recovery; device loss survives that
+boundary and republishes after scene diagnostics clear.
+
+`EnginePerformance` retains application-frame timings, which can continue while
+presentation has stopped. A numeric FPS alone does not prove rendered output.
+Performance acceptance requires clear `RuntimeDiagnostics`, complete visual
+readiness and a valid screenshot from the same measurement cohort. Native GPU
+failure transitions are covered without exhausting hardware by the renderer's
+resource/lifecycle seam test.
+
 ## Composition is a crate boundary
 
 The dependency rule is enforced twice: in Cargo and at runtime.

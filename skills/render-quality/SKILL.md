@@ -22,6 +22,12 @@ For lunar-specific terrain data, regolith reflectance, multiscale detail, and
 LOD approaches, consult the source-linked
 [`lunar surface rendering research note`](../../docs/research/lunar-surface-rendering.md).
 
+Check `RuntimeDiagnostics` for producer `render-recovery` before accepting a
+rendered result. `presentation-stopped` rejects graphics evidence even if
+`EnginePerformance` still returns numeric application-frame FPS. The renderer
+preserves the simulation and API through that failure; inspect the native cause
+and available GPU memory rather than changing authored quality automatically.
+
 Use a task-owned `LUNCOSIM_CONFIG` directory for visual acceptance so restored
 workbench documents cannot change the fixture. `LUNCOSIM_EPHEMERAL_SETTINGS=1`
 alone does not isolate workbench restoration. Confirm physical viewport size
