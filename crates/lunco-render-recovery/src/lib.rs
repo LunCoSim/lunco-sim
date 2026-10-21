@@ -780,6 +780,8 @@ fn apply_render_quality(
     for (mut light, mut config, authored_ranges, preview_light) in &mut directional_lights {
         if let Some(preview) = preview_light {
             light.illuminance = profile.editor_preview_illuminance * preview.illuminance_scale;
+            // The viewport owns its fitted single-cascade studio shadows.
+            continue;
         }
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;

@@ -49,7 +49,22 @@ use bevy::utils::default;
 use lunco_environment::SunRenderState;
 use lunco_environment::horizon::{SunQuery, pick_sun};
 use lunco_materials::ParamValue;
-use lunco_render::{ProceduralSkybox, SceneCamera};
+use lunco_render::{EditorPreviewCamera, ProceduralSkybox, SceneCamera};
+
+// Use Bevy's render adapter marker parameter to extract the existing camera
+// role without adding render dependencies to the render-free intent crate.
+struct PreviewSkyIsolation;
+impl bevy::render::sync_component::SyncComponent<PreviewSkyIsolation> for EditorPreviewCamera {
+    type Target = Self;
+}
+impl ExtractComponent<PreviewSkyIsolation> for EditorPreviewCamera {
+    type QueryData = &'static Self;
+    type QueryFilter = ();
+    type Out = Self;
+    fn extract_component(item: &Self) -> Option<Self> {
+        Some(*item)
+    }
+}
 use std::any::TypeId;
 use std::collections::HashMap;
 
@@ -150,6 +165,10 @@ impl SpecializedRenderPipeline for ProceduralSkyboxPipeline {
 
 pub(crate) fn build(app: &mut App) {
     app.add_plugins(ExtractComponentPlugin::<ProceduralSkyboxMaterial>::default())
+        .add_plugins(ExtractComponentPlugin::<
+            EditorPreviewCamera,
+            PreviewSkyIsolation,
+        >::default())
         .add_observer(remove_skybox_material)
         .add_systems(
             PostUpdate,
@@ -200,6 +219,7 @@ fn directional_sun_inputs_changed(
         (
             With<SceneCamera>,
             With<Camera3d>,
+            Without<EditorPreviewCamera>,
             Or<(Added<Camera>, Changed<Camera>, Changed<GlobalTransform>)>,
         ),
     >,
@@ -241,7 +261,14 @@ fn skybox_material_event_matches(
 fn wire_directional_sun_inputs(
     sun: Option<Res<SunRenderState>>,
     lights: SunQuery,
-    cameras: Query<(&Camera, &GlobalTransform), (With<SceneCamera>, With<Camera3d>)>,
+    cameras: Query<
+        (&Camera, &GlobalTransform),
+        (
+            With<SceneCamera>,
+            With<Camera3d>,
+            Without<EditorPreviewCamera>,
+        ),
+    >,
     skyboxes: Query<&ProceduralSkyboxMaterial>,
     materials: Option<ResMut<Assets<super::ShaderMaterial>>>,
 ) {
@@ -341,7 +368,7 @@ fn prepare_view_bind_groups(
     view_uniforms: Res<ViewUniforms>,
     render_device: Res<RenderDevice>,
     skyboxes: Query<&ProceduralSkyboxMaterial>,
-    cameras: Query<(Entity, &ViewUniformOffset), With<Camera3d>>,
+    cameras: Query<(Entity, &ViewUniformOffset), (With<Camera3d>, Without<EditorPreviewCamera>)>,
 ) {
     if selected_skybox(&skyboxes).is_none() {
         for (entity, _) in &cameras {
@@ -437,7 +464,7 @@ fn queue_procedural_skybox(
     mut pipelines: ResMut<SpecializedRenderPipelines<ProceduralSkyboxPipeline>>,
     pipeline: Res<ProceduralSkyboxPipeline>,
     skyboxes: Query<(Entity, &MainEntity, &ProceduralSkyboxMaterial)>,
-    views: Query<(&ExtractedView, &Msaa), With<Camera3d>>,
+    views: Query<(&ExtractedView, &Msaa, Has<EditorPreviewCamera>), With<Camera3d>>,
     mut previous_skyboxes: Local<
         HashMap<RetainedViewEntity, (MainEntity, ProceduralSkyboxPipelineKey)>,
     >,
@@ -455,11 +482,17 @@ fn queue_procedural_skybox(
         );
         skybox = None;
     }
-    for (view, msaa) in &views {
+    for (view, msaa, editor) in &views {
         let view_entity = view.retained_view_entity;
         let Some(opaque_phase) = opaque_render_phases.get_mut(&view_entity) else {
             continue;
         };
+        if editor {
+            if let Some((previous, _)) = previous_skyboxes.remove(&view_entity) {
+                opaque_phase.remove(previous);
+            }
+            continue;
+        }
         let Some((render_entity, main_entity, shader)) = skybox.as_ref() else {
             if let Some((previous, _)) = previous_skyboxes.remove(&view_entity) {
                 opaque_phase.remove(previous);

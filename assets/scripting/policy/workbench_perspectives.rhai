@@ -48,12 +48,14 @@ fn assemble(facts) {
     if has_panel(facts, "usd_prim_tree") && has_panel(facts, "usd::viewport")
         && has_panel(facts, "lunco.workbench.twin_browser") && has_panel(facts, "sandbox_inspector") {
         let editor = #{
-            id: "editor", title: "✎ Editor", interaction: "editor", revision: 2,
+            id: "editor", title: "✎ Editor", interaction: "editor", revision: 3,
             description: "Edit an explicit USD assembly document. Open its source from Twin, select a prim in its structure and inspect the isolated preview. The source document owns Save and Undo; the live scene remains a separate context.",
-            left: ["usd_prim_tree"], left_bottom: ["lunco.workbench.twin_browser"],
+            left: ["usd_prim_tree", "lunco.workbench.twin_browser"],
             center: ["usd::viewport"], right: ["sandbox_inspector"],
         };
         if has_panel(facts, "rhai_editor") { editor.center.push("rhai_editor"); }
+        if has_panel(facts, "sysml_requirement_details") { editor.right.push("sysml_requirement_details"); }
+        if has_panel(facts, "modelica_journal") { editor.right_bottom = ["modelica_journal"]; }
         if has_panel(facts, "authoring_review") { editor.right.push("authoring_review"); }
         if has_panel(facts, "sandbox_environment") { editor.right.push("sandbox_environment"); }
         result.push(editor);

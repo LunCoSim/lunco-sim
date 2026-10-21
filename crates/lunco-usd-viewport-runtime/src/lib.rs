@@ -246,6 +246,7 @@ impl Plugin for UsdViewportPlugin {
         app.add_observer(on_viewport_measured);
         app.add_observer(on_preview_view_measured);
         app.add_observer(on_viewport_orbit_input);
+        app.add_systems(PostUpdate, sync_preview_lighting);
         app.add_systems(
             Update,
             (
@@ -1041,6 +1042,11 @@ fn create_preview_view(
             exposure,
             GraphicsCameraDefaults,
             lunco_render::EditorPreviewCamera,
+            AmbientLight {
+                color: Color::WHITE,
+                brightness: profile.editor_preview_illuminance * 0.18,
+                ..default()
+            },
             Camera3d::default(),
             Camera {
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.10, 0.10, 0.12)),
@@ -1067,6 +1073,13 @@ fn create_preview_view(
             EditorPreviewLight {
                 illuminance_scale: 1.0,
             },
+            bevy::light::CascadeShadowConfigBuilder {
+                num_cascades: 1,
+                minimum_distance: 0.001,
+                maximum_distance: OrbitCamera::default().distance * 3.0,
+                ..default()
+            }
+            .build(),
             Transform::from_xyz(5.0, 10.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             preview_layers,
             Name::new(format!("UsdPreviewSun-{}-{}", preview.0, view.0)),
@@ -1079,15 +1092,15 @@ fn create_preview_view(
     let fill_light = commands
         .spawn((
             DirectionalLight {
-                color: Color::linear_rgb(0.55, 0.62, 0.75),
-                illuminance: profile.editor_preview_illuminance * 0.12,
+                color: Color::WHITE,
+                illuminance: profile.editor_preview_illuminance * 0.4,
                 shadow_maps_enabled: false,
                 ..default()
             },
             EditorPreviewLight {
-                illuminance_scale: 0.12,
+                illuminance_scale: 0.4,
             },
-            Transform::from_xyz(-5.0, 6.0, -5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            Transform::from_xyz(-5.0, -4.0, -5.0).looking_at(Vec3::ZERO, Vec3::Y),
             RenderLayers::layer(render_layer),
             Name::new(format!("UsdPreviewFill-{}-{}", preview.0, view.0)),
         ))
@@ -1099,6 +1112,53 @@ fn create_preview_view(
     ))
 }
 
+/// Camera-local ambient fill exposes every face without changing the mission's
+/// environment. One view-sized key shadow gives depth without a lunar scene's
+/// cascade range; parked tabs retain no shadow pass.
+fn sync_preview_lighting(
+    state: Res<UsdViewportState>,
+    settings: Res<RenderingQualitySettings>,
+    mut cameras: Query<(&Camera, &mut AmbientLight)>,
+    mut lights: Query<(&mut DirectionalLight, &mut bevy::light::CascadeShadowConfig)>,
+) {
+    let Ok(profile) = settings.validated_profile() else {
+        return;
+    };
+    for view in state.views() {
+        let Ok((camera, mut ambient)) = cameras.get_mut(view.camera) else {
+            continue;
+        };
+        let brightness = profile.editor_preview_illuminance * 0.18;
+        if ambient.brightness != brightness {
+            ambient.brightness = brightness;
+        }
+        let Ok((mut light, mut cascades)) = lights.get_mut(view.light) else {
+            continue;
+        };
+        if light.shadow_maps_enabled != camera.is_active {
+            light.shadow_maps_enabled = camera.is_active;
+        }
+        // CAD detail needs millimetre bias rather than the terrain profile's
+        // metre-scale bias. These values are presentation, not USD physics.
+        if light.shadow_depth_bias != 0.02 {
+            light.shadow_depth_bias = 0.02;
+        }
+        if light.shadow_normal_bias != 2.0 {
+            light.shadow_normal_bias = 2.0;
+        }
+        let far = (view.orbit.distance + view.orthographic_scale) * 3.0;
+        if cascades.bounds.len() != 1 || cascades.bounds[0] != far {
+            *cascades = bevy::light::CascadeShadowConfigBuilder {
+                num_cascades: 1,
+                minimum_distance: 0.001,
+                maximum_distance: far,
+                ..default()
+            }
+            .build();
+        }
+    }
+}
+
 /// Frame a newly projected view around the actual visual bounds of its USD
 /// subtree. The bounds are Bevy's computed [`Aabb`]s, so this uses the same
 /// render geometry that the camera will draw rather than re-reading USD or
@@ -1107,7 +1167,12 @@ fn frame_preview_views(
     mut state: ResMut<UsdViewportState>,
     q_children: Query<&Children>,
     q_added_bounds: Query<Entity, Or<(Added<Aabb>, Added<Mesh3d>)>>,
-    q_bounds: Query<(&GlobalTransform, &Aabb)>,
+    q_bounds: Query<(
+        &GlobalTransform,
+        &Aabb,
+        Option<&InheritedVisibility>,
+        Option<&Visibility>,
+    )>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
     mut q_cameras: Query<(&mut Transform, &mut Projection)>,
 ) {
@@ -1215,7 +1280,12 @@ fn is_descendant_of(entity: Entity, ancestor: Entity, q_children: &Query<&Childr
 fn preview_visual_bounds(
     root: Entity,
     q_children: &Query<&Children>,
-    q_bounds: &Query<(&GlobalTransform, &Aabb)>,
+    q_bounds: &Query<(
+        &GlobalTransform,
+        &Aabb,
+        Option<&InheritedVisibility>,
+        Option<&Visibility>,
+    )>,
 ) -> Option<(Vec3, f32)> {
     let mut stack = vec![root];
     let mut min = Vec3A::splat(f32::INFINITY);
@@ -1223,7 +1293,10 @@ fn preview_visual_bounds(
     let mut found = false;
 
     while let Some(entity) = stack.pop() {
-        if let Ok((global, aabb)) = q_bounds.get(entity) {
+        if let Ok((global, aabb, inherited, visibility)) = q_bounds.get(entity)
+            && inherited.is_none_or(|visible| visible.get())
+            && !matches!(visibility, Some(Visibility::Hidden))
+        {
             for x in [-1.0, 1.0] {
                 for y in [-1.0, 1.0] {
                     for z in [-1.0, 1.0] {
@@ -1818,6 +1891,7 @@ fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
             }
         };
         if let Some(view) = primary_view {
+            focus_preview_document(world);
             world.trigger(OpenTab {
                 kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                 instance: view.0,
@@ -1830,6 +1904,19 @@ fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
             );
         }
     });
+}
+
+/// Preview focus is document focus too: history, Save and Undo consume the
+/// shared workspace cursor rather than a private USD-document selection.
+fn focus_preview_document(world: &mut World) {
+    let Some(doc) = world.resource::<UsdViewportState>().focused_doc() else {
+        return;
+    };
+    if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
+        && workspace.active_document != Some(doc)
+    {
+        workspace.active_document = Some(doc);
+    }
 }
 
 #[on_command(FocusUsdPreviewView)]
@@ -1851,6 +1938,7 @@ fn on_focus_usd_preview_view(
             .map(UsdPreviewView::preview);
         let outcome = match preview {
             Some(preview) if world.resource_mut::<UsdViewportState>().focus_view(view) => {
+                focus_preview_document(world);
                 world.trigger(OpenTab {
                     kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                     instance: view.0,
@@ -4458,13 +4546,17 @@ mod tests {
             .map(|(light, preview)| (preview.illuminance_scale, light.illuminance))
             .collect::<Vec<_>>();
         illumination.sort_by(|a, b| a.0.total_cmp(&b.0));
-        assert_eq!(illumination, vec![(0.12, 42_000.0 * 0.12), (1.0, 42_000.0)]);
+        assert_eq!(illumination, vec![(0.4, 42_000.0 * 0.4), (1.0, 42_000.0)]);
         let camera = app
             .world()
             .get_entity(view.camera())
             .expect("preview session creates its camera");
         assert!(camera.contains::<SceneCamera>());
         assert!(camera.contains::<GraphicsCameraDefaults>());
+        assert_eq!(
+            camera.get::<AmbientLight>().unwrap().brightness,
+            42_000.0 * 0.18
+        );
         assert_eq!(
             camera
                 .get::<bevy::camera::Exposure>()

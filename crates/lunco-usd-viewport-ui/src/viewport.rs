@@ -135,7 +135,7 @@ fn render_preview_view(
         })
         .unwrap_or_else(|| "(no stage)".to_string());
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(&name).strong());
         if ui
             .selectable_label(mode == UsdPreviewViewMode::Visual, "Visual")

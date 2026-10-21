@@ -29,6 +29,11 @@ through `SceneCameraAudit` before comparing screenshots or FPS. Read the settled
 active camera pose through `QueryEntity` before and after an FPS window; startup
 view restoration can replace an early camera command.
 
+Editor inspection uses a neutral studio rig, camera-local ambient fill and one
+view-sized shadow cascade. Verify those cameras separately from physical scene
+lighting; the mission sky and Sun calibration must not replace the CAD preview
+background or its fill. Check front, back and underside views when tuning it.
+
 Ambient authoring reads native composed DomeLights, including references,
 schema defaults, exposure and activity. The dedicated runtime fill is excluded
 from the sum; connected or time-varying inputs reject document authoring before

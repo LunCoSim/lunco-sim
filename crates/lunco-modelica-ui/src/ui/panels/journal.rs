@@ -69,11 +69,11 @@ impl Panel for JournalPanel {
     }
 
     fn title(&self) -> String {
-        "Journal".into()
+        "Change history".into()
     }
 
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Lunica
+        lunco_workbench_core::PanelMenuGroup::Editor
     }
 
     fn default_slot(&self) -> PanelSlot {
@@ -138,12 +138,10 @@ impl Panel for JournalPanel {
             ui.vertical_centered(|ui| {
                 ui.add_space(20.0);
                 ui.label(
-                    egui::RichText::new(
-                        "(no edits yet — add a component, draw a connection, or paste source)",
-                    )
-                    .text_style(lunco_theme::TypographyRole::Body.text_style())
-                    .italics()
-                    .color(muted),
+                    egui::RichText::new("No changes recorded for this document.")
+                        .text_style(lunco_theme::TypographyRole::Body.text_style())
+                        .italics()
+                        .color(muted),
                 );
             });
             return;
@@ -158,7 +156,7 @@ impl Panel for JournalPanel {
                 for row in display {
                     let offset = (row.at_ms.saturating_sub(session_start_ms) as f32) / 1000.0;
                     let ts = format!("[+{offset:>6.2}s]");
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new(&ts)
                                 .text_style(lunco_theme::TypographyRole::DenseCode.text_style())
@@ -269,7 +267,16 @@ fn display_row(entry: &JournalEntry) -> DisplayRow {
 /// row tag + label + color. Reads the `kind` discriminant string and
 /// known field shapes; unknown kinds fall through to a generic display.
 fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) {
-    let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+    // Modelica records a labelled summary; USD records its lossless externally
+    // tagged operation. Both are canonical journal persistence formats.
+    let (kind, payload) = if let Some(kind) = payload.get("kind").and_then(|v| v.as_str()) {
+        (kind, payload)
+    } else if let Some(object) = payload.as_object().filter(|object| object.len() == 1) {
+        let (kind, body) = object.iter().next().expect("one operation");
+        (kind.as_str(), body)
+    } else {
+        ("?", payload)
+    };
     let class = payload.get("class").and_then(|v| v.as_str()).unwrap_or("");
     let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let component = payload
@@ -278,6 +285,7 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
         .unwrap_or("");
     let from = payload.get("from").and_then(|v| v.as_str()).unwrap_or("");
     let to = payload.get("to").and_then(|v| v.as_str()).unwrap_or("");
+    let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
 
     let green = egui::Color32::from_rgb(120, 200, 130);
     let red = egui::Color32::from_rgb(220, 120, 120);
@@ -287,6 +295,33 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
     let neutral = egui::Color32::from_rgb(180, 180, 180);
 
     match kind {
+        "AddPrim" => {
+            let parent = payload
+                .get("parent_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            (
+                "ADD".into(),
+                format!("{}/{name}", parent.trim_end_matches('/')),
+                green,
+            )
+        }
+        "RemovePrim" => ("DEL".into(), path.into(), red),
+        "SetAttribute" => {
+            let value = payload.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            // Mesh arrays stay in the journal; the narrow history pane only
+            // needs a bounded preview, not thousands of coordinate labels.
+            let value = if let Some((end, _)) = value.char_indices().nth(96) {
+                format!("{}…", &value[..end])
+            } else {
+                value.to_string()
+            };
+            ("EDIT".into(), format!("{path}.{name} = {value}"), yellow)
+        }
+        "SetTranslate" | "SetRotate" | "SetScale" => {
+            ("MOVE".into(), format!("{kind} {path}"), neutral)
+        }
+        "SetConnection" | "SetRelationship" => ("LINK".into(), format!("{path}.{name}"), blue),
         "AddComponent" => ("ADD ".into(), format!("{class} added {name}"), green),
         "RemoveComponent" => ("DEL ".into(), format!("{class} removed {name}"), red),
         "AddConnection" => (
@@ -354,6 +389,14 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
         }
         "SetExperimentAnnotation" => ("EXP ".into(), class.to_string(), neutral),
         // Fallback for unknown / new variants.
-        _ => ("EDIT".into(), kind.to_string(), neutral),
+        _ => (
+            "EDIT".into(),
+            if path.is_empty() {
+                kind.to_string()
+            } else {
+                format!("{kind} {path}")
+            },
+            neutral,
+        ),
     }
 }

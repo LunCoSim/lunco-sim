@@ -359,11 +359,11 @@ impl Panel for SysmlRequirementDetailsPanel {
     }
 
     fn default_slot(&self) -> PanelSlot {
-        PanelSlot::RightInspectorBottom
+        PanelSlot::RightInspector
     }
 
     fn visible_in_perspective(&self, perspective: PerspectiveId) -> Option<PanelSlot> {
-        (perspective == PerspectiveId::new("editor")).then_some(PanelSlot::RightInspectorBottom)
+        (perspective == PerspectiveId::new("editor")).then_some(PanelSlot::RightInspector)
     }
 
     fn preferred_perspective(&self) -> Option<PerspectiveId> {

@@ -34,6 +34,11 @@ its isolated `UsdPreviewId` and USD prim tree to inspect and edit the authored
 parts. The Editor layout does not expose the live Entity list or spawn palette,
 so a mounted scene entity cannot be mistaken for the document being authored.
 
+The default left column has full-height Prims and Twin tabs. Inspector and
+Requirement details share the upper-right tab group; Change history occupies
+the lower-right group and reads the active document's existing shared journal.
+The preview toolbar wraps to the available pane width.
+
 Build is the general live-Twin composition workspace. It owns the scene entity
 tree, catalog, placement, and base-level composition of multiple assets. A
 compound assembly is one selectable element there because the existing USD
@@ -44,6 +49,15 @@ drilling into the assembly's USD document in Editor; no second group registry,
 name convention, or ECS-only grouping state is introduced.
 
 ## Ownership and persistence
+
+Editor previews use neutral studio lighting: a key light, opposite fill and
+camera-local ambient illumination keep every side readable. The key uses one
+shadow cascade fitted to the inspection distance, with detail-scale bias.
+Hidden preview tabs stop casting shadows. Graphics preview illuminance scales
+the rig; its ambient fill and shadows are presentation state and do not author
+USD lights or change the running mission's physical sunlight.
+The mission sky is excluded from these inspection cameras, which retain their
+neutral clear-color background.
 
 - USD owns prim identity, hierarchy, references, variants, transforms, ports,
   connections, mount frames, and authored parameters.
