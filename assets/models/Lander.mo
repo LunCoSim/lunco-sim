@@ -29,6 +29,8 @@ model Lander
   input Real controller_inertia_zz = 6250.0;
 
   // Authority and command sources.
+  input Real control_powered(min=0.0, max=1.0) = 1.0
+    "Flight-computer supply availability, 0..1; omitted means an externally powered controller";
   input Real piloted = 0.0;
   input Real external_throttle = 0.0;
   input Real pitch = 0.0;
@@ -253,7 +255,7 @@ equation
   // either tank flowing for another spool time or after a suspension rebound.
   // The autonomous handoff closes the main engine after landing. Manual
   // possession selects a new pilot-controlled flight without refilling tanks.
-  throttle = noEvent(max(command_lower_bound,
+  throttle = noEvent(max(0.0, min(1.0, control_powered))) * noEvent(max(command_lower_bound,
     min(command_upper_bound, cmd_throttle
       * max(0.0, min(1.0, 1.0 - max(propulsion_cutoff,
         flight_handoff))))));
@@ -325,15 +327,15 @@ equation
         - hold_kd * hold_rate_z)));
 
   torque_x = (command_torque_x + hold_torque_x)
-    * max(0.0, min(1.0, 1.0 - flight_handoff));
+    * noEvent(max(0.0, min(1.0, control_powered))) * max(0.0, min(1.0, 1.0 - flight_handoff));
   // The pilot yaw request shares the physical attitude-actuator envelope.
   // Without this bound it can bypass the stabilizer limit and ask the bounded
   // allocator to trade unwanted translation for an impossible torque.
   torque_y = max(-max(0.0, hold_torque_limit_nm), min(
     max(0.0, hold_torque_limit_nm), command_torque_y + hold_torque_y))
-    * max(0.0, min(1.0, 1.0 - flight_handoff));
+    * noEvent(max(0.0, min(1.0, control_powered))) * max(0.0, min(1.0, 1.0 - flight_handoff));
   torque_z = (command_torque_z + hold_torque_z)
-    * max(0.0, min(1.0, 1.0 - flight_handoff));
+    * noEvent(max(0.0, min(1.0, control_powered))) * max(0.0, min(1.0, 1.0 - flight_handoff));
 
   // A pad can touch while the hull still has lateral or downward speed. Keep
   // physical four-pad contact separate from settled touchdown so the flight

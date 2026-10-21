@@ -244,7 +244,16 @@ eleven invalid configurations. `BoundedDataStore` owns finite queue state;
 observe accepted/delivered and rejected/unserved traffic, not only fill percent.
 `MassMemory` retains data while its electrical service is off. Regulated loads
 require device-authored `voltage_off_v` and `voltage_on_v` thresholds; 18/20 V
-are illustrative defaults, not equipment calibration. Connect the transmitter's
+are illustrative defaults, not equipment calibration.
+
+`Lander.control_powered` accepts solved computer availability; wire the generated
+network's exported powered signal to that input. The shared controller gates
+throttle and torque without replacing engine dynamics. Keep supply switching in
+the electrical model and continuous controller expressions event-free. Run
+`scripts/api/test_lander_power.py --output <directory>` for 108 powered, interrupted
+and recovery checks, then verify the vehicle's actual electrical wiring.
+
+Connect the transmitter's
 `available_rf_power_w` to `LunCo.Comms.CommsLink.tx_power_w`, and route actual
 `heat_w` through `HeatLoad` when the assembly needs a thermal budget. The
 link's `rate_bps` is capacity; `delivered_rate_bps` is actual transmitted traffic.
