@@ -27,6 +27,15 @@ workbench. Build the named binary in the current worktree, then invoke it
 directly. The API server only exists when you pass `--api`. Default port is
 **4101** (`lunco_api_contracts::DEFAULT_API_PORT`).
 
+Native execution uses the existing thread-affine worker pools. The pinned
+Rumoca JIT enables inline stack probes, including on fresh Windows worker
+stacks. Do not substitute larger stacks, stack pre-touching, or simpler
+physical models for correct native code generation. Check `GetReadiness` and
+the participant error state for terminal compilation, initialization and step
+failures; those errors must leave the application available for inspection.
+Rust panic handling alone cannot contain a native access violation. See the
+[native execution contract](../../docs/architecture/20-domain-modelica.md).
+
 Before creating a new Modelica file, inventory the maintained package roots and
 the closest composed USD network in the current checkout. Reuse existing
 component classes through USD or the generated wrapper when their equations and

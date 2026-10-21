@@ -1,5 +1,36 @@
 # High-quality realtime performance handover
 
+## Native Modelica stack commitment — 2026-10-21
+
+LunCoSim pins Rumoca `09bdd3034633cf971e4404f9ef0efbf65485a66a` across
+all consumers. Its shared Cranelift builder emits inline stack probes, so
+large native frames touch Windows guard pages in order. The fresh-thread
+768 KiB regression and all 112 native execution tests passed on Linux.
+The Windows handoff reports the same configuration correction taking the
+regression from access violation to success and allowing Griffin initialization.
+Fresh Windows acceptance of this exact fork revision remains open: workflow
+dispatch returns HTTP 422 because Actions is disabled on the Rumoca repository.
+
+The production application retains its thread-affine solver pools, typed
+channels, caches and ordered completion admission. Its direct-worker build
+passes 46 authored initialization/clock/receipt-retirement checks and 44 batch
+physical-contract checks. Both production negative gates pass with the exact
+expected terminal faults: `modelica-initialization-failed` for inconsistent
+initial equations and `modelica-step-failed` for a non-finite observation.
+Owned API port 4762 is released after each run. Evidence is under
+`perf-health/.cache/codex-evidence/windows-crash-20261021/direct-worker-*`.
+The windowed initialization rejection also shows both the shared "Simulation
+stopped" status and the detailed Modelica error in Recent status events. Its API
+remains responsive, it has no child process, and API `Exit` releases the port.
+The screenshot and report are in `direct-worker-error-ui/`; the rebuilt
+production artifact SHA-256 is
+`17a702df6352266be30b40fb3ce530edd6bdefd8ccf6702fb532dc97f2bf7cc8`.
+
+This establishes the native code-generation correction and existing error
+paths, not portable FPS acceptance. The separately reported post-touchdown
+continuous-contact rejection, finite-stack resource admission and the loading,
+physics and graphics performance targets remain open.
+
 ## Native presentation diagnostics — 2026-10-21
 
 The renderer now publishes its retained warning or terminal stop through

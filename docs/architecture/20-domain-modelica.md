@@ -149,6 +149,18 @@ failure or unexpected worker disconnect travels through the typed worker-wide
 records `ModelicaWorkerFailure`, faults the affected runtime, ends live compile
 and step state, and rejects later compiles. This application-owned failure
 survives scene teardown; a buffered success cannot revive a dead worker.
+
+Rumoca's shared native JIT builder enables inline stack probes. Large generated
+frames must touch guard pages in order on Windows; this is a code-generation
+invariant, not a Modelica complexity limit or an application stack-size setting.
+All native emitters use that builder, and the compiler flags participate in the
+native artifact cache identity. The fork's fresh-thread regression executes a
+768 KiB frame and checks both frame edges across a native helper call.
+The application retains its thread-affine solver pools, typed channels and
+ordered completion admission. Compilation and solver errors use their existing
+terminal result paths; Rust unwind handling does not contain native access
+violations or exhausted stacks.
+
 Participant input, integration, and observation failures are terminal step
 results in both native and browser workers. Only a complete finite observation
 can publish runtime values or a presentation stream. See the
