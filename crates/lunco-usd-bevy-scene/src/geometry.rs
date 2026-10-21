@@ -1,3 +1,4 @@
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::{Quat, Vec3, error};
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::stage_convention;
@@ -158,11 +159,36 @@ pub struct UsdMeshTopology {
 
 /// Canonical `UsdGeom` axis to quaternion for Y-axial Bevy primitives.
 pub fn usd_axis_to_quat(axis: UsdGeomAxis) -> Quat {
+    usd_axis_to_dquat(axis).as_quat()
+}
+
+/// Double-precision primitive basis; rendering may narrow it to a `Quat`.
+pub fn usd_axis_to_dquat(axis: UsdGeomAxis) -> DQuat {
     match axis {
-        UsdGeomAxis::X => Quat::from_rotation_arc(Vec3::Y, Vec3::X),
-        UsdGeomAxis::Y => Quat::IDENTITY,
-        UsdGeomAxis::Z => Quat::from_rotation_arc(Vec3::Y, Vec3::Z),
+        UsdGeomAxis::X => DQuat::from_rotation_arc(DVec3::Y, DVec3::X),
+        UsdGeomAxis::Y => DQuat::IDENTITY,
+        UsdGeomAxis::Z => DQuat::from_rotation_arc(DVec3::Y, DVec3::Z),
     }
+}
+
+/// Basis from generated +Y primitive geometry to the canonical prim frame.
+/// Mesh points already use that frame. A wheel's mechanical axle does not
+/// imply a second geometry transform. Invalid primitive axes or stage metadata
+/// return `None` for the consuming projection owner to reject.
+pub fn read_geometry_orientation(reader: &dyn UsdReadObject, path: &SdfPath) -> Option<DQuat> {
+    let type_name = reader.type_name(path)?;
+    if !matches!(
+        type_name.as_str(),
+        "Cylinder" | "Cone" | "Capsule" | "Plane"
+    ) {
+        return Some(DQuat::IDENTITY);
+    }
+    let axis = read_primitive_axis(reader, path, &type_name)?;
+    Some(
+        stage_convention(reader)
+            .ok()?
+            .orient_d(usd_axis_to_dquat(axis)),
+    )
 }
 
 /// Read the standard `UsdGeom` axis token for a primitive.
@@ -439,6 +465,41 @@ mod primitive_attribute_tests {
             source,
         ))
         .expect("build primitive stage")
+    }
+
+    #[test]
+    fn geometry_orientation_separates_primitive_basis_from_authored_points() {
+        use super::read_geometry_orientation;
+        use bevy::math::{DQuat, DVec3};
+
+        for up in ["Y", "Z"] {
+            for (axis, direction) in [("X", DVec3::X), ("Y", DVec3::Y), ("Z", DVec3::Z)] {
+                let stage = parse(&format!(
+                    "#usda 1.0\n(upAxis = \"{up}\" metersPerUnit = 1)\n\
+                     def Cylinder \"Primitive\" {{ uniform token axis = \"{axis}\" }}\n\
+                     def Mesh \"AuthoredPoints\" {{ custom token axis = \"{axis}\" }}\n\
+                     def Cylinder \"Invalid\" {{ uniform token axis = \"invalid\" }}\n"
+                ));
+                let reader = stage.view();
+                let basis =
+                    read_geometry_orientation(&reader, &SdfPath::new("/Primitive").unwrap())
+                        .unwrap();
+                let convention = lunco_usd_bevy_stage::stage_convention(&reader).unwrap();
+                let body = DQuat::from_axis_angle(DVec3::new(0.2, 0.4, 0.8).normalize(), 0.7);
+                assert!(
+                    (body * (basis * DVec3::Y) - body * convention.dir_d(direction)).length()
+                        < 1e-14
+                );
+                assert_eq!(
+                    read_geometry_orientation(&reader, &SdfPath::new("/AuthoredPoints").unwrap()),
+                    Some(DQuat::IDENTITY),
+                );
+                assert_eq!(
+                    read_geometry_orientation(&reader, &SdfPath::new("/Invalid").unwrap()),
+                    None
+                );
+            }
+        }
     }
 
     #[test]

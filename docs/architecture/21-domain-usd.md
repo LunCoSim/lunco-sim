@@ -120,6 +120,22 @@ or runtime-instance topology is never used to skip work. The projector
 selects that prefix without sorting the full pending population and retains the
 remainder for the next pass. This bounds discovery spikes while preserving
 deterministic projection order.
+
+Wheel coordinates keep three independent facts: the authored rigid-body pose,
+the mechanical axle/steering directions, and the geometry basis. The shared
+`lunco-usd-bevy-scene::read_geometry_orientation` reader maps generated
+Y-axial primitives through their standard USD `axis` and stage up-axis. Mesh
+points already express the canonical prim frame and receive identity here.
+`lunco-usd-sim-authoring` converts the authored mechanical directions with the
+stage convention in f64; neither direction rotates mesh vertices. The wheel
+projector prepares native collision geometry and its basis together, then
+applies that basis once inside the authored body frame. Rendering narrows the
+same basis explicitly for its visual child. `PhysicalWheel` retains independent
+mechanical and geometry bases so client roll is `roll_about_axle * geometry_basis`.
+Initial projection and live resynchronization consume the same geometry reader;
+an accepted edit republishes its validated collider even when radius and width
+are unchanged. Invalid geometry or stage conventions reject projection.
+
 `UsdSimulationProjectionSettings` keeps simulation and ownerless marker work
 separately bounded (32 and 128 per Update by default); zero limits raise a
 runtime fault before consuming queued work. Neither limit changes physics

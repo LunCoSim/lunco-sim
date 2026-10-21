@@ -19,8 +19,9 @@ use lunco_usd_bevy_stage::{UsdInstanceRoot, UsdStageAsset};
 
 pub use geometry::{
     MeshCollisionApproximationError, ShapeDims, UsdGeomAxis, UsdMeshTopology,
-    read_mesh_collision_approximation, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
-    read_usd_mesh_points, read_usd_mesh_topology, usd_axis_to_quat, usd_plane_surface_vertices,
+    read_geometry_orientation, read_mesh_collision_approximation, read_primitive_axis,
+    read_shape_dims, read_usd_mesh_indexed, read_usd_mesh_points, read_usd_mesh_topology,
+    usd_axis_to_dquat, usd_axis_to_quat, usd_plane_surface_vertices,
 };
 
 /// Installs render-free USD scene lifecycle bookkeeping.

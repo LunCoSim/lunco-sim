@@ -154,9 +154,12 @@ pub struct PhysicalWheel {
     /// Authored wheel width (m), retained so a live width edit can rebuild the
     /// collider instead of changing density while leaving the old shape in place.
     pub wheel_width: f32,
-    /// Visual base orientation (the USD cylinder `axis`). The roll axle is
-    /// `axis_rot · Y` and the visual base composes as `roll · axis_rot`.
+    /// Mechanical axle basis. The roll axle is `axis_rot · Y`, independently
+    /// of whether authored geometry is a mesh or an analytic primitive.
     pub axis_rot: Quat,
+    /// Rendering basis from generated geometry to the canonical prim frame.
+    /// Identity for meshes whose vertices already express that frame.
+    pub geometry_basis: Quat,
     /// Integrated roll angle (rad), wrapped to `[0, 2π)`. Client display state;
     /// unused on the host (the body carries the real rotation there).
     pub spin_angle: f32,

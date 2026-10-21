@@ -172,8 +172,11 @@ with a CCD owner once in stable collider order, without a candidate tree.
 Step-local body facts and dense collider/leaf slots avoid repeated owner lookups
 and identity hashing; lazy admission retains first-encounter shape order.
 Do not turn these per-step facts into a revision-only geometry/eligibility cache.
-The admitted leaf also owns its native local bounding sphere and local COM
-offset for that step. Keep these immutable geometric facts separate from
+The admitted leaf also owns its native local AABB, local bounding sphere and
+local COM offset for that step. Transform the prepared local box at corrected
+endpoints and retain the rotational arc remainder. This conservative enclosure
+avoids repeated hull-vertex scans; check admitted-query counts because rotated
+boxes can be looser than shape-tight bounds. Keep these immutable facts separate from
 fresh corrected trajectories and swept bounds. The low-level
 `continuous_prepared_leaf_bounds_enclose_native_trajectories` check
 requires native trajectory enclosure across geometry, scale and large-world inputs;
@@ -181,6 +184,13 @@ retain production physics and separate FPS qualification as well.
 Keep the sparse static-population bound, native body/layer/hook filtering and
 pair order when optimizing this path; current-pose AABBs cannot replace the
 whole solved-trajectory bounds used during each substep.
+
+Before a wheel-shape comparison, verify the coordinate contract in
+`docs/architecture/21-domain-usd.md`. Compare the native collider's axial and
+radial bounds with its authored geometry and mechanical axle. Preserve the
+admitted geometry through a restart: disposable view edits are discarded when
+the clean source document refreshes. For an isolated unsaved comparison, use
+the normal document journal, do not save it, and verify source hashes after exit.
 
 For synchronous USD edit stalls, inspect compound operation count and native
 composition lifetime. The document owner's `UsdEditSession` shares one current
@@ -1344,10 +1354,12 @@ Profile `coupled_constraint_response`, `coupled_island_response`,
 geometry corrections, active-set pivots and inner Krylov work: nested span
 totals overlap. Resolve sampled native addresses against the exact captured
 ELF and its recorded symbol relocation before attributing sparse-product cost.
-`coupled_response_factorization` identifies islands whose permanent hard rows
-exceed their supported native response components and whose dominance masks
-retain a PSD response. Preserve both certificates, native coefficient
-construction, scaled minimum-norm reactions and serial maintained QR kernels.
+`coupled_response_coefficients` measures native coefficient construction for
+islands whose common per-body dominance masks certify a PSD response.
+`coupled_response_factorization` measures their full-rank and rank-deficient
+selected faces. Preserve the native support rank bound, PSD certificate,
+coefficient construction, scaled minimum-norm reactions and serial maintained
+QR kernels.
 Feasible multiplier updates retire all contacts attaining the first blocking
 ratio together at the same feasible point, in admitted row order. This includes
 simultaneous zero-length bounds; do not refactor the same face once per tie.

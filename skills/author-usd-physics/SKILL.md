@@ -17,6 +17,13 @@ topology, limits, and commandable drives. When USD has no material schema for a
 physical concept, use the narrow LunCo applied API that owns that concept. Do
 not add a LunCo schema when standard USD already owns the fact.
 
+For wheel geometry, follow the coordinate contract in
+[`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md): the mechanical
+axle, authored body pose and geometry basis are separate. Read the basis through
+`read_geometry_orientation`; mesh points must not receive a cylinder-axis
+rotation. Qualify collider bounds and joint axes before comparing a mesh wheel
+with an analytic cylinder, and verify both initial projection and live edits.
+
 For assets intended for Omniverse, independently moving rigid bodies nested
 under another body need `!resetXformStack!` and explicit initial world poses.
 Author both joint local frames explicitly: portable UsdPhysics defaults are
@@ -847,8 +854,9 @@ intersections when updating it.
 
 Physical wheels retain their continuous-collision profile when the CCD field is
 omitted; an explicit `physxRigidBody:enableCCD` boolean is honored. Collider-axis
-rotations use native double precision. A widened render quaternion is validated
-before conversion to a unit native rigid rotation; malformed input still faults.
+rotations consume the shared USD geometry orientation in native double
+precision; the visual child narrows that same basis at the rendering boundary.
+Malformed axes and stage conventions reject projection.
 
 Generated primitive proxies carry `LunCoDerivedGeometryAPI` and exactly one
 `lunco:derived:source` targeting their sibling Cube or Cylinder. The shared

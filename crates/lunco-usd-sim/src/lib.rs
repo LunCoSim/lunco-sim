@@ -2810,9 +2810,7 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             }
-            let collider = match lunco_usd_avian_reader::collider::authored_collider_from_usd(
-                reader, &sdf_path,
-            ) {
+            let geometry = match authored_wheel_geometry(reader, &sdf_path) {
                 Ok(collider) => collider,
                 Err(error) => {
                     error!(
@@ -2824,7 +2822,7 @@ fn process_usd_sim_prim_read(
                     return;
                 }
             };
-            Some(oriented_wheel_collider(collider, params.axle_axis))
+            Some(geometry)
         } else {
             None
         };
@@ -3625,7 +3623,7 @@ fn setup_physical_wheel(
     p_drive: Entity,
     p_speed: Entity,
     heat_ports: lunco_mobility::WheelHeatPorts,
-    authored_collider: Collider,
+    authored_geometry: WheelGeometry,
     native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
     continuous_collision: bool,
     control_entity: Entity,
@@ -3642,16 +3640,16 @@ fn setup_physical_wheel(
     // input. Using the motor/gearbox reduction keeps joint and raycast rovers
     // consistent. See `project_physical_rover_suspension`.
 
-    // The visual projector expresses an analytic cylinder's +Y mesh on its
-    // authored axis in Transform. Split that geometry basis from the authored
-    // rigid-body orientation: an already rotated vehicle still needs its real
-    // wheel bodies and their hinge axes in the same world frame.
+    // Move the visual projector's geometry basis onto the mesh child, keeping
+    // the rigid body's authored pose independent of its generated geometry.
     let axle_local = params.axle_axis.normalize_or_zero();
     let wheel_axis_rot = Quat::from_rotation_arc(Vec3::Y, axle_local.as_vec3());
-    let visual_axis_rot = wheel_axis_rot;
+    // Native geometry and the visual mesh share the USD geometry basis. The
+    // mechanical axle independently owns roll, drive and inertia coordinates.
+    let visual_axis_rot = authored_geometry.basis.as_quat();
     let wheel_tf = Transform {
         translation: existing_tf.translation,
-        rotation: existing_tf.rotation * wheel_axis_rot.inverse(),
+        rotation: existing_tf.rotation * visual_axis_rot.inverse(),
         scale: existing_tf.scale,
     };
 
@@ -3659,7 +3657,7 @@ fn setup_physical_wheel(
     // collision shape remains the one authored on the USD wheel prim. Avian
     // receives this projection from `lunco-usd-avian`; dynamics parameters never
     // become an implicit collision fallback.
-    let collider = authored_collider;
+    let collider = authored_geometry.collider;
     // Visual mesh child id, captured so the client-proxy animator
     // (`animate_proxy_physical_wheels`) can author its rotation directly.
     let visual_id = spawn_wheel_visual(
@@ -3687,6 +3685,7 @@ fn setup_physical_wheel(
                 wheel_radius: radius,
                 wheel_width: params.width as f32,
                 axis_rot: wheel_axis_rot,
+                geometry_basis: visual_axis_rot,
                 spin_angle: 0.0,
                 // Authored wheel offset in the vehicle frame. The physical wheel is
                 // nested under its suspension carrier, so this is separate from
@@ -3845,21 +3844,35 @@ fn setup_physical_wheel(
     // to infer which body receives wheel torque, suspension, or mass.
 }
 
-/// Put an authored wheel shape into Avian's conventional +Y cylinder frame.
-/// USD's `Cylinder.axis` is read from the same wheel parameter record that
-/// drives the revolute joint and the visual projection. The shape itself still
-/// comes exclusively from `PhysicsCollisionAPI` geometry.
-pub(crate) fn oriented_wheel_collider(collider: Collider, axle_axis: DVec3) -> Collider {
-    let axis = axle_axis.normalize_or_zero();
-    let axis_rotation = DQuat::from_rotation_arc(DVec3::Y, axis);
-    if axis_rotation.abs_diff_eq(DQuat::IDENTITY, 1e-12) {
+/// Prepared USD geometry, distinct from the wheel's mechanical axle frame.
+pub(crate) struct WheelGeometry {
+    collider: Collider,
+    basis: DQuat,
+}
+
+pub(crate) fn authored_wheel_geometry(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+) -> Result<WheelGeometry, lunco_usd_avian_reader::collider::ColliderProjectionError> {
+    let collider = lunco_usd_avian_reader::collider::authored_collider_from_usd(reader, path)?;
+    let basis = lunco_usd_bevy_scene::read_geometry_orientation(reader, path).ok_or_else(|| {
+        lunco_usd_avian_reader::collider::ColliderProjectionError::Backend {
+            prim: path.to_string(),
+            detail: "invalid authored geometry orientation or stage convention".to_owned(),
+        }
+    })?;
+    Ok(WheelGeometry {
+        collider: oriented_wheel_collider(collider, basis),
+        basis,
+    })
+}
+
+/// Apply the geometry owner's basis once, independently of the mechanical axle.
+pub(crate) fn oriented_wheel_collider(collider: Collider, basis: DQuat) -> Collider {
+    if basis.abs_diff_eq(DQuat::IDENTITY, 1e-12) {
         collider
     } else {
-        Collider::compound(vec![(
-            Position(DVec3::ZERO),
-            Rotation(axis_rotation),
-            collider,
-        )])
+        Collider::compound(vec![(Position(DVec3::ZERO), Rotation(basis), collider)])
     }
 }
 
@@ -3875,13 +3888,27 @@ mod physical_wheel_geometry_tests {
             DVec3::Z,
             DVec3::new(0.2, 0.4, 0.8).normalize(),
         ] {
-            let collider = oriented_wheel_collider(Collider::cylinder(0.34, 0.25), axis);
+            let collider = oriented_wheel_collider(
+                Collider::cylinder(0.34, 0.25),
+                DQuat::from_rotation_arc(DVec3::Y, axis),
+            );
             let rotation = collider
                 .shape_scaled()
                 .as_compound()
                 .map_or(DQuat::IDENTITY, |shape| shape.shapes()[0].0.rotation);
             assert!((rotation.length_squared() - 1.0).abs() < 1e-14);
             assert!((rotation * DVec3::Y - axis).length() < 1e-14);
+
+            let vertices = [
+                DVec3::new(-0.125, -0.34, -0.34),
+                DVec3::new(0.125, -0.34, 0.34),
+                DVec3::new(-0.125, 0.34, 0.34),
+                DVec3::new(0.125, 0.34, -0.34),
+            ];
+            let mesh = Collider::convex_hull(vertices.to_vec()).unwrap();
+            let bounds = mesh.shape_scaled().compute_local_aabb();
+            let oriented = oriented_wheel_collider(mesh, DQuat::IDENTITY);
+            assert_eq!(oriented.shape_scaled().compute_local_aabb(), bounds);
         }
     }
 }
@@ -4112,11 +4139,12 @@ fn animate_proxy_physical_wheels(
 
         if let Some(visual_entity) = wheel.visual_entity {
             if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
-                // Roll about the wheel's axle (`axis_rot · Y`), composed over the
-                // cylinder base — reconstructs the host's `body_spin · axis_rot`.
+                // Roll about the mechanical axle, then apply the geometry's
+                // own basis. Authored mesh points require no primitive basis.
                 let axle = (wheel.axis_rot * Vec3::Y).normalize();
-                let rotation =
-                    (Quat::from_axis_angle(axle, wheel.spin_angle) * wheel.axis_rot).normalize();
+                let rotation = (Quat::from_axis_angle(axle, wheel.spin_angle)
+                    * wheel.geometry_basis)
+                    .normalize();
                 if visual_tf.rotation != rotation {
                     visual_tf.rotation = rotation;
                 }
@@ -5940,6 +5968,7 @@ mod proxy_wheel_tests {
                 wheel_radius: 0.5,
                 wheel_width: 0.3,
                 axis_rot: Quat::IDENTITY,
+                geometry_basis: Quat::IDENTITY,
                 spin_angle: 0.0,
                 mount_local: Vec3::ZERO,
             },
@@ -6029,6 +6058,7 @@ mod proxy_wheel_tests {
                 wheel_radius: 0.5,
                 wheel_width: 0.3,
                 axis_rot: Quat::IDENTITY,
+                geometry_basis: Quat::IDENTITY,
                 spin_angle: 0.0,
                 mount_local: Vec3::ZERO,
             },
@@ -6109,6 +6139,7 @@ mod proxy_wheel_tests {
                 wheel_radius: 0.5,
                 wheel_width: 0.3,
                 axis_rot: Quat::IDENTITY,
+                geometry_basis: Quat::IDENTITY,
                 spin_angle: 0.0,
                 mount_local,
             },

@@ -84,7 +84,7 @@ pub fn body_point_velocity(
 /// ω therefore corresponds to forward travel. The mapping from ω to a *visual
 /// mesh rotation* is the caller's job and depends on each wheel system's mesh
 /// base/axle choice (e.g. the proxy `PhysicalWheel` applies a `ROLL_SIGN = −1`
-/// against this convention to match its `axis_rot · Y` axle). Keep the visual
+/// against this convention about its mechanical axle). Keep the visual
 /// sign at the call site; do not bake it in here.
 #[inline]
 pub fn wheel_roll_rate(hub_vel: DVec3, forward: DVec3, radius: f64) -> Option<f64> {

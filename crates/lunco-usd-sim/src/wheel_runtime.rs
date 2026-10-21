@@ -6,7 +6,7 @@ use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
 use lunco_mobility::{JointedWheelTire, RaycastSupportGeometryDirty, Suspension, WheelRaycast};
-use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
+use lunco_usd_bevy_scene::{UsdPrimPath, read_geometry_orientation};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_sim_authoring::WheelParams;
 use lunco_usd_sim_core::PhysicalWheel;
@@ -84,6 +84,7 @@ struct WheelUpdate {
     params: WheelParams,
     collider: Option<Collider>,
     visual_base_rotation: Quat,
+    geometry_basis: Quat,
     native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
 }
 
@@ -155,14 +156,21 @@ pub(crate) fn resync_wheels_for_stage(
                 Ok(params) => {
                     // Use the same authored pose/axis readers as the mesh owner.
                     // Keep this rest pose separate from the animated transform.
+                    let geometry_basis = match read_geometry_orientation(&view, &sp) {
+                        Some(basis) => basis.as_quat(),
+                        None => {
+                            failures.push((
+                                Some(*entity),
+                                path.clone(),
+                                "invalid geometry orientation or stage convention".to_owned(),
+                            ));
+                            continue;
+                        }
+                    };
                     let visual_base_rotation = (|| -> Result<Quat, String> {
                         let pose = lunco_usd_bevy_stage::read_transform_from_usd(&view, &sp)
                             .map_err(|error| error.to_string())?;
-                        let convention = lunco_usd_bevy_stage::stage_convention(&view)
-                            .map_err(|error| error.to_string())?;
-                        let axis = read_primitive_axis(&view, &sp, "Cylinder")
-                            .ok_or_else(|| "wheel cylinder axis is invalid".to_owned())?;
-                        Ok(pose.rotation * convention.orient(usd_axis_to_quat(axis)))
+                        Ok(pose.rotation * geometry_basis)
                     })();
                     let visual_base_rotation = match visual_base_rotation {
                         Ok(rotation) => rotation,
@@ -183,12 +191,8 @@ pub(crate) fn resync_wheels_for_stage(
                             ));
                             continue;
                         }
-                        match lunco_usd_avian_reader::collider::authored_collider_from_usd(
-                            &view, &sp,
-                        ) {
-                            Ok(collider) => {
-                                Some(crate::oriented_wheel_collider(collider, params.axle_axis))
-                            }
+                        match crate::authored_wheel_geometry(&view, &sp) {
+                            Ok(geometry) => Some(geometry.collider),
                             Err(error) => {
                                 failures.push((
                                     Some(*entity),
@@ -215,6 +219,7 @@ pub(crate) fn resync_wheels_for_stage(
                         params,
                         collider,
                         visual_base_rotation,
+                        geometry_basis,
                         native_material,
                     });
                 }
@@ -271,13 +276,21 @@ pub(crate) fn resync_wheels_for_stage(
             continue;
         }
 
-        let (old_radius, old_width, axis_rot) = match world.get::<PhysicalWheel>(u.entity) {
-            Some(pw) => (pw.wheel_radius, pw.wheel_width, pw.axis_rot),
+        let visual_entity = match world.get::<PhysicalWheel>(u.entity) {
+            Some(pw) => pw.visual_entity,
             None => continue,
         };
+        let axis_rot = Quat::from_rotation_arc(bevy::math::Vec3::Y, u.params.axle_axis.as_vec3());
         if let Some(mut pw) = world.get_mut::<PhysicalWheel>(u.entity) {
             pw.wheel_radius = u.params.radius as f32;
             pw.wheel_width = u.params.width as f32;
+            pw.axis_rot = axis_rot;
+            pw.geometry_basis = u.geometry_basis;
+        }
+        if let Some(visual) = visual_entity
+            && let Some(mut transform) = world.get_mut::<bevy::prelude::Transform>(visual)
+        {
+            transform.rotation = u.geometry_basis;
         }
         if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(u.entity) {
             mass.0 = u.params.mass as f32;
@@ -302,14 +315,10 @@ pub(crate) fn resync_wheels_for_stage(
             crate::physical_wheel_angular_inertia(&u.params, axis_rot),
             avian3d::prelude::NoAutoAngularInertia,
         ));
-        if (old_radius as f64 - u.params.radius).abs() > 1e-6
-            || (old_width as f64 - u.params.width).abs() > 1e-6
-        {
-            let Some(collider) = u.collider.as_ref() else {
-                continue;
-            };
-            world.entity_mut(u.entity).insert(collider.clone());
-        }
+        let Some(collider) = u.collider.as_ref() else {
+            continue;
+        };
+        world.entity_mut(u.entity).insert(collider.clone());
         let mut joint_entity: Option<Entity> = None;
         {
             let mut q = world.query::<(Entity, &RevoluteJoint)>();

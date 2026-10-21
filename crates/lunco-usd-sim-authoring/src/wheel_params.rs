@@ -403,6 +403,11 @@ impl WheelParams {
             return Err(missing);
         }
 
+        let convention = lunco_usd_bevy_stage::stage_convention(reader)
+            .map_err(|error| vec![format!("invalid wheel stage convention: {error}")])?;
+        let axle_axis = convention.dir_d(axle_axis);
+        let heading_axis = convention.dir_d(heading_axis);
+
         validate_wheel_values(
             &mut missing,
             radius,

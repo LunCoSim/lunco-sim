@@ -97,7 +97,7 @@ use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_bevy_scene::collision::{
     ObjectAabb, collision_aabb, geometry_world_matrix_d, prim_geometry_aabb,
 };
-use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
+use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_dquat};
 use lunco_usd_bevy_stage::read::{UsdRead, UsdReadSource};
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
@@ -389,7 +389,7 @@ fn collider_transform_in_stage(
         let convention = stage_convention(view).map_err(|error| {
             format!("QueryUsdPrim: invalid stage convention at `{prim}`: {error}")
         })?;
-        let axis_rotation = convention.orient_d(usd_axis_to_quat(axis).as_dquat());
+        let axis_rotation = convention.orient_d(usd_axis_to_dquat(axis));
         rotation *= axis_rotation;
     }
     Ok((

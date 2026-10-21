@@ -1,5 +1,117 @@
 # High-quality realtime performance handover
 
+## Wheel coordinate ownership and analytic comparison — 2026-10-21
+
+The wheel adapter consumes separate authored body, mechanical axle and geometry
+frames. `lunco-usd-bevy-scene::read_geometry_orientation` owns the f64 primitive
+basis, including standard USD axes and stage up-axis. Mesh points retain their
+canonical prim frame. Initial wheel projection and parameter resynchronization
+prepare the same native geometry; the visual child and client roll retain its
+independent rendering basis. Mechanical directions use the stage convention.
+See the canonical coordinate contract in `docs/architecture/21-domain-usd.md`.
+
+The Roadster authors 4,354 points per crowned wheel. The baseline adapter applied
+a cylinder basis to those already X-axial points, producing a front-wheel native
+vertical half-extent of 0.125 m instead of its authored 0.34 m radius. The
+unchanged hull now has body-local half-extents approximately (0.125, 0.34, 0.34).
+The repaired production artifact is SHA-256
+`b2e6bcc03a94e03fe330a36b2ba1e89d735a4d417c689f821dab013c40af9896`.
+It is a regular `optimization` build with `--features tracy -j 4`, normal
+`target/` and sccache; no dependency source changes are part of this repair.
+
+The focused geometry-basis check passes all X/Y/Z axes on Y-up and Z-up stages,
+an arbitrary body rotation, mesh identity and invalid-axis rejection. The wheel
+kernel check passes primitive rotation and unchanged mesh bounds. The final
+production `continuous_contacts` gate exits zero with 12 authored checks.
+The owned live parameter check changes a front-wheel mass from 24 to 25 kg and
+back through document operations, observes both native updates, and retains
+the correct radial collider bounds. Readiness returns clear with zero errors.
+
+Headful production `roadster_ramp_check` passes with both the corrected hull
+and analytic cylinders on identical Twin input hashes. The hull climbs to
+20.175 m with 66 qualifying slope-contact ticks; cylinders climb to 20.158 m
+with 70. Both retain clear diagnostics. The followed-vehicle screenshots were
+inspected. Cylinder collision and crowned visual children were applied through
+the document journal in the owned process without saving; Twin source hashes
+remain unchanged. These results qualify this ramp, not every tire load case.
+
+Two separate settled headless Tracy runs use that same artifact and identical
+Twin inputs. Each table entry is the mean over its final 120 complete physics
+steps, in milliseconds. Interior rows are nested and must not be added to their
+parent totals.
+
+| Work | Corrected hull | Analytic cylinder |
+| --- | ---: | ---: |
+| PhysicsSchedule | 15.077 | 9.109 |
+| Custom continuous contact/joint closure | 11.699 | 6.416 |
+| Preceding hard-joint closure | 1.429 | 1.387 |
+| Other physics outside those closures | 1.949 | 1.306 |
+| Swept geometry, inside contact closure | 4.454 | 0.476 |
+| QR across both closures | 6.371 | 5.412 |
+
+The hull and cylinder captures belong to PIDs 1849719 and 1850701, API 4764,
+Tracy 8097, with verified 1 ms sampling and no instrumentation failure. Their
+97,094,640- and 100,786,889-byte files pass framing checks and native export.
+Concurrent workloads are recorded, so these are diagnostic timings rather than
+clean product FPS acceptance. Both owned processes release their ports.
+The remaining dominant cost is application-owned coupled response, not the
+swept BVH (0.038/0.034 ms per tick). Sub-millisecond physics and the three Twins'
+loading/graphics targets remain open.
+
+Captures are retained under `scripts/perf/captures/physics-roadster-frame-{hull,cylinder}-20261021.tracy`;
+API reports, native exports, checks and screenshots are under
+`.cache/codex-evidence/physics-followup-20261021/`. Build cleanup can remove
+`target/`, so neither location relies on it for diagnostic evidence.
+
+## Native PSD response faces — 2026-10-21
+
+`lunco-physics::constraint_response` directly factors full-rank and rank-deficient
+faces when common per-body native dominance masks certify a PSD response.
+The existing orthogonal kernel, native coefficient construction, scaled
+minimum-norm reactions, feasible contact pivots and geometric admission remain
+the owners. Nonsymmetric islands retain sparse LSMR. The bounded
+`coupled_response_coefficients` span separates matrix construction from selected
+face factorization. Fifteen focused numerical checks pass, including full-rank
+heavy-attachment closure in one face at three physical scales.
+
+The regular `optimization` production build uses `--features tracy -j 4`, the
+normal `target/` directory and sccache. Artifact SHA-256
+`c0856299fa96cb65563f0f0d5017bfd9fc54fb74c08d3a94de6cb81b619022e2`
+passes 53 authored assertions across articulated contact, continuous contact,
+joint kinds and native force drives. The invalid-joint gate reaches its expected
+terminal fault but one run exits with SIGSEGV during shutdown. Its connected
+Tracy retry exits zero and contains no factorization calls. The intermittent
+shutdown failure remains unresolved; the negative process boundary is not
+qualified by the retry alone.
+
+Owned Roadster PID 1437613 on API 4764 connects to Tracy 8097 at 1 kHz. Its
+92,591,532-byte capture has 4,515 complete blocks, 92,573,466 payload bytes and
+18,066 framing bytes. Native export succeeds and reports no instrumentation
+failure. The run reaches tick 494 with unchanged inputs and clear diagnostics,
+then releases both ports. Its final 120 profiled physics samples have median
+25.151 ms and maximum 38.631 ms. In an eight-second settled interval,
+factorization takes 2,540.576 ms inside 3,146.935 ms of coupled response work;
+these nested totals must not be added. Swept geometry remains a separate cost.
+Concurrent simulator workloads are recorded. This is diagnostic attribution,
+not an uninstrumented speedup, graphics or sub-millisecond acceptance result.
+
+The same slice contains 239 physics-schedule entries and 1,914 substeps.
+Inclusive physics time averages 26.218 ms per tick: the custom continuous
+contact/joint pass takes 22.722 ms, its preceding joint-closing pass takes
+1.550 ms, and the remaining physics work takes approximately 1.946 ms.
+Across both closure passes, 12,954 QR factorizations average 0.196 ms each,
+approximately 54 per tick. Their 10.630 ms per-tick total is nested within
+the closure times. The 4,602 complete swept-geometry zones total 2,405.418 ms;
+the candidate, cast and contact-query spans are nested within those sweeps.
+The native swept BVH takes only 13.372 ms over this entire interval.
+
+These results were read from `target/perf/roadster-direct.tracy`, its native
+exports, the API report and the test logs. Cargo Overstay subsequently removed
+the target directory during automatic maintenance; its receipt reports
+15,803,637,812 apparent bytes reclaimed across the tracked targets. The raw
+captures, binary and logs must be regenerated before further paired analysis.
+The three Twins' loading, physics and graphics targets remain open.
+
 ## Native Modelica stack commitment — 2026-10-21
 
 LunCoSim pins Rumoca `09bdd3034633cf971e4404f9ef0efbf65485a66a` across

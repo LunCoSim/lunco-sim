@@ -143,6 +143,7 @@ struct Shape {
     rotation: DQuat,
     center: DVec3,
     local_center: DVec3,
+    local_bounds: Aabb,
     bounding_sphere: avian3d::parry::bounding_volume::BoundingSphere,
 }
 impl Shape {
@@ -158,6 +159,7 @@ impl Shape {
         center: DVec3,
     ) -> Self {
         let local_center = rotation.inverse() * (center - position);
+        let local_bounds = collider.shape_scaled().compute_local_aabb();
         let bounding_sphere = collider.shape_scaled().compute_local_bounding_sphere();
         Self {
             entity,
@@ -168,6 +170,7 @@ impl Shape {
             rotation,
             center,
             local_center,
+            local_bounds,
             bounding_sphere,
         }
     }
@@ -671,16 +674,16 @@ fn motion(shape: &Shape, body: &BodyMotion) -> NonlinearRigidMotion {
     NonlinearRigidMotion::new(pose, shape.local_center, body.linear, body.angular)
 }
 /// Every point follows a linear COM trajectory plus a rotational arc. The
-/// endpoint chord's maximum deviation is bounded by |p''| / 8, so expanding
-/// the endpoint AABBs by this remainder encloses the complete swept shape.
+/// endpoint chord's maximum deviation is bounded by |p''| / 8. Transforming
+/// the prepared local box encloses each endpoint without revisiting hull
+/// vertices; expanding their union by the remainder encloses the whole arc.
 fn swept_bounds(shape: &Shape, motion: &NonlinearRigidMotion) -> Aabb {
     let sphere = shape.bounding_sphere;
     let radius = sphere.radius + (sphere.center - motion.local_center).length();
-    let start = shape.collider.shape_scaled().compute_aabb(&motion.start);
+    let start = shape.local_bounds.transform_by(&motion.start);
     let end = shape
-        .collider
-        .shape_scaled()
-        .compute_aabb(&motion.position_at_time(1.0));
+        .local_bounds
+        .transform_by(&motion.position_at_time(1.0));
     let remainder = DVec3::splat(radius * motion.angvel.length_squared() / 8.0);
     Aabb::new(
         start.mins.min(end.mins) - remainder,
@@ -2952,11 +2955,18 @@ mod tests {
             DVec3::new(0.0, 5.0, 0.0),
             DVec3::new(0.0, 0.0, 6.0),
         ];
+        let wheel_vertices = (0..128)
+            .flat_map(|i| {
+                let angle = std::f64::consts::TAU * i as f64 / 128.0;
+                [-0.2, 0.2].map(|y| DVec3::new(0.4 * angle.cos(), y, 0.4 * angle.sin()))
+            })
+            .collect::<Vec<_>>();
         let colliders = [
             Collider::sphere(0.3),
             Collider::cylinder(0.3, 0.7),
             Collider::cuboid(0.3, 0.7, 1.1),
             Collider::convex_hull(vertices.clone()).unwrap(),
+            Collider::convex_hull(wheel_vertices).unwrap(),
             Collider::try_trimesh_with_config(
                 vertices,
                 vec![[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]],

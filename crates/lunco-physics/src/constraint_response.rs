@@ -493,12 +493,11 @@ fn solve_island(
     let mut full_output = allocate_matrix(n, 1, |_, _| 0.0)?;
     let mut full_memory = MemBuffer::try_new(full.scratch)
         .map_err(|_| "coupled response workspace allocation failed")?;
-    // Permanent hard rows above the native response rank ceiling certify that
-    // every active face is singular. Its serial orthogonal solve retains the
-    // same scaled minimum-norm reactions without a Krylov iteration cap.
-    let coefficients = if prepared.self_adjoint
-        && indices.iter().filter(|&&i| !rows[i].unilateral).count() > prepared.response_rank_ceiling
-    {
+    // A common native dominance mask certifies the PSD response required by
+    // feasible contact pivots. Factor each selected face directly, including
+    // full-rank faces, without an inner Krylov iteration for every pivot.
+    let coefficients = if prepared.self_adjoint {
+        let _span = bevy::log::debug_span!("coupled_response_coefficients").entered();
         let mut matrix = allocate_matrix(n, n, |_, _| 0.0)?;
         for j in 0..n {
             full_input.fill(0.0);
@@ -896,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_stopping_budget_preserves_small_scale_heavy_attachment_response() {
+    fn full_rank_response_closes_small_scale_heavy_attachment_in_one_face() {
         let a = Entity::from_bits(1);
         let b = Entity::from_bits(2);
         let wall = Entity::from_bits(3);
@@ -924,7 +923,7 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            let result = solve(&rows, 64).unwrap();
+            let result = solve(&rows, 1).unwrap();
             assert!((result[0] / scale + 2100.0).abs() < 1e-8);
             assert!((result[1] / scale - 2102.1).abs() < 1e-8);
             assert!((result[0] + result[1] - 2.1 * scale).abs() < 1e-10 * scale);
@@ -1084,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_krylov_workspace_covers_many_rows_over_few_bodies() {
+    fn response_workspace_covers_many_rows_over_few_bodies() {
         let body = inertia(1.0);
         for count in 18..200 {
             let rows = (0..count)

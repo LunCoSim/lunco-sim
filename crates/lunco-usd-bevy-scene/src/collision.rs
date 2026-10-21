@@ -15,8 +15,8 @@ use openusd_schemas::geom::Purpose;
 use openusd_schemas::physics::CollisionApprox;
 
 use crate::{
-    ShapeDims, UsdGeomAxis, read_mesh_collision_approximation, read_shape_dims,
-    read_usd_mesh_indexed, usd_plane_surface_vertices,
+    ShapeDims, read_mesh_collision_approximation, read_shape_dims, read_usd_mesh_indexed,
+    usd_axis_to_dquat, usd_plane_surface_vertices,
 };
 
 /// Small gap (metres) left between an asset's lowest collision point and the
@@ -441,12 +441,4 @@ fn local_shape_corners(
         }
     }
     Ok((corners, approximation))
-}
-
-fn usd_axis_to_dquat(axis: UsdGeomAxis) -> DQuat {
-    match axis {
-        UsdGeomAxis::X => DQuat::from_rotation_arc(DVec3::Y, DVec3::X),
-        UsdGeomAxis::Y => DQuat::IDENTITY,
-        UsdGeomAxis::Z => DQuat::from_rotation_arc(DVec3::Y, DVec3::Z),
-    }
 }

@@ -708,8 +708,13 @@ Parry's native BVH admits overlapping swept bounds for active CCD leaves;
 the prepared pair table retains collision hooks, layers and pair-specific
 dynamic-body eligibility. Candidates execute in prepared stable pair order,
 independent of BVH traversal order. Its topology is built once per prepared
-physics step; every changed trajectory replaces exact leaf bounds and refits
-ancestors with zero change-detection margin. Refitting expands and shrinks bounds.
+physics step; every changed trajectory replaces conservative whole-arc leaf
+bounds and refits ancestors with zero change-detection margin. Each leaf prepares
+its native local AABB once per physics step. Endpoint poses transform that box;
+the rotational arc remainder expands their union. These enclosures can be
+looser than native shape-tight endpoint AABBs, but avoid rescanning convex-hull
+vertices after each correction. Native geometry still owns candidate admission
+and contacts. Refitting expands and shrinks bounds.
 Unchanged poses cannot create a new crossing; prepared native inequalities
 still own their existing contacts. Initial geometry is allocated lazily for admitted candidates and
 retains its immutable substep lifetime. Native support maps
@@ -829,10 +834,10 @@ joint geometry, material trajectories and complete native sweeps validate
 writeback. Motors and compliant channels retain one integration per substep.
 The numerical contract, failure boundary and production gates are specified in
 [deterministic runtime](62-deterministic-runtime-and-async-boundaries.md).
-Permanent hard rows above native response component support certify a singular
-island. When its native dominance masks retain a PSD response, complete
-orthogonal decomposition and feasible contact-bound pivots retain scaled
-minimum-norm reactions. Other islands use sparse LSMR with reaction precision
+When native dominance masks certify a PSD response, complete orthogonal
+decomposition of full-rank and rank-deficient faces and feasible contact-bound
+pivots retain scaled minimum-norm reactions. Nonsymmetric islands use sparse
+LSMR with reaction precision
 independent of geometric writeback slack. Both kernels retain the full native
 residual and geometric admission checks.
 Fresh endpoint manifolds close initial rolling overlap, including when a whole-arc

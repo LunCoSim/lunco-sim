@@ -78,17 +78,17 @@ Scaling, component dot-product grouping and every accumulation order remain
 unchanged for both the native response and its transpose. This avoids repeated
 scattered writes and forms no dense row matrix. Packed terms and stack workspace
 belong to that exact selected operator and expire with its active-set solve.
-Preparation counts supported native linear/angular response components. If the
-permanent hard-row count exceeds that rank ceiling, every active face is
-singular. A common dominance mask per responsive body also certifies the
-positive-semidefinite response required by feasible face updates. Those islands
-materialize scaled coefficients once through the same native sparse operator.
+Preparation counts supported native linear/angular response components to bound
+numerical rank. A common dominance mask per responsive body certifies the
+positive-semidefinite response required by feasible face updates. These islands
+materialize scaled coefficients once through the same native sparse operator,
+then factor full-rank and rank-deficient selected faces directly.
 Maintained faer column-pivoted QR and transpose QR recover the minimum-norm
 selected response. The numerical rank is bounded by native component support
 and the dimension-scaled f64 roundoff threshold. Coefficients and feasible
 multipliers expire with that immutable island preparation.
 
-These singular faces retain nonnegative contact multipliers between pivots.
+These faces retain nonnegative contact multipliers between pivots.
 Native sign, slack and inactive-inequality checks recognize a finished face
 before further search. A nonterminal face follows a least-squares null residual
 to a blocking contact when one exists; otherwise a pulling target uses the
@@ -104,8 +104,8 @@ reaction precision. Hard
 linearized rows may remain inconsistent inside their geometric bounds, retaining
 their selected minimum-norm contact share until nonlinear revalidation.
 
-Other islands use maintained faer LSMR with a zero initial guess, a 1e-12 relative
-normal-residual bound and the owner's iteration limit. Both kernels use explicit
+Nonsymmetric islands use maintained faer LSMR with a zero initial guess, a 1e-12
+relative normal-residual bound and the owner's iteration limit. Both kernels use explicit
 `Par::Seq`, finite-result checks and fallible numerical workspace allocation.
 Reaction convergence is
 independent of geometric writeback tolerances. Those tolerances cannot bound
