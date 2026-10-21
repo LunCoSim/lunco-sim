@@ -3012,6 +3012,8 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
         op,
         UsdOp::ReplaceSource { .. }
             | UsdOp::MovePrim { .. }
+            | UsdOp::MoveProperty { .. }
+            | UsdOp::CopyProperty { .. }
             | UsdOp::RemoveTimeSample { .. }
             // Composition-arc changes: value resolution re-composes the prim's
             // subtree wholesale, which the incremental sink can't express.
@@ -3122,6 +3124,8 @@ fn dependent_stage_refresh_mode(ops: &[UsdOp]) -> Option<DependentStageRefreshMo
             }
             UsdOp::ReplaceSource { .. }
             | UsdOp::MovePrim { .. }
+            | UsdOp::MoveProperty { .. }
+            | UsdOp::CopyProperty { .. }
             | UsdOp::SetDefaultPrim { .. }
             | UsdOp::SetStageMetrics { .. }
             | UsdOp::SetVariantSelection { .. }

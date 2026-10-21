@@ -344,6 +344,8 @@ enum UsdOp {
     RemovePrim      { edit_target, path },
     RestorePrim     { edit_target, path, snapshot_usda, sibling_order },
     MovePrim        { edit_target, from_path, to_path }, // rename / reparent (NamespaceEditor)
+    MoveProperty    { edit_target, from_path, to_path }, // preserve metadata and rewrite connections
+    CopyProperty    { edit_target, from_path, to_path }, // copy a local property spec, including metadata and samples
     SetTranslate    { edit_target, path, value },
     SetRotate       { edit_target, path, value },
     SetAttribute    { edit_target, path, name, type_name, value },

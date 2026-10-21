@@ -664,6 +664,12 @@ When editing variant-owned connection plans, select the variant in the temporary
 use variant-qualified Sdf paths. Keep the compound plan atomic and verify its
 composed source types.
 
+Use `MoveProperty` to rename a local property spec while preserving metadata
+and native connection rewrites. To replace a weaker composed property, use
+`CopyProperty` followed by `RemoveAttribute` or `RemoveRelationship` in one
+`ApplyUsdOps` compound edit. Copy requires a vacant destination in the selected
+layer and preserves the complete property spec. Save and inspect the result.
+
 Use `ApplyUsdOp SetStageDocumentation` for layer `doc` metadata. Open the exact
 source and save it through the document owner.
 

@@ -3560,3 +3560,111 @@ fn native_binary_inheritance_does_not_require_text_export() {
     assert!(restored.source().is_err());
     assert!(restored.export_bytes("usda").is_err());
 }
+
+#[test]
+fn property_move_preserves_specs_and_rewrites_connections_with_typed_undo() {
+    let source = r#"#usda 1.0
+def Shader "Program" {
+    uniform asset info:source:sourceAsset = @program.wesl@ (doc = "Program source")
+    float input = 1
+    float output.connect = </Program.input>
+}
+"#;
+    let mut doc = UsdDocument::new(DocumentId::new(997), source);
+    let inverse = doc
+        .apply(UsdOp::MoveProperty {
+            edit_target: LayerId::root(),
+            from_path: "/Program.input".into(),
+            to_path: "/Program.renamed".into(),
+        })
+        .unwrap();
+    let moved = doc.source().unwrap();
+    assert!(moved.contains("float renamed = 1"));
+    assert!(moved.contains("</Program.renamed>"));
+    doc.apply(inverse).unwrap();
+    let restored = doc.source().unwrap();
+    assert!(restored.contains("float input = 1.0"));
+    assert!(restored.contains("</Program.input>"));
+    assert!(!restored.contains("renamed"));
+    let inverse = doc
+        .apply(UsdOp::MoveProperty {
+            edit_target: LayerId::root(),
+            from_path: "/Program.info:source:sourceAsset".into(),
+            to_path: "/Program.info:wesl:sourceAsset".into(),
+        })
+        .unwrap();
+    let moved = doc.source().unwrap();
+    assert!(moved.contains("uniform asset info:wesl:sourceAsset"));
+    assert!(moved.contains("Program source"));
+    doc.apply(inverse).unwrap();
+    let original = doc.source().unwrap();
+    assert!(original.contains("uniform asset info:source:sourceAsset"));
+    for (from, to) in [
+        ("/Program.absent", "/Program.new"),
+        ("/Program.input", "/Program.output"),
+        ("/Program", "/Renamed"),
+    ] {
+        assert!(
+            doc.apply(UsdOp::MoveProperty {
+                edit_target: LayerId::root(),
+                from_path: from.into(),
+                to_path: to.into(),
+            })
+            .is_err()
+        );
+        assert_eq!(doc.source().unwrap(), original);
+    }
+}
+
+#[test]
+fn property_copy_preserves_authored_metadata_over_a_weaker_composed_property() {
+    let source = r#"#usda 1.0
+def Shader "Base" {
+    uniform asset info:wesl:sourceAsset = @base.wesl@
+}
+def Shader "Override" (prepend references = </Base>) {
+    uniform asset info:other:sourceAsset = @override.wesl@ (doc = "Authored override")
+}
+"#;
+    let mut doc = UsdDocument::new(DocumentId::new(998), source);
+    let inverse = doc
+        .apply(UsdOp::CopyProperty {
+            edit_target: LayerId::root(),
+            from_path: "/Override.info:other:sourceAsset".into(),
+            to_path: "/Override.info:wesl:sourceAsset".into(),
+        })
+        .unwrap();
+    let current = doc.source().unwrap();
+    assert!(current.contains("uniform asset info:wesl:sourceAsset = @override.wesl@"));
+    assert_eq!(current.matches("Authored override").count(), 2);
+    let original = current.clone();
+    for (from, to) in [
+        ("/Override.absent", "/Override.new"),
+        (
+            "/Override.info:other:sourceAsset",
+            "/Override.info:wesl:sourceAsset",
+        ),
+        ("/Base", "/Copy"),
+    ] {
+        assert!(
+            doc.apply(UsdOp::CopyProperty {
+                edit_target: LayerId::root(),
+                from_path: from.into(),
+                to_path: to.into()
+            })
+            .is_err()
+        );
+        assert_eq!(doc.source().unwrap(), original);
+    }
+    doc.apply(inverse).unwrap();
+    assert!(
+        doc.data()
+            .spec(&SdfPath::new("/Override.info:wesl:sourceAsset").unwrap())
+            .is_none()
+    );
+    assert!(
+        doc.source()
+            .unwrap()
+            .contains("info:other:sourceAsset = @override.wesl@")
+    );
+}

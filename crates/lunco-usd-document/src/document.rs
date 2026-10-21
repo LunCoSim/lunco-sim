@@ -750,6 +750,28 @@ pub enum UsdOp {
         /// New absolute USD path for the prim.
         to_path: String,
     },
+    /// Move an authored property with its metadata, samples and connections.
+    /// OpenUSD owns namespace validation and target rewriting. Both endpoints
+    /// must be property paths in this edit layer; undo reverses the move.
+    MoveProperty {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute source property path.
+        from_path: String,
+        /// Absolute destination property path.
+        to_path: String,
+    },
+    /// Copy an authored property spec into a vacant property in this layer.
+    /// A weaker composed destination is allowed: the copy authors a complete
+    /// override, preserving native metadata, samples and internal targets.
+    CopyProperty {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute source property path in the selected layer.
+        from_path: String,
+        /// Absolute destination property path under an authored prim.
+        to_path: String,
+    },
     /// Author the standard USD `primOrder` metadata for a prim's direct
     /// children. `order` contains child identifiers in their requested order;
     /// omitted children retain USD's composed ordering rules. `None` clears
@@ -945,6 +967,8 @@ impl UsdOp {
             | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
+            | Self::MoveProperty { edit_target, .. }
+            | Self::CopyProperty { edit_target, .. }
             | Self::SetPrimOrder { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
             | Self::SetVariantSelection { edit_target, .. }
@@ -994,6 +1018,8 @@ impl UsdOp {
             | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
+            | Self::MoveProperty { edit_target, .. }
+            | Self::CopyProperty { edit_target, .. }
             | Self::SetPrimOrder { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
             | Self::SetVariantSelection { edit_target, .. }
@@ -1047,6 +1073,12 @@ impl UsdOp {
             | Self::SetActive { path, .. }
             | Self::ClearActive { path, .. } => vec![path.clone()],
             Self::MovePrim {
+                from_path, to_path, ..
+            }
+            | Self::MoveProperty {
+                from_path, to_path, ..
+            }
+            | Self::CopyProperty {
                 from_path, to_path, ..
             } => vec![from_path.clone(), to_path.clone()],
             Self::SetDefaultPrim { .. }
@@ -2439,6 +2471,8 @@ impl<'a> UsdEditSession<'a> {
             | UsdOp::SetPrimDocumentation { edit_target, .. }
             | UsdOp::SetPrimKind { edit_target, .. }
             | UsdOp::MovePrim { edit_target, .. }
+            | UsdOp::MoveProperty { edit_target, .. }
+            | UsdOp::CopyProperty { edit_target, .. }
             | UsdOp::SetPrimOrder { edit_target, .. }
             | UsdOp::SetApiSchemas { edit_target, .. }
             | UsdOp::SetVariantSelection { edit_target, .. }
@@ -3898,6 +3932,97 @@ impl<'a> UsdEditSession<'a> {
                 // A move changes prim paths on both ends; the translator re-keys
                 // entities by path, so a full reload is the honest change kind.
                 self.commit_stage(target, &stage, UsdChange::FullReload)?;
+                Ok(inverse)
+            }
+
+            UsdOp::MoveProperty {
+                from_path, to_path, ..
+            } => {
+                let from_sdf = SdfPath::new(&from_path).map_err(author_err)?;
+                let to_sdf = SdfPath::new(&to_path).map_err(author_err)?;
+                if !from_sdf.is_abs()
+                    || !to_sdf.is_abs()
+                    || !from_sdf.is_property_path()
+                    || !to_sdf.is_property_path()
+                {
+                    return Err(DocumentError::ValidationFailed(
+                        "MoveProperty requires two absolute property paths".to_owned(),
+                    ));
+                }
+                if self.layer(target).spec(&from_sdf).is_none() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "MoveProperty source `{from_path}` is not authored in {id:?}",
+                    )));
+                }
+                let inverse = UsdOp::MoveProperty {
+                    edit_target: id,
+                    from_path: to_path,
+                    to_path: from_path,
+                };
+                let stage = self.open_target_stage(target)?;
+                let mut editor = openusd::usd::NamespaceEditor::new(&stage);
+                editor.move_property(from_sdf, to_sdf).map_err(author_err)?;
+                editor.apply().map_err(author_err)?;
+                self.commit_stage(target, &stage, UsdChange::FullReload)?;
+                Ok(inverse)
+            }
+
+            UsdOp::CopyProperty {
+                from_path, to_path, ..
+            } => {
+                let from = SdfPath::new(&from_path).map_err(author_err)?;
+                let to = SdfPath::new(&to_path).map_err(author_err)?;
+                if !from.is_abs()
+                    || !to.is_abs()
+                    || !from.is_property_path()
+                    || !to.is_property_path()
+                {
+                    return Err(DocumentError::ValidationFailed(
+                        "CopyProperty requires absolute property paths".into(),
+                    ));
+                }
+                let data = self.layer(target);
+                let kind = data.spec(&from).map(|spec| spec.ty);
+                if !matches!(
+                    kind,
+                    Some(sdf::SpecType::Attribute | sdf::SpecType::Relationship)
+                ) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "CopyProperty source `{from_path}` is not an authored property"
+                    )));
+                }
+                let parent = to.prim_path();
+                if data.spec(&to).is_some() || data.spec(&parent).is_none() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "CopyProperty destination `{to_path}` must be vacant under an authored prim"
+                    )));
+                }
+                let (_, name) = to.split_property().ok_or_else(|| {
+                    DocumentError::ValidationFailed(
+                        "CopyProperty destination has no property name".into(),
+                    )
+                })?;
+                let name = name.to_owned();
+                let mut copied = data.clone();
+                if !sdf::copy_spec_within(&mut copied, &from, &to).map_err(author_err)? {
+                    return Err(DocumentError::ValidationFailed(
+                        "CopyProperty source disappeared".into(),
+                    ));
+                }
+                let inverse = match kind {
+                    Some(sdf::SpecType::Attribute) => UsdOp::RemoveAttribute {
+                        edit_target: id,
+                        path: parent.to_string(),
+                        name,
+                    },
+                    Some(sdf::SpecType::Relationship) => UsdOp::RemoveRelationship {
+                        edit_target: id,
+                        path: parent.to_string(),
+                        name,
+                    },
+                    _ => unreachable!("validated property kind"),
+                };
+                self.commit_layer(target, copied, UsdChange::FullReload);
                 Ok(inverse)
             }
 
