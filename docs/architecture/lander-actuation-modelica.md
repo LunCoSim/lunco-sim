@@ -40,6 +40,16 @@ Its HUD/console toggle submits `griffin_gnc_engagement_requested`; the mission
 owns the guidance write in its Simulation callback. The action acknowledges a
 queued request, and verification waits for the live authority/engagement ports.
 
+`Lander.control_powered` gates the final throttle and body-torque requests.
+Wire it to the solved flight-computer supply when the vehicle owns an electrical
+network. Its default of one represents an explicitly externally powered
+controller. The signal is bounded without introducing events into the continuous
+controller; undervoltage lockout and restart belong to the electrical load.
+Engine valve, chamber and propellant dynamics remain downstream, so loss of
+control power closes the request rather than erasing stored engine state.
+`scripts/api/test_lander_power.py` checks powered, unpowered and recovery phases
+against the current shared controller source (108 production solve checks).
+
 ## Signal and fluid paths
 
 The main propulsion is a generated `CollectionAPI:components` network. Each
