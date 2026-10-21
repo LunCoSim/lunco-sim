@@ -428,6 +428,11 @@ active dismissal clears retired properties without requesting a download.
 For the derived scene entity tree, immutable parent insertions use native
 lifecycle messages coalesced by entity at the Update gate. Compare current
 edge values with the cached ancestry; identical replacements must not rebuild.
+Mount identity, mount diagnostics and the system-entity filter compare with the
+build owner's last observed inputs. That scene-owned scope resets on teardown.
+A pending worker or a derived hierarchy diagnostic must not repeatedly
+invalidate unchanged mount/filter inputs; genuine source changes still advance
+the worker revision and reject stale results.
 Separate change admission from rich candidate reads: the native changed query
 returns only entity identities; indexed candidate reads fetch label/visibility
 data for those identities. Preserve the candidate predicate and mutable metadata

@@ -232,6 +232,13 @@ override it to preserve only explicitly application-owned state and monotonic
 publication counters. Settings, shared source caches and application registries
 keep their application lifetime.
 
+The entity-tree build owner retains its last observed mount identity, mount
+diagnostic and system-entity filter separately from the published tree. Its
+change gate compares those source facts with that observed scope, allowing an
+unchanged pending worker to finish. Derived hierarchy diagnostics are output;
+they do not create another mount-input change. Teardown clears the observed
+scope with the pending task, forcing one fresh admission in the next scene.
+
 Dependency-owned mutable resources use
 `AppSceneExt::init_scene_resource_with::<R>(R::clear)` to register their public
 reset operation at the same boundary. This needs no trait implementation on a

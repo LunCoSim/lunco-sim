@@ -151,7 +151,6 @@ pub struct EntityTreeView {
     /// actual edge values: grid and celestial systems may reinsert an identical
     /// parent every frame.
     parents: HashMap<Entity, Entity>,
-    show_system: bool,
     /// Primary scene mount used for the cached tree.
     active_scene_root: Option<Entity>,
     /// Invalid scene ownership prevents a misleading tree.
@@ -160,7 +159,7 @@ pub struct EntityTreeView {
     candidate_hierarchy_entities: HashSet<Entity>,
     /// Parent links at the time the active-scene ancestry was harvested.
     candidate_hierarchy_parents: HashMap<Entity, Entity>,
-    /// Set once the first build runs, so the change-gate forces an initial fill.
+    /// Whether a derived tree has been published for this scene.
     built: bool,
 }
 
@@ -193,7 +192,6 @@ struct NamedTreeCandidate {
 }
 
 struct EntityTreeBuildInput {
-    show_system: bool,
     active_scene_root: Option<Entity>,
     scene_error: Option<String>,
     child_of: HashMap<Entity, Entity>,
@@ -238,6 +236,27 @@ pub(crate) struct EntityTreeBuildState {
     revision: u64,
     dirty: bool,
     task: Option<Task<(u64, EntityTreeView)>>,
+    observed_scope: Option<EntityTreeScope>,
+}
+
+#[derive(PartialEq, Eq)]
+struct EntityTreeScope {
+    active_scene_root: Option<Entity>,
+    scene_error: Option<String>,
+    show_system: bool,
+}
+
+fn entity_tree_scope(
+    settings: &EntityListSettings,
+    scene: &EntityTreeSceneQueries,
+) -> EntityTreeScope {
+    let (active_scene_root, scene_error) =
+        active_scene_root_state(scene.mount.as_deref(), &scene.roots);
+    EntityTreeScope {
+        active_scene_root,
+        scene_error,
+        show_system: settings.show_system,
+    }
 }
 
 /// Native source admissions delivered to the tree's Update gate.
@@ -513,7 +532,6 @@ pub(crate) fn populate_entity_tree_view(
             }
         }
         EntityTreeBuildInput {
-            show_system: settings.show_system,
             active_scene_root,
             scene_error,
             child_of,
@@ -557,7 +575,6 @@ pub(crate) fn poll_entity_tree_view_build(
 
 fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
     let EntityTreeBuildInput {
-        show_system,
         active_scene_root,
         scene_error,
         child_of,
@@ -706,7 +723,6 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
                 .map(|parent| (*entity, parent))
         })
         .collect();
-    view.show_system = show_system;
     view.active_scene_root = active_scene_root;
     view.scene_error = scene_error;
     view.candidate_hierarchy_entities = candidate_hierarchy_entities;
@@ -715,16 +731,7 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
     view
 }
 
-/// Run condition for [`mark_entity_tree_view_dirty`]: report when the scene
-/// topology that the tree depends on changes: candidate labels, markers,
-/// hierarchy edges, scene boundaries or removals (including despawns). The
-/// `Local` flag forces one initial build (a freshly-added system does not see
-/// pre-existing entities as `Changed`). On a quiescent scene this returns
-/// `false` and the harvest is skipped entirely.
-/// Parent insertions arrive through native lifecycle messages, coalesced by
-/// entity before comparing current edges. Unnamed candidate ancestors can
-/// invalidate descendants; unrelated scene hierarchies remain outside this view.
-/// Tracked automatically by `add_view_model` — see [`lunco_core_runtime::gate::tracked`].
+/// Harvest an invalidated source only when the worker slot is available.
 pub(crate) fn entity_tree_build_due(build: Res<EntityTreeBuildState>) -> bool {
     build.dirty && build.task.is_none()
 }
@@ -732,7 +739,12 @@ pub(crate) fn entity_tree_build_due(build: Res<EntityTreeBuildState>) -> bool {
 /// Record a topology invalidation without entering the query-heavy snapshot
 /// producer. The worker revision changes immediately, so any in-flight result
 /// is rejected when it completes.
-pub(crate) fn mark_entity_tree_view_dirty(mut build: ResMut<EntityTreeBuildState>) {
+pub(crate) fn mark_entity_tree_view_dirty(
+    mut build: ResMut<EntityTreeBuildState>,
+    settings: Res<EntityListSettings>,
+    scene: EntityTreeSceneQueries,
+) {
+    build.observed_scope = Some(entity_tree_scope(&settings, &scene));
     build.invalidate();
 }
 
@@ -749,10 +761,15 @@ type EntityTreeNamedCandidate = (
     Has<SceneCamera>,
 );
 
+/// Admit changes to candidate metadata, ancestry, scene boundaries or removals.
+/// Mount/filter scope compares with observed inputs, allowing a pending worker
+/// to finish without repeated invalidation. Scope resets with scene teardown.
+/// Parent insertions are coalesced by entity before comparing current edges;
+/// unnamed ancestors can invalidate descendants inside this scene.
 pub(crate) fn scene_topology_changed(
-    mut first: Local<bool>,
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
+    build: Res<EntityTreeBuildState>,
     scene: EntityTreeSceneQueries,
     mut source_insertions: MessageReader<EntityTreeSourceInserted>,
     mut inserted_parents: Local<HashSet<Entity>>,
@@ -774,8 +791,8 @@ pub(crate) fn scene_topology_changed(
     named_candidates: Query<EntityTreeNamedCandidate>,
     mut removals: EntityTreeRemovals,
 ) -> bool {
-    let (active_scene_root, scene_error) =
-        active_scene_root_state(scene.mount.as_deref(), &scene.roots);
+    let scope = entity_tree_scope(&settings, &scene);
+    let active_scene_root = scope.active_scene_root;
     admitted_candidates.clear();
     for insertion in source_insertions.read() {
         match insertion {
@@ -788,8 +805,6 @@ pub(crate) fn scene_topology_changed(
         }
     }
     let removals_span = bevy::log::info_span!("entity_tree_gate_removals").entered();
-    let active_scene_changed =
-        view.active_scene_root != active_scene_root || view.scene_error != scene_error;
     let removed_scene_boundary =
         removals.scene_roots.read().count() > 0 || removals.preview_roots.read().count() > 0;
 
@@ -935,14 +950,11 @@ pub(crate) fn scene_topology_changed(
         .boundary_changes
         .iter()
         .any(|entity| view.candidate_hierarchy_entities.contains(&entity));
-    let invalidated = !*first
-        || view.show_system != settings.show_system
-        || active_scene_changed
+    let invalidated = build.observed_scope.as_ref() != Some(&scope)
         || named_changed
         || scene_hierarchy_changed
         || scene_boundary_changed
         || removed;
-    *first = true;
     invalidated
 }
 
@@ -1342,6 +1354,62 @@ mod tests {
         runs.0 += 1;
     }
 
+    #[test]
+    fn pending_tree_build_is_invalidated_once_per_source_scope_change() {
+        let pool = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let mut app = App::new();
+        install_entity_tree_source_tracking(&mut app);
+        app.init_resource::<EntityListSettings>()
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<GateRuns>()
+            .add_systems(
+                Update,
+                (count_gate_run, mark_entity_tree_view_dirty)
+                    .chain()
+                    .run_if(scene_topology_changed),
+            );
+        let root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(root, true);
+        app.world_mut().resource_mut::<EntityTreeBuildState>().task =
+            Some(pool.spawn(future::pending()));
+
+        app.update();
+        let revision = app.world().resource::<EntityTreeBuildState>().revision;
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+        assert_eq!(
+            app.world().resource::<EntityTreeBuildState>().revision,
+            revision
+        );
+        assert!(!app.world().resource::<EntityTreeView>().built);
+
+        app.world_mut()
+            .resource_mut::<EntityListSettings>()
+            .show_system = true;
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+
+        // A derived hierarchy diagnostic is presentation output, not a new
+        // scene-mount input that should invalidate an unchanged pending build.
+        app.world_mut().resource_mut::<EntityTreeView>().scene_error =
+            Some("hierarchy diagnostic".into());
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+
+        lunco_core::run_scene_teardown(app.world_mut());
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 3);
+    }
+
     /// Measures a quiet change gate over synthetic named runtime holders.
     #[test]
     #[ignore = "manual entity-tree change-query performance measurement"]
@@ -1355,7 +1423,12 @@ mod tests {
                 .init_resource::<EntityTreeView>()
                 .init_resource::<lunco_core::SceneMountState>()
                 .init_resource::<GateRuns>()
-                .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+                .add_systems(
+                    Update,
+                    (count_gate_run, mark_entity_tree_view_dirty)
+                        .chain()
+                        .run_if(scene_topology_changed),
+                );
             let active_root = app
                 .world_mut()
                 .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
@@ -1432,7 +1505,12 @@ mod tests {
             .init_resource::<EntityTreeView>()
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<GateRuns>()
-            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+            .add_systems(
+                Update,
+                (count_gate_run, mark_entity_tree_view_dirty)
+                    .chain()
+                    .run_if(scene_topology_changed),
+            );
         let root = app
             .world_mut()
             .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
@@ -1521,7 +1599,12 @@ mod tests {
             .init_resource::<EntityTreeView>()
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<GateRuns>()
-            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+            .add_systems(
+                Update,
+                (count_gate_run, mark_entity_tree_view_dirty)
+                    .chain()
+                    .run_if(scene_topology_changed),
+            );
         let root = app
             .world_mut()
             .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
@@ -1599,7 +1682,12 @@ mod tests {
             .init_resource::<EntityTreeView>()
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<GateRuns>()
-            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+            .add_systems(
+                Update,
+                (count_gate_run, mark_entity_tree_view_dirty)
+                    .chain()
+                    .run_if(scene_topology_changed),
+            );
         let active_root = app
             .world_mut()
             .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
@@ -1644,7 +1732,12 @@ mod tests {
             .init_resource::<EntityTreeView>()
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<GateRuns>()
-            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+            .add_systems(
+                Update,
+                (count_gate_run, mark_entity_tree_view_dirty)
+                    .chain()
+                    .run_if(scene_topology_changed),
+            );
         let active_root = app
             .world_mut()
             .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
@@ -1733,7 +1826,12 @@ mod tests {
             .init_resource::<EntityTreeView>()
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<GateRuns>()
-            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+            .add_systems(
+                Update,
+                (count_gate_run, mark_entity_tree_view_dirty)
+                    .chain()
+                    .run_if(scene_topology_changed),
+            );
         let active_root = app
             .world_mut()
             .spawn(lunco_usd_bevy_scene::UsdSceneRoot)

@@ -1177,6 +1177,33 @@ const DEFAULT_USDA_SCAFFOLD: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n
 // SaveDocument — gated on registry membership
 // ─────────────────────────────────────────────────────────────────────
 
+/// Publish the exact saved base bytes at the document's existing asset identity.
+/// Native runtime/view inputs retain their separate projection lease.
+fn publish_saved_twin_source(
+    doc: DocumentId,
+    path: &std::path::Path,
+    bytes: Vec<u8>,
+    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<(), String> {
+    let Some((name, relative)) = backed.and_then(|backed| backed.coords_of(doc)) else {
+        // A file with no projection lease has no in-memory source to update.
+        return Ok(());
+    };
+    let roots = roots.ok_or_else(|| "USD source publication requires TwinRoots".to_owned())?;
+    let root = roots
+        .root_for(&name)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("USD source authority `{name}` retired before save publication"))?;
+    if root.join(&relative) != path {
+        // Save-As to a different file does not overwrite the original asset.
+        return Ok(());
+    }
+    roots
+        .set_overlay(&name, &relative, std::sync::Arc::new(bytes))
+        .map_err(|error| format!("publish saved USD source: {error}"))
+}
+
 #[on_command(SaveDocument)]
 fn on_save_document(
     trigger: On<SaveDocument>,
@@ -1209,6 +1236,13 @@ fn on_save_document(
             let storage = lunco_storage::FileStorage::new();
             storage.write_sync(&lunco_storage::StorageHandle::File(path.clone()), &bytes)
                 .map_err(|error| format!("write USD {}: {error}", path.display()))?;
+            publish_saved_twin_source(
+                doc_id,
+                &path,
+                bytes,
+                world.get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>(),
+                world.get_resource::<lunco_assets_core::TwinRoots>(),
+            )?;
             let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
             registry.host_mut(doc_id).expect("save retains the document owner").document_mut().mark_saved();
             registry.note_saved(doc_id);
@@ -1234,6 +1268,8 @@ fn on_save_as_document(
     mut commands: Commands,
     active: Res<ActiveCommandId>,
     mut results: ResMut<CommandResults>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     let doc_id = trigger.event().doc_id;
     if registry.host(doc_id).is_none() {
@@ -1261,6 +1297,7 @@ fn on_save_as_document(
             storage
                 .write_sync(&lunco_storage::StorageHandle::File(path.clone()), &bytes)
                 .map_err(|error| format!("write USD {}: {error}", path.display()))?;
+            publish_saved_twin_source(doc_id, &path, bytes, backed.as_deref(), roots.as_deref())?;
             let doc = registry
                 .host_mut(doc_id)
                 .expect("save retains the document owner")

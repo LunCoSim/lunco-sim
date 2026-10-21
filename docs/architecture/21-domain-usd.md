@@ -626,6 +626,16 @@ scenarios or runs. The file is still opened through `DocumentOrigin::File` and
 saveable with `SaveDocument`. **`SaveAsTwin`** adds the manifest-backed Twin
 metadata when the user wants it.
 
+`lunco-usd-commands` completes a file save by publishing the same exported base
+bytes to the document's existing `TwinRoots` asset identity before acknowledging
+success and marking the document saved. This keeps later reference composition
+consistent with disk. Save-As to another destination does not replace the
+original asset's source. Runtime/view layers and their document projection lease
+remain separate; ordinary incremental edits do not serialize the full base.
+The production `saved_component_reference.rhai` gate observes a saved component
+and a newly opened referencing assembly. Its API driver creates and restores a
+journaled source fixture and verifies both child inclusion and f64 translation.
+
 Structural base-layer edits, including documentation updates and `RemovePrim`,
 operate on canonical SDF data. Source text is serialized by the native writer;
 original USDA formatting and comments remain available only before an edit.

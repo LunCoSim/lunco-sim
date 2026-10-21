@@ -981,6 +981,15 @@ admission, before another authoring operation opens the live native stage.
 Verify the active scene receives the change, readiness clears, and undo
 restores it. Source-document readback alone does not prove that handoff.
 
+When validating saved component references, open the exact component document,
+save a journaled change, then open a previously unopened referencing assembly.
+Check composed source children and authored values through that assembly's own
+document. `SaveDocument` publishes its exported base bytes at the existing Twin
+asset identity; Save-As to another file leaves the original identity intact.
+Use `scripts/api/test_saved_component_reference.py` with explicit component,
+assembly, roots and probe child to run the production Rhai observer and restore
+the fixture through undo plus save. Source-only readback is insufficient.
+
 For physical acceptance, inspect the production scene/scenario's
 real verdict. `--validate` is parse/preflight only. For code or authored asset
 changes, run the narrowest relevant checks after the interactive session; do
