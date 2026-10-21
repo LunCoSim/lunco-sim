@@ -78,6 +78,11 @@ contract: [`docs/offline-recording.md`](../../docs/offline-recording.md) §5–�
 
 ## Check progress / diagnose
 
+Use `GetOfflineRecordingStatus` and measurement queries during a take.
+`CaptureScreenshot` rejects while recording is pending or active because the
+recorder owns the capture target. For visual QA, capture before recording or
+extract a frame from the finished video.
+
 ```rhai
 query("GetOfflineRecordingStatus")
 // #{ active, frame_index, is_waiting_for_frame, last_capture_sim_tick }

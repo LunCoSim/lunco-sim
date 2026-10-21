@@ -83,6 +83,19 @@ shared-clock gate.
 | `rover_status` | rover-specific convenience readout. |
 | `capture_screenshot` (`CaptureScreenshot`) | raw PNG — save `-o /tmp/x.png`, then Read it. Confirms what numbers can't (did it tip over?). |
 
+## Rigid-body acceleration
+
+Use the owning body's `acceleration_magnitude` for net `|Δv/Δt|`, and
+`specific_force_magnitude` for the accelerometer load `|Δv/Δt - g|`.
+Both are m/s². The latter reads one local g while supported and near zero in
+ideal free fall. Check `acceleration_valid` / `specific_force_valid` before
+interpreting a value. They use completed native physics intervals, including
+contacts and joints; their vector components are optional analysis detail.
+The real telemetry curves are `linear_acceleration` and `specific_force` under
+the exact body owner. Do not derive them from graphics frames, subtract 9.81
+from a scalar magnitude, or add gravity-removal logic to each plot widget.
+See [the core measurement contract](../../docs/architecture/body-acceleration.md).
+
 ## Inspect an authored assembly
 
 When the question is about a reusable USD assembly rather than only a spawned

@@ -1,5 +1,158 @@
 # High-quality realtime performance handover
 
+## Native response metric capture — 2026-10-21
+
+`constraint_response::native_rows=trace` records each constructed row with its
+paired native `SolverBodyInertia` snapshots. The existing admitted-system trace
+identifies actual solve membership. This diagnostic is disabled in normal runs;
+it changes no row, factorization, tolerance, ordering or physical equation.
+
+Production artifact SHA-256
+`f57a662c7084ba784209bde1bcd5cfe1127866ba28e3a147f842f177e479cdfb`
+uses base `b8c3fb6d0` plus that trace. An early owned headless run retains eight
+104-row/14-body systems. A separate run reaches tick 1,603 and the authored
+touchdown confirmation, retaining 32 later systems with 92–210 rows and 14–18
+bodies. Both have clear readiness, no retained errors, unchanged Twin/model
+source hashes and verified API 4758 shutdown. Concurrent workloads are recorded;
+neither run is FPS or timing acceptance.
+
+For all forty captured systems, the exact native metric reproduces each row's
+response within 6.94e-18 absolute error. Diagnostic square-root body factors have
+84 columns and reproduce the response Gram matrix within 2.23e-16 absolute
+error. The comparison retains uncancelled native tensor and factor magnitudes
+when bounding roundoff; a near-zero projected coefficient cannot provide its own
+relative error scale. No negative pivot is discarded or regularized. This is
+input/representation evidence for a thinner factorization experiment, not a
+qualified replacement solver or a speedup claim. Native minimum-norm reactions,
+unilateral pivots and production geometric closure still require comparison.
+
+Evidence: `.cache/codex-evidence/performance-20261020/`:
+`griffin-native-metric-2/`, `griffin-native-metric-settled-1/`, their captured
+native rows, exported `.problem`/`.basis` pairs and `metric-analysis.json`.
+The first driver's query before any completed physics step was rejected; that
+attempt is excluded. The corrected collector waits for admitted solve work.
+Main's later Roadster traction/acceleration merge is a separate code cohort.
+
+### Rank qualification of the native factor
+
+Frozen-system replay now covers all forty exports using the current response
+operator and unilateral pivot procedure. The rectangular QR diagnostic and an
+independent rectangular QR/SVD diagnostic both finish every replay, but each
+matches the current contact mask in only 33 cases. An independent SVD of the
+native response matrix agrees with the rectangular SVD's mask in 39 cases.
+The remaining case has almost identical body response but different internal
+reactions. None of these diagnostics is a qualified production replacement;
+contact admission, minimum-norm reactions and nonlinear closure remain required.
+
+The current rank selection needs a stronger certificate. In the captured
+`system-13746` replay, one 107-row face has a QR diagonal of approximately
+2.74e-16 followed by 2.04e-11 and 1.73e-12. Its cutoff is 6.12e-14. The owner's
+`take_while` stops at the first small diagonal, so it omits later coefficients
+above its own cutoff. This captured faer 0.24.4 factor lacks the monotone
+diagonal that the application-side rank test assumes. Verify the omitted
+subspace when qualifying a replacement; changing storage layout, discarding
+weak directions, or accepting geometric tolerance alone would not establish
+the required minimum-norm contract.
+
+Replay inputs and results are retained beside the captures:
+`native-basis-replay-analysis.json`, `native-svd-replay-analysis.json`,
+`response-svd-reference-analysis.json` and their driver/rank logs. These are
+offline numerical diagnostics. Their provisional residual error certificates
+and elapsed times are not production correctness or performance acceptance.
+The production solver and its tolerances remain unchanged.
+
+## Scoped native compiler artifacts — 2026-10-21
+
+The approved Rumoca worktree now exposes an explicit synchronous native-cache
+scope through its curated simulation facade. Cranelift owns function-stencil,
+version, ISA and flag identity; current module relocations and host addresses
+are rebound for each new executable arena. The Modelica worker owns a bounded
+application-lived FIFO of immutable artifacts and coalesces persistence on a
+separate I/O owner. Live FMI state remains thread-affine and retires normally.
+The canonical owner/API/lifetime contract is in architecture 20's cache section.
+
+Frozen-FMI diagnostics retain identical f64 bits for all 6,053 exposed values
+at initialization and twelve steps, including independent-process persistence.
+Native tests cover changed constants and inputs, shifted function IDs/host
+addresses, scope restoration, occupied-store rejection and corrupt artifacts.
+The application passes 16 bounded-cache/codec/admission tests. Its production
+`modelica_source_target` gate passes 20 authored checks, including public cache
+accounting, rejected source, replacement, compact status and recovery.
+
+Full Griffin qualification exposed a working set larger than 32 MiB: repeated
+loads with that limit evicted the upcoming native functions and rebuilt them.
+The resource default is 64 MiB and 32,768 entries; public construction profiles
+now report scope evictions and shared resident entries/bytes. On restart the
+coupled constructor hits 16,408 of 16,476 functions, compiles 68, rejects none
+and evicts none. Its resident snapshot is 39,998,549 bytes; later subsystems
+raise this to 41,219,102 bytes, still within both limits.
+
+The two 32 MiB runs become ready in 28.642 / 28.784 s. Filling the larger cache
+takes 21.725 s; its next-process run takes 20.584 s. Coupled construction is
+8.628 / 8.899 s with the smaller cache and 4.450 s in the final restart.
+The normal High-quality artifact is
+`a6d694a87d360196b883b3bc60be83bf5822a17b1cc52c10c97fd54fe4901faf`,
+on LunCoSim base `34423da2f`. No foreign simulator/build workload is recorded.
+All four runs confirm touchdown, retain unchanged source hashes and complete
+frame histories, show clear readiness and zero retained errors, and release
+owned API port 4758. The final screenshot was inspected. Native profile data
+also survives the one-shot coupled actor's retirement through its existing receipt.
+
+Physics medians remain approximately 59–60 ms and frame medians 75–76 ms;
+there is no physics/FPS improvement claim. The dirty local compiler identity
+correctly disables prepared-FMI disk admission in these experiments, so these
+are native artifact qualifications rather than final combined-cache acceptance.
+The portable workspace dependency pins Rumoca commit
+`f8df42b448c31273d94926183dac2fffeccef9d0`, published with explicit user approval
+on `LunCoSim/rumoca` branch `perf/projection-construction`. Local path overrides
+are diagnostic evidence only. macOS qualification remains pending. Tracy and
+the original `../rumoca` branch remain untouched.
+
+The final local Rumoca commit is
+`f8df42b448c31273d94926183dac2fffeccef9d0` (including the preceding selected
+retention commit). A normal rebuild with the clean compiler identity produces
+LunCoSim SHA-256
+`0580e6a00cadf16bac8955a07bc04d725241f7484eb6cd3da815762433e45849`.
+Griffin's first clean-identity run takes 21.109 s; its restart takes 18.125 s,
+with eleven prepared-FMI disk hits and 16,408/16,476 native hits in the coupled
+constructor. That constructor takes 4.328 s, with no artifact rejection or
+eviction. Physics remains 59.383 ms median and measured frame throughput is
+13.043 FPS. Both runs confirm touchdown and pass the ownership, source,
+readiness, complete-frame-history and retained-error checks above.
+
+Summer Space School on the same normal High-quality binary takes 2.264 s on
+its first run and 1.852 s on restart (three prepared-FMI disk hits). Its restart
+physics median is 0.535 ms, retained maximum 0.868 ms, and frame median 4.286 ms.
+Measured throughput across all 2,637 frame intervals is 175.030 FPS; the
+reciprocal of the median frame time must not be reported as sustained FPS.
+Both runs have unchanged source hashes, clear readiness, zero retained errors,
+complete frame histories and inspected screenshots; their owned ports close.
+These use ephemeral `--no-throttle --no-vsync --render-quality high`, with no
+profiler or saved preference change. Summer meets the observed physics budget;
+loading and sustained FPS still miss the goal. Griffin remains above all three
+limits. The final normal artifact also passes all twenty source-target checks.
+Combined-cache evidence is `native-cache-clean-identity-comparison.json` and
+the `griffin-native-cache-clean-identity-*` / `summer-native-cache-clean-identity-*`
+directories. The original frozen diagnostic FMI record is preserved separately
+as `frozen-griffin-fmi-v13.bin.zst`, SHA-256
+`a996c979a1d8ab649e1ccbf8d92d0e0c198f0f238e0e894a5f30950bbc376baf`.
+
+The browser Modelica worker compile check passes. The fixed twenty-model
+Rumoca canary has zero per-model diagnostic or oracle-band delta against clean
+`bda1e01ff223`: fourteen compile, twelve simulate and all twelve compare
+strict-high against OpenModelica. The same six ToDae rejections and two solver
+failures remain visible, with no timeouts/non-finite results. This is focused
+canary evidence, not a full-cohort claim. Emitter lib/tests and facade lib scoped
+Clippy pass. Facade test Clippy encounters an unchanged unnecessary cast at
+`solve_lowering/tests.rs:1419`; dependency-inclusive Clippy also has existing
+core nesting failures. Neither is suppressed by this change.
+
+Evidence is `.cache/codex-evidence/performance-20261020/`:
+`native-cache-integrated-comparison.json`, `native-cache-working-set-*`,
+`native-cache-source-target-*`, `native-cache-worker-tests.log`, and
+`native-cache-persist-*`, plus `native-cache-msl-canary-delta.json` and its two
+source runs. The loading, physics and FPS goal remains open.
+
 ## Selected native projection retention — 2026-10-21
 
 An approved local Rumoca change allocates emission-time reuse storage only for
@@ -34,8 +187,9 @@ qualification remain open.
 Rumoca commit `bda1e01ff223300b3b8dd1cb53bcea12587c1309` lives in its
 `perf/projection-construction` worktree at `../rumoca-performance`;
 `../rumoca` keeps its original clean
-branch. Local Cargo patch configuration and lockfile snapshots are evidence
-only, not a portable dependency update. No dependency publication is included.
+branch. The portable workspace dependency includes this commit through the
+published `f8df42b448c3` revision described above. Local Cargo patch configuration
+and lockfile snapshots are diagnostic evidence only.
 Evidence is retained under `.cache/codex-evidence/performance-20261020/` in
 `projection-construction-*`, `rumoca-selected-retention-*` and
 `griffin-rumoca-retention-final/`.
@@ -9735,16 +9889,13 @@ entity-local. `cargo +nightly-2026-02-27 check --locked -j 4 -p
 lunco-modelica-worker` passed. This change has not been profiled, and no timing
 gain is claimed. The other three long Sandbox model lowerings remain distinct.
 
-### 2026-09-28 — batch accelerometer sample initialization
+### Rigid-body acceleration ownership
 
-The same Tracy capture shows `ensure_acceleration_samples` with a 46.135 ms
-maximum deferred-command flush over 1,061 calls, while its system body peaked at
-46.7 microseconds. The system only initializes `SolvedLinearAcceleration` for
-newly physics-ready bodies. It now collects these identical initial states and
-inserts them through one fallible typed batch in query order; steady fixed-step
-sampling is unchanged. `cargo +nightly-2026-02-27 check --locked -j 4 -p
-lunco-cosim` passed. There is no post-change Tracy capture, so no timing gain is
-claimed.
+`lunco-physics::kinematics` installs `SolvedBodyAcceleration` as a required
+rigid-body component and samples completed native intervals. Co-simulation
+and telemetry consume that shared result. See the
+[measurement contract](../architecture/body-acceleration.md). No current
+Tracy timing or performance gain is claimed for this producer.
 
 ### 2026-09-28 — batch readiness freeze inserts
 

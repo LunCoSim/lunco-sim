@@ -31,7 +31,7 @@ const PREPARED_SOLVE_CACHE_VERSION: u32 = 13;
 
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
-pub use cache::PreparedSolveDiskLimits;
+pub use cache::ModelicaArtifactDiskLimits;
 use cache::{BoundedReuseCache, PreparedSolveCache, PreparedSolveKey};
 mod bridge;
 mod compile;
@@ -49,6 +49,8 @@ mod thread_pool;
 use thread_pool::ThreadAffinePool;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_session;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_code_cache;
 #[cfg(not(target_arch = "wasm32"))]
 use live_session::{LiveConstructionResult, SessionHandle};
 #[cfg(not(target_arch = "wasm32"))]
@@ -323,6 +325,7 @@ fn build_prepared_stepper(
         session_ns: constructed.duration_since(started).as_nanos() as u64,
         metadata_ns: metadata_collected.duration_since(constructed).as_nanos() as u64,
         initial_observation_ns: metadata_collected.elapsed().as_nanos() as u64,
+        native_code_cache: None,
     };
     Ok((
         stepper,
@@ -395,7 +398,10 @@ struct ModelicaWorkerPools {
     pool: ThreadAffinePool<()>,
     live_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
     document_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
-    disk_limits: PreparedSolveDiskLimits,
+    native_cache: native_code_cache::SharedNativeCodeCache,
+    // Dropped after the live owners, so their final publication requests drain.
+    _native_cache_io: ThreadAffinePool<()>,
+    disk_limits: ModelicaArtifactDiskLimits,
     tx: Sender<WorkerPreparationResult>,
     rx: Receiver<WorkerPreparationResult>,
     next_id: u64,
@@ -474,8 +480,9 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
 #[cfg(not(target_arch = "wasm32"))]
 impl ModelicaWorkerPools {
     fn new(
-        disk_limits: PreparedSolveDiskLimits,
+        disk_limits: ModelicaArtifactDiskLimits,
         limits: ModelicaWorkerLimits,
+        capacities: lunco_modelica_runtime::ModelicaCacheCapacities,
     ) -> Result<Self, String> {
         disk_limits.validate()?;
         let available = std::thread::available_parallelism()
@@ -516,6 +523,17 @@ impl ModelicaWorkerPools {
                 let _ = failure_tx.send(WorkerPreparationResult::Failed(error));
             },
         )?;
+        let mut native_cache_io = ThreadAffinePool::new(
+            "modelica-native-cache",
+            1,
+            || (),
+            |error| bevy::log::warn!("[modelica-runtime] native code cache I/O failed: {error}"),
+        )?;
+        let native_cache = native_code_cache::SharedNativeCodeCache::new(
+            capacities,
+            disk_limits,
+            native_cache_io.next_lane(),
+        )?;
         bevy::log::info!(
             "[modelica-runtime] solve preparation pool ready: {preparation_threads} worker thread(s)"
         );
@@ -529,6 +547,8 @@ impl ModelicaWorkerPools {
             pool,
             live_pool,
             document_pool,
+            native_cache,
+            _native_cache_io: native_cache_io,
             disk_limits,
             tx,
             rx,
@@ -987,7 +1007,14 @@ fn dispatch_live_construction(
         lunco_modelica_runtime::ModelicaExecutionDomain::Scene => pool.live_pool.next_lane(),
         lunco_modelica_runtime::ModelicaExecutionDomain::Document => pool.document_pool.next_lane(),
     };
-    if let Err(error) = live_session::construct(id, lane, component, plan, pool.tx.clone()) {
+    if let Err(error) = live_session::construct(
+        id,
+        lane,
+        component,
+        plan,
+        pool.native_cache.clone(),
+        pool.tx.clone(),
+    ) {
         let _ = tx.send(ModelicaResult::worker_failure(error));
         return;
     }
@@ -2581,11 +2608,11 @@ fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> 
 pub fn modelica_worker(
     rx: Receiver<ModelicaCommand>,
     tx: Sender<ModelicaResult>,
-    disk_limits: PreparedSolveDiskLimits,
+    disk_limits: ModelicaArtifactDiskLimits,
     cache_limits: ModelicaCacheLimits,
     worker_limits: ModelicaWorkerLimits,
 ) {
-    let (compiled_capacity, prepared_capacity) = match cache_limits.validate() {
+    let capacities = match cache_limits.validate() {
         Ok(capacities) => capacities,
         Err(error) => {
             let _ = tx.send(ModelicaResult::worker_failure(error));
@@ -2606,24 +2633,27 @@ pub fn modelica_worker(
     // is keyed by the structural source revision, solver, and authored
     // overrides so two USD instances do not lower identical networks twice
     // during scene startup.
-    let mut prepared_solve_cache = PreparedSolveCache::new(prepared_capacity);
+    let mut prepared_solve_cache = PreparedSolveCache::new(capacities.prepared_solves);
     // Source/FMI preparation and live sessions have independent bounded workers.
     // The mutable Rumoca compiler has its own single-thread actor.
-    let mut solve_preparation_pool = match ModelicaWorkerPools::new(disk_limits, worker_limits) {
-        Ok(pool) => pool,
-        Err(error) => {
-            let _ = tx.send(ModelicaResult::worker_failure(error));
-            return;
-        }
-    };
-    let mut compiler =
-        match CompilerActor::new(solve_preparation_pool.tx.clone(), compiled_capacity) {
-            Ok(compiler) => compiler,
+    let mut solve_preparation_pool =
+        match ModelicaWorkerPools::new(disk_limits, worker_limits, capacities) {
+            Ok(pool) => pool,
             Err(error) => {
                 let _ = tx.send(ModelicaResult::worker_failure(error));
                 return;
             }
         };
+    let mut compiler = match CompilerActor::new(
+        solve_preparation_pool.tx.clone(),
+        capacities.compiled_artifacts,
+    ) {
+        Ok(compiler) => compiler,
+        Err(error) => {
+            let _ = tx.send(ModelicaResult::worker_failure(error));
+            return;
+        }
+    };
     // M3: cached compiled artifacts are valid only for the library set they
     // were compiled against — every LoadSourceRoot bumps this and thereby
     // invalidates all of them (see `CachedModel::library_gen`).
@@ -3664,13 +3694,13 @@ pub struct ModelicaWorkerState {
 #[cfg(target_arch = "wasm32")]
 impl ModelicaWorkerState {
     pub fn new(limits: ModelicaCacheLimits) -> Result<Self, String> {
-        let (compiled_capacity, prepared_capacity) = limits.validate()?;
+        let capacities = limits.validate()?;
         Ok(Self {
             steppers: HashMap::new(),
             current_sessions: HashMap::new(),
             cached_models: HashMap::new(),
-            compiled_artifacts: CompiledArtifactCache::new(compiled_capacity),
-            prepared_solve_cache: PreparedSolveCache::new(prepared_capacity),
+            compiled_artifacts: CompiledArtifactCache::new(capacities.compiled_artifacts),
+            prepared_solve_cache: PreparedSolveCache::new(capacities.prepared_solves),
             compiler: None,
             realtime_models: Default::default(),
             library_gen: 0,
@@ -4400,7 +4430,7 @@ mod worker_budget_tests {
             modelica_worker(
                 command_rx,
                 result_tx,
-                PreparedSolveDiskLimits::default(),
+                ModelicaArtifactDiskLimits::default(),
                 ModelicaCacheLimits::default(),
                 ModelicaWorkerLimits {
                     preparation: one,
@@ -4455,7 +4485,14 @@ mod worker_budget_tests {
                 reserved_cpu_threads: 0,
             },
         };
-        let pool = ModelicaWorkerPools::new(PreparedSolveDiskLimits::default(), custom).unwrap();
+        let pool = ModelicaWorkerPools::new(
+            ModelicaArtifactDiskLimits::default(),
+            custom,
+            lunco_modelica_runtime::ModelicaCacheLimits::default()
+                .validate()
+                .unwrap(),
+        )
+        .unwrap();
         let count = pool.pool.worker_count();
         assert!((1..=3).contains(&count));
         assert!((1..=2).contains(&pool.live_pool.worker_count()));
@@ -4476,7 +4513,7 @@ mod worker_budget_tests {
             modelica_worker(
                 command_rx,
                 result_tx,
-                PreparedSolveDiskLimits::default(),
+                ModelicaArtifactDiskLimits::default(),
                 ModelicaCacheLimits::default(),
                 limits,
             );
@@ -4997,7 +5034,6 @@ mod artifact_cache_tests {
         };
         assert_eq!(count(&first), 3);
         let plan = live_build_plan(
-            lunco_modelica_runtime::ModelicaExecutionPolicy::Automatic,
             solver::RuntimeProfile {
                 live: true,
                 predicted: false,
@@ -5078,7 +5114,6 @@ mod artifact_cache_tests {
             );
             let revision = compiler.library_revision();
             let plan = live_build_plan(
-                lunco_modelica_runtime::ModelicaExecutionPolicy::Automatic,
                 solver::RuntimeProfile {
                     live: true,
                     predicted: false,
@@ -5164,7 +5199,6 @@ mod live_solver_snapshot_tests {
             predicted: true,
         };
         let plan = live_build_plan(
-            lunco_modelica_runtime::ModelicaExecutionPolicy::Automatic,
             profile,
             &[("zeta".to_owned(), 2.0), ("alpha".to_owned(), 1.0)],
             &[],
@@ -5217,7 +5251,6 @@ mod checked_step_tests {
             .compile_str("ClockProbe", source, "ClockProbe.mo")
             .unwrap();
         let plan = live_build_plan(
-            lunco_modelica_runtime::ModelicaExecutionPolicy::Automatic,
             solver::RuntimeProfile {
                 live: true,
                 predicted: false,
@@ -5254,7 +5287,6 @@ mod checked_step_tests {
             .unwrap();
         for (name, value) in [("unadmitted", 99.0), ("admitted", f64::NAN)] {
             let plan = live_build_plan(
-                lunco_modelica_runtime::ModelicaExecutionPolicy::Automatic,
                 solver::RuntimeProfile {
                     live: true,
                     predicted: false,

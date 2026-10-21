@@ -15,7 +15,8 @@
 //! [`PendingForces`] (the propagation master has already summed all wires into
 //! that one value), and the single generic [`apply_pending_forces`] system
 //! applies it through avian's query-shaped `Forces` API and clears it each tick.
-//! That one system is the only per-tick avian system left.
+//! Physics-owned acceleration measurements are exposed read-only through the
+//! same adapter; this module does not maintain a second derivative history.
 
 use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties, ColliderOf,
@@ -30,6 +31,7 @@ use std::hash::{Hash, Hasher};
 use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
 use lunco_physics::joint::{JointTorqueActuator, bounded_brake_torque, revolute_hinge_axis_world};
+use lunco_physics::kinematics::SolvedBodyAcceleration;
 use lunco_port_core::ports::{PortDirection, PortTopologyRevision, PortTopologyState};
 
 /// Per-entity force accumulator written by `force_*` input ports and drained
@@ -51,82 +53,6 @@ pub struct PendingForces {
     /// World-space torque (N·m) to apply this tick (e.g. reaction wheel,
     /// thrust-vector moment expressed in world frame).
     pub torque: DVec3,
-}
-
-/// The solved linear acceleration seen by a rigid-body-mounted accelerometer.
-///
-/// Avian exposes velocity as a native solver fact, but not an accelerometer
-/// reading.  The sample is captured after physics writeback and is therefore
-/// the finite-difference kinematics of the solved body, including gravity,
-/// thrust, contacts, and joints.  The Modelica IMU converts that navigation
-/// frame quantity into specific force; no controller or scene reads this
-/// component directly.
-#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
-#[reflect(Component, Default)]
-pub struct SolvedLinearAcceleration {
-    /// Previous solved world-frame velocity, used for the next sample.
-    previous_velocity: DVec3,
-    /// Current solved world-frame acceleration, m/s².
-    pub value: DVec3,
-    /// False until a complete velocity interval has been observed.
-    pub valid: bool,
-}
-
-/// Add the raw accelerometer state to every Avian body once it exists.
-pub fn ensure_acceleration_samples(
-    mut commands: Commands,
-    query: Query<
-        (Entity, &LinearVelocity),
-        (
-            With<RigidBody>,
-            With<lunco_core::PhysicsStateReady>,
-            Without<SolvedLinearAcceleration>,
-        ),
-    >,
-) {
-    let samples = query
-        .iter()
-        .map(|(entity, velocity)| {
-            (
-                entity,
-                SolvedLinearAcceleration {
-                    previous_velocity: velocity.0,
-                    value: DVec3::ZERO,
-                    valid: false,
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    if samples.is_empty() {
-        return;
-    }
-    // Bodies become physics-ready in admission batches. Insert their identical
-    // initialization state in one fallible command while retaining query order.
-    commands.try_insert_batch(samples);
-}
-
-/// Capture solved acceleration after Avian has written back its state.
-pub fn sample_solved_acceleration(
-    time: Res<Time<Physics>>,
-    mut query: Query<
-        (&LinearVelocity, &mut SolvedLinearAcceleration),
-        (With<RigidBody>, With<lunco_core::PhysicsStateReady>),
-    >,
-) {
-    let dt = time.delta_secs_f64();
-    if !dt.is_finite() || dt <= 0.0 {
-        return;
-    }
-    for (velocity, mut sample) in &mut query {
-        let current = velocity.0;
-        if sample.valid {
-            sample.value = (current - sample.previous_velocity) / dt;
-        } else {
-            sample.value = DVec3::ZERO;
-            sample.valid = true;
-        }
-        sample.previous_velocity = current;
-    }
 }
 
 /// Apply solved joint torque as equal and opposite body torques.
@@ -607,9 +533,13 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::ACCELERATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
-                w.get::<SolvedLinearAcceleration>(e)
-                    .map(|sample| if sample.valid { sample.value.x } else { 0.0 })
-                    .or(Some(0.0))
+                w.get::<SolvedBodyAcceleration>(e).map(|sample| {
+                    if sample.valid {
+                        sample.linear_world.x
+                    } else {
+                        0.0
+                    }
+                })
             }),
             write: None,
         },
@@ -618,9 +548,13 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::ACCELERATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
-                w.get::<SolvedLinearAcceleration>(e)
-                    .map(|sample| if sample.valid { sample.value.y } else { 0.0 })
-                    .or(Some(0.0))
+                w.get::<SolvedBodyAcceleration>(e).map(|sample| {
+                    if sample.valid {
+                        sample.linear_world.y
+                    } else {
+                        0.0
+                    }
+                })
             }),
             write: None,
         },
@@ -629,9 +563,13 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::ACCELERATION_WORLD,
             dir: PortDirection::Out,
             read: Some(|w, e| {
-                w.get::<SolvedLinearAcceleration>(e)
-                    .map(|sample| if sample.valid { sample.value.z } else { 0.0 })
-                    .or(Some(0.0))
+                w.get::<SolvedBodyAcceleration>(e).map(|sample| {
+                    if sample.valid {
+                        sample.linear_world.z
+                    } else {
+                        0.0
+                    }
+                })
             }),
             write: None,
         },
@@ -641,8 +579,84 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             dir: PortDirection::Out,
             read: Some(|w, e| {
                 Some(
-                    if w.get::<SolvedLinearAcceleration>(e)
+                    if w.get::<SolvedBodyAcceleration>(e)
                         .is_some_and(|sample| sample.valid)
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                )
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "acceleration_magnitude",
+            contract: AvianPortContract::ACCELERATION,
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedBodyAcceleration>(e)
+                    .filter(|sample| sample.valid)
+                    .map(|sample| sample.linear_world.length())
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "specific_force_magnitude",
+            contract: AvianPortContract::ACCELERATION,
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedBodyAcceleration>(e)
+                    .filter(|sample| sample.valid)
+                    .and_then(|sample| sample.specific_force_world)
+                    .map(|force| force.length())
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "specific_force_body_x",
+            contract: AvianPortContract::ACCELERATION_BODY,
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedBodyAcceleration>(e)
+                    .filter(|sample| sample.valid)
+                    .and_then(|sample| sample.specific_force_body)
+                    .map(|force| force.x)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "specific_force_body_y",
+            contract: AvianPortContract::ACCELERATION_BODY,
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedBodyAcceleration>(e)
+                    .filter(|sample| sample.valid)
+                    .and_then(|sample| sample.specific_force_body)
+                    .map(|force| force.y)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "specific_force_body_z",
+            contract: AvianPortContract::ACCELERATION_BODY,
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                w.get::<SolvedBodyAcceleration>(e)
+                    .filter(|sample| sample.valid)
+                    .and_then(|sample| sample.specific_force_body)
+                    .map(|force| force.z)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "specific_force_valid",
+            contract: AvianPortContract::DIMENSIONLESS,
+            dir: PortDirection::Out,
+            read: Some(|w, e| {
+                Some(
+                    if w.get::<SolvedBodyAcceleration>(e)
+                        .is_some_and(|s| s.valid && s.specific_force_body.is_some())
                     {
                         1.0
                     } else {
@@ -944,9 +958,9 @@ fn register_rigid_body_topology(app: &mut App) {
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Rotation>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<AngularVelocity>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<AngularVelocity>)
-        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SolvedLinearAcceleration>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SolvedBodyAcceleration>)
         .add_observer(
-            lunco_port_core::ports::bump_port_topology_on_remove::<SolvedLinearAcceleration>,
+            lunco_port_core::ports::bump_port_topology_on_remove::<SolvedBodyAcceleration>,
         )
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ComputedMass>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ComputedMass>)

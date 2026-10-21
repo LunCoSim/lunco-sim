@@ -39,6 +39,7 @@ pub mod force_ports;
 pub mod joint;
 mod joint_projection;
 pub mod joint_solver;
+pub mod kinematics;
 pub mod occlusion;
 pub mod order;
 pub mod pose;
@@ -1086,6 +1087,7 @@ pub struct PhysicsGatePlugin;
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         pose::register_spatial_query_providers(app);
+        kinematics::install(app);
         app.register_type::<avian3d::prelude::SleepThreshold>()
             .register_type::<PhysicsInitializationPolicy>()
             .register_type::<PhysicsObjectPaused>()
