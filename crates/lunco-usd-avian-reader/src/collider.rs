@@ -450,32 +450,21 @@ pub fn collect_body_colliders_from_usd(
             continue;
         }
 
-        // For axis-aligned primitive children, fold the authored axis into the
-        // child's body-local rotation so the canonical collider lines
-        // up with the authored axis (mirrors what lunco-usd-bevy does
-        // for the entity Transform — same canonical `usd_axis_to_quat`).
-        // The body root is different: its axis is already on the ECS body
-        // transform, so applying it again on the child would rotate the
-        // root shape twice.
+        // A geometry axis is a collider-local basis, independent of the body's
+        // authored pose. Every shape, including geometry on the body prim,
+        // is mounted on its own native collider entity.
         let is_body_shape = child_path.as_str() == parent_path.as_str();
-        if !is_body_shape {
-            if let Some(ty) = reader.type_name(&child_path) {
-                if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
-                    let axis_tok =
-                        read_primitive_axis(reader, &child_path, &ty).ok_or_else(|| {
-                            ColliderProjectionError::Backend {
-                                prim: child_path.to_string(),
-                                detail: format!("invalid authored {ty} axis"),
-                            }
-                        })?;
-                    // Pre-rotate by the stage convention: the `axis` token names an
-                    // axis of the STAGE's frame while the collider is built in the
-                    // canonical one (identical to what usd-bevy does for the visual
-                    // Transform, so mesh and collider can't disagree on a Z-up stage).
-                    let q_axis = convention.orient(usd_axis_to_quat(axis_tok));
-                    if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
-                        child_tf.rotation *= q_axis;
+        if let Some(ty) = reader.type_name(&child_path) {
+            if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
+                let axis_tok = read_primitive_axis(reader, &child_path, &ty).ok_or_else(|| {
+                    ColliderProjectionError::Backend {
+                        prim: child_path.to_string(),
+                        detail: format!("invalid authored {ty} axis"),
                     }
+                })?;
+                let q_axis = convention.orient(usd_axis_to_quat(axis_tok));
+                if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                    child_tf.rotation *= q_axis;
                 }
             }
         }
@@ -628,8 +617,8 @@ fn gather_body_collider_candidates(
 /// - **Sphere**: `double radius` (default 1.0).
 /// - **Cylinder**: `double radius`, `double height` (defaults 1, 2). Avian's
 ///   cylinder is Y-axial and its plane surface is +Y-normal; authored axes are
-///   honored by the entity transform or, for attached children, by
-///   `collect_body_colliders_from_usd`.
+///   applied by `collect_body_colliders_from_usd` for body-owned colliders,
+///   and by the entity transform for standalone geometry.
 ///
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.

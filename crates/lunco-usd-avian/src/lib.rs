@@ -2387,7 +2387,7 @@ mod collider_parity_tests {
     //! (the highest-risk physics read), including the mesh-approximation selector.
 
     use super::{ColliderBuildOutcome, ColliderProjectionError, build_collider_from_usd};
-    use bevy::math::DVec3;
+    use bevy::math::Vec3;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
@@ -2509,7 +2509,7 @@ def Cube "Malformed" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
         else {
             panic!("scaled cube collider");
         };
-        assert_eq!(scaled.scale(), DVec3::new(2.0, 3.0, 4.0));
+        assert_eq!(scaled.scale(), Vec3::new(2.0, 3.0, 4.0));
 
         let error = build_collider_from_usd(&view, &SdfPath::new("/Malformed").unwrap())
             .expect_err("a scale outside the native collider representation must be rejected");
@@ -2940,8 +2940,8 @@ def PhysicsRevoluteJoint "Hinge" ( prepend apiSchemas = ["PhysicsDriveAPI:angula
                 match drive.motor_model().unwrap() {
                     MotorModel::ForceBased { stiffness, damping }
                     | MotorModel::AccelerationBased { stiffness, damping } => {
-                        assert!((stiffness - expected_k).abs() < 1e-9);
-                        assert!((damping - expected_d).abs() < 1e-9);
+                        assert_eq!(stiffness, expected_k as f32);
+                        assert_eq!(damping, expected_d as f32);
                     }
                     other => panic!("unexpected model {other:?}"),
                 }
@@ -3787,9 +3787,9 @@ def Xform "Body" (prepend apiSchemas = "PhysicsRigidBodyAPI")
             );
             let bounds = shapes[0]
                 .collider
-                .aabb(shapes[0].position.0, shapes[0].rotation.0);
-            assert_eq!(bounds.min, DVec3::splat(-1.0));
-            assert_eq!(bounds.max, DVec3::splat(1.0));
+                .aabb(shapes[0].position.0, shapes[0].rotation.0, 0.0);
+            assert_eq!(bounds.min, Vec3::splat(-1.0));
+            assert_eq!(bounds.max, Vec3::splat(1.0));
         }
     }
 
@@ -3886,6 +3886,53 @@ def Xform "Rig"
             has_collider,
             "a bare rigid-body root must collide via its own shape"
         );
+    }
+
+    #[test]
+    fn body_root_primitive_axes_match_descendant_collider_frames() {
+        for up_axis in ["Y", "Z"] {
+            for axis in ["X", "Y", "Z"] {
+                for shape in ["Cylinder", "Cone", "Capsule", "Plane"] {
+                    let source = format!(
+                        r#"#usda 1.0
+(
+    upAxis = "{up_axis}"
+    metersPerUnit = 1.0
+)
+def {shape} "Body" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"])
+{{
+    uniform token axis = "{axis}"
+    double radius = 0.34
+    double height = 0.25
+    double width = 0.68
+    double length = 0.25
+    def {shape} "Child" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {{
+        uniform token axis = "{axis}"
+        double radius = 0.34
+        double height = 0.25
+        double width = 0.68
+        double length = 0.25
+    }}
+}}
+"#
+                    );
+                    let recipe = StageRecipe::from_source("axes.usda", &source);
+                    let stage = CanonicalStage::from_recipe(&recipe).unwrap();
+                    let view = stage.view();
+                    let root = SdfPath::new("/Body").unwrap();
+                    let parts = collect_body_colliders_from_usd(&view, &root).unwrap();
+                    assert_eq!(parts.len(), 2);
+                    assert!(
+                        parts[0].rotation.0.abs_diff_eq(parts[1].rotation.0, 1e-6),
+                        "{up_axis}-up {axis}-axis {shape}: root and descendant geometry must share a basis"
+                    );
+                    let expected =
+                        lunco_usd_bevy_scene::read_geometry_orientation(&view, &root).unwrap();
+                    assert!(parts[0].rotation.0.as_dquat().abs_diff_eq(expected, 1e-6));
+                }
+            }
+        }
     }
 
     /// A body whose own prim carries no geometry (a plain `Xform` with

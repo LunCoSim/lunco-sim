@@ -593,9 +593,11 @@ directions — USD and avian agree:
 
 The body prim may also carry `PhysicsCollisionAPI`. If it has a collision shape
 and descendants, both the body-root shape and every eligible descendant shape
-belong to the same body as separate source colliders. The root shape is identity-local to the body; its
-authored transform is applied by the body's ECS transform once, while child
-transforms are accumulated from the body frame. This remains true when the
+belong to the same body as separate source colliders. The root shape has no
+body-local translation; its primitive `axis` still supplies the collider-local
+geometry basis. The body's authored pose is independent of that basis. Child
+transforms accumulate from the body frame and include their own geometry basis.
+This remains true when the
 body arrives through a reference or a prepared runtime-instance projection.
 Eligible source prims are ordered by composed prim identity before native
 admission. Each collider carries one `UsdColliderSource`; a decomposed mesh

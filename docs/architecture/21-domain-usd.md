@@ -852,6 +852,10 @@ Native override preparation and co-simulation retain ownership of explicit
 computed properties through `NoAuto*`; an explicit mass rescales only automatic
 inertia. Nested bodies and visual descendants never add mass to that
 geometry reduction. Contact orientation uses the same stable physics identities.
+Primitive `axis` belongs to the collider-local geometry basis, including when
+the collision geometry is authored on the rigid-body prim itself. The body's
+authored pose never substitutes for that basis; root and descendant primitives
+use the same axis conversion before their native collider entities are attached.
 The native `MassPropertyHelper` traverses the complete entity hierarchy without
 a rigid-body boundary; USD mass ownership therefore reduces the native
 `ColliderMassProperties` through `RigidBodyColliders` and Parry's public f64

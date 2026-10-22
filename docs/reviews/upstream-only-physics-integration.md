@@ -116,3 +116,19 @@ pass for terrain appearance, terrain normal transforms, vertex-shadow alignment
 and plume depth occlusion. The terrain gate also checks its prepass variants
 and authored overlay switching. The current native contact gate passes 12
 checks. These results do not qualify the three complete Twin physics suites.
+
+## Physics qualification in progress
+
+Body-root primitive colliders now retain their standard USD axis in their native
+body-local mount. One lowering test covers Cylinder, Cone, Capsule and Plane on
+all three axes in both Y-up and Z-up stages. The production isolated-tire gate
+passes four authored checks: correct X-axis bounds, sustained contact, bounded
+contact penetration and no ground crossing. Peak native penetration is
+0.000029288 m. The free tire may topple, so center height alone is not a contact
+penetration measurement.
+
+The Summer Lunokhod flat-ground gate passes 102 checks after migrating its
+lifecycle/dependency declarations and using the existing Modelica waypoint
+setpoint helper. Tesla steering and Griffin engine-off impact still fail their
+authored gates. The complete three-Twin suite and graphical physics acceptance
+remain open.
