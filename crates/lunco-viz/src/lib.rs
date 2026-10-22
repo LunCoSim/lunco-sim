@@ -39,6 +39,10 @@ pub mod telemetry_sparkline;
 pub mod view;
 #[cfg(feature = "ui")]
 pub mod viz;
+#[cfg(feature = "ui")]
+mod ui;
+#[cfg(feature = "ui")]
+pub use ui::signal_grid::{ConfigureSignalGrid, SignalGridEntry};
 
 #[cfg(feature = "ui")]
 pub use kinds::line_plot::{LINE_PLOT_KIND, LinePlot};
@@ -117,6 +121,7 @@ impl Plugin for LuncoVizPlugin {
         ))
         .register_settings_section::<telemetry_browser::TelemetryDisplaySettings>()
         .init_resource::<VisualizationRegistry>()
+        .init_resource::<ui::signal_grid::SignalGrids>()
         .init_scene_resource::<telemetry_browser::TelemetryBrowserView>()
         .init_scene_resource::<telemetry_browser::TelemetryBrowserState>()
         .init_scene_resource::<telemetry_browser::TelemetryCatalogBuildState>()
@@ -124,6 +129,7 @@ impl Plugin for LuncoVizPlugin {
         .init_scene_resource::<VizFitRequests>()
         .register_visualization::<LinePlot>()
         .register_instance_panel(VizPanel)
+        .register_instance_panel(ui::signal_grid::SignalGridPanel)
         .register_panel(TelemetryBrowserPanel)
         .add_observer(kinds::line_plot::on_line_plot_edit_requested)
         .add_observer(kinds::line_plot::on_line_plot_fit_requested)
@@ -146,6 +152,9 @@ impl Plugin for LuncoVizPlugin {
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(telemetry_browser::InspectTelemetryCatalogProvider);
+        app.world_mut().resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(ui::signal_grid::InspectSignalGridProvider);
+        ui::signal_grid::register_all_commands(app);
         telemetry_browser::register_all_commands(app);
         kinds::line_plot::register_all_commands(app);
     }

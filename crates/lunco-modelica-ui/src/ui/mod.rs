@@ -445,6 +445,13 @@ pub struct ModelicaUiPlugin;
 
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
+        // Reserve this domain's canonical plot before any other native view
+        // allocates user plots. Lazy first-paint seeding can otherwise adopt
+        // an unrelated plot that already received the same numeric identity.
+        app.init_resource::<lunco_viz::VisualizationRegistry>();
+        viz::ensure_default_modelica_graph(
+            &mut app.world_mut().resource_mut::<lunco_viz::VisualizationRegistry>(),
+        );
         if !app.is_plugin_added::<lunco_modelica_core::modelica_lint::ModelicaLintPlugin>() {
             app.add_plugins(lunco_modelica_core::modelica_lint::ModelicaLintPlugin);
         }

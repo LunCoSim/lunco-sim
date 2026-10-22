@@ -151,7 +151,7 @@ impl Default for LinePlotStyle {
 }
 
 impl LinePlotStyle {
-    fn load(config: &VisualizationConfig) -> Self {
+    pub(crate) fn load(config: &VisualizationConfig) -> Self {
         serde_json::from_value(config.style.clone()).unwrap_or_default()
     }
     /// Render-path loader: parse the style JSON once and cache the
@@ -177,7 +177,7 @@ impl LinePlotStyle {
         });
         parsed
     }
-    fn save(&self, config: &mut VisualizationConfig) {
+    pub(crate) fn save(&self, config: &mut VisualizationConfig) {
         config.style = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
     }
 }

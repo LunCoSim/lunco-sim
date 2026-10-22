@@ -2,6 +2,29 @@
 
 Domain-agnostic visualization framework for LunCoSim.
 
+## Native signal grids
+
+`ConfigureSignalGrid` composes 1–64 active, sampled scalar channels as small
+multiples of the ordinary native line plot. Sources may mix Modelica and
+physics. Every entry declares `target_gid`, exact `signal`, and a human
+`caption`. The command validates the entire selection before changing a view;
+missing owners, inactive/unsampled channels, duplicate channels, invalid column
+counts and over-budget grids reject without replacing the previous grid.
+
+Example: `{"grid":1,"title":"Stunt measurements","columns":2,"signals":[
+{"target_gid":123,"signal":"specific_force","caption":"Accelerometer load"},
+{"target_gid":123,"signal":"angular_acceleration","caption":"Angular acceleration"}]}`.
+Use actual owner identities and `ListTelemetryChannels` to select available
+channels. These example paths only exist when their physics publisher is active.
+
+`InspectSignalGrid` returns each grid's ordered native plot ids. Apply ordinary
+`ConfigureLinePlot` settings to those ids before revealing a view. Registered
+instance kind `signal_grid`, instance equal to `grid`, works in docks or the
+shared borderless floating hosts. The grid keeps each plot's native history,
+source-reconnection, transform, follow-window and appearance owner. It creates
+no measurements and does not derive acceleration in the presentation layer.
+Keep a few readable channels for explanation; dense grids are overview views.
+
 Modelica variables, Avian rigid-body state, simulation events, and any future
 domain (USD, SysML, …) push into one **SignalRegistry**. Visualization kinds
 (line plot, gauge, 3D arrow, trajectory, …) consume signals and render into

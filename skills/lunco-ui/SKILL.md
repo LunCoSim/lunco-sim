@@ -27,6 +27,14 @@ and design decisions. This skill is a quick-reference summary.
 
 ## Graph readability
 
+For small multiples, use `ConfigureSignalGrid` with an explicit source, signal
+and caption for every cell. Discover active sampled channels through
+`ListTelemetryChannels`; inspect allocated plot ids with `InspectSignalGrid`.
+Style them through `ConfigureLinePlot`, then reveal registered instance kind
+`signal_grid` in a dock or floating host. The shared grid supports up to 64
+channels and reuses native plots, rather than adding an alternate renderer or
+duplicating telemetry. A few cells support explanation; dense views show scope.
+
 Use the native line plot toolbar's `Line` control to set curve thickness from
 0.5 to 8 logical pixels. It is saved per visualization in `LinePlotStyle` and
 uses the existing typed edit observer. Keep global UI zoom at the operator's
