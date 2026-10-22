@@ -9,6 +9,28 @@ use avian3d::prelude::RevoluteJoint;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
+/// A changed drive setpoint is an external input to the constrained island.
+/// Wake its dynamic endpoints so Avian's solver can consume the new motor target.
+pub fn wake_sleeping_joint_bodies(world: &mut World, bodies: [Entity; 2]) {
+    use avian3d::prelude::{RigidBody, Sleeping};
+    for body in bodies {
+        let sleeping_dynamic = world
+            .get::<RigidBody>(body)
+            .is_some_and(RigidBody::is_dynamic)
+            && world.get::<Sleeping>(body).is_some();
+        if sleeping_dynamic
+            && let Err(error) = <avian3d::dynamics::solver::islands::WakeBody as Command>::apply(
+                avian3d::dynamics::solver::islands::WakeBody(body),
+                world,
+            )
+        {
+            warn!(
+                "[physics] joint motor changed but dynamic body {body:?} could not be woken: {error}"
+            );
+        }
+    }
+}
+
 /// The port name a revolute joint exposes in both directions.
 pub const JOINT_ANGLE_PORT: &str = "angle";
 

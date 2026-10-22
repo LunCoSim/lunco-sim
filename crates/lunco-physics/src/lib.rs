@@ -461,15 +461,15 @@ fn contact_debug_snapshot_filtered(
     Some(snapshot)
 }
 
-/// A dimensional force-drive description for a prismatic joint.
+/// Dimensional drive coefficients for one native linear or angular coordinate.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PrismaticDriveParameters {
-    /// Linear stiffness in N/m.
+pub struct JointDriveParameters {
+    /// N/m for a slider; N m/rad for a hinge.
     pub stiffness: f64,
-    /// Linear damping in N·s/m.
+    /// N s/m for a slider; N m s/rad for a hinge.
     pub damping: f64,
-    /// Maximum actuator force in N.
-    pub max_force: f64,
+    /// Force in N for a slider; torque in N m for a hinge.
+    pub max_effort: f64,
 }
 
 /// Why a dimensional force drive cannot be lowered to Avian's implicit model.
@@ -510,9 +510,11 @@ pub fn motor_model_force_coefficients(model: avian3d::prelude::MotorModel) -> Op
     }
 }
 
-/// A live prismatic-drive readout, in the same dimensional units used by USD.
+/// A live coordinate-drive readout in SI units. Angular values use radians,
+/// including stiffness/damping; USD degree conversion belongs to its reader.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PrismaticDriveSnapshot {
+pub struct JointDriveSnapshot {
+    pub angular: bool,
     pub enabled: bool,
     /// `"force"`; this readout exists only for dimensional force drives.
     pub model: &'static str,
@@ -520,60 +522,114 @@ pub struct PrismaticDriveSnapshot {
     pub target_velocity: f64,
     pub stiffness: f64,
     pub damping: f64,
-    pub max_force: f64,
+    pub max_effort: f64,
 }
 
-/// Replace a prismatic joint's dimensional force-drive coefficients in place.
+/// Replace a joint's dimensional force/torque-drive coefficients in place.
 ///
 /// The target position/velocity are intentionally preserved: position commands
 /// remain on the joint's existing co-simulation ports, while this operation
 /// changes only the physical drive law. The joint entity must already carry the
 /// native Avian joint; no replacement constraint is created.
-pub fn set_prismatic_drive(
+pub fn set_joint_drive(
     world: &mut World,
     entity: Entity,
-    drive: PrismaticDriveParameters,
+    drive: JointDriveParameters,
 ) -> Result<(), String> {
-    use avian3d::prelude::PrismaticJoint;
+    use avian3d::prelude::{PrismaticJoint, RevoluteJoint};
 
     if !drive.stiffness.is_finite()
         || !drive.damping.is_finite()
-        || drive.max_force.is_nan()
+        || drive.max_effort.is_nan()
         || drive.stiffness < 0.0
         || drive.damping < 0.0
-        || drive.max_force < 0.0
-        || (drive.max_force.is_finite() && drive.max_force > f64::from(f32::MAX))
+        || drive.max_effort < 0.0
+        || (drive.max_effort.is_finite() && drive.max_effort > f64::from(f32::MAX))
     {
         return Err(format!(
-            "invalid prismatic drive: stiffness/damping must be non-negative and max_force non-negative, got {drive:?}"
+            "invalid joint drive: stiffness/damping must be non-negative and max_effort non-negative, got {drive:?}"
         ));
     }
     let model = force_drive_motor_model(drive.stiffness, drive.damping)
-        .map_err(|error| format!("cannot lower prismatic force drive: {error:?}"))?;
-    let Some(mut joint) = world.get_mut::<PrismaticJoint>(entity) else {
-        return Err(format!("entity {entity:?} has no PrismaticJoint"));
+        .map_err(|error| format!("cannot lower joint force drive: {error:?}"))?;
+    let linear = world.get::<PrismaticJoint>(entity).is_some();
+    let angular = world.get::<RevoluteJoint>(entity).is_some();
+    if linear == angular {
+        return Err(format!(
+            "entity {entity:?} must have exactly one prismatic or revolute joint"
+        ));
+    }
+    // Explicit Avian scalar boundary, after finite/range validation above.
+    let effort = drive.max_effort as f32;
+    let bodies = if linear {
+        let mut joint = world
+            .get_mut::<PrismaticJoint>(entity)
+            .expect("validated slider");
+        if joint.motor.enabled
+            && joint.motor.motor_model == model
+            && joint.motor.max_force == effort
+        {
+            return Ok(());
+        }
+        joint.motor.enabled = true;
+        joint.motor.motor_model = model;
+        joint.motor.max_force = effort;
+        [joint.body1, joint.body2]
+    } else {
+        let mut joint = world
+            .get_mut::<RevoluteJoint>(entity)
+            .expect("validated hinge");
+        if joint.motor.enabled
+            && joint.motor.motor_model == model
+            && joint.motor.max_torque == effort
+        {
+            return Ok(());
+        }
+        joint.motor.enabled = true;
+        joint.motor.motor_model = model;
+        joint.motor.max_torque = effort;
+        [joint.body1, joint.body2]
     };
-    joint.motor.enabled = true;
-    joint.motor.motor_model = model;
-    joint.motor.max_force = drive.max_force as f32;
+    joint::wake_sleeping_joint_bodies(world, bodies);
     Ok(())
 }
 
-/// Read a force-based prismatic drive's native dimensional coefficients.
+/// Read a force-based coordinate drive's native dimensional coefficients.
 /// Frequency and acceleration models do not expose force coefficients.
-pub fn prismatic_drive_snapshot(world: &World, entity: Entity) -> Option<PrismaticDriveSnapshot> {
-    use avian3d::prelude::PrismaticJoint;
+pub fn joint_drive_snapshot(world: &World, entity: Entity) -> Option<JointDriveSnapshot> {
+    use avian3d::prelude::{PrismaticJoint, RevoluteJoint};
 
-    let joint = world.get::<PrismaticJoint>(entity)?;
-    let (stiffness, damping) = motor_model_force_coefficients(joint.motor.motor_model)?;
-    Some(PrismaticDriveSnapshot {
-        enabled: joint.motor.enabled,
+    let linear = world.get::<PrismaticJoint>(entity);
+    let angular = world.get::<RevoluteJoint>(entity);
+    let (is_angular, enabled, model, position, velocity, effort) = match (linear, angular) {
+        (Some(joint), None) => (
+            false,
+            joint.motor.enabled,
+            joint.motor.motor_model,
+            joint.motor.target_position,
+            joint.motor.target_velocity,
+            joint.motor.max_force,
+        ),
+        (None, Some(joint)) => (
+            true,
+            joint.motor.enabled,
+            joint.motor.motor_model,
+            joint.motor.target_position,
+            joint.motor.target_velocity,
+            joint.motor.max_torque,
+        ),
+        _ => return None,
+    };
+    let (stiffness, damping) = motor_model_force_coefficients(model)?;
+    Some(JointDriveSnapshot {
+        angular: is_angular,
+        enabled,
         model: "force",
-        target_position: f64::from(joint.motor.target_position),
-        target_velocity: f64::from(joint.motor.target_velocity),
+        target_position: f64::from(position),
+        target_velocity: f64::from(velocity),
         stiffness,
         damping,
-        max_force: f64::from(joint.motor.max_force),
+        max_effort: f64::from(effort),
     })
 }
 
@@ -1353,21 +1409,21 @@ mod tests {
             .spawn(avian3d::prelude::PrismaticJoint::new(hull, leg))
             .id();
 
-        set_prismatic_drive(
+        set_joint_drive(
             &mut world,
             joint,
-            PrismaticDriveParameters {
+            JointDriveParameters {
                 stiffness: 4000.0,
                 damping: 1600.0,
-                max_force: 12000.0,
+                max_effort: 12000.0,
             },
         )
         .expect("joint drive should accept dimensional values");
-        let snapshot = prismatic_drive_snapshot(&world, joint).expect("drive snapshot");
+        let snapshot = joint_drive_snapshot(&world, joint).expect("drive snapshot");
         assert_eq!(snapshot.model, "force");
         assert!((snapshot.stiffness - 4000.0).abs() < 1e-6);
         assert!((snapshot.damping - 1600.0).abs() < 1e-6);
-        assert!((snapshot.max_force - 12000.0).abs() < 1e-6);
+        assert!((snapshot.max_effort - 12000.0).abs() < 1e-6);
     }
 
     #[test]

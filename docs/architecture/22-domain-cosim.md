@@ -24,6 +24,19 @@ Avian contact ports consume the physics owner's retained-interval interpretation
 of its native contact graph. A coupling hold changes scheduling permission,
 without changing the duration or load represented by that completed sample.
 
+Authored mechanism policy can inspect `joint_drive(id)` and change the native
+dimensional law with `set_joint_drive(id, stiffness, damping, max_effort)`.
+Both prismatic and revolute joints use the same physics-owned boundary. A
+snapshot's `angular` flag selects SI metres/newtons or radians/newton-metres;
+angular stiffness and damping are per radian, after the USD reader's degree
+conversion. `max_effort` is force or torque accordingly. Zero effort disables
+delivered motor force without replacing the joint, resetting its targets, or
+removing passive constraints. Positive infinity retains the native unlimited
+cap. Invalid coefficients reject before mutation; changed laws wake sleeping
+dynamic endpoints. Rhai owns latch sequencing or other application policy.
+The production `native_force_drives` gate exercises both coordinate kinds,
+zero/restored effort, target retention, rejection and delivered dynamics.
+
 Native external FMI 3 Co-Simulation import belongs to
 [`lunco-fmi`](../../crates/lunco-fmi/README.md), installed by the shared
 headless/windowed simulation composition. `LoadFmu` admits bounded archives

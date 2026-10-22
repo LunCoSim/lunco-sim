@@ -8,7 +8,9 @@ fn simulation_dependencies(me,ctx) {
         bodies.push(find_path("/World/"+name));
         bodies.push(find_path("/World/"+name+"Host"));bodies.push(find_path("/World/"+name+"Bob"));
     }
-    #{modelica_entities:[],entity_reads:bodies,entity_writes:[find_path("/World/Finite")],query_reads:["QueryPhysicsState"],required_inputs:[]}
+    #{modelica_entities:[],entity_reads:bodies,
+      entity_writes:[find_path("/World/Finite"),find_path("/World/Angular")],
+      query_reads:["QueryPhysicsState"],required_inputs:[]}
 }
 fn measured(joint,angular) {
     if angular {return [get(joint,"angle"),get(joint,"angular_velocity")];}
@@ -16,9 +18,21 @@ fn measured(joint,angular) {
 }
 fn on_start(me,ctx) {
     let finite=find_path("/World/Finite");
-    this.omitted_unlimited=joint_drive(finite).max_force.is_infinite();
-    this.setter_unlimited=set_joint_drive(finite,1000.0,100.0,joint_drive(find_path("/World/Computed")).max_force);
+    this.omitted_unlimited=joint_drive(finite).max_effort.is_infinite();
+    this.setter_unlimited=set_joint_drive(finite,1000.0,100.0,joint_drive(find_path("/World/Computed")).max_effort);
     this.setter_rejected_negative=!set_joint_drive(finite,1000.0,100.0,-1.0);
+    let angular=find_path("/World/Angular");
+    let before=joint_drive(angular);
+    this.coordinate_kinds=before.angular==true && joint_drive(finite).angular==false;
+    let disabled=set_joint_drive(angular,before.stiffness,before.damping,0.0);
+    let off=joint_drive(angular);
+    this.angular_zero_cap=disabled && off.max_effort==0.0
+        && off.target_position==before.target_position && off.target_velocity==before.target_velocity;
+    let restored=set_joint_drive(angular,before.stiffness,before.damping,before.max_effort);
+    let after=joint_drive(angular);
+    this.angular_restored=restored && after==before;
+    this.angular_rejected=!set_joint_drive(angular,before.stiffness,-1.0,before.max_effort)
+        && joint_drive(angular)==after;
     this.done=false;this.previous=[];this.cases=[];
     this.max_momentum_error=0.0;this.max_kinematic_error=0.0;this.max_damping_error=0.0;this.max_damping_force_error=0.0;this.max_damping_torque_error=0.0;this.previous_damping=[];
     this.mechanics_initialized=false;
@@ -33,7 +47,7 @@ fn initialize_mechanics() {
     // Native solver state and shape mass properties use f32. Bound conservation by
     // their relative precision while retaining an absolute floor near zero.
     this.momentum_tolerance=max(1.0e-10,abs(this.damping_momentum)*NATIVE_EPSILON*128.0);
-    this.max_position_error=0.0;this.max_velocity_error=0.0;this.max_force_error=0.0;this.samples=0;
+    this.max_position_error=0.0;this.max_velocity_error=0.0;this.max_effort_error=0.0;this.samples=0;
     for name in ["Finite","Computed","Damping","Angular"] {
         let host=query("QueryPhysicsState",#{id:find_path("/World/"+name+"Host")});
         let bob=query("QueryPhysicsState",#{id:find_path("/World/"+name+"Bob")});
@@ -100,34 +114,49 @@ fn on_tick(me,ctx) {
             this.max_velocity_error=max(this.max_velocity_error,(state[1]-v).abs());
             let expected_effort=(v-initial_v)/(drive.w*clock.physics_dt_s);
             let effort_port=if drive.angular {"torque"} else {"force"};
-            this.max_force_error=max(this.max_force_error,(get(drive.id,effort_port)-expected_effort).abs());
+            this.max_effort_error=max(this.max_effort_error,(get(drive.id,effort_port)-expected_effort).abs());
         }
     }
     this.previous=current;this.samples+=1;
     if this.samples<20 {return;}
     this.done=true;
     let computed=query("QueryPhysicsState",#{id:find_path("/World/ComputedBob")});
+    let stop=find_path("/World/Stop");
+    let stop_law=joint_drive(stop);
+    // Cancellation is relative to the opposing dimensional actuator load,
+    // not an absolute, unitless multiple of native machine epsilon.
+    let stop_effort_scale=(stop_law.stiffness*(stop_law.target_position-get(stop,"displacement"))).abs()
+        +(stop_law.damping*get(stop,"velocity")).abs();
+    let stop_force_tolerance=16.0*NATIVE_EPSILON*stop_effort_scale;
+    print("NATIVE STOP CANCELLATION "+#{force_N:get(stop,"force"),
+        opposing_effort_scale_N:stop_effort_scale,tolerance_N:stop_force_tolerance});
     report_verdict([
         t_true(this.omitted_unlimited,"an omitted USD maxForce retains the native unlimited default"),
-        t_true(this.setter_unlimited && joint_drive(find_path("/World/Finite")).max_force.is_infinite(),"the live drive setter retains the unlimited-force contract"),
+        t_true(this.setter_unlimited && joint_drive(find_path("/World/Finite")).max_effort.is_infinite(),"the live drive setter retains the unlimited-force contract"),
         t_true(this.setter_rejected_negative,"the live drive setter rejects a negative force cap without mutation"),
-        t_true(joint_drive(find_path("/World/Computed")).max_force.is_infinite(),"explicit positive infinity retains unlimited drive effort"),
+        t_true(this.coordinate_kinds,"native drive snapshots distinguish linear SI and angular SI/radians"),
+        t_true(this.angular_zero_cap,"a hinge motor can be de-energized without replacing its joint or target"),
+        t_true(this.angular_restored,"restoring hinge effort preserves its complete dimensional law and target"),
+        t_true(this.angular_rejected,"invalid angular drive coefficients reject before any native mutation"),
+        t_true(joint_drive(find_path("/World/Computed")).max_effort.is_infinite(),"explicit positive infinity retains unlimited drive effort"),
         t_true(this.max_damping_force_error<32.0*NATIVE_EPSILON,"the completed reaction includes passive linear damping impulse"),
         t_true(this.max_damping_torque_error<32.0*NATIVE_EPSILON,"the completed reaction includes passive angular damping impulse"),
         t_true(this.max_momentum_error<this.momentum_tolerance,"passive joint damping conserves unequal-inertia momentum"),
         t_true(this.max_kinematic_error<1e-12,"passive joint damping preserves kinematic motion authority"),
         t_true(this.max_damping_error<16.0*NATIVE_EPSILON,"passive joint damping integrates its decay rate against infinite-inertia endpoints"),
         t_true(get(find_path("/World/Damped"),"angular_velocity").abs()<0.01,"angular damping dissipates relative spin"),
-        t_true((get(find_path("/World/Stop"),"displacement")-0.02).abs()<1e-8 && get(find_path("/World/Stop"),"force").abs()<256.0*NATIVE_EPSILON,"opposing motor and travel-stop reactions cancel in the net force port"),
+        t_true((get(stop,"displacement")-0.02).abs()<1e-8
+            && stop_effort_scale>0.0 && get(stop,"force").abs()<stop_force_tolerance,
+            "opposing motor and travel-stop reactions cancel within native precision relative to actuator load"),
         t_true(this.samples>=20,"twenty completed physics samples were observed"),
         t_true(this.max_position_error<1e-8,"force motors preserve the implicit dimensional position law"),
         t_true(this.max_velocity_error<16.0*NATIVE_EPSILON,"force motors use both native endpoint inertias"),
-        t_true(this.max_force_error<256.0*NATIVE_EPSILON,"force and torque ports report the completed native reaction"),
+        t_true(this.max_effort_error<256.0*NATIVE_EPSILON,"force and torque ports report the completed native reaction"),
         t_true(computed.authored_mass_kg==() && computed.mass_kg>0.0,"computed mass uses the same native force law"),
         t_true(get(find_path("/World/Finite"),"displacement")>0.01,"the finite-mass spring actually moves"),
         t_true(get(find_path("/World/Damping"),"velocity")<0.1,"pure damping dissipates relative motion"),
         t_true(get(find_path("/World/ZeroCap"),"displacement").abs()<1e-12 && get(find_path("/World/ZeroCap"),"force").abs()<1e-12,"a zero force cap prevents actuation"),
         t_true(get(find_path("/World/ZeroGains"),"displacement").abs()<1e-12,"omitted USD gains retain their zero semantic defaults"),
     ],"Native force drives","NATIVE_FORCE_DRIVES");
-    print("NATIVE FORCE DRIVES "+#{maximum_momentum_error:this.max_momentum_error,maximum_damping_velocity_error:this.max_damping_error,stop_position:get(find_path("/World/Stop"),"displacement"),stop_force:get(find_path("/World/Stop"),"force"),maximum_kinematic_error:this.max_kinematic_error,maximum_position_error:this.max_position_error,maximum_velocity_error:this.max_velocity_error,maximum_effort_error:this.max_force_error,maximum_damping_force_error_N:this.max_damping_force_error,maximum_damping_torque_error_Nm:this.max_damping_torque_error});
+    print("NATIVE FORCE DRIVES "+#{maximum_momentum_error:this.max_momentum_error,maximum_damping_velocity_error:this.max_damping_error,stop_position:get(find_path("/World/Stop"),"displacement"),stop_force:get(find_path("/World/Stop"),"force"),maximum_kinematic_error:this.max_kinematic_error,maximum_position_error:this.max_position_error,maximum_velocity_error:this.max_velocity_error,maximum_effort_error:this.max_effort_error,maximum_damping_force_error_N:this.max_damping_force_error,maximum_damping_torque_error_Nm:this.max_damping_torque_error});
 }
