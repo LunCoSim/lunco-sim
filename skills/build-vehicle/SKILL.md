@@ -498,6 +498,13 @@ by both shared drive laws. `drive`/`brake` select direct program control;
 require possession and remain inactive without it. Verify mode boundaries with
 `modelica_drive_law` and real travel with the matching drivetrain scene gate.
 
+Continuous actuator demands belong on continuous port connections or inside
+the same Modelica composition. Discrete Rhai control edges must not serve as
+the sampling clock for an analog steering demand. Keep ownership/takeover and
+mission sequencing in Rhai; the finite rack and control equations stay in
+Modelica. Declare operating-envelope assumptions explicitly and qualify both
+nominal behavior and a physically meaningful negative fixture.
+
 Engineering failure policy uses `PauseSimulationObject`, not a physics-only
 freeze. The co-simulation owner includes the active mechanical island, owned
 controllers and all connected continuous models. Independent systems and an

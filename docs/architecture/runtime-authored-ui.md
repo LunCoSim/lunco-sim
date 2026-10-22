@@ -15,9 +15,8 @@ it cannot inspect ECS state or directly mutate the simulation.
 
 ## Version and capability baseline
 
-The current dependency baseline is `bevy_hui 0.7.0`, `bevy_flair 0.8.1`, and
-Bevy `0.19.1`. HUI 0.7 is the HUI release for Bevy 0.19; Flair 0.8 is the
-matching CSS/style release. Keep the committed `Cargo.lock` as the version
+The committed dependency baseline is `bevy_hui 0.8.0`, `bevy_flair 0.9.0`, and
+Bevy `0.20.0`. Keep the committed `Cargo.lock` as the version
 evidence and re-check upstream release notes before changing this contract.
 
 The shipped contract deliberately uses the smallest stable subset:

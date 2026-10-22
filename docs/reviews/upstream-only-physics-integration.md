@@ -9,7 +9,10 @@ suspension (16). Three-Twin qualification remains incomplete. Tesla's raycast
 realization passes
 wall holding/release, steering at 5/15/30 m/s, ramp driving and all four entry
 cases, motor launch, moving jump, 120 kWh mass/energy balance and 14 graphical
-wheel checks. Drop travel, roof impact and full-course guidance remain open.
+wheel checks. Tesla `38128c4` also passes all seven full-course SysML checks,
+seven early-timing checks, a measured late-collision case and seven coupled
+adhesion-pause checks, with inspected shared-HUD failure presentation. Drop
+travel and roof impact remain open.
 Griffin's high-energy engine-off drop needs physical failure classification
 rather than a settling assertion.
 Earlier measurements below qualify their recorded artifacts only.
@@ -276,10 +279,32 @@ wall holding/release, steering at 5/15/30 m/s, ramp drive, 11/25/40 m/s entry wi
 fans and 25 m/s without fans, motor launch, moving jump and 120 kWh mass/energy
 balance. The wall descends 0.37 m in five seconds with 39.999 kN suction before
 falling on fan release; finite-slip support does not qualify exact static holding.
-Roof impact, excessive compression on drop and full-course guidance retain their
-failed gates. The linear raycast spring has no mechanical travel limit; nominal
+Roof impact and excessive compression on drop retain their failed gates. The
+linear raycast spring has no mechanical travel limit; nominal
 passing cases do not qualify a crash/landing envelope. Scene tests retain their
 original physical acceptance bounds.
+
+Tesla `38128c4` connects the continuous Modelica pilot directly to its finite
+steering rack. Rhai owns autopilot selection and discrete mission/control edges;
+those discrete edges no longer sample an analog steering demand. Body-frame
+pure pursuit and a steady 12 m/s compact-ramp approach retain actual tire/rack
+motion. The explicit 0.40 m flexible-skirt assumption covers the compact return
+curve without increasing fan area, pressure or electrical power. The shorter
+0.25 m skirt loses seal and has a composed negative fixture.
+
+All seven nominal course criteria pass in 29.18 simulated seconds. The early
+jump also satisfies all seven criteria; the late fixture explicitly expects a
+measured native chassis collision and mission miss. Timing perturbations do not
+imply a failure verdict by themselves. Modelica detects loss of fan-supported
+climb; Rhai invokes the existing `PauseSimulationObject` mechanism with measured
+height, suction, weight and seal. Seven assertions verify one sourced Recent
+Events explanation, stopped pose/Modelica clock/air/battery/mission time and
+retained world readiness. The graphical production host shows the pause through
+shared vessel-HUD status and badge fields. No new Rust dynamics, pause mechanism
+or UI widget is added. Source hashes and captures are in
+`raycast-roadster/coupled-adhesion-integration/`, `explicit-timing-verdicts/` and
+`adhesion-ui-composed/` under the evidence root. Tesla's remaining sky, rotor and
+jet assets use native WESL in local main `669544f`.
 
 Omniverse's [vehicle authoring guide](https://docs.omniverse.nvidia.com/kit/docs/omni_physics/110.1/dev_guide/vehicles/vehicles.html)
 uses raycasts or sweeps for suspension/road contact and separates this from

@@ -25,9 +25,9 @@ windowed host in `crates/lunco-luncosim-ui/src/ui/` supplies app-specific gates,
 capture mode, and action handling. Do not assume that `lunica` or a headless
 server has this surface manifest.
 
-The current compatible dependency baseline is `bevy_hui 0.7.0`,
-`bevy_flair 0.8.1`, and Bevy `0.19.1`; verify the lockfile and upstream release
-notes before changing it. HUI 0.7 is the Bevy 0.19 release. The separate
+The committed dependency baseline is `bevy_hui 0.8.0`, `bevy_flair 0.9.0`,
+and Bevy `0.20.0`. Verify the lockfile and upstream release notes before
+changing it. The separate
 `bevy_hui_widgets 0.6.0` crate provides primitive text-input, slider, and select
 components, but is intentionally not a LunCoSim dependency: it does not define
 our clipboard, validation, keyboard-navigation, accessibility, or modal

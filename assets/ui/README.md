@@ -5,9 +5,8 @@ client. They are not browser documents: there is no DOM, JavaScript, network
 fetch, or full HTML/CSS implementation. The architecture and limitations are
 documented in [`docs/architecture/runtime-authored-ui.md`](../../docs/architecture/runtime-authored-ui.md).
 
-The pinned 2026-09 baseline is `bevy_hui 0.7.0` with `bevy_flair 0.8.1` on
-Bevy `0.19.1`. These are the current compatible releases in the committed
-lockfile. HUI is the template/event layer and Flair is the retained Bevy CSS
+The committed baseline is `bevy_hui 0.8.0` with `bevy_flair 0.9.0` on Bevy
+`0.20.0`. HUI is the template/event layer and Flair is the retained Bevy CSS
 style layer; neither is a browser DOM.
 
 ## Stable surface contract
