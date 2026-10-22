@@ -5,9 +5,13 @@ The application retains the native `e4f073b` pin; the dense island candidate is
 not adopted. The regular production Tracy rebuild passes. Current production
 gates pass isolated tire (4 checks), Lunokhod (102), shared drivetrain parity
 (20), Modelica raycast drive (8), object suspension (11) and coupled wheel
-suspension (16). Three-Twin qualification remains incomplete: Roadster's ramp
-and medium/high-speed steering gates fail, and Griffin's high-energy engine-off
-drop needs physical failure classification rather than a settling assertion.
+suspension (16). Three-Twin qualification remains incomplete. Tesla's raycast
+realization passes
+wall holding/release, steering at 5/15/30 m/s, ramp driving and all four entry
+cases, motor launch, moving jump, 120 kWh mass/energy balance and 14 graphical
+wheel checks. Drop travel, roof impact and full-course guidance remain open.
+Griffin's high-energy engine-off drop needs physical failure classification
+rather than a settling assertion.
 Earlier measurements below qualify their recorded artifacts only.
 
 ## Ownership
@@ -132,16 +136,16 @@ penetration measurement.
 
 The Summer Lunokhod flat-ground gate passes 102 checks after migrating its
 lifecycle/dependency declarations and using the existing Modelica waypoint
-setpoint helper. Tesla steering and Griffin engine-off impact still fail their
-authored gates. The complete three-Twin suite and graphical physics acceptance
-remain open.
+setpoint helper. Griffin engine-off impact still needs its authored failure
+qualification.
+The complete three-Twin suite remains open.
 
 Profile revolution accepts an explicit local direction in both the geometry
 kernel and document operation. Points and normals rotate together in f64; the
 command rejects zero/non-finite directions before document mutation. The native
-axis test and 18-check production Rhai geometry contract pass. Tesla's authored contact geometry is now analytic X-axis cylinders, with crowned
-visual meshes excluded from collision. On the retained native pin, the isolated
-tire passes, but the ramp and medium/high-speed steering gates still fail.
+axis test and 18-check production Rhai geometry contract pass. The generic
+analytic-cylinder tire gate remains available. Tesla uses the
+existing analytical raycast realization with a separate crowned render mesh.
 
 The native offset-slider reproduction passes blocked-axis and hard-stop checks.
 A loaded-slider impact preserves contact and travel on static ground and a moving
@@ -259,19 +263,23 @@ equal initial geometry. The retained `e4f073b` pin passes all 20 production
 checks with ordinary authored hinge projection. The steering agreement
 criterion has not been relaxed.
 
-Tesla's reference dry mass is 1700 kg, with 128 kg assigned to its four wheels,
-four carriers and two steering knuckles. Its Modelica chassis calculation
-subtracts those masses and parallel-axis inertia contributions. The 24 kg,
-0.34 m wheel's 1.4 kg m² axial inertia is consistent with a solid-cylinder
-estimate of 1.3872 kg m². Using the reference sprung mass of 1572 kg, each
-300,000 N/m suspension gives approximately 4.40 Hz ride frequency, 12.8 mm
-static compression and damping ratio 0.645 at 14,000 N s/m. These are stiff
-study assumptions, not grounds for arbitrary solver-oriented mass inflation.
-The authored analytic-cylinder wheels preserve the X-axis geometry contract.
-On the retained native pin, steering passes the 5 m/s comparison but fails at
-15 and 30 m/s: wheel heading departs from its target while all suspensions sit
-at their upper travel stops. The ramp gate also fails. Geometry cleanup alone
-does not qualify this vehicle.
+Tesla's local main commit `884de7e` uses four query wheels and one complete
+vehicle rigid body. Modelica supplies its full dry-plus-air mass, COM and inertia;
+separate wheel/carrier masses and parallel-axis subtraction are removed. Scene
+instances inherit vehicle-local mounts. The cabin remains a convex mesh hull,
+with all seven chassis collision parts active. Published wheel ports own road
+contact observations; native pair impulses remain chassis/obstacle observations.
+The 0.34 m wheel and 1.4 kg m² axial inertia remain study assumptions.
+
+The retained `e4f073b` pin passes nominal Tesla driving without new solver code:
+wall holding/release, steering at 5/15/30 m/s, ramp drive, 11/25/40 m/s entry with
+fans and 25 m/s without fans, motor launch, moving jump and 120 kWh mass/energy
+balance. The wall descends 0.37 m in five seconds with 39.999 kN suction before
+falling on fan release; finite-slip support does not qualify exact static holding.
+Roof impact, excessive compression on drop and full-course guidance retain their
+failed gates. The linear raycast spring has no mechanical travel limit; nominal
+passing cases do not qualify a crash/landing envelope. Scene tests retain their
+original physical acceptance bounds.
 
 Omniverse's [vehicle authoring guide](https://docs.omniverse.nvidia.com/kit/docs/omni_physics/110.1/dev_guide/vehicles/vehicles.html)
 uses raycasts or sweeps for suspension/road contact and separates this from
@@ -297,11 +305,13 @@ query-only wheel; enabled or malformed collision still fails lint.
 The bounded production cohort passes 51 checks across render ownership (10),
 mesh warning (5), coupled wheel pause (16) and drivetrain parity (20). Loading
 the invalid source directly exits with `usd-wheel-visual-invalid` before
-simulation, without a panic. Tesla's rendered analytic-wheel gate passes 13
-checks and two inspected views show one crowned tire surface; its cabin mesh
-hull remains intact. The existing free-wheel torque/bearing mechanism test
+simulation, without a panic. Tesla's rendered raycast-wheel gate passes 14
+checks, including complete
+vehicle mass, and two inspected views show one crowned tire surface; its cabin
+mesh hull remains intact. The existing free-wheel torque/bearing mechanism test
 also passes after updating its native Avian fixture types. Evidence is under
-`.cache/codex-evidence/physics-followup-20261021/wheel-render-root/`.
+`.cache/codex-evidence/physics-followup-20261021/wheel-render-root/`; current
+Tesla qualification is in the adjacent `raycast-roadster/` directory.
 
 The regular `target/debug/luncosim` cohort and source hashes are retained under
 `.cache/codex-evidence/physics-followup-20261021/native-e4-analytic-wheel-runtime/`;
