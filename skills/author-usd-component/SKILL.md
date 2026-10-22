@@ -652,6 +652,12 @@ facts; keep them in separate layers and verify the composed result.
 
 ### Revolved profile shading
 
+`RevolveProfileMesh.axis` is a required nonzero local direction. Profile heights
+follow its normalized direction; the geometry kernel rotates points and normals
+together in f64. Use the intended mechanical/component frame directly rather
+than adding an entity rotation to compensate for mesh construction. The Rhai
+kernel call is `revolve_profile(profile, vec3(0.0, 1.0, 0.0), segments)`.
+
 `RevolveProfileMesh` accepts `normal_crease_angle_deg`: zero preserves flat
 shading; a positive angle smooths shared face corners within that crease.
 Choose the angle in the owning component recipe/requirements. Geometry,

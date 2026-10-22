@@ -82,12 +82,13 @@ fn profile_extrusion(
 
 fn profile_revolution(
     values: Array,
+    axis: DVec3,
     angular_segments: i64,
 ) -> Result<RevolvedProfileMeshData, Box<EvalAltResult>> {
     let points = profile_points(values)?;
     let angular_segments = u16::try_from(angular_segments)
         .map_err(|_| runtime_error("revolution segment count must be a positive integer"))?;
-    revolve_profile(&points, angular_segments).map_err(|error: ProfileRevolutionError| {
+    revolve_profile(&points, axis, angular_segments).map_err(|error: ProfileRevolutionError| {
         runtime_error(format!("profile revolution failed: {error}"))
     })
 }

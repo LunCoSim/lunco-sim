@@ -5,9 +5,9 @@
 //! `UsdGeomMesh` without adding a second parametric schema or storing design
 //! values in USD strings.
 
-use bevy_math::{DVec2, DVec3};
+use bevy_math::{DQuat, DVec2, DVec3};
 
-/// A closed, indexed surface of revolution around local +Y.
+/// A closed, indexed surface of revolution around an explicit local axis.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RevolvedProfileMeshData {
     points: Vec<DVec3>,
@@ -87,6 +87,7 @@ pub enum ProfileRevolutionError {
     MeshTooLarge,
     DegenerateFace,
     InvalidCreaseAngle,
+    InvalidAxis,
 }
 
 impl std::fmt::Display for ProfileRevolutionError {
@@ -106,6 +107,7 @@ impl std::fmt::Display for ProfileRevolutionError {
             Self::InvalidCreaseAngle => {
                 "normal crease angle must be finite and within 0..180 degrees"
             }
+            Self::InvalidAxis => "revolution axis must have a finite nonzero direction",
         };
         f.write_str(message)
     }
@@ -113,7 +115,8 @@ impl std::fmt::Display for ProfileRevolutionError {
 
 impl std::error::Error for ProfileRevolutionError {}
 
-/// Revolve a simple closed `(radius, height)` polygon around local +Y.
+/// Revolve a simple closed `(radius, height)` polygon around a local direction.
+/// Profile heights measure distance along the normalized axis from the origin.
 ///
 /// The polygon is implicitly closed, may be authored in either winding, and
 /// may touch the axis at one or more profile vertices. Axis edges collapse to
@@ -122,11 +125,17 @@ impl std::error::Error for ProfileRevolutionError {}
 /// segments prevents accidental low-resolution visual primitives.
 pub fn revolve_profile(
     profile: &[DVec2],
+    axis: DVec3,
     angular_segments: u16,
 ) -> Result<RevolvedProfileMeshData, ProfileRevolutionError> {
     const MAX_PROFILE_POINTS: usize = 4096;
     const MAX_ANGULAR_SEGMENTS: u16 = 512;
     const MAX_VERTICES: usize = 250_000;
+
+    let axis = axis
+        .try_normalize()
+        .ok_or(ProfileRevolutionError::InvalidAxis)?;
+    let orientation = DQuat::from_rotation_arc(DVec3::Y, axis);
 
     if profile.len() < 3 {
         return Err(ProfileRevolutionError::TooFewPoints);
@@ -248,6 +257,12 @@ pub fn revolve_profile(
     if face_vertex_counts.is_empty() {
         return Err(ProfileRevolutionError::DegenerateArea);
     }
+    for point in &mut points {
+        *point = orientation * *point;
+    }
+    for normal in &mut face_varying_normals {
+        *normal = orientation * *normal;
+    }
     Ok(RevolvedProfileMeshData {
         points,
         face_vertex_counts,
@@ -320,6 +335,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn revolution_axis_preserves_axial_dimensions_and_rejects_invalid_directions() {
+        let profile = [DVec2::ZERO, DVec2::X, DVec2::ONE, DVec2::Y];
+        for direction in [
+            DVec3::X,
+            DVec3::Y,
+            DVec3::Z,
+            DVec3::NEG_Y,
+            DVec3::new(1.0, 2.0, 3.0),
+        ] {
+            let mesh = revolve_profile(&profile, direction, 32).unwrap();
+            let axis = direction.normalize();
+            let mut minimum = f64::INFINITY;
+            let mut maximum = f64::NEG_INFINITY;
+            let mut radius = 0.0_f64;
+            for point in mesh.points() {
+                let height = point.dot(axis);
+                minimum = minimum.min(height);
+                maximum = maximum.max(height);
+                radius = radius.max((*point - axis * height).length());
+            }
+            assert!(minimum.abs() < 1e-12);
+            assert!((maximum - 1.0).abs() < 1e-12);
+            assert!((radius - 1.0).abs() < 1e-12);
+            assert!(
+                mesh.face_varying_normals()
+                    .iter()
+                    .all(|normal| (normal.length() - 1.0).abs() < 1e-12)
+            );
+        }
+        for axis in [
+            DVec3::ZERO,
+            DVec3::splat(f64::NAN),
+            DVec3::splat(f64::INFINITY),
+        ] {
+            assert_eq!(
+                revolve_profile(&profile, axis, 32),
+                Err(ProfileRevolutionError::InvalidAxis)
+            );
+        }
+    }
+
+    #[test]
     fn smooth_revolution_keeps_rims_and_geometry() {
         let mut mesh = revolve_profile(
             &[
@@ -328,6 +385,7 @@ mod tests {
                 DVec2::new(1.0, 1.0),
                 DVec2::new(0.0, 1.0),
             ],
+            DVec3::Y,
             48,
         )
         .unwrap();

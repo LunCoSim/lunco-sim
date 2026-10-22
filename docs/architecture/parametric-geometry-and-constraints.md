@@ -170,4 +170,16 @@ of material strength, collision ownership, or flight qualification.
 
 ### Revolved profile shading
 
+The required `RevolveProfileMesh.axis` supplies a finite nonzero local direction.
+The shared f64 geometry kernel normalizes it and applies the native quaternion
+rotation to both positions and normals. Profile heights lie along that axis,
+while body, joint and component transforms retain their authored meaning.
+Zero and non-finite directions reject the complete authoring operation before
+document mutation. Rhai uses the same kernel through
+`revolve_profile(profile, axis_vec3, angular_segments)`.
+The production `scripting/tests/test_spatial_geometry.rhai` asset checks the
+typed bindings, X-axis envelope and invalid-direction rejection with the
+`SPATIAL_GEOMETRY` verdict. Run it through `RunScenarioAsset` after scene
+admission so it uses the scenario execution budget.
+
 `RevolveProfileMesh.normal_crease_angle_deg` controls crease-aware face-varying normals in the geometry kernel. Zero retains flat shading; a finite angle from 0 to 180 degrees averages adjacent face normals at each shared indexed vertex only within that angle. Positions, topology, physical dimensions and collision geometry are unchanged. Sharp rims remain separate normals when their dihedral angle exceeds the threshold. The authored result uses ordinary USD mesh normals; no additional persistent schema is introduced.

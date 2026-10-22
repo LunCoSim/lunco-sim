@@ -2,16 +2,18 @@
 // scene acceptance stays in Twin-owned scenario files; this checks only the
 // generic native geometry mechanism exposed to authored tools.
 
-import "assembly_audit" as assembly_audit;
+import "lunco://scripting/tools/assembly_audit" as assembly_audit;
 
 fn _revolved_mesh_signed_volume(mesh) {
     let volume = 0.0;
     let cursor = 0;
+    let points = mesh.points;
+    let indices = mesh.face_vertex_indices;
     for face_count in mesh.face_vertex_counts {
-        let first = mesh.points[mesh.face_vertex_indices[cursor]];
+        let first = points[indices[cursor]];
         for corner in 1..face_count - 1 {
-            let b = mesh.points[mesh.face_vertex_indices[cursor + corner]];
-            let c = mesh.points[mesh.face_vertex_indices[cursor + corner + 1]];
+            let b = points[indices[cursor + corner]];
+            let c = points[indices[cursor + corner + 1]];
             volume += (first.x * (b.y * c.z - b.z * c.y)
                 + first.y * (b.z * c.x - b.x * c.z)
                 + first.z * (b.x * c.y - b.y * c.x)) / 6.0;
@@ -59,7 +61,28 @@ for station in 1..24 {
         foot_radius * angle.sin()));
 }
 hemisphere_profile.push(vec2(0.0, foot_radius));
-let hemisphere = revolve_profile(hemisphere_profile, 64);
+let hemisphere = revolve_profile(hemisphere_profile, vec3(0.0, 1.0, 0.0), 64);
+let wheel_profile = [vec2(0.0, -0.125), vec2(0.34, -0.125),
+    vec2(0.34, 0.125), vec2(0.0, 0.125)];
+let wheel = revolve_profile(wheel_profile, vec3(1.0, 0.0, 0.0), 64);
+let wheel_half_width = 0.0;
+let wheel_radius = 0.0;
+for point in wheel.points {
+    wheel_half_width = max(wheel_half_width, abs(point.x));
+    wheel_radius = max(wheel_radius, sqrt(point.y * point.y + point.z * point.z));
+}
+checks.push(t_true(abs(wheel_half_width - 0.125) < 0.000000000001
+    && abs(wheel_radius - 0.34) < 0.000000000001
+    && _revolved_mesh_signed_volume(wheel) > 0.0,
+    "X-axis revolution preserves axial dimensions and outward winding in the component frame"));
+let invalid_axis_rejected = false;
+try {
+    revolve_profile(wheel_profile, vec3(0.0, 0.0, 0.0), 64);
+} catch (error) {
+    invalid_axis_rejected = error.to_string().contains("revolution axis");
+}
+checks.push(t_true(invalid_axis_rejected,
+    "zero revolution direction fails visibly at the shared geometry owner"));
 let hemisphere_volume = _revolved_mesh_signed_volume(hemisphere);
 let expected_hemisphere_volume = 2.0 * 3.141592653589793
     * foot_radius * foot_radius * foot_radius / 3.0;
@@ -85,12 +108,15 @@ for point in hemisphere.points {
 }
 let face_offset = 0;
 let oriented_faces = true;
+let hemisphere_indices = hemisphere.face_vertex_indices;
+let hemisphere_points = hemisphere.points;
+let hemisphere_normals = hemisphere.face_varying_normals;
 for face_count in hemisphere.face_vertex_counts {
-    let first_index = hemisphere.face_vertex_indices[face_offset];
-    let normal = hemisphere.face_varying_normals[face_offset];
-    let center_dot = normal.x * hemisphere.points[first_index].x
-        + normal.y * hemisphere.points[first_index].y
-        + normal.z * hemisphere.points[first_index].z;
+    let first_index = hemisphere_indices[face_offset];
+    let normal = hemisphere_normals[face_offset];
+    let center_dot = normal.x * hemisphere_points[first_index].x
+        + normal.y * hemisphere_points[first_index].y
+        + normal.z * hemisphere_points[first_index].z;
     if center_dot < -0.000001 { oriented_faces = false; }
     face_offset += face_count;
 }
@@ -152,4 +178,4 @@ let b_far = oriented_bounds3(vec3(3.0, 0.0, 0.0), vec3(0.5, 0.5, 0.5),
 let rotated = bounds_relation(a, b_far);
 checks.push(t_true(rotated.separated && rotated.axis_from_a_to_b.x > 0.9,
     "OBB SAT handles a rotated component and returns its separating axis"));
-t_report(checks);
+report_verdict(checks, "SPATIAL GEOMETRY", "SPATIAL_GEOMETRY");

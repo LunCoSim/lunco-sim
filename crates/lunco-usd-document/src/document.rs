@@ -534,6 +534,8 @@ pub enum UsdOp {
         path: String,
         /// Closed `(radius, height)` profile in the prim's local frame.
         profile: Vec<[f64; 2]>,
+        /// Nonzero local revolution direction; profile heights follow this axis.
+        axis: [f64; 3],
         /// Angular tessellation count. Rust validates the supported range.
         angular_segments: u16,
         /// Shading crease angle in degrees; zero preserves flat face normals.

@@ -2043,6 +2043,7 @@ fn expand_usd_geometry_ops(ops: Vec<UsdOp>) -> Result<Vec<UsdOp>, String> {
                 edit_target,
                 path,
                 profile,
+                axis,
                 angular_segments,
                 normal_crease_angle_deg,
                 display_color,
@@ -2053,6 +2054,7 @@ fn expand_usd_geometry_ops(ops: Vec<UsdOp>) -> Result<Vec<UsdOp>, String> {
                         .into_iter()
                         .map(|[radius, height]| DVec2::new(radius, height))
                         .collect::<Vec<_>>(),
+                    DVec3::from_array(axis),
                     angular_segments,
                 )
                 .map_err(|error| {

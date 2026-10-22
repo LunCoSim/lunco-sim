@@ -132,3 +132,10 @@ lifecycle/dependency declarations and using the existing Modelica waypoint
 setpoint helper. Tesla steering and Griffin engine-off impact still fail their
 authored gates. The complete three-Twin suite and graphical physics acceptance
 remain open.
+
+Profile revolution accepts an explicit local direction in both the geometry
+kernel and document operation. Points and normals rotate together in f64; the
+command rejects zero/non-finite directions before document mutation. The native
+axis test and 18-check production Rhai geometry contract pass. The analytic
+cylinder steering comparison remains unsaved and still fails the steering
+verdict; it is not a behavioral adoption decision.
