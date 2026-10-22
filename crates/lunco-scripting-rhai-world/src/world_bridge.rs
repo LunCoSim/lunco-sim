@@ -2222,20 +2222,19 @@ fn build_world_engine_base(
         .unwrap_or(Dynamic::UNIT)
     });
 
-    // joint_drive(id) / set_joint_drive(id, k, c, max_force) — the live
-    // dimensional drive surface. Position commands remain on the joint's
-    // existing `displacement` port; this operation changes only the authored
-    // force law so a Rhai observer can run controlled A/B sweeps without a
-    // process restart.
+    // joint_drive(id) / set_joint_drive(id, k, c, max_effort) — the live
+    // dimensional drive surface (linear SI or angular SI/radians). Targets stay
+    // on `displacement`/`angle`; tuning preserves targets, frames and joint identity.
     engine.register_fn("joint_drive", |id: i64| -> Dynamic {
         if id < 0 {
             return Dynamic::UNIT;
         }
         bridge_core::with_world(|world| {
             let entity = bridge_core::resolve_entity(world, id as u64)?;
-            let drive = lunco_physics::prismatic_drive_snapshot(world, entity)?;
+            let drive = lunco_physics::joint_drive_snapshot(world, entity)?;
             let mut map = Map::new();
             map.insert("enabled".into(), Dynamic::from_bool(drive.enabled));
+            map.insert("angular".into(), Dynamic::from_bool(drive.angular));
             map.insert("model".into(), Dynamic::from(drive.model));
             map.insert(
                 "target_position".into(),
@@ -2247,7 +2246,7 @@ fn build_world_engine_base(
             );
             map.insert("stiffness".into(), Dynamic::from_float(drive.stiffness));
             map.insert("damping".into(), Dynamic::from_float(drive.damping));
-            map.insert("max_force".into(), Dynamic::from_float(drive.max_force));
+            map.insert("max_effort".into(), Dynamic::from_float(drive.max_effort));
             Some(Dynamic::from_map(map))
         })
         .flatten()
@@ -2258,7 +2257,7 @@ fn build_world_engine_base(
         |id: i64,
          stiffness: f64,
          damping: f64,
-         max_force: f64|
+         max_effort: f64|
          -> Result<bool, Box<EvalAltResult>> {
             bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
             if id < 0 {
@@ -2273,13 +2272,13 @@ fn build_world_engine_base(
                 )?;
                 let entity = bridge_core::resolve_entity(world, id as u64)
                     .ok_or_else(|| format!("unknown entity {id}"))?;
-                lunco_physics::set_prismatic_drive(
+                lunco_physics::set_joint_drive(
                     world,
                     entity,
-                    lunco_physics::PrismaticDriveParameters {
+                    lunco_physics::JointDriveParameters {
                         stiffness,
                         damping,
-                        max_force,
+                        max_effort,
                     },
                 )
             });

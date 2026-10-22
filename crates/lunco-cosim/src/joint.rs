@@ -50,7 +50,7 @@
 
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, JointForces, LinearVelocity, Position, PrismaticJoint,
-    RevoluteJoint, RigidBody, Rotation, Sleeping,
+    RevoluteJoint, RigidBody, Rotation,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -59,7 +59,7 @@ use std::hash::{Hash, Hasher};
 use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_physics::joint::{
     JOINT_ANGLE_PORT, JOINT_ANGULAR_VELOCITY_PORT, JOINT_DISPLACEMENT_PORT, JOINT_FORCE_PORT,
-    JOINT_TORQUE_PORT, JOINT_VELOCITY_PORT,
+    JOINT_TORQUE_PORT, JOINT_VELOCITY_PORT, wake_sleeping_joint_bodies,
 };
 use lunco_port_core::ports::PortDirection;
 
@@ -257,27 +257,6 @@ fn write_motor_angle(world: &mut World, entity: Entity, value: f64) {
     drop(j);
     if wake_bodies {
         wake_sleeping_joint_bodies(world, bodies);
-    }
-}
-
-/// A changed drive setpoint is an external input to the constrained island.
-/// Wake its dynamic endpoints so Avian's solver can consume the new motor target.
-fn wake_sleeping_joint_bodies(world: &mut World, bodies: [Entity; 2]) {
-    for body in bodies {
-        let sleeping_dynamic = world
-            .get::<RigidBody>(body)
-            .is_some_and(RigidBody::is_dynamic)
-            && world.get::<Sleeping>(body).is_some();
-        if sleeping_dynamic
-            && let Err(error) = <avian3d::dynamics::solver::islands::WakeBody as Command>::apply(
-                avian3d::dynamics::solver::islands::WakeBody(body),
-                world,
-            )
-        {
-            warn!(
-                "[cosim] joint motor target changed but dynamic body {body:?} could not be woken: {error}"
-            );
-        }
     }
 }
 

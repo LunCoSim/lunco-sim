@@ -43,6 +43,15 @@ native engineering convention at `f64`; an explicit renderer/presentation
 lowering is the normal `f32` boundary. Avian 0.8 also uses internal f32 state;
 the user accepted that explicit native boundary for the 2026-10-21 migration.
 TODO: qualify and address local joint/contact precision and accumulated drift.
+For native dimensional motors, use `joint_drive(id)` and
+`set_joint_drive(id, stiffness, damping, max_effort)`. The snapshot's `angular`
+flag distinguishes slider SI units from hinge SI/radian units; USD degree
+conversion belongs to the USD reader. The setter retains joint identity,
+frames and targets, validates the native scalar boundary, and wakes changed
+dynamic endpoints. Rhai owns sequencing, including when to suppress or restore
+motor effort around a mechanical latch. Retain the observed native law rather
+than duplicating its coefficients. The production `native_force_drives` scene
+checks linear/angular controls and rejection without mutation.
 Put shared hot vector operations
 in the Rust Rhai bridge over the existing native `DVec3`/`DQuat`/transform
 values: finite/validity predicates, dot/cross, clamped cosine, angle, component
