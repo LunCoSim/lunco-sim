@@ -89,7 +89,7 @@ Each format adapter implements only what is format-specific:
 | Modelica | source/AST/diagram lowering, parse scheduling, compile state and runtime projection | operation constructors, generation cursor, compile checkpoint, model/diagram UX |
 | SysML/KerML | UTF-8 source ranges, parser/resolver snapshot and source-set validation | source edit plans, requirement/verification policy, traceability checkpoint |
 | Rhai | script document source, UTF-8 edits and hook lifecycle | authored scenario/tool policy and test verdicts |
-| Shaders/other text domains | existing parser/compiler and resource owner (WGSL currently `CreateShader`/`ImportShader`) | add a source-edit facade only after a document adapter; never write shader files from a generic tool |
+| Shaders/other text domains | existing parser/compiler and resource owner (WESL currently `CreateShader`/`ImportShader`) | add a source-edit facade only after a document adapter; never write shader files from a generic tool |
 
 The dynamic tool boundary is `assets/scripting/tools/*.rhai`. A tool is
 discoverable and hot-reloadable by name; it may call only the public `cmd` /

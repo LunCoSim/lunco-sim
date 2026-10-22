@@ -30,14 +30,14 @@ terrain queries, and colliders inside the crop retain the same composed
 surface; the raw DEM grid is never rewritten.
 The collar reads cropped map images from the DEM prim and takes appearance from
 the body's USD-selected `UsdShade` material. A shader that accepts the local
-maps declares the same `info:wgsl:interface` and WGSL `//!@interface`
+maps declares the same `info:wesl:interface` and WESL `//!@interface`
 `lunco.lunar-surface-continuation.v1` contract. The runtime adds only local DEM
 map roles and visual crop parameters to a clone of the body's `ShaderLook`; USD
 continues to own both shader asset paths. The required Rhai action policy admits
 only compatible reflected interfaces; invalid interfaces hold simulation and
 keep the collar hidden. The compositor owns DEM collar visibility, and globe
 cutout admission consumes its material-ready visibility. `RunLint` checks the
-live USD declaration against the reflected WGSL source.
+live USD declaration against the reflected WESL source.
 
 The render shell closes the finite crop; it does not describe measured terrain
 outside it. One collar width is sized from the largest measured edge relief and

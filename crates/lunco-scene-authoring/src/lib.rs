@@ -9,6 +9,7 @@
 pub mod doc_resolve;
 pub mod properties;
 pub mod shader_doc;
+pub mod shader_sources;
 
 use bevy::prelude::*;
 use lunco_core::register_commands;
@@ -29,6 +30,9 @@ impl Plugin for SceneAuthoringPlugin {
     fn build(&self, app: &mut App) {
         register_all_commands(app);
         app.init_resource::<shader_doc::ShaderRegistry>();
+        app.init_resource::<shader_sources::PendingShaderSources>();
+        app.add_observer(shader_sources::retire_shader_sources);
+        app.add_systems(Update, shader_sources::publish_shader_sources);
         app.add_observer(properties::persist_wheel_to_runtime_layer);
         app.add_systems(
             Update,

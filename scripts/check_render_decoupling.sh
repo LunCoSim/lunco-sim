@@ -50,11 +50,8 @@ cd "$PROJECT_DIR"
 PKG="lunco-luncosim-server"
 CORE_PKG="lunco-core"
 
-# `naga` is deliberately ABSENT from this list. It remains in the graph via
-# `bevy_shader`, which supplies the WGSL compiler that `SetShaderSource` /
-# `CreateShader` use to compile shader edits into `Assets<Shader>` without a
-# disk round-trip. A compiler is not a GPU stack. Moving it behind the gate
-# is a separate, smaller job — see render-decoupling.md.
+# `naga` remains through the render-free `bevy_shader` package. Native WESL
+# loading, dependency preparation and shader-cache compilation do not need wgpu.
 BANNED=(wgpu bevy_render bevy_pbr bevy_core_pipeline egui winit bevy_input_focus)
 CORE_BANNED=(bevy_state bevy_input_focus bevy_window)
 

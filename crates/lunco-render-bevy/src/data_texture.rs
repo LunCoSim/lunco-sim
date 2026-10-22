@@ -19,7 +19,9 @@ pub(super) fn build(app: &mut App) {
             .add_systems(ExtractSchedule, extract_patches)
             .add_systems(
                 Render,
-                upload_patches.in_set(RenderSystems::PrepareResources),
+                upload_patches
+                    .in_set(RenderSystems::PrepareResources)
+                    .before(RenderSystems::Render),
             );
     }
 }

@@ -46,10 +46,14 @@ from the sum; connected or time-varying inputs reject document authoring before
 any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
 `RunScenarioAsset` on the settled replacement fixture to verify that contract.
 
+Use native WESL (`.wesl`) imports and conditional attributes. Headless
+`ValidateAsset` checks syntax with the shared WESL frontend; full pipeline and
+GPU acceptance still require the rendered fixture and a clean process log.
+
 ## Diagnose in order
 
 1. Confirm the terrain prim, `material:binding`, Material surface connection,
-   shader `info:wgsl:sourceAsset`, and authored `inputs:albedo_map`/
+   shader `info:wesl:sourceAsset`, and authored `inputs:albedo_map`/
    `inputs:normal_map`/weights in the composed stage. A composed-stage read is
    the runtime truth; do not open layers from a tutorial.
 2. Inspect the actual asset role and color space. An illumination-bearing
@@ -249,9 +253,9 @@ the rest of camera-driven globe LOD independent of DEM posting density. The
 sphere beyond the crop is visual closure, not measured regional terrain. The
 collar reads local maps from the DEM prim and appearance from the body's
 USD-selected `material:binding`. Its shader asset path remains in USD. A
-continuation shader declares matching WGSL and USD
+continuation shader declares matching WESL and USD
 `lunco.lunar-surface-continuation.v1` interfaces; `RunLint` compares the authored
-declaration with loaded WGSL. Rhai holds simulation for incompatible sources.
+declaration with loaded WESL. Rhai holds simulation for incompatible sources.
 Only the compositor admits a DEM collar's visibility after its composed look
 is bound; globe cutout admission consumes that readiness and visibility.
 

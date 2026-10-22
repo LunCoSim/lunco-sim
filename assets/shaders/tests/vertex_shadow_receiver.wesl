@@ -1,6 +1,7 @@
+import bevy_pbr::render::{forward_io::VertexOutput, mesh_functions, shadows, mesh_view_bindings::view};
+
 // Green: the vacated position is lit. Cyan: the displaced caster casts here.
 // Red is a shadow/visible-geometry disagreement; gray is outside the probes.
-#import bevy_pbr::{forward_io::VertexOutput, mesh_functions, shadows, mesh_view_bindings::view}
 struct Material { unused: f32, }
 
 @fragment

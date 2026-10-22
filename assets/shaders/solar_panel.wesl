@@ -1,3 +1,11 @@
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+};
+
 //! Solar panel material for the general `ShaderMaterial`.
 //!
 //! Renders a photovoltaic cell grid procedurally on a panel's UV [0,1] surface:
@@ -12,13 +20,6 @@
 //! struct (field names → offsets) and the `//!@` annotations straight out of
 //! this file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    pbr_types,
-    pbr_functions,
-    mesh_bindings::mesh,
-    mesh_view_bindings::view,
-}
 
 //!@ui      cell_color  color "Cell colour"
 //!@default cell_color  0.05,0.05,0.35
@@ -53,7 +54,7 @@ struct Material {
     v_scale:     f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 /// True if `p` is within `half_w` of the nearest grid line at `spacing`.

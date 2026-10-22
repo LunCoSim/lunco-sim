@@ -34,7 +34,7 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 | Emitter identity on events | `TelemetryEvent.source` (sensor/script gid); `wait_for_from(name, src)`, `evt.source` | ✅ |
 | On-screen notifications | `ShowNotification` command + rhai `notify`/`notify_kind` + ui overlay | ✅ |
 | Native/foreign event → script bus | `App::project_events::<E>(…)`; e.g. keyboard → `key:<KeyCode>` events | ✅ (input wired; network projector pending) |
-| Propulsion-derived engine plume | Modelica propulsion/nozzle outputs feed `PlumePhotometry`; USD connects its conservative gas stations, radiative estimate and simulation clock to the WGSL volume and local light | ✅ (no script — gas field, light and zero-flow visibility are wired) |
+| Propulsion-derived engine plume | Modelica propulsion/nozzle outputs feed `PlumePhotometry`; USD connects its conservative gas stations, radiative estimate and simulation clock to the WESL volume and local light | ✅ (no script — gas field, light and zero-flow visibility are wired) |
 
 > **Authoring walkthrough:** [`../tutorials/01-lander-rover-mission.md`](../tutorials/01-lander-rover-mission.md)
 > builds this entire mission from scratch in USD + rhai + Modelica, exercising

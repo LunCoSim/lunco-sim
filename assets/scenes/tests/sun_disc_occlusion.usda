@@ -28,8 +28,8 @@ def Xform "World" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/sun_disc_occlusion.wgsl@
                 custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/sun_disc_occlusion.wesl@
             }
         }
         def Material "Blue"
@@ -39,8 +39,8 @@ def Xform "World" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wgsl@
                 custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wesl@
             }
         }
     }

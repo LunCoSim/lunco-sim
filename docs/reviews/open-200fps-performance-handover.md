@@ -1116,7 +1116,7 @@ This is a source-backed reduction, not yet a measured FPS/CPU delta; the
 existing concurrent, readiness-held Tracy capture is not suitable for a
 post-change comparison. A clean settled window remains required.
 
-The same measured leaf also validated identical loaded WGSL once per changed
+The same measured leaf also validated identical loaded WESL once per changed
 entity. Its shader-path/asset-ID lookup and fragment/vertex stage verdicts are
 now shared by asset identity and stage, then invalidated by shader asset events.
 This preserves validation for in-place shader changes while preventing repeated

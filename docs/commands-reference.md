@@ -2545,8 +2545,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `CreateShader`
 
- Create a new dynamic shader from a built-in template (or supplied WGSL),
- persist it into the open Twin (`<twin>/shaders/<name>.wgsl`, or
+ Create a new dynamic shader from a built-in template (or supplied WESL),
+ persist it into the open Twin (`<twin>/shaders/<name>.wesl`, or
  `assets/shaders/` when no Twin is open), register it in the picker, and
  optionally bind it to a target entity — all live, no restart.
 
@@ -2561,55 +2561,55 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `name` | `String` |  Display name / file stem, e.g. `"my_panel"` (sanitised to `[a-z0-9_]`). |
 | `template` | `String` |  Template id when `source` is empty: `"solid"` (default) or `"checker"`. |
-| `source` | `String` |  Full WGSL source. Empty → generate from `template`. |
+| `source` | `String` |  Full WESL source. Empty → generate from `template`. |
 | `target` | `u64` |  API id of an entity to apply the new shader to. `0` = create only. |
 
 #### `DeleteShader`
 
  Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove
- its `.wgsl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
+ its `.wesl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
  Entities currently using it keep their in-memory material for the session.
 
  ```json
- {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
+ {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wesl"}}
  ```
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Asset path to remove (`twin://name/shaders/x.wgsl` or `shaders/x.wgsl`). |
+| `path` | `String` |  Asset path to remove (`twin://name/shaders/x.wesl` or `shaders/x.wesl`). |
 
 #### `ImportShader`
 
- Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
- (copies it to `<twin>/shaders/<name>.wgsl`), registers it in the picker, and
+ Import an existing `.wesl` file from anywhere on disk INTO the open Twin
+ (copies it to `<twin>/shaders/<name>.wesl`), registers it in the picker, and
  optionally binds it to a target entity. The file must be a prop-pickable
  dynamic shader: a `Material` struct, and every `//!@engine` field it declares
  must be prop-fillable per the engine-param registry.
 
  ```json
- {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
+ {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wesl","name":"cool","target":42}}
  ```
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `source_path` | `String` |  Filesystem path of the `.wgsl` to import (absolute or cwd-relative). |
+| `source_path` | `String` |  Filesystem path of the `.wesl` to import (absolute or cwd-relative). |
 | `name` | `String` |  Optional new stem; empty → keep the source file's own stem. |
 | `target` | `u64` |  API id of an entity to apply the imported shader to. `0` = import only. |
 
 #### `ReloadShader`
 
- Force-reload live WGSL assets from disk so edits apply without restarting
+ Force-reload live WESL assets from disk so edits apply without restarting
  the app. Calls [`AssetServer::reload`], which re-runs the loader and lets
  dependent material pipelines rebuild.
 
- A supplied bare path such as `"shaders/wheel.wgsl"` resolves against the
+ A supplied bare path such as `"shaders/wheel.wesl"` resolves against the
  active engine-library identity, including its explicit `lunco://` spelling.
  An explicit `lunco://…` or `twin://…` path is matched exactly. An empty path
- reloads every currently loaded WGSL asset. The command fails visibly when
+ reloads every currently loaded WESL asset. The command fails visibly when
  the requested asset is not active instead of reporting a successful no-op.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
@@ -2626,7 +2626,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  ```jsonc
  {"type":"ExecuteCommand","command":"SetObjectProperty",
-  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
+  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wesl"}}
  {"type":"ExecuteCommand","command":"SetObjectProperty",
   "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
  {"type":"ExecuteCommand","command":"SetObjectProperty",
@@ -2634,7 +2634,7 @@ actually call, with the fields the deserializer actually accepts. See the
  ```
 
  Recognised `property` values:
- - `shader` → author a [`ShaderLook`] for that `.wgsl` (asset path); the render
+ - `shader` → author a [`ShaderLook`] for that `.wesl` (asset path); the render
    binder turns it into a material.
  - any parameter named by the shader's `Material` struct (e.g. `albedo`,
    `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
@@ -2660,11 +2660,11 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetShaderSource`
 
- Replace a shader asset's WGSL **source in place** from text sent over the
- API, recompiling it live without touching disk or restarting. Overwrites the
- active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wgsl"`), so every
+ Replace a shader asset's WESL **source in place** from text sent over the
+ API, preparing its native file dependencies asynchronously. Overwrites the
+ active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wesl"`), so every
  material using them re-specializes its pipeline next frame. Bare engine
- paths resolve the same `lunco://`/default-source aliases as [`ReloadShader`].
+ paths resolve to the canonical `lunco://` identity used by [`ReloadShader`].
  Compile/validation outcome surfaces in the render log (naga errors on a bad
  shader). Pairs with [`ReloadShader`] (disk) — this one is for pushing edits
  directly.
@@ -2673,8 +2673,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`. |
-| `source` | `String` |  New WGSL source text. |
+| `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wesl"`. |
+| `source` | `String` |  New WESL source text. |
 
 ### `lunco-scene-camera` <a id="lunco-scene-camera"></a>
 

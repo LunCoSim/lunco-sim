@@ -697,11 +697,11 @@ state; do not claim whole-simulation replay determinism from it.
 
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform
-block, so their `Material` fields, order, and WGSL types must agree. The
+block, so their `Material` fields, order, and WESL types must agree. The
 fragment schema is the packed layout; do not invent a second vertex schema or
 silently select a replacement shader. Validate the requested stage positively:
 `sourceAsset` needs `@fragment` and `vertex_shader` needs `@vertex`; a combined
-WGSL module is valid for either role. A missing or invalid stage is a structured
+WESL module is valid for either role. A missing or invalid stage is a structured
 runtime diagnostic and an unbound material. Rust must not install a
 `StandardMaterial`, neutral shader, or another guessed source as recovery. If a
 scenario needs recovery, make it an explicit Rhai policy that can be replaced
@@ -829,7 +829,7 @@ changes also prune private authorities before replacement scans.
 
 Asset enumeration belongs to `lunco_assets_runtime::discovery` and runs through the
 shared asynchronous catalog listing owned by `lunco-scene-catalog`. USD,
-WGSL, Modelica, and Python projections are published from one root snapshot;
+WESL, Modelica, and Python projections are published from one root snapshot;
 they must not add a second filesystem walk or a UI-thread scan. A new
 manifest/Twin snapshot advances the listing generation, reopens the USD read
 set, and drops older metadata completions. This keeps a Twin opened during an

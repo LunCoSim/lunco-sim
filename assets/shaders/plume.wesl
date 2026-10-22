@@ -1,3 +1,9 @@
+import bevy_pbr::render::{mesh_functions, forward_io::VertexOutput, mesh_view_bindings::view};
+@if((DEPTH_PREPASS))
+import bevy_pbr::prepass::utils::prepass_depth;
+import bevy_pbr::render::view_transformations::{frag_coord_to_ndc, position_ndc_to_world};
+import super::lunco_noise::vnoise;
+
 //! Optically thin, energy-bounded combustion emission. Modelica supplies five
 //! radius/temperature/emissivity stations and transported distance. Interpolate
 //! the state and integrate j ds; no gas dynamics or engine policy runs here.
@@ -6,12 +12,6 @@
 //! to unit cross-sectional mean, and procedural detail only attenuates power.
 //! Luminous radiance (cd/m2) uses the camera exposure, matching Bevy lighting.
 //!@capability lunco.volume-depth.v1
-#import bevy_pbr::{mesh_functions, forward_io::VertexOutput, mesh_view_bindings::view}
-#ifdef DEPTH_PREPASS
-#import bevy_pbr::prepass_utils::prepass_depth
-#endif
-#import bevy_pbr::view_transformations::{frag_coord_to_ndc, position_ndc_to_world}
-#import lunco::noise::vnoise
 //!@default fuel_color_r 1.0
 //!@default fuel_color_g 1.0
 //!@default fuel_color_b 1.0
@@ -78,7 +78,7 @@ struct Material {
     emission_w_m3_3: f32,
     emission_w_m3_4: f32,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 fn safe_direction(d: vec3<f32>) -> vec3<f32> {
     return select(vec3<f32>(-1.0),vec3<f32>(1.0),d>=vec3<f32>(0.0))*max(abs(d),vec3<f32>(0.00001));
@@ -93,52 +93,46 @@ fn transported_noise(q:vec3<f32>, radial_scale:f32, axial_scale:f32, seed:f32) -
 }
 @fragment
 fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
-#ifdef MULTISAMPLED
-    @builtin(sample_index) sample_index: u32,
-#endif
+    @if((MULTISAMPLED)) @builtin(sample_index) sample_index: u32,
 ) -> @location(0) vec4<f32> {
-#ifndef DEPTH_PREPASS
     // The declared scene-depth requirement is pending native camera admission.
     // Never submit unoccluded volume emission before that texture exists.
-    return vec4<f32>(0.0);
-#else
-#ifndef MULTISAMPLED
-    let sample_index=0u;
-#endif
-    if mat.throttle<=0.0 || mat.plume_length_fraction<=0.0 || mat.profile_length_m<=0.0
+    @if((!DEPTH_PREPASS)) return vec4<f32>(0.0);
+    @if((!(!DEPTH_PREPASS)) && (!MULTISAMPLED)) let sample_index=0u;
+    @if((!(!DEPTH_PREPASS))) if mat.throttle<=0.0 || mat.plume_length_fraction<=0.0 || mat.profile_length_m<=0.0
         || mat.bound_radius_m<=0.0 || mat.radius_m_0<=0.0 { return vec4<f32>(0.0); }
-    let inverse=mesh_functions::get_local_from_world(input.instance_index);
-    let ndc=frag_coord_to_ndc(input.position);
-    let near_world=position_ndc_to_world(vec3<f32>(ndc.xy,1.0));
-    let orthographic=view.clip_from_view[3].w==1.0;
-    let direction=select(near_world-view.world_position,-view.world_from_view[2].xyz,orthographic);
+    @if((!(!DEPTH_PREPASS))) let inverse=mesh_functions::get_local_from_world(input.instance_index);
+    @if((!(!DEPTH_PREPASS))) let ndc=frag_coord_to_ndc(input.position);
+    @if((!(!DEPTH_PREPASS))) let near_world=position_ndc_to_world(vec3<f32>(ndc.xy,1.0));
+    @if((!(!DEPTH_PREPASS))) let orthographic=view.clip_from_view[3].w==1.0;
+    @if((!(!DEPTH_PREPASS))) let direction=select(near_world-view.world_position,-view.world_from_view[2].xyz,orthographic);
     // Start at this pixel's near plane, including when it clips the proxy.
     // Orthographic rays remain parallel instead of converging at the camera.
-    let eye=(inverse*vec4<f32>(near_world,1.0)).xyz;
-    let ray=normalize((inverse*vec4<f32>(direction,0.0)).xyz);
-    let opaque_depth=prepass_depth(input.position,sample_index);
-    var scene_exit=1.0e30;
+    @if((!(!DEPTH_PREPASS))) let eye=(inverse*vec4<f32>(near_world,1.0)).xyz;
+    @if((!(!DEPTH_PREPASS))) let ray=normalize((inverse*vec4<f32>(direction,0.0)).xyz);
+    @if((!(!DEPTH_PREPASS))) let opaque_depth=prepass_depth(input.position,sample_index);
+    @if((!(!DEPTH_PREPASS))) var scene_exit=1.0e30;
     // Bevy uses reverse Z: zero is clear/infinite for perspective views.
-    if opaque_depth>0.0 || orthographic {
+    @if((!(!DEPTH_PREPASS))) if opaque_depth>0.0 || orthographic {
         let opaque_world=position_ndc_to_world(vec3<f32>(ndc.xy,opaque_depth));
         let opaque_local=(inverse*vec4<f32>(opaque_world,1.0)).xyz;
         scene_exit=dot(opaque_local-eye,ray);
     }
-    let inside=abs(eye.y)<0.5 && length(eye.xz)<1.0;
-    if front==inside {return vec4<f32>(0.0);}
-    let inv=1.0/safe_direction(ray);
-    let maximum_samples=u32(clamp(mat.steps,32.0,96.0));
-    let radii=array<f32,5>(mat.radius_m_0,mat.radius_m_1,mat.radius_m_2,mat.radius_m_3,mat.radius_m_4);
-    let temps=array<f32,5>(mat.temperature_k_0,mat.temperature_k_1,mat.temperature_k_2,mat.temperature_k_3,mat.temperature_k_4);
-    let emissivity=array<f32,5>(mat.emission_w_m3_0,mat.emission_w_m3_1,mat.emission_w_m3_2,mat.emission_w_m3_3,mat.emission_w_m3_4);
-    let sigma=clamp(mat.radial_width,0.1,1.0);
-    let fuel=max(vec3<f32>(mat.fuel_color_r,mat.fuel_color_g,mat.fuel_color_b),vec3<f32>(0.0));
-    let seed=f32(input.instance_index%97u)*17.31;
-    let phase=atan2(mat.flow_phase_sin,mat.flow_phase_cos)*1024.0/6.283185307179586;
-    var radiance=vec3<f32>(0.0);
+    @if((!(!DEPTH_PREPASS))) let inside=abs(eye.y)<0.5 && length(eye.xz)<1.0;
+    @if((!(!DEPTH_PREPASS))) if front==inside {return vec4<f32>(0.0);}
+    @if((!(!DEPTH_PREPASS))) let inv=1.0/safe_direction(ray);
+    @if((!(!DEPTH_PREPASS))) let maximum_samples=u32(clamp(mat.steps,32.0,96.0));
+    @if((!(!DEPTH_PREPASS))) let radii=array<f32,5>(mat.radius_m_0,mat.radius_m_1,mat.radius_m_2,mat.radius_m_3,mat.radius_m_4);
+    @if((!(!DEPTH_PREPASS))) let temps=array<f32,5>(mat.temperature_k_0,mat.temperature_k_1,mat.temperature_k_2,mat.temperature_k_3,mat.temperature_k_4);
+    @if((!(!DEPTH_PREPASS))) let emissivity=array<f32,5>(mat.emission_w_m3_0,mat.emission_w_m3_1,mat.emission_w_m3_2,mat.emission_w_m3_3,mat.emission_w_m3_4);
+    @if((!(!DEPTH_PREPASS))) let sigma=clamp(mat.radial_width,0.1,1.0);
+    @if((!(!DEPTH_PREPASS))) let fuel=max(vec3<f32>(mat.fuel_color_r,mat.fuel_color_g,mat.fuel_color_b),vec3<f32>(0.0));
+    @if((!(!DEPTH_PREPASS))) let seed=f32(input.instance_index%97u)*17.31;
+    @if((!(!DEPTH_PREPASS))) let phase=atan2(mat.flow_phase_sin,mat.flow_phase_cos)*1024.0/6.283185307179586;
+    @if((!(!DEPTH_PREPASS))) var radiance=vec3<f32>(0.0);
     // March each axial station interval in its own tight bound. A single
     // final-radius box undersamples the small, bright nozzle region.
-    for(var station=0u;station<4u;station+=1u) {
+    @if((!(!DEPTH_PREPASS))) for(var station=0u;station<4u;station+=1u) {
         let node0=f32(station*station)/16.0;
         let node1=f32((station+1u)*(station+1u))/16.0;
         let bound=1.15*max(radii[station],radii[station+1u])/mat.bound_radius_m;
@@ -187,6 +181,5 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         radiance+=chroma*luminous_emission*radial_weight*texture*tail*ds*clamp(mat.energy_fraction,0.0,1.0);
     }
     }
-    return vec4<f32>(radiance*view.exposure,0.0);
-#endif
+    @if((!(!DEPTH_PREPASS))) return vec4<f32>(radiance*view.exposure,0.0);
 }

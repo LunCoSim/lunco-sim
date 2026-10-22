@@ -316,7 +316,7 @@ FLAGS:
                          Without --scene, start with an empty persistent world
                          shell; the sandbox is an explicit scene/test fixture.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
-        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.sysml/.kerml/.wgsl/.rhai):
+        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.sysml/.kerml/.wesl/.rhai):
                          parse-only, no window/GPU/app. Prints a report and
                          exits 0 (all ok) or 1 (any failed).
 

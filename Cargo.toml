@@ -497,6 +497,7 @@ bevy_reflect = "0.20.0"
 bevy_math = "0.20.0"
 bevy_mesh = "0.20.0"
 bevy_shader = "0.20.0"
+wesl = { version = "0.6.0", features = ["naga-ext"] }
 bevy_asset = "0.20.0"
 bevy_picking = "0.20.0"
 
@@ -658,5 +659,6 @@ debug = "line-tables-only"
 strip = "none"
 
 [patch.crates-io]
-avian3d = { git = "https://github.com/LunCoSim/avian", rev = "559d2d0ab896afa884139234c8bb83eb8a6c71df" }
+bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338" }
+avian3d = { git = "https://github.com/LunCoSim/avian", rev = "11dfbb5bb89d9763aeb645385ff77a40427f936b" }
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "01302a171ac3db662c0c322ef9e98fe7d5f33a6a" }

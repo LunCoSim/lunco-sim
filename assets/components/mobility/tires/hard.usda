@@ -2,65 +2,37 @@
 (
     defaultPrim = "Tire"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# A HARD tire — stiff compound, shallow tread, for prepared surfaces: landing pads,
-# habitat aprons, the inside of a test hall. It grips less and slips sooner than
-# `regolith.usda`, and it deforms less, so a rover on it is quicker and twitchier.
-#
-# The second tire exists to make the swap real: a wheel chooses between them through
-# its `tire` variantSet, and nothing else about the vehicle changes.
-#
-#   def Cylinder "Wheel_FL" (
-#       prepend references = @lunco://components/mobility/wheel.usda@</Wheel>
-#       variants = { string tire = "hard" }
-#   )
-#
-# See `regolith.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Tire" (
     prepend apiSchemas = ["PhysxVehicleTireAPI", "PhysicsMaterialAPI", "LunCoTireAPI", "MaterialBindingAPI"]
     kind = "component"
 )
 {
-    # --- Grip ---
-    # Stiffer contact patch: it builds force faster per unit of slip, and lets go
-    # sooner when it runs out of friction.
     float physxVehicleTire:longitudinalStiffness = 14000.0
-    float physics:dynamicFriction = 1.1
-    float physics:staticFriction = 1.1
-    # A rigid compound corners as stiffly as it drives — no soil shear to soften
-    # it, so the side force is up against the (lower) friction cone almost at
-    # once. Stiff and slippery is a real combination: it holds a line precisely
-    # right up until it lets go.
-    # Standard PhysX load graph: the nominal four-wheel lunar rover load is
-    # 400 N; the plateau is 14 N/(N·rad) at that load, expressed in the
-    # schema's absolute N/rad units.
+    float physics:dynamicFriction = 1.100000023841858
+    float physics:staticFriction = 1.100000023841858
     float2 physxVehicleTire:lateralStiffnessGraph = (1.0, 5600.0)
     float physxVehicleTire:restLoad = 400.0
-    # Idealized rigid-surface model: explicitly valid to rest.
     float lunco:tire:minValidatedSpeed = 0.0
-
-    # --- Tread ---
     rel material:binding = </Tire/TireLook>
-    color3f[] primvars:displayColor = [(0.22, 0.22, 0.24)]
-
+    color3f[] primvars:displayColor = [(0.2199999988079071, 0.2199999988079071, 0.23999999463558197)]
     def Material "TireLook"
     {
+        token outputs:surface
         token outputs:surface.connect = </Tire/TireLook/Shader.outputs:surface>
-
         def Shader "Shader"
         {
             uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:wgsl:sourceAsset = @lunco://shaders/wheel.wgsl@
-            color3f inputs:rim_color = (0.12, 0.13, 0.14)
-            color3f inputs:tire_color = (0.05, 0.05, 0.06)
+            color3f inputs:rim_color = (0.11999999731779099, 0.12999999523162842, 0.14000000059604645)
+            color3f inputs:tire_color = (0.05000000074505806, 0.05000000074505806, 0.05999999865889549)
             float inputs:spoke_count = 6.0
-            float inputs:tread_lugs = 48.0                  # fine, dense tread — hard ground
-            float inputs:lug_depth = 0.3                    # shallow profile
-            float inputs:wear = 0.05                        # prepared surfaces barely wear it
+            float inputs:tread_lugs = 48.0
+            float inputs:lug_depth = 0.30000001192092896
+            float inputs:wear = 0.05000000074505806
             token outputs:surface
+            uniform asset info:wesl:sourceAsset = @lunco://shaders/wheel.wesl@
         }
     }
 }

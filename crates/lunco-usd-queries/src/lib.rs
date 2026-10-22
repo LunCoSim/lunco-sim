@@ -67,11 +67,14 @@ fn authored_child_paths(
             ));
         }
     };
-    let parent = path.to_string();
-    Ok(children
+    children
         .into_iter()
-        .map(|name| format!("{parent}/{name}"))
-        .collect())
+        .map(|name| {
+            path.append_path(name.as_str())
+                .map(|child| child.to_string())
+                .map_err(|error| format!("invalid authored child `{name}` at `{path}`: {error}"))
+        })
+        .collect()
 }
 
 fn include_authored_children(
@@ -532,6 +535,7 @@ fn document_snapshot(
 }
 
 fn composed_attribute_inspection(
+    document: &UsdDocument,
     stage: &openusd::usd::Stage,
     path: &SdfPath,
 ) -> Result<(bool, Option<String>, bool, Vec<String>, Vec<ApiValue>), ApiQueryError> {
@@ -565,7 +569,15 @@ fn composed_attribute_inspection(
                     )
                 })
                 .transpose()?;
-            Ok(api_value!({ "name": attribute.name(), "type": type_name, "value": value }))
+            let property = attribute.path();
+            Ok(api_value!({
+                "name": attribute.name(), "type": type_name, "value": value,
+                "authored": {
+                    "root": document.data().spec(property).is_some(),
+                    "runtime": document.runtime_data().spec(property).is_some(),
+                    "view": document.view_data().spec(property).is_some(),
+                },
+            }))
         })
         .collect::<Result<Vec<_>, ApiQueryError>>()?;
     Ok((
@@ -831,7 +843,7 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                 );
             };
             let (exists, type_name, active, children, attributes) =
-                composed_attribute_inspection(&stage, &path)?;
+                composed_attribute_inspection(document, &stage, &path)?;
             let references = api_value!({
                 "authored": {
                     "root": reference_list_api_value(document.data(), &path)?,

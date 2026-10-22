@@ -1,7 +1,7 @@
 ---
 name: validate-assets
 description: >
-  Pre-flight a LunCoSim `.mo`, `.usda`, `.sysml`, `.kerml`, `.wgsl`, or `.rhai` asset with
+  Pre-flight a LunCoSim `.mo`, `.usda`, `.sysml`, `.kerml`, `.wesl`, or `.rhai` asset with
   `ValidateAsset` or the production CLI, or inspect one Twin's resolver
   namespaces with `ValidateTwin`. Use for parse, reference, schema,
   shader-parameter, Modelica, SysML, namespace, or authored-lint checks. These are
@@ -33,7 +33,7 @@ verification cases).
 "$LUNCOSIM_BIN" --validate \
   assets/models/LunCo/Electrical/Battery.mo \
   assets/vessels/rovers/skid_rover.usda \
-  assets/shaders/rover_hull.wgsl \
+  assets/shaders/rover_hull.wesl \
   requirements/system.sysml
 ```
 
@@ -41,11 +41,11 @@ The flag is intercepted in `crates/lunco-luncosim/src/bin/luncosim.rs`
 **before** the Bevy `App` is built, and the process `exit`s — nothing is
 rendered, no window opens, no port is bound. Run it anywhere, any time.
 
-For a WGSL file, this pre-flight validates the file's standalone source/schema
+For a WESL file, this pre-flight validates the file's standalone source/schema
 contract. It cannot decide whether the file is a fragment or vertex stage when
 it is not referenced by a USD material. That role is authored by the USD
-`Shader` prim (`info:wgsl:sourceAsset` and optional
-`info:wgsl:vertexAsset`) and is checked by the production USD/render boundary.
+`Shader` prim (`info:wesl:sourceAsset` and optional
+`info:wesl:vertexAsset`) and is checked by the production USD/render boundary.
 Use an authored USD + Rhai scene test for that contract; do not add a Rust test
 that reads a repository shader path to simulate it.
 
@@ -166,7 +166,7 @@ the stage, or silently save. See the [model-authoring guide](../../docs/scriptin
 | `.mo` | rumoca `parse_to_syntax` + AST facts + authored `lint.modelica` policy | yes |
 | `.sysml`/`.kerml` | SysML parser/resolver + typed requirement/verification facts + authored `lint.sysml` policy | yes |
 | `.usd`/`.usda`/`.usdc` | byte-layer preparation → **compose the reference closure** → strict `WheelParams::read` on every `PhysxVehicleWheelAPI` prim | yes |
-| `.wgsl` | `ParamSchema::parse` — reflect the `struct Material` uniform + `//!@` annotations | **no** — warnings only |
+| `.wesl` | `ParamSchema::parse` — reflect the `struct Material` uniform + `//!@` annotations | **no** — warnings only |
 | `.rhai` | `rhai::Engine::new().compile()`, nothing executed | yes |
 | anything else | `unsupported extension` error | yes |
 
@@ -231,7 +231,7 @@ Three stages, first failure short-circuits:
 > [`author-usd-physics`](../author-usd-physics/SKILL.md#2-a-prismatic-joint-carries-moment)).
 > A vehicle can pass static validation and still land on its shins.
 
-### `.wgsl` — cannot fail, read the warnings
+### `.wesl` — cannot fail, read the warnings
 
 There is **no naga validation** — deliberately. A syntactically broken shader
 that still contains a parsable `struct Material` reports `ok: true`. What you get
@@ -353,7 +353,7 @@ policy wording; unknown bindings are surfaced as
 ## Where it fits
 
 ```
-edit .usda / .mo / .wgsl / .rhai
+edit .usda / .mo / .wesl / .rhai
         ↓
 --validate            ← seconds, no GPU. Catches: syntax, broken refs, missing
         ↓               wheel attrs, invalid Modelica declarations, unparsable rhai.
@@ -371,12 +371,12 @@ run costs seconds; a luncosim launch that dies on a typo costs a compile.
   `--validate` is for.
 - ❌ Sending `ValidateAsset` to **lunica** and concluding the command doesn't
   exist. It is luncosim-only; use the CLI.
-- ❌ Treating a `.wgsl` `ok: true` as "the shader compiles" — no naga runs.
+- ❌ Treating a `.wesl` `ok: true` as "the shader compiles" — no naga runs.
   Only a real load proves the pipeline builds.
 - ❌ Passing a bare `models/X.mo` from an arbitrary CWD and trusting which file
   was read — `path` in the report echoes your input, not the resolved path.
 - ❌ Passing a `twin://` address — unresolvable; use the filesystem path.
-- ❌ Reading `ok` and ignoring `warnings` on a `.wgsl` — that file can never
+- ❌ Reading `ok` and ignoring `warnings` on a `.wesl` — that file can never
   report `ok: false`, so the warnings ARE the result.
 - ❌ Reading a `[usd/…]` lint error as "the file is broken syntax". It parsed and
   composed fine — it says the file would load and then behave wrongly. Fix the

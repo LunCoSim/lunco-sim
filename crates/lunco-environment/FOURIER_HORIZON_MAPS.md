@@ -353,7 +353,7 @@ straight into the fragment color, §3).
 - **Texture taps: 4 explicit-LOD fetch locations** (one per mip level) — but because the
   half-pair packing defeats hardware filtering, "this has to be implemented in shader code":
   manual bilinear = **4 `texelFetch` per level → 16 integer taps total**, plus unpack
-  (`unpackHalf2x16` in GLSL ⇔ `unpack2x16float` in WGSL) and lerp. With an unpacked
+  (`unpackHalf2x16` in GLSL ⇔ `unpack2x16float` in WESL) and lerp. With an unpacked
   2-texture (`re`/`im` `RGBA16F`) variant you'd get hardware bilinear = 8 filtered taps,
   or 4 if re/im are interleaved per level pair — see G.4.
 - The coefficients are read **once** per shaded point regardless of how many soft-shadow
@@ -513,7 +513,7 @@ locally at `/tmp/fourier_horizon_pseudo_algorithm.pdf`). If a release appears la
 `cosmoscout/cosmoscout-vr` and the csp-lod-bodies terrain shaders
 (`plugins/csp-lod-bodies/shaders/`) — that is where it would land.
 
-### F.2 Reference WGSL skeleton (derived from Eq. 3–5 + Algorithm 2, original code)
+### F.2 Reference WESL skeleton (derived from Eq. 3–5 + Algorithm 2, original code)
 
 ```wgsl
 // Horizon map: texture_2d<u32> (rgba32uint), 4 mip levels, each texel-channel = (re,im) packed half2.

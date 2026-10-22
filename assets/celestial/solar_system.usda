@@ -11,7 +11,7 @@ def Xform "SolarSystem" (
 )
 {
     def Xform "Sun" (
-        prepend apiSchemas = "LunCoCelestialBodyAPI"
+        prepend apiSchemas = ["LunCoCelestialBodyAPI"]
         documentation = "The Sun. Origin of the solar frame and the scene's key light."
     )
     {
@@ -47,8 +47,6 @@ def Xform "SolarSystem" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
-                uniform asset info:wgsl:vertexAsset = @lunco://shaders/blueprint.wgsl@
                 color3f inputs:surface_color = (0.12999999523162842, 0.3199999928474426, 0.6600000262260437)
                 float inputs:roughness = 0.5
                 color3f inputs:high_line_color = (0.0, 0.5, 1.0)
@@ -58,6 +56,8 @@ def Xform "SolarSystem" (
                 float inputs:line_width = 1.0
                 float inputs:transition = 0.0
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/blueprint.wesl@
+                uniform asset info:wesl:vertexAsset = @lunco://shaders/blueprint.wesl@
             }
         }
         def Material "Moon"
@@ -67,8 +67,6 @@ def Xform "SolarSystem" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
-                uniform asset info:wgsl:vertexAsset = @lunco://shaders/blueprint.wgsl@
                 color3f inputs:surface_color = (0.5, 0.5, 0.5)
                 float inputs:roughness = 0.8999999761581421
                 color3f inputs:high_line_color = (0.6000000238418579, 0.6000000238418579, 0.6000000238418579)
@@ -78,7 +76,9 @@ def Xform "SolarSystem" (
                 float inputs:line_width = 2.0
                 float inputs:transition = 0.0
                 token outputs:surface
-                string info:wgsl:interface = "lunco.lunar-surface-continuation.v1"
+                string info:wesl:interface = "lunco.lunar-surface-continuation.v1"
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/blueprint.wesl@
+                uniform asset info:wesl:vertexAsset = @lunco://shaders/blueprint.wesl@
             }
         }
     }

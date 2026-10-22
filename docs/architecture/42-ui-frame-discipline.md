@@ -265,7 +265,7 @@ the physics solver empties. Never block that queue:
   generated palette index is decoded off-thread and publishes one readiness
   event for the browser to enrich its already-available bundled-model view.
 - Asset catalog enumeration is an async projection of the shared discovery
-  owner. USD, WGSL, Modelica, and Python listings are collected in one task and
+  owner. USD, WESL, Modelica, and Python listings are collected in one task and
   published by their consumers; startup and Twin lifecycle observers do not
   walk filesystem roots on the UI schedule. Each USD listing owns a generation
   and a complete read set: a newer Twin/manifest snapshot reopens path

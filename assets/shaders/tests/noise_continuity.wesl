@@ -1,8 +1,9 @@
+import bevy_pbr::render::forward_io::VertexOutput;
+import super::super::lunco_noise::{vnoise, vnoise_gradient, vnoise2d, vnoise2d_gradient, fbm_rot, fbm_rot_gradient, fbm2d, fbm2d_gradient};
+
 // GPU regression for lattice continuity and octave footprint filtering.
 // Green is the numerical contract; red identifies a value/gradient mismatch
 // or an incorrectly filtered octave spectrum.
-#import bevy_pbr::forward_io::VertexOutput
-#import lunco::noise::{vnoise, vnoise_gradient, vnoise2d, vnoise2d_gradient, fbm_rot, fbm_rot_gradient, fbm2d, fbm2d_gradient}
 
 struct Material {
     unused: f32,

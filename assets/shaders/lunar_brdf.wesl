@@ -1,5 +1,6 @@
-// Lunar regolith photometry, shared by the terrain shaders (regolith.wgsl,
-// terrain_shadow.wgsl) via naga_oil import.
+
+// Lunar regolith photometry, shared by the terrain shaders (regolith.wesl,
+// terrain_shadow.wesl) via WESL import.
 //
 // The Moon does not obey Cook-Torrance/Lambert: lunar soil is a porous,
 // sub-wavelength-grained, **retroreflective** powder. Two corrections carry
@@ -25,7 +26,6 @@
 // Constants are conservative first-cut values; promote to `//!@ui` params for
 // live maria/highlands tuning (highlands back-scatter more) as a follow-up.
 
-#define_import_path lunco::lunar
 
 /// Floor on μ = cos(emission). At a grazing view μ → 0 and the Lommel-Seeliger
 /// denominator collapses onto μ₀ alone, so `ls` would run away. The final

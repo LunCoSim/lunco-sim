@@ -244,7 +244,7 @@ source revision has not been prepared. Composition arcs (references, payloads,
 sublayers) remain layer-anchored. Browser Twins cannot probe OPFS from the
 synchronous preparation pass, so they select the layer-anchored candidate.
 
-Programs, PBR textures, dome textures, WGSL sources/texture inputs and body
+Programs, PBR textures, dome textures, WESL sources/texture inputs and body
 albedo maps pass that identifier through stage preparation and the shared typed
 load boundary. The render owner reconstructs typed shader/image paths once;
 procedural sky uses the already admitted shader handle. Child references and

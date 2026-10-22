@@ -1,9 +1,21 @@
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+    mesh_view_bindings::lights,
+};
+import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
+import super::lunar_brdf::regolith_factor;
+import super::terrain_surface::terrain_apply_sun_response;
+
 //! Explicit non-authored terrain material with ray-marched heightfield sun shadows.
 //!
 //! A Rhai/tool policy may author it for a `HorizonShadowTerrain` that has no
 //! custom shader: plain albedo (`color_a`, taken from the prim's `displayColor`)
 //! under full scene PBR lighting, multiplied by per-pixel ray-marched sun
-//! visibility from the terrain heightfield (see `horizon_march.wgsl` for the
+//! visibility from the terrain heightfield (see `horizon_march.wesl` for the
 //! algorithm; the engine writes the heightfield + sun uniforms). The Rust
 //! renderer never installs this material to recover from a missing or invalid
 //! authored shader.
@@ -14,23 +26,12 @@
 //! range (`csm_far`; 0 ⇒ march everywhere), avoiding a second shadow term over
 //! the native cascade while retaining the long-range terrain shadow.
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    pbr_types,
-    pbr_functions,
-    mesh_bindings::mesh,
-    mesh_view_bindings::view,
-    mesh_view_bindings::lights,
-}
-#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
-#import lunco::lunar::regolith_factor
-#import lunco::terrain::terrain_apply_sun_response
 
 // Dynamic, self-describing parameters (reflected from this file). Only the
 // albedo is author-settable; the rest are engine-filled by the horizon system.
 //!@ui      albedo color "Albedo"
 //!@default albedo 0.13,0.13,0.13
-// --- lunar photometry (lunco::lunar) — see `terrain_geomorph.wgsl` -----------
+// --- lunar photometry (lunco::shaders::lunar_brdf) — see `terrain_geomorph.wesl` -----------
 //!@ui      surge_amp         0 3      "Opposition surge amplitude (Hapke Bs0)"
 //!@default surge_amp         1.80
 //!@ui      surge_width       0.01 0.3 "Opposition surge width, rad (Hapke hs)"
@@ -60,18 +61,18 @@ struct Material {
     horizon_march_steps: f32, // engine: configured live ray-march iterations
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(1)
+@group(constants::MATERIAL_BIND_GROUP) @binding(1)
 var height_map: texture_2d<f32>;
 
 // Pre-baked horizon shadow cache (R8Unorm, 0..1 sun visibility) — sampled
 // with a single `textureSampleLevel` when `mat.shadow_cache_on > 0.5` instead
 // of the configured heightfield ray-march. Filterable (GPU bilinear interp).
-@group(#{MATERIAL_BIND_GROUP}) @binding(10)
+@group(constants::MATERIAL_BIND_GROUP) @binding(10)
 var shadow_cache: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(11)
+@group(constants::MATERIAL_BIND_GROUP) @binding(11)
 var shadow_cache_sampler: sampler;
 
 @fragment
@@ -88,7 +89,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.N = pbr_input.world_normal;
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
     // Lunar regolith photometry (Lommel-Seeliger + opposition surge); see
-    // lunar_brdf.wgsl. The shared response applies it only to the engine-picked
+    // lunar_brdf.wesl. The shared response applies it only to the engine-picked
     // Sun contribution, leaving fill and environment light untouched.
     var lunar_k = 1.0;
     let sw = mat.sun_dir_world;
@@ -106,17 +107,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var sun_vis = 1.0;
     var march_blend = 0.0;
 
-#ifdef VERTEX_UVS_A
-    let csm_far = mat.csm_far;
-    march_blend = horizon_shadow_blend(
+    @if((VERTEX_UVS_A)) let csm_far = mat.csm_far;
+    @if((VERTEX_UVS_A)) march_blend = horizon_shadow_blend(
         distance(view.world_position, in.world_position.xyz), csm_far, mat.sun_dir, mat.hf_res);
-    if (march_blend > 0.0) {
+    @if((VERTEX_UVS_A)) if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
     }
-#endif
 
     color = terrain_apply_sun_response(
         pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);

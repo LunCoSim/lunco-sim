@@ -37,7 +37,7 @@ between independently valid parts belong in the USD assembly that uses them.
 | `scripting/policy/` | policy hooks and the application policy manifest |
 | `tutorials/` | lesson Rhai, optional lesson worlds, and authored lesson data |
 | `missions/` | mission data and orchestration entrypoints |
-| `shaders/` | WGSL materials |
+| `shaders/` | WESL materials |
 | `lighting/` | global lighting rigs |
 | `celestial/` | celestial assemblies |
 | `manifests/` | downloadable dataset manifests, not an authored-asset index |

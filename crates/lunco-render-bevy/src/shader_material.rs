@@ -1,4 +1,4 @@
-//! General **`ShaderMaterial`** — one material, any WGSL, chosen per-instance.
+//! General **`ShaderMaterial`** — one material, any WESL, chosen per-instance.
 //!
 //! This is the `AsBindGroup` half of the custom-shader boundary, and the reason
 //! this crate exists: it is what forces `bevy_pbr` → `bevy_render` → wgpu + naga.
@@ -8,7 +8,7 @@
 //! a GPU stack. See `docs/architecture/render-decoupling.md`.
 //!
 //! This is the *one* Rust material you ever need for custom shaders. After it
-//! exists, new shaders are pure `.wgsl` files (+ optional USD properties) — no
+//! exists, new shaders are pure `.wesl` files (+ optional USD properties) — no
 //! Rust. It is engine-agnostic: nothing here is USD-specific. USD is just *one*
 //! way to author it (the USD→material binding lives in `lunco-usd-sim`'s
 //! `apply_usd_shader_materials`, deterministically ordered so it can never race
@@ -16,9 +16,9 @@
 //!
 //! ## Why one material can drive many shaders
 //! Bevy resolves `fragment_shader()` per material *type*, not per instance. To let
-//! each object pick its own `.wgsl`, we:
+//! each object pick its own `.wesl`, we:
 //! 1. Store the per-object `Handle<Shader>` in the material (loaded from an
-//!    **asset path**, so editing the `.wgsl` on disk hot-reloads).
+//!    **asset path**, so editing the `.wesl` on disk hot-reloads).
 //! 2. Carry that handle into the pipeline key via `#[bind_group_data]`
 //!    (`Handle<Shader>` is `Clone + Eq + Hash` — all a plain `Material` key needs;
 //!    `ExtendedMaterial` would additionally require `Copy`, which a handle isn't,
@@ -26,7 +26,7 @@
 //! 3. Override [`Material::specialize`] to overwrite `descriptor.fragment.shader`
 //!    with the per-instance handle.
 //!
-//! ## Uniform contract — each `.wgsl` declares its OWN params (`@binding(0)`)
+//! ## Uniform contract — each `.wesl` declares its OWN params (`@binding(0)`)
 //! Every shader declares a `Material` struct with real field names; the engine
 //! reflects the layout (field names → std140 offsets) and the `//!@` annotation
 //! comments (UI ranges, defaults, engine-filled fields) straight out of the
@@ -40,20 +40,20 @@
 //! //!@ui      albedo  color "Albedo"
 //! //!@default albedo  0.5,0.5,0.5
 //! struct Material { albedo: vec3<f32>, opacity: f32 }
-//! @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+//! @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 //! ```
 //! Terrain shaders additionally declare the heightfield (non-filterable,
 //! fetched with `textureLoad`):
 //! ```wgsl
-//! @group(#{MATERIAL_BIND_GROUP}) @binding(1) var height_map: texture_2d<f32>;
+//! @group(constants::MATERIAL_BIND_GROUP) @binding(1) var height_map: texture_2d<f32>;
 //! ```
 //! and optionally the pre-baked horizon shadow cache (filterable `R8Unorm`,
 //! sampled with `textureSampleLevel`):
 //! ```wgsl
-//! @group(#{MATERIAL_BIND_GROUP}) @binding(10) var shadow_cache: texture_2d<f32>;
-//! @group(#{MATERIAL_BIND_GROUP}) @binding(11) var shadow_cache_sampler: sampler;
+//! @group(constants::MATERIAL_BIND_GROUP) @binding(10) var shadow_cache: texture_2d<f32>;
+//! @group(constants::MATERIAL_BIND_GROUP) @binding(11) var shadow_cache_sampler: sampler;
 //! ```
-//! A plain `Material` is unlit by default; the `.wgsl` returns its own colour
+//! A plain `Material` is unlit by default; the `.wesl` returns its own colour
 //! (it may shade using `VertexOutput.world_normal` if it wants form).
 
 use bevy::mesh::MeshVertexBufferLayoutRef;
@@ -62,7 +62,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
-use bevy::shader::{Shader, ShaderDefVal, ShaderImport, ShaderRef, Source as ShaderSource};
+use bevy::shader::{Shader, ShaderDefVal, ShaderRef, Source as ShaderSource};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -73,7 +73,7 @@ use lunco_materials::{
 };
 
 /// A general custom-shader material whose parameters are **dynamic**: each
-/// `.wgsl` declares its own `Material` uniform struct (real field names), the
+/// `.wesl` declares its own `Material` uniform struct (real field names), the
 /// engine reflects that layout from the shader source ([`ParamSchema`]),
 /// values are stored by name in [`values`](Self::values), and packed into a
 /// fixed 256-byte opaque block ([`raw`](Self::raw)) at the reflected offsets.
@@ -84,7 +84,7 @@ use lunco_materials::{
 #[bind_group_data(ShaderKey)]
 pub struct ShaderMaterial {
     /// Opaque uniform block (256 bytes). Its field layout is the *shader's* —
-    /// each `.wgsl` reinterprets these bytes through its own `Material`
+    /// each `.wesl` reinterprets these bytes through its own `Material`
     /// struct. Built from [`values`](Self::values) via
     /// [`schema`](Self::schema); never edit directly, use `set*`.
     #[uniform(0)]
@@ -96,7 +96,7 @@ pub struct ShaderMaterial {
     /// binding are unaffected.
     #[texture(1, sample_type = "float", filterable = false)]
     pub height_map: Option<Handle<Image>>,
-    /// **Layer maps** (terrain layered pipeline, `terrain_layered.wgsl`). All
+    /// **Layer maps** (terrain layered pipeline, `terrain_layered.wesl`). All
     /// `Option` + filterable float; `None` binds Bevy's neutral image binding, and a
     /// shader that doesn't declare the binding is unaffected (same contract as
     /// `height_map`). Sampled by planar UV (`in.uv`), `has_*`-guarded so a
@@ -128,7 +128,7 @@ pub struct ShaderMaterial {
     /// **Horizon shadow cache** (terrain shaders, `lunco-environment`'s horizon
     /// system). A filterable `R8Unorm` texture whose texels carry the pre-baked
     /// sun-visibility (0..1) from the SAME ray-march as
-    /// `horizon_march.wgsl::sun_visibility`, computed once per sun-direction
+    /// `horizon_march.wesl::sun_visibility`, computed once per sun-direction
     /// change instead of per pixel. The terrain fragment shader does a single
     /// `textureSampleLevel` of this (guarded by the `shadow_cache_on` uniform)
     /// instead of the configured march loop. `None` binds Bevy's neutral image binding;
@@ -368,7 +368,7 @@ impl Material for ShaderMaterial {
             descriptor.primitive.cull_mode = None;
         }
         // The ONE place the native/web shading split lives. `lunco::terrain`
-        // (terrain_surface.wgsl) keys its noise dimensionality and octave budget
+        // (terrain_surface.wesl) keys its noise dimensionality and octave budget
         // off this def, which is what let the six terrain shaders collapse to one
         // implementation instead of a native file and an 88-92%-identical `_web`
         // copy that silently drifted apart. Set on the vertex stage too: the CDLOD
@@ -457,106 +457,19 @@ impl Material for ShaderMaterial {
 /// downstream consumer (e.g. the wheel physics/visual split).
 pub struct ShaderMaterialPlugin;
 
-/// Retains runtime WGSL assets that declare a custom import path.
-///
-/// Bevy's shader composer resolves `#import lunco::…` from loaded shader
-/// assets. The runtime manifest is the source of truth for which files exist,
-/// so the render boundary discovers and retains import modules without a Rust
-/// list of filenames. New modules therefore become ordinary authored WGSL
-/// files.
-#[derive(Resource, Default)]
-struct ShaderImportCatalog {
-    candidates: Vec<(String, Handle<Shader>)>,
-    modules: Vec<Handle<Shader>>,
-    scan_started: bool,
-    ready: bool,
-    failure: Option<String>,
-}
-
-fn discover_shader_import_modules(
-    mut commands: Commands,
-    mut catalog: ResMut<ShaderImportCatalog>,
-    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
-    server: Option<Res<AssetServer>>,
-    shaders: Option<Res<Assets<Shader>>>,
-) {
-    if catalog.ready || catalog.failure.is_some() {
-        return;
-    }
-    let (Some(manifest), Some(server), Some(shaders)) = (manifest, server, shaders) else {
-        return;
-    };
-    if !manifest.ready() {
-        return;
-    }
-    if !catalog.scan_started {
-        let candidates = manifest
-            .rels()
-            .iter()
-            .filter(|path| path.ends_with(".wgsl"))
-            .map(|path| {
-                super::shader_look::load_shader(path, &server).map(|handle| (path.clone(), handle))
-            })
-            .collect::<Result<Vec<_>, _>>();
-        match candidates {
-            Ok(candidates) => catalog.candidates = candidates,
-            Err(error) => {
-                error!("shader import address rejected: {error}");
-                lunco_core::trigger_runtime_error(
-                    &mut commands,
-                    "shader-import-address-rejected",
-                    &error,
-                );
-                catalog.failure = Some(error);
-                return;
-            }
-        }
-        catalog.scan_started = true;
-    }
-
-    let mut pending = false;
-    let mut discovered_modules = Vec::new();
-    for (path, handle) in &catalog.candidates {
-        let Some(shader) = shaders.get(handle) else {
-            if server
-                .get_load_state(handle.id())
-                .is_some_and(|load_state| !load_state.is_failed())
-            {
-                pending = true;
-            } else {
-                error!("shader import module could not be loaded: {path}");
-            }
-            continue;
-        };
-        if matches!(shader.import_path, ShaderImport::Custom(_))
-            && !catalog.modules.iter().any(|loaded| loaded == handle)
-        {
-            discovered_modules.push(handle.clone());
-        }
-    }
-    catalog.modules.extend(discovered_modules);
-    if !pending {
-        catalog.ready = true;
-    }
-}
-
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
         app.init_resource::<ShaderSchemas>();
         app.init_resource::<crate::shader_look::ShaderSourceCache>();
         app.init_resource::<ShaderCatalog>();
-        app.init_resource::<ShaderImportCatalog>();
         // Reflect each shader's `Material` struct → per-material `ParamSchema`.
-        app.add_systems(
-            Update,
-            (discover_shader_import_modules, reflect_shader_schemas).chain(),
-        );
+        app.add_systems(Update, reflect_shader_schemas);
     }
 }
 
 /// Builds a [`ShaderMaterial`] from a shader handle + a template (preserves
-/// the template's named `values`/`schema` so swapping the `.wgsl` keeps tuned
+/// the template's named `values`/`schema` so swapping the `.wesl` keeps tuned
 /// params). The reflect system re-derives the schema from the new shader.
 pub fn build_shader_material(
     shader: Handle<Shader>,
@@ -571,7 +484,7 @@ pub fn build_shader_material(
 /// schema, parses, and stores by name. Returns `true` if the value parsed.
 ///
 /// The authored name is normalized to snake_case ([`to_snake_case`]) so
-/// USD-conventional camelCase params (`colorA`) land on the snake_case WGSL field
+/// USD-conventional camelCase params (`colorA`) land on the snake_case WESL field
 /// (`color_a`). The conversion is idempotent for names that are already
 /// snake_case, so the inspector / scripting paths (which use the schema's own
 /// field names) are unaffected.
@@ -627,7 +540,7 @@ pub fn set_color_value(m: &mut ShaderMaterial, key: &str, rgb: [f32; 3]) -> bool
 // shader source (no parameter metadata hardcoded in Rust).
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Cache of reflected schemas keyed by shader asset, so each `.wgsl` is parsed
+/// Cache of reflected schemas keyed by shader asset, so each `.wesl` is parsed
 /// once and shared across all materials using it.
 #[derive(Resource, Default)]
 pub struct ShaderSchemas {
@@ -637,17 +550,17 @@ pub struct ShaderSchemas {
 impl ShaderSchemas {
     /// Return the cached layout for a loaded shader. The shader-look binder
     /// uses this identity to publish a tile only after the material has the
-    /// exact layout used by the shader; it must not re-parse WGSL once per
+    /// exact layout used by the shader; it must not re-parse WESL once per
     /// waiting tile.
     pub(crate) fn get(&self, shader: AssetId<Shader>) -> Option<&Arc<ParamSchema>> {
         self.map.get(&shader)
     }
 }
 
-/// The WGSL source of a loaded shader, if it is WGSL.
-pub(crate) fn wgsl_source(shader: &Shader) -> Option<&str> {
+/// The WESL source of a loaded shader, if it is WESL.
+pub(crate) fn wesl_source(shader: &Shader) -> Option<&str> {
     match &shader.source {
-        ShaderSource::Wgsl(c) => Some(c.as_ref()),
+        ShaderSource::Wesl(c) => Some(c.as_ref()),
         _ => None,
     }
 }
@@ -673,7 +586,7 @@ pub(crate) fn reflect_shader_schemas(
             continue;
         }
         if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {
-            if let Some(src) = shaders.get(*id).and_then(wgsl_source) {
+            if let Some(src) = shaders.get(*id).and_then(wesl_source) {
                 // Reflection is a fragment-material operation. A vertex-only
                 // companion is a valid Shader asset, but it must not populate
                 // the fragment schema cache or be submitted as a material.

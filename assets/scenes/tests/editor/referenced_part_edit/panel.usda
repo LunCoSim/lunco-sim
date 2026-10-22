@@ -76,7 +76,6 @@ def Xform "SolarPanel" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
                 color3f inputs:cell_color = (0.05000000074505806, 0.05000000074505806, 0.3499999940395355)
                 color3f inputs:bus_color = (0.8500000238418579, 0.8500000238418579, 0.8999999761581421)
                 color3f inputs:frame_color = (0.3499999940395355, 0.3499999940395355, 0.3799999952316284)
@@ -86,6 +85,7 @@ def Xform "SolarPanel" (
                 float inputs:bus_width = 0.004000000189989805
                 float inputs:border = 0.05000000074505806
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/solar_panel.wesl@
             }
         }
     }

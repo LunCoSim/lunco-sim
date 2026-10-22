@@ -245,7 +245,7 @@ The transform is the right live channel when the whole prim moves or stretches a
 a range beam is exactly as long as the distance it reports.
 
 When the shape is a field, use a simple bound and wire physical field samples
-to WGSL. `assets/shaders/plume.wgsl` integrates optically thin combustion
+to WESL. `assets/shaders/plume.wesl` integrates optically thin combustion
 emission inside a unit Cylinder. Modelica supplies five stations for radius,
 temperature and emissivity, metric bounds, and transported distance. The
 existing port adapter performs the explicit f64-to-f32 GPU conversion. Both
@@ -384,7 +384,7 @@ replacement for unlit presentation.
 
 ## Engine-filled shader uniforms — a provider registry, not a branch
 
-A dynamic WGSL shader declares its own parameters, and marks the ones the *author*
+A dynamic WESL shader declares its own parameters, and marks the ones the *author*
 must not set with `//!@engine <name>`. Which names the engine knows how to fill,
 what type each is, and where its value comes from is stated in exactly one place:
 `lunco_materials::engine_params` (`EngineParams::builtin`). Adding an engine input
@@ -417,7 +417,7 @@ provider automatically widens the test.
 
 ### Foil fold shading
 
-`mli_foil.wgsl` uses the shared analytic noise gradient to perturb the surface
+`mli_foil.wesl` uses the shared analytic noise gradient to perturb the surface
 normal through `pbr_lit::lit_n`. Folds remain attached to object-space metric
 coordinates and their highlights respond to lighting and view direction.
 Each octave fades with its pixel footprint; unresolved detail adds roughness.

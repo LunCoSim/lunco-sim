@@ -1,3 +1,15 @@
+import bevy_pbr::render::{
+    mesh_functions,
+    view_transformations::position_world_to_clip,
+    forward_io::VertexOutput,
+};
+import super::pbr_lit::lit;
+import super::pbr_lit::lit_n_occluded_sun_response;
+import super::lunar_brdf::regolith_factor;
+import bevy_pbr::render::{pbr_functions, mesh_view_bindings::view};
+@if((PREPASS_PIPELINE))
+import bevy_pbr::prepass::io as prepass_io;
+
 //! Blueprint grid material — self-describing `ShaderMaterial`.
 //!
 //! Two grid modes blended by `transition` (0 → 1):
@@ -11,7 +23,7 @@
 //! The base colour is `surface_color` multiplied by the optional `albedo_map`
 //! (binding 2/3 — Bevy's white fallback when unbound, so a solid-colour ground
 //! is `surface_color` and a textured planet tile is the imagery). Lighting is the
-//! shared `lunco::pbr_lit::lit` path (full Bevy PBR — directional sun, shadows,
+//! shared `lunco::shaders::pbr_lit::lit` path (full Bevy PBR — directional sun, shadows,
 //! tonemapping) — no `StandardMaterial` inheritance needed.
 //!
 //! Self-describing: the engine reflects `struct Material` (field → std140 offset)
@@ -21,48 +33,26 @@
 //!
 //!@interface lunco.lunar-surface-continuation.v1
 
-#import bevy_pbr::{
-    mesh_functions,
-    view_transformations::position_world_to_clip,
-    forward_io::VertexOutput,
-}
-#import lunco::pbr_lit::lit
-#import lunco::pbr_lit::lit_n_occluded_sun_response
-#import lunco::lunar::regolith_factor
-#import bevy_pbr::{pbr_functions, mesh_view_bindings::view}
-#ifdef PREPASS_PIPELINE
-#import bevy_pbr::prepass_io
-#endif
 
-#ifdef LUNCO_GLOBE_DIRECTION
-struct GlobeVertex {
+@if((LUNCO_GLOBE_DIRECTION)) struct GlobeVertex {
     @builtin(instance_index) instance_index: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
-#ifdef VERTEX_UVS_A
-    @location(2) uv: vec2<f32>,
-#endif
+    @if((VERTEX_UVS_A)) @location(2) uv: vec2<f32>,
     @location(11) globe_direction: vec3<f32>,
 };
 
-struct GlobeVertexOutput {
+@if((LUNCO_GLOBE_DIRECTION)) struct GlobeVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
     @location(1) world_normal: vec3<f32>,
-#ifdef VERTEX_UVS_A
-    @location(2) uv: vec2<f32>,
-#endif
+    @if((VERTEX_UVS_A)) @location(2) uv: vec2<f32>,
     @location(5) globe_direction: vec3<f32>,
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    @location(6) @interpolate(flat) instance_index: u32,
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
-    @location(7) @interpolate(flat) visibility_range_dither: i32,
-#endif
+    @if((VERTEX_OUTPUT_INSTANCE_INDEX)) @location(6) @interpolate(flat) instance_index: u32,
+    @if((VISIBILITY_RANGE_DITHER)) @location(7) @interpolate(flat) visibility_range_dither: i32,
 };
 
-#ifndef PREPASS_PIPELINE
-@vertex
+@if((LUNCO_GLOBE_DIRECTION) && (!PREPASS_PIPELINE)) @vertex
 fn vertex(vertex: GlobeVertex) -> GlobeVertexOutput {
     var out: GlobeVertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
@@ -75,73 +65,46 @@ fn vertex(vertex: GlobeVertex) -> GlobeVertexOutput {
         vertex.normal,
         vertex.instance_index,
     );
-#ifdef VERTEX_UVS_A
-    out.uv = vertex.uv;
-#endif
+    @if((VERTEX_UVS_A)) out.uv = vertex.uv;
     out.globe_direction = vertex.globe_direction;
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = vertex.instance_index;
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
-    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
+    @if((VERTEX_OUTPUT_INSTANCE_INDEX)) out.instance_index = vertex.instance_index;
+    @if((VISIBILITY_RANGE_DITHER)) out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
         vertex.instance_index,
         world_from_local[3],
     );
-#endif
     return out;
 }
-#else
 // Globe positions are already resolved by the mesh owner. Adapt the same
 // geometry to Bevy's native depth/normal/shadow interface.
-@vertex
+@if((LUNCO_GLOBE_DIRECTION) && (!(!PREPASS_PIPELINE))) @vertex
 fn vertex(vertex: GlobeVertex) -> prepass_io::VertexOutput {
     var out: prepass_io::VertexOutput;
     let transform = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(
         transform, vec4(vertex.position, 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);
-#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
-    out.unclipped_depth = out.position.z;
-    out.position.z = min(out.position.z, 1.0);
-#endif
-#ifdef VERTEX_UVS_A
-    out.uv = vertex.uv;
-#endif
-#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
-    out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
-#endif
-#ifdef MOTION_VECTOR_PREPASS
-    out.previous_world_position = mesh_functions::mesh_position_local_to_world(
+    @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.unclipped_depth = out.position.z;
+    @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.position.z = min(out.position.z, 1.0);
+    @if((VERTEX_UVS_A)) out.uv = vertex.uv;
+    @if((NORMAL_PREPASS_OR_DEFERRED_PREPASS)) out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+    @if((MOTION_VECTOR_PREPASS)) out.previous_world_position = mesh_functions::mesh_position_local_to_world(
         mesh_functions::get_previous_world_from_local(vertex.instance_index), vec4(vertex.position, 1.0));
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = vertex.instance_index;
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
-    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
+    @if((VERTEX_OUTPUT_INSTANCE_INDEX)) out.instance_index = vertex.instance_index;
+    @if((VISIBILITY_RANGE_DITHER)) out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
         vertex.instance_index, transform[3]);
-#endif
     return out;
 }
-#endif
 
-fn globe_pbr_input(in: GlobeVertexOutput) -> VertexOutput {
+@if((LUNCO_GLOBE_DIRECTION)) fn globe_pbr_input(@if((LUNCO_GLOBE_DIRECTION)) in: GlobeVertexOutput) -> VertexOutput {
     var out: VertexOutput;
     out.position = in.position;
     out.world_position = in.world_position;
     out.world_normal = in.world_normal;
-#ifdef VERTEX_UVS_A
-    out.uv = in.uv;
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = in.instance_index;
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
-    out.visibility_range_dither = in.visibility_range_dither;
-#endif
+    @if((VERTEX_UVS_A)) out.uv = in.uv;
+    @if((VERTEX_OUTPUT_INSTANCE_INDEX)) out.instance_index = in.instance_index;
+    @if((VISIBILITY_RANGE_DITHER)) out.visibility_range_dither = in.visibility_range_dither;
     return out;
 }
-#endif
 
 //!@ui      surface_color    color "Surface colour"
 //!@default surface_color    0.2,0.2,0.2
@@ -215,27 +178,26 @@ struct Material {
     sun_dir_world: vec3<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 // Optional albedo raster (planet imagery). `None` → Bevy's white fallback, so a
 // solid-colour ground stays `surface_color`. Same slot as ShaderMaterial.albedo_map.
-@group(#{MATERIAL_BIND_GROUP}) @binding(2)
+@group(constants::MATERIAL_BIND_GROUP) @binding(2)
 var albedo_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3)
+@group(constants::MATERIAL_BIND_GROUP) @binding(3)
 var albedo_smp: sampler;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(12)
+@group(constants::MATERIAL_BIND_GROUP) @binding(12)
 var continuation_albedo_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(13)
+@group(constants::MATERIAL_BIND_GROUP) @binding(13)
 var continuation_albedo_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(14)
+@group(constants::MATERIAL_BIND_GROUP) @binding(14)
 var continuation_surface_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(15)
+@group(constants::MATERIAL_BIND_GROUP) @binding(15)
 var continuation_surface_smp: sampler;
 
-#ifdef LUNCO_GLOBE_DIRECTION
-fn equirectangular_uv(d: vec3<f32>) -> vec2<f32> {
+@if((LUNCO_GLOBE_DIRECTION)) fn equirectangular_uv(@if((LUNCO_GLOBE_DIRECTION)) d: vec3<f32>) -> vec2<f32> {
     return vec2(
         atan2(-d.z, d.x) / (2.0 * 3.141592653589793) + 0.5,
         0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.141592653589793,
@@ -248,7 +210,7 @@ fn equirectangular_uv(d: vec3<f32>) -> vec2<f32> {
 //   * the pole singularity produces a large, physically correct footprint and
 //     therefore selects a coarse mip instead of requiring an arbitrary polar cap.
 // The guards apply only at the mathematical coordinate singularity.
-fn equirectangular_grad(d: vec3<f32>, delta: vec3<f32>) -> vec2<f32> {
+@if((LUNCO_GLOBE_DIRECTION)) fn equirectangular_grad(@if((LUNCO_GLOBE_DIRECTION)) d: vec3<f32>, @if((LUNCO_GLOBE_DIRECTION)) delta: vec3<f32>) -> vec2<f32> {
     let radial_sq = max(d.x * d.x + d.z * d.z, 1e-8);
     let latitude_scale = sqrt(max(1.0 - d.y * d.y, 1e-8));
     return vec2(
@@ -256,7 +218,6 @@ fn equirectangular_grad(d: vec3<f32>, delta: vec3<f32>) -> vec2<f32> {
         -delta.y / (3.141592653589793 * latitude_scale),
     );
 }
-#endif
 
 // Rotate by a unit quaternion. The renderer supplies the inverse rotation from
 // the active terrain frame into the floating-origin render frame.
@@ -268,41 +229,32 @@ fn rotate_by_quaternion(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
 fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f32> {
     var base = mat.surface_color;
     var grid_mask = 0.0;
-#ifdef LUNCO_GLOBE_DIRECTION
-    let globe_direction_unit = normalize(globe_direction);
-    let globe_uv = equirectangular_uv(globe_direction_unit);
-    let globe_dx = equirectangular_grad(globe_direction_unit, dpdx(globe_direction_unit));
-    let globe_dy = equirectangular_grad(globe_direction_unit, dpdy(globe_direction_unit));
-#endif
+    @if((LUNCO_GLOBE_DIRECTION)) let globe_direction_unit = normalize(globe_direction);
+    @if((LUNCO_GLOBE_DIRECTION)) let globe_uv = equirectangular_uv(globe_direction_unit);
+    @if((LUNCO_GLOBE_DIRECTION)) let globe_dx = equirectangular_grad(globe_direction_unit, dpdx(globe_direction_unit));
+    @if((LUNCO_GLOBE_DIRECTION)) let globe_dy = equirectangular_grad(globe_direction_unit, dpdy(globe_direction_unit));
 
     if (mat.transition < 0.5) {
         // --- Lat/Long grid (spherical bodies). Direction is interpolated in 3D
         // and normalised BEFORE projection, so this mapping is independent of
         // tile tessellation and quadtree level.
-#ifdef LUNCO_GLOBE_DIRECTION
-        let img = textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
-        base *= img;
-        let ll_coords = globe_uv * mat.subdivisions;
-        let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
-        let ll_line = min(ll_f.x, ll_f.y);
-        let ll_fade = 1.0 - smoothstep(
+        @if((LUNCO_GLOBE_DIRECTION)) let img = textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
+        @if((LUNCO_GLOBE_DIRECTION)) base *= img;
+        @if((LUNCO_GLOBE_DIRECTION)) let ll_coords = globe_uv * mat.subdivisions;
+        @if((LUNCO_GLOBE_DIRECTION)) let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
+        @if((LUNCO_GLOBE_DIRECTION)) let ll_line = min(ll_f.x, ll_f.y);
+        @if((LUNCO_GLOBE_DIRECTION)) let ll_fade = 1.0 - smoothstep(
             mat.fade_range.x, mat.fade_range.y,
             max(fwidth(ll_coords).x, fwidth(ll_coords).y));
         // Fade the graticule out as `transition` approaches 0 (fully-textured
         // imagery): a natural globe seen from orbit shows no lat/long lines;
         // they belong to the blueprint look that fades in on approach.
-        grid_mask = (1.0 - smoothstep(0.0, mat.line_width, ll_line)) * ll_fade
+        @if((LUNCO_GLOBE_DIRECTION)) grid_mask = (1.0 - smoothstep(0.0, mat.line_width, ll_line)) * ll_fade
             * smoothstep(0.05, 0.45, mat.transition);
-#endif
     } else {
         // --- Blueprint grid (Cartesian XZ, flat ground).
-#ifdef LUNCO_GLOBE_DIRECTION
-        base *= textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
-#else
-#ifdef VERTEX_UVS_A
-        base *= textureSample(albedo_tex, albedo_smp, in.uv).rgb;
-#endif
-#endif
+        @if((LUNCO_GLOBE_DIRECTION)) base *= textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
+        @if((!(LUNCO_GLOBE_DIRECTION)) && (VERTEX_UVS_A)) base *= textureSample(albedo_tex, albedo_smp, in.uv).rgb;
         // `world_position` is the floating-origin render frame. First restore
         // the stable WorldGrid position, then map it into the authored active
         // terrain frame before evaluating its XZ pattern. For a site-mounted
@@ -343,27 +295,26 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
     var continuation_weight = 0.0;
     var roughness = mat.roughness;
     var ao = 1.0;
-#ifdef VERTEX_UVS_A
-    let outside_uv = vec2(
+    @if((VERTEX_UVS_A)) let outside_uv = vec2(
         max(max(-in.uv.x, in.uv.x - 1.0), 0.0),
         max(max(-in.uv.y, in.uv.y - 1.0), 0.0),
     );
     // Width order matches the geometry: west, east, south, north.
-    let outside_m = outside_uv * 2.0 * max(mat.terrain_half_extent, 1.0);
-    let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, in.uv.x < 0.0);
-    let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, in.uv.y < 0.0);
-    let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
-    let site_weight = 1.0 - smoothstep(0.0, 1.0, transition);
-    continuation_weight = mat.site_base_color.a * site_weight;
-    let site_uv = clamp(in.uv, vec2(0.0), vec2(1.0));
-    var continuation_color = mat.site_base_color.rgb;
-    if (mat.site_weight_albedo > 0.0) {
+    @if((VERTEX_UVS_A)) let outside_m = outside_uv * 2.0 * max(mat.terrain_half_extent, 1.0);
+    @if((VERTEX_UVS_A)) let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, in.uv.x < 0.0);
+    @if((VERTEX_UVS_A)) let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, in.uv.y < 0.0);
+    @if((VERTEX_UVS_A)) let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
+    @if((VERTEX_UVS_A)) let site_weight = 1.0 - smoothstep(0.0, 1.0, transition);
+    @if((VERTEX_UVS_A)) continuation_weight = mat.site_base_color.a * site_weight;
+    @if((VERTEX_UVS_A)) let site_uv = clamp(in.uv, vec2(0.0), vec2(1.0));
+    @if((VERTEX_UVS_A)) var continuation_color = mat.site_base_color.rgb;
+    @if((VERTEX_UVS_A)) if (mat.site_weight_albedo > 0.0) {
         let site_albedo = textureSample(
             continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
         continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
-    albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_weight);
-    if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
+    @if((VERTEX_UVS_A)) albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_weight);
+    @if((VERTEX_UVS_A)) if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
         let site_surface = textureSample(
             continuation_surface_tex, continuation_surface_smp, site_uv);
         roughness = mix(
@@ -377,7 +328,6 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
             clamp(mat.site_weight_ao, 0.0, 1.0) * site_weight,
         );
     }
-#endif
     var sun_factor = 1.0;
     if (dot(mat.sun_dir_world, mat.sun_dir_world) > 0.25 && continuation_weight > 0.0) {
         let n = select(-normalize(in.world_normal), normalize(in.world_normal), is_front);
@@ -398,14 +348,11 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
     );
 }
 
-#ifdef LUNCO_GLOBE_DIRECTION
-@fragment
+@if((LUNCO_GLOBE_DIRECTION)) @fragment
 fn fragment(in: GlobeVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     return shade(globe_pbr_input(in), is_front, in.globe_direction);
 }
-#else
-@fragment
+@if((!(LUNCO_GLOBE_DIRECTION))) @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     return shade(in, is_front, vec3<f32>(0.0));
 }
-#endif

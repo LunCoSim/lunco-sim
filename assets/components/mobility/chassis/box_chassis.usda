@@ -2,28 +2,8 @@
 (
     defaultPrim = "Chassis"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# A box utility CHASSIS — collider + panelised hull material in one reusable
-# component, the body-side sibling of `mobility/wheel.usda`. A rover references
-# it INTO its own `Chassis` prim (same prim path, so authored joints and wheel
-# mounts are untouched) and overrides only its own decisions — the footprint,
-# and the paint:
-#
-#   def Cube "Chassis" (
-#       prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
-#   )
-#   {
-#       double3 xformOp:scale = (2.0, 0.3, 5.0)          # a longer flatbed
-#       color3f[] primvars:displayColor = [(0.8, 0.68, 0.3)]   # its livery
-#   }
-#
-# Colour is `primvars:displayColor` and nothing else. The hull shader declares
-# `//!@engine display_color` and the engine fills it from that standard
-# attribute, so a rover paints itself the ordinary USD way and every other tool
-# (usdview, Blender, the inspector) sees the same colour we render. Difficulty
-# tiers restyle by overriding the SAME attribute.
 
 def Cube "Chassis" (
     kind = "subcomponent"
@@ -33,29 +13,21 @@ def Cube "Chassis" (
     double size = 1.0
     double3 xformOp:scale = (2.0, 0.3, 3.5)
     uniform token[] xformOpOrder = ["xformOp:scale"]
-
-    # Default hull grey — a rover overrides this one attribute to get its own
-    # livery. The hull shader consumes it as the base paint.
-    color3f[] primvars:displayColor = [(0.25, 0.26, 0.28)]
-
+    color3f[] primvars:displayColor = [(0.25, 0.25999999046325684, 0.2800000011920929)]
     rel material:binding = </Chassis/HullLook>
-
     def Material "HullLook"
     {
+        token outputs:surface
         token outputs:surface.connect = </Chassis/HullLook/Shader.outputs:surface>
-
         def Shader "Shader"
         {
             uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:wgsl:sourceAsset = @lunco://shaders/rover_hull.wgsl@
-            # No `inputs:display_color` here — the base paint is engine-filled
-            # from the Chassis prim's `primvars:displayColor`. Authoring it
-            # would OVERRIDE that fill for every rover referencing this file.
-            color3f inputs:accent_color = (0.85, 0.45, 0.10)
+            color3f inputs:accent_color = (0.8500000238418579, 0.44999998807907104, 0.10000000149011612)
             float inputs:panel_scale = 2.0
-            float inputs:wear = 0.08
-            float inputs:dust_amount = 0.15
+            float inputs:wear = 0.07999999821186066
+            float inputs:dust_amount = 0.15000000596046448
             token outputs:surface
+            uniform asset info:wesl:sourceAsset = @lunco://shaders/rover_hull.wesl@
         }
     }
 }

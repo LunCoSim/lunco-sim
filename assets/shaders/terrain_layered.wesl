@@ -1,5 +1,18 @@
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+    mesh_view_bindings::lights,
+};
+import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
+import super::lunar_brdf::regolith_factor;
+import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
+
 //!@capability lunco.surface-annotations.v1
-//! Layered lunar terrain material — `regolith.wgsl` + non-destructive map layers.
+//! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
 //!
 //!@interface lunco.lunar-surface-continuation.v1
 //!
@@ -23,25 +36,13 @@
 //!     the procedural bump normal.
 //!
 //! A `weight_* = 0` layer contributes nothing. Maps are sampled by the planar
-//! UV the horizon bake establishes, under `#ifdef VERTEX_UVS_A` (the shadow
+//! UV the horizon bake establishes, under `@if(VERTEX_UVS_A)` (the shadow
 //! march uses the same guard); without UVs the material is procedural.
 //!
 //! Self-describing: the engine reflects `struct Material` (field → std140 offset)
 //! and the `//!@` annotations, so every `weight_*` is a free Inspector slider /
 //! `SetObjectProperty` target and the layout hot-reloads on shader edit.
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    pbr_types,
-    pbr_functions,
-    mesh_functions,
-    mesh_bindings::mesh,
-    mesh_view_bindings::view,
-    mesh_view_bindings::lights,
-}
-#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
-#import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -88,9 +89,9 @@
 //!@default derived_normal_on  0
 //!@default authored_surface_on 0
 //!@default authored_normal_on  0
-// --- lunar photometry (lunco::lunar) ---------------------------------------
+// --- lunar photometry (lunco::shaders::lunar_brdf) ---------------------------------------
 // Fitted lunar values (Chrono/UW-Madison, arxiv 2410.04371 Table 1), not taste.
-// `terrain_geomorph.wgsl` is only the optional vertex stage for this fragment;
+// `terrain_geomorph.wesl` is only the optional vertex stage for this fragment;
 // it must share this Material ABI but does not define another appearance path.
 //!@ui      surge_amp         0 3         "Opposition surge amplitude (Hapke Bs0)"
 //!@default surge_amp         1.80
@@ -127,7 +128,7 @@
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
-// `info:wgsl:vertexAsset` can pair this fragment with `terrain_geomorph.wgsl`.
+// `info:wesl:vertexAsset` can pair this fragment with `terrain_geomorph.wesl`.
 // Both stages therefore declare this exact uniform ABI; the cross-file contract
 // test in `lunco-materials` prevents either stage from silently drifting.
 struct Material {
@@ -178,50 +179,50 @@ struct Material {
     site_photometry: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(16)
+@group(constants::MATERIAL_BIND_GROUP) @binding(16)
 var surface_annotations: texture_2d<f32>;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 // Terrain heightfield (R32Float, world-space heights) for the sun-shadow march.
-@group(#{MATERIAL_BIND_GROUP}) @binding(1)
+@group(constants::MATERIAL_BIND_GROUP) @binding(1)
 var height_map: texture_2d<f32>;
 
 // Pre-baked horizon shadow cache (R8Unorm, 0..1 sun visibility) — sampled
 // with a single `textureSampleLevel` when `mat.shadow_cache_on > 0.5` instead
 // of the configured heightfield ray-march. Filterable (GPU bilinear interp).
-@group(#{MATERIAL_BIND_GROUP}) @binding(10)
+@group(constants::MATERIAL_BIND_GROUP) @binding(10)
 var shadow_cache: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(11)
+@group(constants::MATERIAL_BIND_GROUP) @binding(11)
 var shadow_cache_sampler: sampler;
 
 // Layer maps (filterable; `None` → Bevy fallback white, gated by weight_*).
-@group(#{MATERIAL_BIND_GROUP}) @binding(2)
+@group(constants::MATERIAL_BIND_GROUP) @binding(2)
 var albedo_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3)
+@group(constants::MATERIAL_BIND_GROUP) @binding(3)
 var albedo_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4)
+@group(constants::MATERIAL_BIND_GROUP) @binding(4)
 var mineral_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(5)
+@group(constants::MATERIAL_BIND_GROUP) @binding(5)
 var mineral_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(6)
+@group(constants::MATERIAL_BIND_GROUP) @binding(6)
 var surface_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(7)
+@group(constants::MATERIAL_BIND_GROUP) @binding(7)
 var surface_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(8)
+@group(constants::MATERIAL_BIND_GROUP) @binding(8)
 var normal_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(9)
+@group(constants::MATERIAL_BIND_GROUP) @binding(9)
 var normal_smp: sampler;
 // Site maps are independent from the body-wide Albedo/Surface layers. The
 // collar blends these local DEM inputs into the material selected for the body.
-@group(#{MATERIAL_BIND_GROUP}) @binding(12)
+@group(constants::MATERIAL_BIND_GROUP) @binding(12)
 var continuation_albedo_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(13)
+@group(constants::MATERIAL_BIND_GROUP) @binding(13)
 var continuation_albedo_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(14)
+@group(constants::MATERIAL_BIND_GROUP) @binding(14)
 var continuation_surface_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(15)
+@group(constants::MATERIAL_BIND_GROUP) @binding(15)
 var continuation_surface_smp: sampler;
 
 @fragment
@@ -246,10 +247,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let dist = distance(view.world_position, world_p);
     var detail_p = world_p;
     var detail_n = normalize(in.world_normal);
-#ifdef VERTEX_UVS_A
-    detail_p = terrain_detail_position(in.uv, mat.terrain_half_extent);
-    detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
-#endif
+    @if((VERTEX_UVS_A)) detail_p = terrain_detail_position(in.uv, mat.terrain_half_extent);
+    @if((VERTEX_UVS_A)) detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
     let pw = length(fwidth(detail_p));
     let fine_fade  = aa_fade(fine_scale, pw);
     let macro_fade = aa_fade(macro_scale, pw);
@@ -277,9 +276,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
 
     var n = detail_n;
-#ifdef VERTEX_UVS_A
-    n = terrain_detail_normal_to_world(detail_n, in.instance_index);
-#endif
+    @if((VERTEX_UVS_A)) n = terrain_detail_normal_to_world(detail_n, in.instance_index);
 
     // Large-scale procedural colour is a fallback only. With an authored
     // orthophoto, adding independent per-metre variation over it makes the
@@ -301,22 +298,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     // ── Non-destructive raster layers (planar UV; weight 0 = no contribution).
     // Guarded by VERTEX_UVS_A: with no UVs we stay pure procedural.
-#ifdef VERTEX_UVS_A
-    let uv = in.uv;
-    var map_n = textureSample(normal_tex, normal_smp, uv);
-    var map_s = textureSample(surface_tex, surface_smp, uv);
-    let map_footprint = pw / mat.map_texel_size_m;
-    let outside_site_uv = vec2(
+    @if((VERTEX_UVS_A)) let uv = in.uv;
+    @if((VERTEX_UVS_A)) var map_n = textureSample(normal_tex, normal_smp, uv);
+    @if((VERTEX_UVS_A)) var map_s = textureSample(surface_tex, surface_smp, uv);
+    @if((VERTEX_UVS_A)) let map_footprint = pw / mat.map_texel_size_m;
+    @if((VERTEX_UVS_A)) let outside_site_uv = vec2(
         max(max(-uv.x, uv.x - 1.0), 0.0),
         max(max(-uv.y, uv.y - 1.0), 0.0),
     );
     // The exterior material uses the same rectangle as the geometry.
-    let outside_m = outside_site_uv * 2.0 * mat.terrain_half_extent;
-    let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, uv.x < 0.0);
-    let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, uv.y < 0.0);
-    let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
-    site_material_weight = 1.0 - smoothstep(0.0, 1.0, transition);
-    let map_weights = terrain_map_weights(
+    @if((VERTEX_UVS_A)) let outside_m = outside_site_uv * 2.0 * mat.terrain_half_extent;
+    @if((VERTEX_UVS_A)) let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, uv.x < 0.0);
+    @if((VERTEX_UVS_A)) let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, uv.y < 0.0);
+    @if((VERTEX_UVS_A)) let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
+    @if((VERTEX_UVS_A)) site_material_weight = 1.0 - smoothstep(0.0, 1.0, transition);
+    @if((VERTEX_UVS_A)) let map_weights = terrain_map_weights(
         map_footprint,
         mat.derived_surface_on,
         mat.derived_normal_on,
@@ -327,38 +323,38 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         mat.weight_ao,
         mat.weight_normal,
     );
-    let map_weight_normal = map_weights.x;
-    let map_weight_rough = map_weights.y;
-    let map_weight_ao = map_weights.z;
-    let map_weight_tone = map_weights.w;
-    var map_ao = 1.0;
+    @if((VERTEX_UVS_A)) let map_weight_normal = map_weights.x;
+    @if((VERTEX_UVS_A)) let map_weight_rough = map_weights.y;
+    @if((VERTEX_UVS_A)) let map_weight_ao = map_weights.z;
+    @if((VERTEX_UVS_A)) let map_weight_tone = map_weights.w;
+    @if((VERTEX_UVS_A)) var map_ao = 1.0;
     // Albedo is already a linear material colour. The asset pipeline separates
     // source-image illumination from local surface detail before writing this
     // sRGB-authored texture; this shader must not relight the source image.
-    if (authored_albedo_weight > 0.0) {
+    @if((VERTEX_UVS_A)) if (authored_albedo_weight > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
         albedo = mix(albedo, a, authored_albedo_weight);
     }
-    var continuation_color = mat.site_base_color.rgb;
-    if (mat.site_weight_albedo > 0.0) {
+    @if((VERTEX_UVS_A)) var continuation_color = mat.site_base_color.rgb;
+    @if((VERTEX_UVS_A)) if (mat.site_weight_albedo > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
         let site_albedo = textureSample(
             continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
         continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
-    albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_material_weight);
+    @if((VERTEX_UVS_A)) albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_material_weight);
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a
     // slope-class drape stays readable inside the crater's shadow. Tinting the
     // albedo here would multiply it through sun, CSM and the shadow march —
     // the exact bug doc 18 §4 removes.)
     // Surface pack: R=roughness, G=AO (B=rockDens, A=hazard consumed elsewhere).
-    if (map_weight_rough > 0.0 || map_weight_ao > 0.0) {
+    @if((VERTEX_UVS_A)) if (map_weight_rough > 0.0 || map_weight_ao > 0.0) {
         roughness = clamp(mix(roughness, map_s.r, map_weight_rough), 0.05, 1.0);
         map_ao = terrain_surface_occlusion(
             map_s, map_weight_ao, mat.authored_surface_on);
     }
-    if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
+    @if((VERTEX_UVS_A)) if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
         let site_surface = textureSample(
             continuation_surface_tex, continuation_surface_smp, site_uv);
@@ -377,7 +373,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Recover the detail's tangent slope around the geometric normal, then
     // project it onto the selected landform normal. A full-weight DEM must not
     // erase grain or inherit camera-dependent tile-normal interpolation.
-    if (map_weight_normal > 0.0) {
+    @if((VERTEX_UVS_A)) if (map_weight_normal > 0.0) {
         let n_baked = dem_normal_to_world(
             map_n.xyz, in.instance_index);
         let geometric_n = normalize(in.world_normal);
@@ -388,19 +384,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
     // The derived normal's alpha carries the same DEM-anchored relief tone as
     // the streamed path. Authored normal maps intentionally do not supply it.
-    albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * map_weight_tone);
-#endif
+    @if((VERTEX_UVS_A)) albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * map_weight_tone);
 
     // Resolved sub-texel grain modulates the material colour around its mean.
     // The same stable position and footprint fade used for its normal prevent
     // view-dependent speckle; broad colour remains owned by the orthophoto.
     if (micro_fade > 0.0 && micro_albedo > 0.0) {
         var grain_source_weight = 1.0;
-#ifdef VERTEX_UVS_A
-        let albedo_texel_m = 2.0 * mat.terrain_half_extent / f32(textureDimensions(albedo_tex).x);
-        grain_source_weight = mix(1.0,
+        @if((VERTEX_UVS_A)) let albedo_texel_m = 2.0 * mat.terrain_half_extent / f32(textureDimensions(albedo_tex).x);
+        @if((VERTEX_UVS_A)) grain_source_weight = mix(1.0,
             smoothstep(1.0, 2.0, micro_scale * albedo_texel_m), authored_albedo_weight);
-#endif
         albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade * grain_source_weight;
     }
 
@@ -442,21 +435,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var sun_vis = 1.0;
     var march_blend = 0.0;
 
-#ifdef VERTEX_UVS_A
-    let csm_far = mat.csm_far;
-    march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
-    if (march_blend > 0.0) {
+    @if((VERTEX_UVS_A)) let csm_far = mat.csm_far;
+    @if((VERTEX_UVS_A)) march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
+    @if((VERTEX_UVS_A)) if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
     }
-#endif
 
     color = terrain_apply_sun_response(
         pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
 
-#ifdef VERTEX_UVS_A
     // ── Overlay plane (UNLIT, doc 18 §4): the mineral/classification drape
     // composites over the LIT result — after PBR, after the sun march, after
     // shadow fill — and is never multiplied by any of them. Same composite
@@ -464,15 +454,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // and the diagnostic view use the same transfer definition. The drape is the
     // map's own colour (e.g. the LROC slope classes), not an albedo tint:
     // its whole job is to stay readable where the light does not reach.
-    if (mat.weight_mineral > 0.0) {
+    @if((VERTEX_UVS_A)) if (mat.weight_mineral > 0.0) {
         let m = textureSample(mineral_tex, mineral_smp, uv).rgb;
         color = vec4(mix(color.rgb, m, mat.weight_mineral), color.a);
     }
-#endif
 
-#ifdef VERTEX_UVS_A
-    color = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, color);
-#endif
+    @if((VERTEX_UVS_A)) color = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, color);
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;
 }

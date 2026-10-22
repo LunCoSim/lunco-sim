@@ -91,7 +91,8 @@ impl WorldLabel {
     Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
 )]
 pub enum ToneMap {
-    None,
+    /// No tone curve; preserve grading, dither and non-negative output.
+    Linear,
     /// Bevy's default.
     TonyMcMapface,
     /// Filmic; default for LunCoSim (high contrast solar/lunar lighting).

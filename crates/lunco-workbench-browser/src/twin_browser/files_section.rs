@@ -814,7 +814,7 @@ mod tests {
             DocumentKindId::new("shader"),
             DocumentKindMeta {
                 display_name: "Shader".into(),
-                extensions: vec!["wgsl"],
+                extensions: vec!["wesl"],
                 ..Default::default()
             },
         );
@@ -827,7 +827,7 @@ mod tests {
             },
         );
         assert!(!should_open_as_document(
-            Path::new("shaders/terrain.wgsl"),
+            Path::new("shaders/terrain.wesl"),
             Some(&registry),
             true,
         ));

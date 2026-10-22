@@ -193,7 +193,7 @@ pub(crate) fn inspect_input(
 
     for rel in &input.files {
         add_asset_entry(rel, &mut entries);
-        if has_extension(rel, "wgsl") {
+        if has_extension(rel, "wesl") {
             entries.push(NamespaceEntry {
                 namespace: SHADER_NAMESPACE.to_string(),
                 name: file_stem(rel),

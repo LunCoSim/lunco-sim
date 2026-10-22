@@ -129,7 +129,7 @@ crate names no material type at all.
 > recolour "this rock" would recolour **every rock that looked like it**.
 
 `SetObjectProperty` owns the reflected shader-parameter case. It uses the same
-WGSL schema parser as the live command, resolves the bound Shader through the
+WESL schema parser as the live command, resolves the bound Shader through the
 composed USD material network, preserves an existing composed declaration's
 exact `typeName`, validates the literal, and emits one typed runtime-layer
 `UsdOp::SetAttribute` on `inputs:<snake_case>`. The Inspector uses the same

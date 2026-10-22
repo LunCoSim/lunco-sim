@@ -394,7 +394,7 @@ impl RenderQualityProfile {
             shadow_depth_bias: profile_f32(entries, "shadow_depth_bias")?,
             shadow_normal_bias: profile_f32(entries, "shadow_normal_bias")?,
             camera_tone_map: match profile_string(entries, "camera_tone_map")? {
-                "none" => ToneMap::None,
+                "linear" => ToneMap::Linear,
                 "tony_mc_mapface" => ToneMap::TonyMcMapface,
                 "agx" => ToneMap::AgX,
                 "aces_fitted" => ToneMap::AcesFitted,

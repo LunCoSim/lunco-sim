@@ -46,7 +46,7 @@ fn main() -> lunco_luncosim_core::AppExit {
                 .collect();
             if paths.is_empty() {
                 eprintln!(
-                    "--validate needs at least one path (.mo/.usda/.sysml/.kerml/.wgsl/.rhai)"
+                    "--validate needs at least one path (.mo/.usda/.sysml/.kerml/.wesl/.rhai)"
                 );
                 std::process::exit(2);
             }

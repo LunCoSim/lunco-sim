@@ -19,7 +19,6 @@ def Xform "Engine"
                 {
                     float inputs:throttle = 1.0
                     float inputs:flicker_scale = 7.0
-                    asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
                     color3f inputs:core_color = (1.0, 1.0, 1.0)
                     uniform token info:implementationSource = "sourceAsset"
                     float inputs:plume_length_fraction = 1.0
@@ -52,6 +51,7 @@ def Xform "Engine"
                     custom float inputs:radial_width = 1.0
                     custom float inputs:flow_phase_sin = 0.0
                     custom float inputs:flow_phase_cos = 1.0
+                    asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
                 }
             }
         }
@@ -132,9 +132,9 @@ def Xform "Engine"
         def Shader "Surface"
         {
             uniform token info:implementationSource = "sourceAsset"
-            custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/opaque_depth_probe.wgsl@
             custom color4f inputs:color = (0.0, 0.009999999776482582, 0.10000000149011612, 1.0)
             custom token outputs:surface = ""
+            custom asset info:wesl:sourceAsset = @lunco://shaders/tests/opaque_depth_probe.wesl@
         }
     }
     def Cube "Occluder"

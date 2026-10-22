@@ -66,8 +66,8 @@ isolated preview:
 | `docs/architecture/terrain-substrate.md` and `terrain-layered-rendering.md` | Terrain geometry is a deterministic projection of the DEM/oracle and layer stack; geometry is not authored as a giant USD mesh. |
 
 The standard production shader remains the correct source for DEM appearance:
-`lunco://shaders/terrain_layered.wgsl` with
-`lunco://shaders/terrain_geomorph.wgsl`. The missing part is render geometry and
+`lunco://shaders/terrain_layered.wesl` with
+`lunco://shaders/terrain_geomorph.wesl`. The missing part is render geometry and
 spatial demand, not an alternate material.
 
 ## Required architecture

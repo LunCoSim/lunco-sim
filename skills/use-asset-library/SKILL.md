@@ -1,7 +1,7 @@
 ---
 name: use-asset-library
 description: >
-  Add or locate LunCoSim assets under `assets/`: USD components, WGSL shaders,
+  Add or locate LunCoSim assets under `assets/`: USD components, WESL shaders,
   Modelica models, SysML requirements, or event-driven Rhai policies. Use for discovery, spawn
   palette entries, `lunco://` references, Twin-mounted assets, source programs,
   or web manifests. This skill owns placement and resolution; use
@@ -44,7 +44,7 @@ README defines the stable taxonomy.
 | Twin-owned requirement roots | `.sysml` / `.kerml` source files declared and indexed by `twin.toml` |
 | `assets/scenarios/` | `.rhai` bound as a `LunCoProgramAPI` source |
 | `assets/scripting/` | importable rhai modules — `lib/`, `prelude/`, `policy/`, `tools/` |
-| `assets/shaders/` | `.wgsl` |
+| `assets/shaders/` | `.wesl` |
 | `assets/celestial/`, `missions/`, `tutorials/`, `lighting/`, `config/` | global/application data |
 
 ## Architecture boundary
@@ -212,14 +212,14 @@ hardcoded; **moving the file changes its category.**
   caches per asset. Adding a *new* file is picked up automatically on native
   (the filesystem is the manifest).
 
-## Add a shader (`.wgsl`)
+## Add a shader (`.wesl`)
 
 Drop it in `assets/shaders/`. It is walked into the manifest and registered into
 the `ShaderCatalog` automatically (`RescanShaders` to re-read edits). Bind it
 **directly on the gprim**:
 
 ```usda
-uniform asset info:wgsl:sourceAsset = @lunco://shaders/rover_hull.wgsl@
+uniform asset info:wesl:sourceAsset = @lunco://shaders/rover_hull.wesl@
 ```
 
 The tunable surface is reflected from a `struct Material` at
@@ -265,7 +265,7 @@ color3f[] primvars:displayColor = [(0.30, 0.72, 0.35)]   # ARRAY, linear
 ```
 
 One authored attribute, in the standard USD place, whether the part renders
-through plain PBR or through WGSL. An authored `inputs:<name>` on the bound
+through plain PBR or through WESL. An authored `inputs:<name>` on the bound
 Shader **always wins** over the engine fill — but authoring `inputs:display_color`
 hides the colour from every other tool that reads USD, so use `inputs:` only for
 what displayColor cannot express (accents, panel scale, wear, dust).

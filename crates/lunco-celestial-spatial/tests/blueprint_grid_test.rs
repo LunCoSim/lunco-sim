@@ -1,15 +1,15 @@
 //! Tests for the blueprint grid shader math.
 //!
-//! IMPORTANT: WGSL's `fract(x)` = `x - floor(x)` (always positive).
+//! IMPORTANT: WESL's `fract(x)` = `x - floor(x)` (always positive).
 //! Rust's `x.fract()` = `x - x.trunc()` (can be negative).
-//! This test uses the WGSL-correct formula.
+//! This test uses the WESL-correct formula.
 
-/// WGSL-compatible fract: always returns value in [0, 1)
+/// WESL-compatible fract: always returns value in [0, 1)
 fn wgsl_fract(x: f32) -> f32 {
     x - x.floor()
 }
 
-/// Simulates the WGSL cartesian grid computation exactly as in the shader.
+/// Simulates the WESL cartesian grid computation exactly as in the shader.
 fn compute_grid_mask(
     body_local: [f32; 3],
     major_spacing: f32,

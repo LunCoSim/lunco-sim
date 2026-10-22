@@ -1,7 +1,7 @@
 //! Shader **discovery** and **starting templates** — render-free.
 //!
 //! The set of dynamic (`Material`-declaring) shaders the Inspector's shader-picker
-//! can swap a prop to, plus the WGSL templates `CreateShader` starts from. Both are
+//! can swap a prop to, plus the WESL templates `CreateShader` starts from. Both are
 //! plain strings + [`ParamSchema`](crate::dyn_params::ParamSchema) reflection —
 //! nothing here names a material or a render pipeline, so it stays on the
 //! render-free side of the boundary with `dyn_params` and `look`.
@@ -20,7 +20,7 @@ use crate::dyn_params::ParamSchema;
 // Inspector's shader-picker can swap a prop to.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// One pickable shader: its asset path (`shaders/foo.wgsl`) and display label.
+/// One pickable shader: its asset path (`shaders/foo.wesl`) and display label.
 #[derive(Clone, Debug)]
 pub struct ShaderEntry {
     /// Asset path passed to `SetObjectProperty { property: "shader", .. }`.
@@ -39,8 +39,8 @@ pub struct ShaderCatalog {
 }
 
 impl ShaderCatalog {
-    /// Register a pickable shader by asset path (`shaders/foo.wgsl` or
-    /// `twin://name/shaders/foo.wgsl`), deduped by path. The display label is
+    /// Register a pickable shader by asset path (`shaders/foo.wesl` or
+    /// `twin://name/shaders/foo.wesl`), deduped by path. The display label is
     /// derived from the file stem. Returns `true` if it was newly added.
     pub fn add(&mut self, path: impl Into<String>) -> bool {
         let path = path.into();
@@ -51,7 +51,7 @@ impl ShaderCatalog {
             .rsplit('/')
             .next()
             .unwrap_or(&path)
-            .strip_suffix(".wgsl")
+            .strip_suffix(".wesl")
             .unwrap_or(&path);
         let label = humanize_shader_name(stem);
         self.entries.push(ShaderEntry { path, label });
@@ -88,7 +88,7 @@ fn humanize_shader_name(stem: &str) -> String {
         .join(" ")
 }
 
-/// Whether WGSL `src` is safe to offer as a pickable prop shader: it declares a
+/// Whether WESL `src` is safe to offer as a pickable prop shader: it declares a
 /// `Material` struct (so the engine can reflect its params) and every
 /// engine-filled field it declares is one a plain prop entity actually receives
 /// (`prop_fillable` in the [engine-param registry][crate::engine_params]).
@@ -109,17 +109,18 @@ pub fn is_prop_pickable_source(src: &str) -> bool {
 // ─────────────────────────────────────────────────────────────────────────
 // Shader templates — PBR-compatible starting points for live shader creation
 // (`CreateShader`). Each declares its own `Material` struct (so it is dynamic)
-// and shades through the shared `lunco::pbr_lit::lit` helper (full lighting,
+// and shades through the shared `lunco::shaders::pbr_lit::lit` helper (full lighting,
 // shadows, ambient) so a generated shader looks correct under the sun.
 // `__NAME__` is replaced with the shader's stem for the header comment.
 // ─────────────────────────────────────────────────────────────────────────
 
-const SOLID_TEMPLATE: &str = r#"//! __NAME__ — solid PBR material (generated template). Edit freely; saves
+const SOLID_TEMPLATE: &str = r#"import bevy_pbr::render::forward_io::VertexOutput;
+import lunco::shaders::pbr_lit::lit;
+
+//! __NAME__ — solid PBR material (generated template). Edit freely; saves
 //! hot-reload, and the Inspector controls are reflected from the `//!@`
 //! annotations + `Material` struct below.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import lunco::pbr_lit::lit
 
 //!@ui      base_color color "Base colour"
 //!@default base_color 0.8,0.8,0.8
@@ -132,7 +133,7 @@ struct Material {
     roughness:  f32,
     metallic:   f32,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -140,12 +141,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 }
 "#;
 
-const CHECKER_TEMPLATE: &str = r#"//! __NAME__ — procedural checker PBR material (generated template). The pattern
+const CHECKER_TEMPLATE: &str = r#"import bevy_pbr::render::{forward_io::VertexOutput, mesh_functions};
+import lunco::shaders::pbr_lit::lit;
+
+//! __NAME__ — procedural checker PBR material (generated template). The pattern
 //! is computed from the object-space surface direction (seam-free on any mesh)
 //! and shaded with full PBR lighting. Edit freely.
 
-#import bevy_pbr::{forward_io::VertexOutput, mesh_functions}
-#import lunco::pbr_lit::lit
 
 //!@ui      color_a   color "Colour A"
 //!@default color_a   0.85,0.2,0.2
@@ -161,11 +163,11 @@ struct Material {
     color_b:   vec3<f32>,
     roughness: f32,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    // Object-space surface direction → seam-free lat/long coords (see balloon.wgsl).
+    // Object-space surface direction → seam-free lat/long coords (see balloon.wesl).
     let m = mesh_functions::get_world_from_local(in.instance_index);
     let R = mat3x3<f32>(normalize(m[0].xyz), normalize(m[1].xyz), normalize(m[2].xyz));
     let d = normalize(transpose(R) * normalize(in.world_normal));
@@ -179,11 +181,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 }
 "#;
 
-const GRADIENT_TEMPLATE: &str = r#"//! __NAME__ — vertical gradient PBR material (generated template). Blends two
+const GRADIENT_TEMPLATE: &str = r#"import bevy_pbr::render::forward_io::VertexOutput;
+import lunco::shaders::pbr_lit::lit;
+
+//! __NAME__ — vertical gradient PBR material (generated template). Blends two
 //! colours by surface normal (top vs bottom facing). Edit freely.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import lunco::pbr_lit::lit
 
 //!@ui      top       color "Top colour"
 //!@default top       0.7,0.85,1.0
@@ -196,7 +199,7 @@ struct Material {
     roughness: f32,
     bottom:    vec3<f32>,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -207,11 +210,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 }
 "#;
 
-const GLOW_TEMPLATE: &str = r#"//! __NAME__ — emissive glow PBR material (generated template). A lit base plus
+const GLOW_TEMPLATE: &str = r#"import bevy_pbr::render::forward_io::VertexOutput;
+import lunco::shaders::pbr_lit::lit;
+
+//! __NAME__ — emissive glow PBR material (generated template). A lit base plus
 //! a constant emissive term (×strength). Edit freely.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import lunco::pbr_lit::lit
 
 //!@ui      base_color color "Base colour"
 //!@default base_color 0.1,0.1,0.12
@@ -227,7 +231,7 @@ struct Material {
     emissive:   vec3<f32>,
     roughness:  f32,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -235,11 +239,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 }
 "#;
 
-const RIM_TEMPLATE: &str = r#"//! __NAME__ — rim / fresnel PBR material (generated template). A lit base with
+const RIM_TEMPLATE: &str = r#"import bevy_pbr::render::{forward_io::VertexOutput, mesh_view_bindings::view};
+import lunco::shaders::pbr_lit::lit;
+
+//! __NAME__ — rim / fresnel PBR material (generated template). A lit base with
 //! a view-dependent rim glow on grazing angles. Edit freely.
 
-#import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::view}
-#import lunco::pbr_lit::lit
 
 //!@ui      base_color color "Base colour"
 //!@default base_color 0.15,0.18,0.22
@@ -255,7 +260,7 @@ struct Material {
     rim_color:  vec3<f32>,
     roughness:  f32,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -277,10 +282,10 @@ pub fn shader_template_kinds() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
-/// WGSL source for a built-in starting template, with `title` substituted into
+/// WESL source for a built-in starting template, with `title` substituted into
 /// the header comment. `kind` selects the template (see [`shader_template_kinds`]);
 /// anything unknown (incl. empty) falls back to the flat solid material. All
-/// templates are PBR-lit (`lunco::pbr_lit::lit`) and prop-pickable.
+/// templates are PBR-lit (`lunco::shaders::pbr_lit::lit`) and prop-pickable.
 pub fn shader_template(kind: &str, title: &str) -> String {
     let body = match kind.trim() {
         "checker" => CHECKER_TEMPLATE,

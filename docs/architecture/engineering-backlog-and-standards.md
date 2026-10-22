@@ -216,13 +216,13 @@ remains is the Storage-API migration, which needs a dependency line from
 
 ### Shaders are never compiled by CI
 
-**What:** Validate the WGSL at build or test time, not only when a scene renders.
+**What:** Validate the WESL at build or test time, not only when a scene renders.
 
 **Why:** `cargo check` does not compile shaders — naga_oil does, at startup, when
 a material is first bound. So the entire shader tree can be broken by a rename
-and every check stays green. The import graph is real code: `lunco::noise`,
-`lunco::pbr_lit`, `lunco::horizon` and `lunco::transfer` are shared modules with
-call sites across 20 files, and a symbol both `#import`ed and defined locally is
+and every check stays green. The import graph is real code: `lunco::shaders::lunco_noise`,
+`lunco::shaders::pbr_lit`, `lunco::shaders::horizon_march` and `lunco::shaders::transfer` are shared modules with
+call sites across 20 files, and a symbol both `import`ed and defined locally is
 a hard naga_oil error. A static import/redefinition check catches most of it
 cheaply; a headless run that binds one material of each family catches the rest.
 

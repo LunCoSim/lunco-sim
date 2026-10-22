@@ -2402,7 +2402,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                     &mut faults,
                     target,
                     surface_look,
-                    "the Rhai policy selected compose for an incompatible USD/WGSL interface",
+                    "the Rhai policy selected compose for an incompatible USD/WESL interface",
                 );
                 continue;
             }
@@ -2412,7 +2412,7 @@ pub(crate) fn sync_terrain_visual_continuations(
                     target,
                     surface_look,
                     format!(
-                        "continuation interface mismatch: USD declares {:?}, WGSL reflects {:?}",
+                        "continuation interface mismatch: USD declares {:?}, WESL reflects {:?}",
                         declared, actual
                     ),
                 );
@@ -4614,8 +4614,8 @@ mod draw_partition_tests {
     }
 
     fn production_template() -> ShaderLook {
-        ShaderLook::new("shaders/terrain_layered.wgsl")
-            .with_vertex_shader("shaders/terrain_geomorph.wgsl")
+        ShaderLook::new("shaders/terrain_layered.wesl")
+            .with_vertex_shader("shaders/terrain_geomorph.wesl")
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -4894,8 +4894,8 @@ mod draw_partition_tests {
             );
         }
         assert!(!near.values().contains_key("map_ratio"));
-        assert_eq!(near.shader, "shaders/terrain_layered.wgsl");
-        assert_eq!(far.shader, "shaders/terrain_layered.wgsl");
+        assert_eq!(near.shader, "shaders/terrain_layered.wesl");
+        assert_eq!(far.shader, "shaders/terrain_layered.wesl");
         for name in ["mode", "overlay_mode", "overlay_opacity", "lod_depth"] {
             assert!(
                 !near.values().contains_key(name),
@@ -4924,7 +4924,7 @@ mod draw_partition_tests {
             },
         );
 
-        assert_eq!(look.shader, "lunco://shaders/terrain_debug.wgsl");
+        assert_eq!(look.shader, "lunco://shaders/terrain_debug.wesl");
         assert_eq!(look.values().get("lod"), Some(&ParamValue::F32(4.0)));
         assert!(!look.values().contains_key("micro_scale"));
     }
@@ -5038,7 +5038,7 @@ mod draw_partition_tests {
             .world_mut()
             .spawn((
                 DemTerrainSurface,
-                ShaderLook::new("shaders/terrain_layered.wgsl")
+                ShaderLook::new("shaders/terrain_layered.wesl")
                     .with_texture(TextureLayer::Albedo, first.clone()),
             ))
             .id();
@@ -5054,7 +5054,7 @@ mod draw_partition_tests {
 
         *app.world_mut()
             .get_mut::<ShaderLook>(terrain)
-            .expect("terrain look") = ShaderLook::new("shaders/terrain_layered.wgsl")
+            .expect("terrain look") = ShaderLook::new("shaders/terrain_layered.wesl")
             .with_texture(TextureLayer::Albedo, second.clone());
         app.update();
 
@@ -5109,7 +5109,7 @@ mod draw_partition_tests {
 
         let tile = app
             .world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_layered.wgsl"))
+            .spawn(ShaderLook::new("shaders/terrain_layered.wesl"))
             .id();
         let mut tile_entity = app.world_mut().entity_mut(tile);
         let mut shader_look = tile_entity.get_mut::<ShaderLook>().expect("tile look");
@@ -5300,7 +5300,7 @@ mod draw_partition_tests {
         let tile = app
             .world_mut()
             .spawn((
-                ShaderLook::new("shaders/terrain_layered.wgsl"),
+                ShaderLook::new("shaders/terrain_layered.wesl"),
                 // A resident tile may carry stale shadow flags when its cache
                 // is rebound. The shared helper must restore the current
                 // terrain caster/receiver contract.
@@ -5355,7 +5355,7 @@ mod draw_partition_tests {
         let tile = app
             .world_mut()
             .spawn((
-                ShaderLook::new("shaders/terrain_layered.wgsl"),
+                ShaderLook::new("shaders/terrain_layered.wesl"),
                 bevy::light::NotShadowReceiver,
             ))
             .id();

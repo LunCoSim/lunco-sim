@@ -28,8 +28,8 @@ def Xform "World" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/sun_material_precision.wgsl@
                 custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/sun_material_precision.wesl@
             }
         }
         def Material "Sky"
@@ -39,8 +39,8 @@ def Xform "World" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/sun_radius_precision.wgsl@
                 custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/sun_radius_precision.wesl@
             }
         }
     }

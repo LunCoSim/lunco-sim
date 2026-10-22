@@ -89,8 +89,8 @@ impl SchemeRegistry {
     /// The local filesystem path `reference` resolves to.
     ///
     /// A reference with no scheme is engine-library-relative — the same default
-    /// the `lunco://` source applies, so a bare `shaders/wheel.wgsl` and
-    /// `lunco://shaders/wheel.wgsl` agree. A reference naming an UNREGISTERED
+    /// the `lunco://` source applies, so a bare `shaders/wheel.wesl` and
+    /// `lunco://shaders/wheel.wesl` agree. A reference naming an UNREGISTERED
     /// scheme returns `None` rather than being silently treated as library-
     /// relative, which would resolve it to a path that does not exist.
     pub fn local_path(&self, reference: &str) -> Result<Option<PathBuf>, SchemeRegistryError> {
@@ -130,7 +130,7 @@ mod tests {
     fn bare_references_are_library_relative() {
         let reg = SchemeRegistry::default();
         assert_eq!(
-            reg.local_path("shaders/wheel.wgsl").unwrap(),
+            reg.local_path("shaders/wheel.wesl").unwrap(),
             Some(crate::engine_shader_path("wheel").unwrap())
         );
     }

@@ -1063,7 +1063,7 @@ fn set_error_handler(
                             "wgpu validation error (frame dropped, continuing): {desc}. \
                              A persistent version of this usually means a material's render \
                              pipeline is invalid — check the bound Shader's \
-                             `info:wgsl:sourceAsset` (it must name a whole shader with an \
+                             `info:wesl:sourceAsset` (it must name a whole shader with an \
                              `@fragment` entry, not a library). Identical errors are now \
                              rate-limited."
                         );

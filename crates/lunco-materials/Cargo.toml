@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 # RENDER-FREE. This crate states shader appearance *intent* (`ShaderLook`), the
-# WGSL-reflected parameter schema (`dyn_params`), the CDLOD vertex attribute
+# WESL-reflected parameter schema (`dyn_params`), the CDLOD vertex attribute
 # (`vertex` — `bevy_mesh`, not `bevy_render`), the shader catalog/templates and the
 # param-name bridge. `ShaderMaterial` (the `AsBindGroup`, hence `bevy_pbr` →
 # `bevy_render` → wgpu/naga) lives in `lunco-render-bevy`. Do not add `bevy_pbr`
@@ -27,6 +27,8 @@ lunco-render = { path = "../lunco-render" }
 lunco-port-core = { path = "../lunco-port-core" }
 thiserror = { workspace = true }
 wgpu-types = "30"
+# The same render-free WESL frontend used by Bevy's shader loader/cache.
+wesl = { workspace = true }
 
 [dev-dependencies]
 bevy = { workspace = true, features = ["png"] }

@@ -488,7 +488,7 @@ port release were verified. Evidence is in `/tmp/luncosim-native-reset-stack-*.l
 `Material::compute_surface_source`, including NodeGraphs. Native material
 binding reads preserve errors and validate the bound Material schema. The
 preparation worker captures the Shader path and rejects malformed connected
-graphs; live consumers use the same contract. Rendering, animation, WGSL
+graphs; live consumers use the same contract. Rendering, animation, WESL
 projection, physics binding reads, topology inspection, and material authoring
 consume these fallible reader methods. The one-hop surface lookup and its
 public exports are removed.

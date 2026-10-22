@@ -102,7 +102,7 @@ parse check into runtime evidence.
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
 | [**author-rhai-tests**](author-rhai-tests/SKILL.md) | Put behavioral and asset-backed tests in Rhai and run them through production |
 | [**debug-ui-interactions**](debug-ui-interactions/SKILL.md) | Reproduce and verify headful UI workflows with typed native key and pointer events |
-| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.sysml`/`.kerml`/`.wgsl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `ValidateSysml`/`RunLint` for Twin and loaded-scene checks |
+| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.sysml`/`.kerml`/`.wesl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `ValidateSysml`/`RunLint` for Twin and loaded-scene checks |
 | [**performance-profiling**](performance-profiling/SKILL.md) | Diagnose FPS, physics timing, periodic stalls, Builder/View differences, and Tracy evidence without reducing quality or changing BigSpace/substeps |
 
 ## Extend the engine
@@ -220,7 +220,7 @@ parse check into runtime evidence.
 - **Shipped assets are `@lunco://…@`.** A bare relative path resolves against the
   anchoring document, so it breaks once a Twin mounts the file — and for
   `info:sourceAsset` that failure is **silent**.
-- **Colour is `primvars:displayColor`**, shader or not; WGSL opts in with
+- **Colour is `primvars:displayColor`**, shader or not; WESL opts in with
   `//!@engine display_color`.
 
 New to the codebase? Start with [**repo-map**](repo-map/SKILL.md), then use

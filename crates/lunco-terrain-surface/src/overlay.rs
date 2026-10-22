@@ -6,7 +6,7 @@
 //! transfer (green ≤ safe angle → red ≥ cliff angle) is evaluated **in the separate
 //! diagnostic shader**, running the SAME smoothstep + ramp as
 //! [`lunco_terrain_core::transfer`] (one definition, shared via the `lunco::transfer`
-//! WGSL module), so the colour RAMP matches the legend swatch.
+//! WESL module), so the colour RAMP matches the legend swatch.
 //!
 //! **The slope it ramps is view-dependent, and that is a known limit.** The shader
 //! takes its slope from the baked DEM-resolution normal map where that map is bound
@@ -34,7 +34,7 @@ use crate::stream_viz::LodTiles;
 use crate::stream_viz::TileShadowCache;
 
 /// The diagnostic tool's controls. `Copy` so they thread cheaply through the
-/// tile replacement path. They are consumed only by `terrain_debug.wgsl`; the
+/// tile replacement path. They are consumed only by `terrain_debug.wesl`; the
 /// production terrain material does not declare diagnostic inputs.
 #[derive(Clone, Copy)]
 pub struct OverlayUniforms {
@@ -58,12 +58,12 @@ pub struct TerrainDiagnosticLook(pub ShaderLook);
 
 impl Default for TerrainDiagnosticLook {
     fn default() -> Self {
-        let shader = lunco_assets_core::engine_asset_uri("shaders/terrain_debug.wgsl");
+        let shader = lunco_assets_core::engine_asset_uri("shaders/terrain_debug.wesl");
         Self(ShaderLook::new(shader.clone()).with_vertex_shader(shader))
     }
 }
 
-/// Diagnostic modes consumed by `terrain_debug.wgsl`.
+/// Diagnostic modes consumed by `terrain_debug.wesl`.
 pub mod overlay_mode {
     /// Production material — the diagnostic tool is inactive.
     pub const OFF: f32 = 0.0;
@@ -373,17 +373,17 @@ mod tests {
     fn diagnostic_shader_sources_are_runtime_configurable() {
         let mut app = test_app();
         app.world_mut().trigger(SetTerrainOverlay {
-            shader: Some("shaders/custom_diagnostic.wgsl".into()),
-            vertex_shader: Some("shaders/custom_diagnostic.wgsl".into()),
+            shader: Some("shaders/custom_diagnostic.wesl".into()),
+            vertex_shader: Some("shaders/custom_diagnostic.wesl".into()),
             ..default()
         });
         app.world_mut().flush();
 
         let look = &app.world().resource::<TerrainDiagnosticLook>().0;
-        assert_eq!(look.shader, "lunco://shaders/custom_diagnostic.wgsl");
+        assert_eq!(look.shader, "lunco://shaders/custom_diagnostic.wesl");
         assert_eq!(
             look.vertex_shader.as_deref(),
-            Some("lunco://shaders/custom_diagnostic.wgsl")
+            Some("lunco://shaders/custom_diagnostic.wesl")
         );
     }
 

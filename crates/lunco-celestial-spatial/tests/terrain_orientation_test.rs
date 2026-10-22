@@ -14,12 +14,12 @@ use big_space::prelude::Grid;
 
 const MOON_R: f64 = 1_737_000.0;
 
-/// WGSL-compatible fract
+/// WESL-compatible fract
 fn wgsl_fract(x: f32) -> f32 {
     x - x.floor()
 }
 
-/// Exact copy of the WGSL cartesian grid shader math.
+/// Exact copy of the WESL cartesian grid shader math.
 fn compute_grid_mask(
     body_local: Vec3,
     major_spacing: f32,

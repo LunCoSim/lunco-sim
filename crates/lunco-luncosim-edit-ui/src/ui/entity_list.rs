@@ -916,7 +916,7 @@ pub(crate) fn scene_topology_changed(
     // on the native change query, including not-yet-published worker members.
     let named_changed = named_candidates
         .iter_many(changed.iter().chain(admitted_candidates.iter().copied()))
-        .flatten()
+        .matched()
         .any(candidate_changed);
     drop(named_span);
     // ChildOf is immutable: native insert events cover both initial edges and

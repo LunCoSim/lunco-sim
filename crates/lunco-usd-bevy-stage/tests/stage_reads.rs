@@ -850,17 +850,17 @@ def Xform "World" (
         let source = "#usda 1.0\n\
             def Shader \"Shader\"\n{\n\
             uniform token info:implementationSource = \"sourceAsset\"\n\
-            uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@\n}\n";
+            uniform asset info:wesl:sourceAsset = @shaders/wheel.wesl@\n}\n";
         let stage = test_stage_from_recipe(&StageRecipe::from_source("shader.usda", source));
         let view = stage.view();
         let shader = SdfPath::new("/Shader").unwrap();
 
         assert_eq!(
-            UsdRead::asset(&view, &shader, "info:wgsl:sourceAsset").as_deref(),
-            Some("shaders/wheel.wgsl"),
+            UsdRead::asset(&view, &shader, "info:wesl:sourceAsset").as_deref(),
+            Some("shaders/wheel.wesl"),
         );
         assert!(
-            view.scalar::<String>(&shader, "info:wgsl:sourceAsset")
+            view.scalar::<String>(&shader, "info:wesl:sourceAsset")
                 .is_none(),
             "an asset must not be accepted as a String"
         );

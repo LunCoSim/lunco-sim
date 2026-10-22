@@ -5989,7 +5989,7 @@ the engine mutex confirms both completion queues are empty, so the bounded
 completion budget cannot strand a queued parse or library result.
 
 The asset catalog follows the same UI boundary. The shared discovery owner now
-enumerates USD, WGSL, Modelica, and Python extensions in one asynchronous task;
+enumerates USD, WESL, Modelica, and Python extensions in one asynchronous task;
 the spawn, shader, and program projections publish only after that task drains.
 The startup and Twin lifecycle paths no longer synchronously walk the open Twin
 roots from the UI schedule, and listing generations prevent a closed/reopened
@@ -6043,7 +6043,7 @@ before claiming an overall FPS improvement. The before/after captures are
 `summer-space-school-optimization-ccbfe504-settled-20260924.tracy` and
 `summer-space-school-optimization-ba7550-authoring-view-gate-20260924.tracy`
 in the ignored `scripts/perf/captures/` directory.
-The shader-look binder also reuses loaded WGSL stage verdicts by asset ID and
+The shader-look binder also reuses loaded WESL stage verdicts by asset ID and
 stage, invalidating them on shader asset events so shared terrain looks do not
 revalidate identical source; see the dated note in the [200 FPS
 handover](open-200fps-performance-handover.md). No measured FPS delta is
@@ -11293,7 +11293,7 @@ that whole production cost to registry validation. Evidence is
 changed spellings into owned output. Material projection, authoring and renderer
 callers use that one converter; ownership is acquired only at persistence. The
 authoring setter consumes a borrowed name rather than cloning it before its own
-storage operation. Runtime shader ports use the exact published WGSL key.
+storage operation. Runtime shader ports use the exact published WESL key.
 Scene-property named
 queries use the existing slot resolver, whose native component-membership
 check does not sample color values; full inspection retains complete listing.
@@ -11340,7 +11340,7 @@ Shader resource fixtures declare explicitly typed values or assert rejection
 of an untyped driven input. The integer regression reproduces
 `16777217 -> 16777216` in the baseline named read. Runtime declarations,
 metadata and resolution all use the exact
-published WGSL key, including connected geometry inputs. Named/slot reads share
+published WESL key, including connected geometry inputs. Named/slot reads share
 one reader that widens integers directly to f64. All eight owner tests pass,
 including rejection of untyped driven inputs
 and integer writes. Logs are `target/shader-port-{baseline-tests,contract-baseline,contract-tests}.log`.

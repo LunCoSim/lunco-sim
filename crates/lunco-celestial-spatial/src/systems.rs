@@ -230,7 +230,7 @@ pub fn celestial_visuals_system(
     // globe's job there is the FAR field and the limb, and for that the LROC albedo
     // is exactly the right data at exactly the right scale.
     //
-    // Left on, the trade inverted badly: `blueprint.wgsl` switches to its Cartesian
+    // Left on, the trade inverted badly: `blueprint.wesl` switches to its Cartesian
     // XZ mode at `transition >= 0.5` and that mode does not sample the albedo at all,
     // so a lander at 90 m got a black-on-white wireframe where the Moon should be —
     // and, because the globe sphere is coincident with the site's own ground slab at

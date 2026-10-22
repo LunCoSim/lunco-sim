@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 pub struct ValidationReport {
     /// The path as the caller gave it.
     pub path: String,
-    /// Asset kind, from the extension: `modelica` | `usd` | `sysml` | `wgsl` | `rhai`.
+    /// Asset kind, from the extension: `modelica` | `usd` | `sysml` | `wesl` | `rhai`.
     pub kind: String,
     /// True iff `errors` is empty — the file would survive the load path.
     pub ok: bool,
@@ -37,7 +37,7 @@ pub struct ValidationReport {
     /// these stable rule identifiers and fields instead of parsing prose.
     pub findings: Vec<ValidationFinding>,
     /// Kind-specific extras: `model`/`params`/`inputs` (.mo),
-    /// `wheel_prims` (.usda), `shader_params` (.wgsl).
+    /// `wheel_prims` (.usda), `shader_params` (.wesl).
     pub info: serde_json::Value,
     /// Domain-shaped facts handed to the authored lint rules for this kind
     /// (`apply_lint_policy`). Not part of the API payload — it is the linter's
@@ -237,10 +237,10 @@ pub(crate) fn validate_prepared_bytes(
     let report = match ext.as_str() {
         "mo" => validate_modelica(reference, path, &text),
         "sysml" | "kerml" => validate_sysml(reference, path, &text),
-        "wgsl" => validate_wgsl(reference, &text),
+        "wesl" => validate_wesl(reference, &text),
         "rhai" => validate_rhai(reference, &text),
         other => ValidationReport::new(reference, "unknown").error(format!(
-            "unsupported extension `.{other}` — supported: .mo, .usd, .usda, .usdc, .sysml, .kerml, .wgsl, .rhai"
+            "unsupported extension `.{other}` — supported: .mo, .usd, .usda, .usdc, .sysml, .kerml, .wesl, .rhai"
         )),
     };
     (report, text)
@@ -667,12 +667,16 @@ pub(crate) fn engine_assets_root() -> std::io::Result<PathBuf> {
     lunco_assets_core::assets_dir_abs()
 }
 
-// ─── .wgsl ──────────────────────────────────────────────────────────────────
+// ─── .wesl ──────────────────────────────────────────────────────────────────
 
-/// Reflect the dynamic-param schema. Module-level (naga) validation is
-/// skipped on purpose — see module docs.
-fn validate_wgsl(reference: &str, text: &str) -> ValidationReport {
-    let mut report = ValidationReport::new(reference, "wgsl");
+/// Parse WESL with Bevy's shared frontend and reflect the material schema.
+/// Linking and conditional specialization belong to the native pipeline cache.
+fn validate_wesl(reference: &str, text: &str) -> ValidationReport {
+    let mut report = ValidationReport::new(reference, "wesl");
+    if let Err(error) = lunco_materials::validate_shader_syntax(text) {
+        report.errors.push(error);
+        return report.finish();
+    }
     match lunco_materials::ParamSchema::parse(text) {
         Some(schema) => {
             let params: Vec<serde_json::Value> = schema

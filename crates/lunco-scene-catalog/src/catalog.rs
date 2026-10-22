@@ -23,7 +23,7 @@
 //! for the bytes.
 //!
 //! The shape is dispatch/drain: [`dispatch_catalog_listing`] moves one shared
-//! USD/WGSL/Modelica/Python enumeration off the update schedule, then starts one
+//! USD/WESL/Modelica/Python enumeration off the update schedule, then starts one
 //! read per newly-discovered USD asset. [`drain_catalog_listing`] publishes
 //! shader names and [`drain_usd_scan`] publishes metadata and spawn entries;
 //! the program picker consumes its projection with [`take_program_listing`].
@@ -752,7 +752,7 @@ pub fn dispatch_catalog_listing(
     let tx = scan.listing_tx.clone();
     let extensions: Vec<&'static str> = [
         include_usd.then_some("usda"),
-        include_shaders.then_some("wgsl"),
+        include_shaders.then_some("wesl"),
         include_programs.then_some("mo"),
         include_programs.then_some("py"),
         include_programs.then_some("rhai"),
@@ -773,7 +773,7 @@ pub fn dispatch_catalog_listing(
                     .partition(|asset| asset.rel.ends_with(".usda"));
                 let (shaders, programs): (Vec<_>, Vec<_>) = shaders
                     .into_iter()
-                    .partition(|asset| asset.rel.ends_with(".wgsl"));
+                    .partition(|asset| asset.rel.ends_with(".wesl"));
                 CatalogListing {
                     generation,
                     manifest_ready: manifest.ready(),
@@ -877,7 +877,7 @@ pub fn on_rescan_shaders(
 ) {
     if let Some(roots) = twin_roots.as_deref() {
         dispatch_catalog_listing(&manifest, roots, &mut scan, false, true, false);
-        info!("RESCAN_SHADERS: scheduled WGSL asset listing");
+        info!("RESCAN_SHADERS: scheduled WESL asset listing");
     }
 }
 

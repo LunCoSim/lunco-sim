@@ -1,6 +1,7 @@
+import bevy_pbr::render::forward_io::VertexOutput;
+import super::super::terrain_surface::{terrain_detail_normal_to_local, terrain_detail_normal_to_world};
+
 // Terrain normals must survive a world/local round trip under nonuniform scale.
-#import bevy_pbr::forward_io::VertexOutput
-#import lunco::terrain::{terrain_detail_normal_to_local, terrain_detail_normal_to_world}
 struct Material { unused: f32, }
 
 @fragment

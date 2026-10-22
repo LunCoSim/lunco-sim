@@ -1,3 +1,6 @@
+import bevy_pbr::render::forward_io::VertexOutput;
+import super::pbr_lit::lit;
+
 //! Landing-leg strut material for the general `ShaderMaterial`.
 //!
 //! Tints the strut from its cold, unloaded metal toward a hot colour by
@@ -16,8 +19,6 @@
 //! struct (field names → offsets) and the `//!@` annotations straight out of
 //! this file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import lunco::pbr_lit::lit
 
 //!@ui      base_color  color "Cold strut colour (unloaded)"
 //!@default base_color  0.55,0.55,0.57
@@ -40,7 +41,7 @@ struct Material {
     metallic:   f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 @fragment

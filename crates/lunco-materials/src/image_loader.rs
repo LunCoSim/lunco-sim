@@ -504,10 +504,15 @@ mod tests {
                 .is_none()
         );
         let image = server.load::<Image>(path);
-        let look = crate::ShaderLook::new("native-shader.wgsl")
+        let look = crate::ShaderLook::new("native-shader.wesl")
             .with_texture(TextureLayer::Albedo, image.clone());
         assert_eq!(look.textures[&TextureLayer::Albedo].image(), Some(&image));
         let ready = |world: &World, expected| {
+            let state = server.get_load_state(image.id());
+            assert!(
+                !state.as_ref().is_some_and(|state| state.is_failed()),
+                "native container image {expected} failed: {state:?}"
+            );
             world
                 .resource::<Assets<Image>>()
                 .get(&image)
@@ -518,7 +523,7 @@ mod tests {
         };
         update_until(&mut app, |world| ready(world, 32));
         dir.insert_asset(Path::new("source.image-container"), &[224][..]);
-        server.reload("source.image-container");
+        server.reload("source.image-container#texture");
         update_until(&mut app, |world| ready(world, 224));
     }
 

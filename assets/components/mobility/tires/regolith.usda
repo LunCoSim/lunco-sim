@@ -2,95 +2,37 @@
 (
     defaultPrim = "Tire"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# A REGOLITH tire — the part of a wheel that meets the ground: what it grips with, and
-# what it looks like doing it. Lugged tread, soft compound, tuned for loose lunar soil.
-#
-# The tire is a separate file because a tire is a separate DECISION. The hub does not
-# change when you re-shod a rover, and two rovers with the same wheel can run different
-# rubber. A wheel picks one through its `tire` variantSet:
-#
-#   def Cylinder "Wheel_FL" (
-#       prepend references = @lunco://components/mobility/wheel.usda@</Wheel>
-#       variants = { string tire = "regolith" }
-#   )
-#
-# HOW IT TRAVELS. `Tire` is a neutral stand-in for the wheel prim that composes it —
-# the same idiom `components/mobility/physical_drivetrain.usda` uses. It is an `over`,
-# so it defines nothing of its own: it carries OPINIONS (grip, tread, colour) that the
-# reference arc path-translates onto whatever wheel pulls it in. The geometry, mass and
-# collider those opinions dress are the wheel's, and stay there.
-#
-# Grip is authored with Omniverse's PhysX vehicle names (`physxVehicleTire:*`), so the
-# numbers mean the same thing here as they do in any other PhysX vehicle.
 
 over "Tire" (
     prepend apiSchemas = ["PhysxVehicleTireAPI", "PhysicsMaterialAPI", "LunCoTireAPI", "MaterialBindingAPI"]
     kind = "component"
 )
 {
-    # --- Grip ---
-    float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
-    # Tyre↔regolith friction. 1.5, up from 0.8: at 0.8 a 1100 kg rover's cone is
-    # ~356 N per wheel against a drivetrain that can ask for far more, so a
-    # throttled rover sat in the saturated branch of `update_wheel_spin` —
-    # wheels visibly spinning, ~1.3 m/s² of actual thrust, and a long crawl up to
-    # the 5 m/s the motor curve allows. The cone is what converts axle torque into
-    # travel, so it is the knob that makes a rover *go*, and a deep-lugged tyre
-    # biting loose soil is the one place a coefficient above 1 is honest.
-    #
-    # This does NOT raise top speed: that is ω_max·r ≈ 12.6 rad/s × 0.4 m ≈ 5 m/s,
-    # set by `motor.usda`'s no-load speed through the 200:1 in `gearbox.usda`.
-    # Grip decides how fast you REACH it (and how much of a slope you keep it on).
-    #
-    # THE PAIR THAT DECIDES WHEELSPIN is this and `motor.usda`'s `stallTorque`:
-    # a wheel slips whenever commanded torque exceeds `μ·N·r`. On a four-wheeler
-    # (N ≈ 445 N, r = 0.4) 1.5 gives a 267 N·m cone; on a six-wheeler the same
-    # vehicle weight spreads to N ≈ 310 N and the cone is 186 N·m. The motor is
-    # sized under the SMALLER of the two — see `motor.usda` — so neither spins on
-    # flat ground, and grip is what stops it rather than a coincidence.
-    # Standard UsdPhysics Coulomb coefficient. The shared LunCo tire law uses
-    # this value for both wheel realizations; Avian supplies only normal contact
-    # for marked joint wheels, so its generic tangent friction is not a second law.
+    float physxVehicleTire:longitudinalStiffness = 8000.0
     float physics:dynamicFriction = 1.5
     float physics:staticFriction = 1.5
-    # Standard PhysX load graph. The measured small-angle coefficient is about
-    # 2.9 rad^-1 over 180–370 N wheel loads (NASA/TM-X-73109, fig. 10). For the
-    # nominal 400 N reference load, the equivalent plateau is 2.9 * 400 =
-    # 1160 N/rad. The graph and rest load retain that measurement in the
-    # standard schema's absolute units while allowing the runtime to evaluate
-    # the authored load dependence.
     float2 physxVehicleTire:lateralStiffnessGraph = (1.0, 1160.0)
     float physxVehicleTire:restLoad = 400.0
-    # The same report's tests span 1.07–3.05 m/s. This explicitly marks the
-    # lower evidence boundary so the steady-state curve is not extrapolated
-    # into the singular near-zero-speed regime.
-    float lunco:tire:minValidatedSpeed = 1.07
-
-    # --- Tread ---
-    # Spin-revealing tread + rim, drawn by the wheel shader. The look is a `Material`
-    # under this `over`, so it path-translates onto the wheel with everything else the
-    # tire brings: the wheel that composes this tire binds this tire's tread.
+    float lunco:tire:minValidatedSpeed = 1.0700000524520874
     rel material:binding = </Tire/TireLook>
-    color3f[] primvars:displayColor = [(0.3, 0.3, 0.3)]
-
+    color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.30000001192092896)]
     def Material "TireLook"
     {
+        token outputs:surface
         token outputs:surface.connect = </Tire/TireLook/Shader.outputs:surface>
-
         def Shader "Shader"
         {
             uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:wgsl:sourceAsset = @lunco://shaders/wheel.wgsl@
-            color3f inputs:rim_color = (0.12, 0.13, 0.14)   # spoke / rim (dark titanium/steel metal)
-            color3f inputs:tire_color = (0.05, 0.05, 0.06)  # rubber
+            color3f inputs:rim_color = (0.11999999731779099, 0.12999999523162842, 0.14000000059604645)
+            color3f inputs:tire_color = (0.05000000074505806, 0.05000000074505806, 0.05999999865889549)
             float inputs:spoke_count = 6.0
-            float inputs:tread_lugs = 24.0                  # deep, widely-spaced lugs — soil
-            float inputs:lug_depth = 0.7                    # full-relief working tread
-            float inputs:wear = 0.1                         # near-new
+            float inputs:tread_lugs = 24.0
+            float inputs:lug_depth = 0.699999988079071
+            float inputs:wear = 0.10000000149011612
             token outputs:surface
+            uniform asset info:wesl:sourceAsset = @lunco://shaders/wheel.wesl@
         }
     }
 }

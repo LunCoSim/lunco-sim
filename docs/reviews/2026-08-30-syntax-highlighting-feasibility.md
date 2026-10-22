@@ -48,7 +48,7 @@ on the UI thread for every frame.
 | Modelica | OpenModelica maintains `tree-sitter-modelica`, including a Modelica 3.5 grammar and highlighting queries. The repository still requires generated parser/build tooling and carries its own OSMC license file. | Candidate for a later parser-backed implementation, but first compare its tokens with the already authoritative Rumoca syntax cache and keep highlighting separate from compile/diagnostic state. | Two parser paths can drift. Adding a second parser to the core UI increases native build, grammar, licensing, and maintenance surface. |
 | BCCP / HUI HTML | `tree-sitter-html` is a maintained MIT-licensed grammar. The current source-view extension list does not include `.html`. | Add extension routing only as part of a future shared highlighter. HTML structure and HUI custom elements can use the HTML grammar, with unknown HUI attributes left neutral. | HTML reload semantics are already owned by HUI. A source viewer must not imply that syntax highlighting validates or reloads a template. |
 | BCCP / HUI CSS | `tree-sitter-css` is a maintained MIT-licensed grammar with generated parser artifacts. | Pair with HTML only in the future shared editor; preserve plain text for imported or unsupported stylesheet dialects. | CSS custom properties and Flair-specific selectors are project vocabulary, not evidence that a generic grammar understands the runtime style contract. |
-| WGSL / shaders | `gpuweb/tree-sitter-wgsl` mirrors the upstream WGSL grammar, but its README requires parser build generation. | Prefer a later parser-backed or conservative lexer implementation after measuring grammar size and generated-artifact policy. Keep shader compilation and highlighting independent. | Build-tool/native parser cost and grammar freshness. Highlighting must never hide WGSL compiler errors or alter shader hot reload. |
+| WESL / shaders | `gpuweb/tree-sitter-wgsl` mirrors the upstream WESL grammar, but its README requires parser build generation. | Prefer a later parser-backed or conservative lexer implementation after measuring grammar size and generated-artifact policy. Keep shader compilation and highlighting independent. | Build-tool/native parser cost and grammar freshness. Highlighting must never hide WESL compiler errors or alter shader hot reload. |
 
 ## Candidate integrations
 
@@ -81,9 +81,9 @@ five-family scope and a stable theme/fallback contract.
 ### Tree-sitter
 
 Tree-sitter provides incremental parsing and can reuse an edited previous tree,
-which is attractive for an editable Modelica or WGSL editor. The reviewed
+which is attractive for an editable Modelica or WESL editor. The reviewed
 grammar coverage is uneven: HTML, CSS, and Modelica have credible candidates;
-WGSL has an upstream-aligned grammar but requires generated parser setup; USD
+WESL has an upstream-aligned grammar but requires generated parser setup; USD
 and Rhai still need a project-owned strategy. Each grammar is another native
 parser artifact and release/ABI/license surface.
 
@@ -101,7 +101,7 @@ after selecting a small supported language set and defining grammar ownership.
    presentation layer and cannot own source mutation, save, reload, diagnostics,
    or compile state.
 4. Keep incomplete/invalid source renderable. Parser errors produce partial
-   spans or plain text; they do not block loading, editing, HUI reload, or WGSL
+   spans or plain text; they do not block loading, editing, HUI reload, or WESL
    reload.
 5. Bound work for long files. Prefer a visible-range or chunked strategy after
    measurement; never perform an unbounded full-file parse on every frame.

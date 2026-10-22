@@ -26,13 +26,13 @@ runtime consumes that projected look; it does not choose a shader filename.
 
 | Path | Authoritative source | Current contract | Design defect to remove |
 |---|---|---|---|
-| Authored DEM fragment | `assets/shaders/terrain_layered.wgsl` | The single canonical DEM material: authored albedo/layers, DEM relief, filtered detail, lunar photometry, and terrain self-shadow | None; this is the only production appearance implementation for authored DEMs. |
-| Streamed DEM vertex stage | `assets/shaders/terrain_geomorph.wgsl` | Optional CDLOD morphing and crack-free edge stitching; no fragment entry point and no second material law | Its `Material` declaration is only the shared uniform ABI; all appearance remains in the fragment above. |
-| Explicit non-authored terrain material | `assets/shaders/terrain_shadow.wgsl` | Plain authored/display albedo, scene PBR, and heightfield sun visibility | It may be selected by an authored Rhai/tool policy for a terrain with no authored material; Rust never installs it to hide a missing or invalid authored source. |
+| Authored DEM fragment | `assets/shaders/terrain_layered.wesl` | The single canonical DEM material: authored albedo/layers, DEM relief, filtered detail, lunar photometry, and terrain self-shadow | None; this is the only production appearance implementation for authored DEMs. |
+| Streamed DEM vertex stage | `assets/shaders/terrain_geomorph.wesl` | Optional CDLOD morphing and crack-free edge stitching; no fragment entry point and no second material law | Its `Material` declaration is only the shared uniform ABI; all appearance remains in the fragment above. |
+| Explicit non-authored terrain material | `assets/shaders/terrain_shadow.wesl` | Plain authored/display albedo, scene PBR, and heightfield sun visibility | It may be selected by an authored Rhai/tool policy for a terrain with no authored material; Rust never installs it to hide a missing or invalid authored source. |
 
-`assets/shaders/regolith.wgsl` is excluded from this inventory: it is the
+`assets/shaders/regolith.wesl` is excluded from this inventory: it is the
 general `ShaderMaterial` for ordinary regolith meshes, not a terrain source
-selection. `assets/shaders/terrain_debug.wgsl` is already the separate
+selection. `assets/shaders/terrain_debug.wesl` is already the separate
 diagnostic material and must remain outside the production material contract.
 
 ### USD stage authoring
@@ -41,8 +41,8 @@ An authored terrain material uses standard `UsdShade` stage metadata:
 
 ```usda
 uniform token info:implementationSource = "sourceAsset"
-uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
-uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
+uniform asset info:wesl:sourceAsset = @lunco://shaders/terrain_layered.wesl@
+uniform asset info:wesl:vertexAsset = @lunco://shaders/terrain_geomorph.wesl@
 ```
 
 `sourceAsset` is the canonical fragment/material contract. `vertexAsset` is
@@ -129,15 +129,15 @@ helpers own lighting; no heightfield shadow march runs for the collar. The
 packed terrain uniform remains within 256 bytes.
 
 A body fragment shader that accepts these local roles declares
-`//!@interface lunco.lunar-surface-continuation.v1` in WGSL and authors the same
-identifier as `info:wgsl:interface` on its USD Shader prim. The optional vertex
+`//!@interface lunco.lunar-surface-continuation.v1` in WESL and authors the same
+identifier as `info:wesl:interface` on its USD Shader prim. The optional vertex
 asset remains USD-owned. Omitting it uses Bevy's standard mesh vertex stage;
 the generated collar has its own final geometry and carries no CDLOD morph
 attributes. Shader assets remain hot-reloadable and the USD binding can be
 changed while the scene is running.
 
 The required Rhai hook `terrain.lunar_surface_continuation` receives the USD
-declaration and the reflected WGSL interface after the source loads. It returns
+declaration and the reflected WESL interface after the source loads. It returns
 `compose` only for a valid match, `wait` while source reflection is pending,
 and `hold` for an invalid interface. The compositor owns DEM collar visibility:
 it admits only the composed look after material binding is ready. Invalid
@@ -214,15 +214,15 @@ diagnostic replacement:
    Bevy's `PbrInput.diffuse_occlusion`, where it modulates indirect diffuse
    light only. It must never be multiplied into base albedo: doing so turns a
    broad derived field into false colour patches and also darkens direct sun.
-2. `terrain_debug.wgsl` remains the only diagnostic replacement. LOD depth and
+2. `terrain_debug.wesl` remains the only diagnostic replacement. LOD depth and
    slope are analysis data, not branches or uniforms added to the production
    material.
-3. `terrain_shadow.wgsl` remains an explicit material for non-authored terrain.
+3. `terrain_shadow.wesl` remains an explicit material for non-authored terrain.
    A Rhai assembly or recovery policy may select it when that is the authored
    scenario behavior. Rust never selects it automatically and never uses it to
    hide missing or invalid authored source data.
 
-The existing `terrain_surface.wgsl` and `lunar_brdf.wgsl` modules remain the
+The existing `terrain_surface.wesl` and `lunar_brdf.wesl` modules remain the
 authoritative owners for shared procedural detail and lunar photometry. Heavy
 orthophoto decode/filter work belongs to the native
 `lunco-assets-processing` Rust asset processor. The
@@ -277,7 +277,8 @@ One native worker per terrain retains the last completed angular presentation
 sample until the next bake finishes. It does not delay physics or claim that
 old pixels represent the current Sun exactly. Completed results are fenced by
 heightfield identity and sampling quality. Equal-size R8 updates use the shared
-`lunco-render::data_texture` queue, preserving GPU allocation and material binding.
+`lunco-render::data_texture` queue, preserving GPU allocation and material binding. Uploads run strictly
+before the render submission set because the GPU queue uses interior mutability.
 `TerrainLodStatus.shadow_caches` exposes sampled direction, pending work, binding,
 and acknowledged upload/allocation counts. The `sunrise_shadow_cache` editor
 fixture exercises repeated crossings and fixed physics cadence.
@@ -495,11 +496,11 @@ oracle, not the source of truth. One field, many consumers:
 
 Consequences that shape everything below:
 
-- **Author the field once, in Rust, on the oracle** — not in WGSL. It then runs
+- **Author the field once, in Rust, on the oracle** — not in WESL. It then runs
   headless (the field exists with no renderer), is unit-testable and deterministic,
   and bakes to tiles for the GPU. `derive.rs::slope_map` + the oracle's `normal_at`
   are already exactly this; `query.rs` already returns `slope` for a point with no GPU.
-- **WGSL only samples + colourises.** For a purely geometric field a shader *may*
+- **WESL only samples + colourises.** For a purely geometric field a shader *may*
   re-derive it live (zero-bake), but the Rust stays authoritative — a determinism
   contract like the tile bake, not a second definition.
 - **A field is a USD layer, describe-don't-store** — `{ field, params }`, no pixels;
@@ -692,7 +693,7 @@ truth, live-tunable for both.
 
 Every transfer/blend parameter is a **reflected uniform** on the dynamic
 `ShaderMaterial` (the `//!@`-annotated self-describing material, same path
-`terrain_debug.wgsl` uses). Exposing a param as a reflected uniform gives, for free:
+`terrain_debug.wesl` uses). Exposing a param as a reflected uniform gives, for free:
 
 - **Inspector** — a slider (critical angle, opacity, domain, colormap picker);
 - **Scripting / API** — `cmd("SetObjectProperty", { critical_angle: 0.35 })` over rhai / HTTP / MCP;

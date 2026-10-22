@@ -6,7 +6,7 @@
 //! that queues that material as one non-mesh item in Bevy's built-in opaque
 //! phase, after opaque geometry. The normal phase owns the render pass and its
 //! depth state, matching Bevy's built-in skybox lifecycle. That keeps sky
-//! appearance in WGSL/USD while removing finite-sphere culling and far-plane
+//! appearance in WESL/USD while removing finite-sphere culling and far-plane
 //! coupling from the scene.
 
 use bevy::asset::{AssetEvent, AssetId};

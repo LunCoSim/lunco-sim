@@ -1,9 +1,10 @@
+import bevy_pbr::render::forward_io::VertexOutput;
+import super::super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
+
 // A nodal shadow grid must interpolate at the CPU bake's endpoint coordinates.
-#import bevy_pbr::forward_io::VertexOutput
-#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
 struct Material { unused: f32, }
-@group(#{MATERIAL_BIND_GROUP}) @binding(6) var cache: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(7) var cache_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var cache: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(7) var cache_sampler: sampler;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {

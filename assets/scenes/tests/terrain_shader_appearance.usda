@@ -2,14 +2,11 @@
 (
     defaultPrim = "TerrainShaderAppearance"
     upAxis = "Y"
-    metersPerUnit = 1
-    timeCodesPerSecond = 1
-    doc = "Production terrain shader appearance fixture: one repo-owned DEM and an authored near/middle/far camera contract."
+    metersPerUnit = 1.0
+    timeCodesPerSecond = 1.0
+    documentation = "Production terrain shader appearance fixture: one repo-owned DEM and an authored near/middle/far camera contract."
 )
 
-# This is a graphics fixture, not a replacement terrain implementation. The
-# DEM and shader are both consumed through the same USD projection used by a
-# Twin scene, so the capture is independent of downloaded Twin content.
 def Xform "TerrainShaderAppearance" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
@@ -21,80 +18,67 @@ def Xform "TerrainShaderAppearance" (
     {
         token lunco:assetMode = "dem"
         rel material:binding = </TerrainShaderAppearance/Looks/LunarTerrain>
-
-        # The fixture is a complete 1002 m square. Streaming is the production
-        # path; the authored camera remains fixed while the normal selector
-        # settles the near/middle/far cover for each capture.
-
         def Xform "DEM" (
             prepend apiSchemas = ["LunCoTerrainLayerAPI"]
         )
         {
             token lunco:layer = "dem"
             asset lunco:layer:demSource = @fixtures/terrain_shader_appearance@
-            float lunco:layer:windowM = 0
+            float lunco:layer:windowM = 0.0
             int lunco:layer:targetRes = 0
             bool lunco:layer:lodViz = true
             bool lunco:layer:colliderRing = true
         }
     }
-
     def Scope "Looks"
     {
         def Material "LunarTerrain"
         {
+            token outputs:surface
             token outputs:surface.connect = </TerrainShaderAppearance/Looks/LunarTerrain/Shader.outputs:surface>
-
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
-                uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
-
-                # These are scene-owned presentation facts. The remaining
-                # reflected shader defaults stay in the WGSL contract.
-                color3f inputs:albedo = (0.13, 0.125, 0.12)
+                color3f inputs:albedo = (0.12999999523162842, 0.125, 0.11999999731779099)
                 float inputs:micro_scale = 35.0
-                float inputs:micro_bump = 0.015
-                float inputs:micro_albedo = 0.045
-                float inputs:roughness = 0.88
+                float inputs:micro_bump = 0.014999999664723873
+                float inputs:micro_albedo = 0.04500000178813934
+                float inputs:roughness = 0.8799999952316284
                 float inputs:macro_clump_scale = 8.0
-                float inputs:macro_bump = 0.06
-                float inputs:mid_scale = 0.15
-                float inputs:mid_bump = 0.6
+                float inputs:macro_bump = 0.05999999865889549
+                float inputs:mid_scale = 0.15000000596046448
+                float inputs:mid_bump = 0.6000000238418579
                 float inputs:fine_scale = 180.0
-                float inputs:fine_bump = 0.025
-                float inputs:rough_mix = 0.35
-                float inputs:mottle = 0.22
-                float inputs:surge_amp = 1.8
-                float inputs:surge_width = 0.0715
+                float inputs:fine_bump = 0.02500000037252903
+                float inputs:rough_mix = 0.3499999940395355
+                float inputs:mottle = 0.2199999988079071
+                float inputs:surge_amp = 1.7999999523162842
+                float inputs:surge_width = 0.07150000333786011
                 float inputs:photometry_gain = 1.0
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/terrain_layered.wesl@
+                uniform asset info:wesl:vertexAsset = @lunco://shaders/terrain_geomorph.wesl@
             }
         }
     }
-
     def Camera "TerrainCamera" (
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
-        # One fixed, oblique view exposes the mesh at three screen-space
-        # distances: foreground relief, mid-field ridges, and the far horizon.
         double3 lunco:cameraLookAt = (0.0, -1950.0, 0.0)
         double3 xformOp:translate = (0.0, -1800.0, 270.0)
         float focalLength = 24.0
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Scope "CameraTrack" (
         prepend apiSchemas = ["LunCoCameraTrackAPI"]
     )
     {
+        token lunco:activeCamera
         token lunco:activeCamera.timeSamples = {
-            0: "TerrainCamera",
+            0.0: "TerrainCamera",
         }
     }
-
     def Scope "Scenario"
     {
         def Scope "Test" (

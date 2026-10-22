@@ -243,7 +243,7 @@ active Twin's indexed files and existing resolver owners:
   `tools/*.rhai` modules and the Standard/Core/Application modules they can
   shadow. Twin-scoped live registrations are represented by the indexed Twin
   files and are not counted a second time as engine owners.
-- WGSL shader modules and other Twin assets use their containing directory as
+- WESL shader modules and other Twin assets use their containing directory as
   the resolver scope, so equal names in independent directories are legal.
 
 Only entries with the same namespace, name, and resolution scope become a

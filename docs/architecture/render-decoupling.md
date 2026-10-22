@@ -19,9 +19,11 @@ status passes unconditionally. And without `-e normal`, `-i` also walks dev- and
 build-dependencies, where wgpu legitimately appears in visual examples,
 dev-only `bevy_pbr`), reporting a regression that is not one.
 
-`naga` remains, via `bevy_shader` — the WGSL **compiler**, kept for live shader editing
-(`SetShaderSource` / `CreateShader` compile WGSL into `Assets<Shader>` so an edit renders without a
-disk round-trip). A compiler, not a GPU stack. Moving it behind the gate is a separate, smaller job.
+`naga` remains through `bevy_shader`, which owns WESL linking and shader-cache
+preparation without a GPU. The headless asset plugin installs the native
+`ShaderLoader`; `ValidateAsset` uses the shared WESL syntax frontend. Source edits
+retain native dependency handles before publication. GPU compilation and pipeline
+validation remain render-owned.
 
 [`scripts/check_render_decoupling.sh`](../../scripts/check_render_decoupling.sh) enforces all of the
 above. **Run it after any dependency change; do not delete it** — see
@@ -329,13 +331,14 @@ resource: a missing edge must fail loudly at the composition boundary.
 
 ## The finding that makes this cheap
 
-Bevy 0.19 already split its render stack. Measured with `cargo tree -p <crate> --depth 1`:
+Bevy 0.20 separates shader assets and compilation from the renderer. Measured with `cargo tree -p <crate> --depth 1`:
 
 | render-FREE — safe below the line | forces `bevy_render` → wgpu/naga |
 |---|---|
 | `bevy_mesh` — `Mesh`, **`Mesh3d`**, `Indices` (depends only on `wgpu-types`) | **`bevy_pbr`** — `MeshMaterial3d<M>`, `StandardMaterial` |
 | `bevy_camera` — **`Camera`, `Projection`, `Visibility`** | `bevy_core_pipeline` — `Camera3d`, `Bloom`, `Tonemapping` |
-| `bevy_light` — `DirectionalLight`, `PointLight`, cascades | `bevy_shader` — pulls `naga` |
+| `bevy_light` — `DirectionalLight`, `PointLight`, cascades | |
+| `bevy_shader` — shader assets, loader and renderer-independent cache; WESL frontend | |
 | `bevy_image`, `bevy_asset`, `bevy_scene`, `bevy_gltf`, `bevy_picking` | |
 
 So a headless world can hold geometry, transforms, cameras, lights, visibility, glTF and picking.
@@ -384,7 +387,7 @@ appearance components stay in the world either way — they are simulation-visib
 also what makes them serializable to USD and replicable over the wire.
 
 This is the same move the codebase already made for panels (a trait-object registry, not an enum) and
-for materials (WGSL-reflected, not a hardcoded table). It is not a new idea here — it is the existing
+for materials (WESL-reflected, not a hardcoded table). It is not a new idea here — it is the existing
 doctrine applied to the last place that dodged it.
 
 ## The three intents
@@ -407,7 +410,7 @@ worked example: `PbrLook` carries `ior` (as does `UsdPreviewSurface`), while Bev
 and known nowhere else. A second backend would remap from the same `ior`. Carrying both
 would let a look reflect like diamond and refract like glass, and would need to persist a
 `reflectance` that USD has no attribute for.
-| **`ShaderLook`** | `lunco-materials` | `MeshMaterial3d<ShaderMaterial>` | a custom `.wgsl` with an **open, user-defined parameter set** and typed `ShaderTexture` native/prepared sources; live inputs use predeclared `lunco-port-core` slots — see [shader-layers-and-params.md](shader-layers-and-params.md) |
+| **`ShaderLook`** | `lunco-materials` | `MeshMaterial3d<ShaderMaterial>` | a custom `.wesl` with an **open, user-defined parameter set** and typed `ShaderTexture` native/prepared sources; live inputs use predeclared `lunco-port-core` slots — see [shader-layers-and-params.md](shader-layers-and-params.md) |
 | **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom + Bevy `ClusterConfig` | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question**; the render binder uses Bevy's single-cluster topology when no clusterable object exists and follows light lifecycle events |
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 
@@ -497,7 +500,7 @@ stitch variants from entering a deferred remove/re-add cycle.
 
 Stage readiness is a positive contract: the fragment source must expose
 `@fragment`, and an authored optional vertex source must expose `@vertex`.
-Combined WGSL modules are valid. A missing stage is not converted to a PBR or
+Combined WESL modules are valid. A missing stage is not converted to a PBR or
 neutral material; the shader owner removes the invalid concrete binding and
 publishes a `RuntimeDiagnostics` error. Any recovery is an explicit USD/Rhai
 authoring decision, not a renderer fallback.

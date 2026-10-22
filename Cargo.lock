@@ -772,10 +772,10 @@ dependencies = [
 [[package]]
 name = "avian3d"
 version = "0.8.0"
-source = "git+https://github.com/LunCoSim/avian?rev=559d2d0ab896afa884139234c8bb83eb8a6c71df#559d2d0ab896afa884139234c8bb83eb8a6c71df"
+source = "git+https://github.com/LunCoSim/avian?rev=11dfbb5bb89d9763aeb645385ff77a40427f936b#11dfbb5bb89d9763aeb645385ff77a40427f936b"
 dependencies = [
  "approx 0.5.1",
- "avian_derive 0.2.3 (git+https://github.com/LunCoSim/avian?rev=559d2d0ab896afa884139234c8bb83eb8a6c71df)",
+ "avian_derive 0.2.3 (git+https://github.com/LunCoSim/avian?rev=11dfbb5bb89d9763aeb645385ff77a40427f936b)",
  "bevy",
  "bevy_curve",
  "bevy_heavy",
@@ -812,7 +812,7 @@ dependencies = [
 [[package]]
 name = "avian_derive"
 version = "0.2.3"
-source = "git+https://github.com/LunCoSim/avian?rev=559d2d0ab896afa884139234c8bb83eb8a6c71df#559d2d0ab896afa884139234c8bb83eb8a6c71df"
+source = "git+https://github.com/LunCoSim/avian?rev=11dfbb5bb89d9763aeb645385ff77a40427f936b#11dfbb5bb89d9763aeb645385ff77a40427f936b"
 dependencies = [
  "proc-macro-error3",
  "proc-macro2",
@@ -2387,8 +2387,7 @@ dependencies = [
 [[package]]
 name = "bevy_shader"
 version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2becafd54079da13835d6a42fc743e305d6270c27a91de613afe6e3f4b5de19"
+source = "git+https://github.com/LunCoSim/bevy?rev=a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338#a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338"
 dependencies = [
  "bevy_asset",
  "bevy_platform",
@@ -9328,6 +9327,7 @@ dependencies = [
  "lunco-port-core",
  "lunco-render",
  "thiserror 2.0.18",
+ "wesl",
  "wgpu-types",
 ]
 

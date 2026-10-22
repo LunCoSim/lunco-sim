@@ -1,3 +1,8 @@
+import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
+import bevy_pbr::render::utils::coords_to_viewport_uv;
+import bevy_render::view::View;
+import super::lunco_noise::vnoise_quintic;
+
 //! Procedural night sky for the general `ShaderMaterial` — stars and the Milky
 //! Way evaluated **per view direction**, with no texture anywhere in the pipeline.
 //!
@@ -11,7 +16,7 @@
 //! This replaces `textures/starfield_4k.png` and the offline Python generator
 //! that wrote it. A committed PNG freezes every parameter at generation time,
 //! puts a second implementation of the sky outside the engine, and means every
-//! scene needs its own generated asset to tune the sky. The WGSL defaults are
+//! scene needs its own generated asset to tune the sky. The WESL defaults are
 //! the single source of truth; the reusable sky and sandbox leave all shader
 //! inputs un-authored.
 //!
@@ -42,7 +47,7 @@
 //!     single most obvious tell. So the point spread is floored at half a pixel
 //!     (`fwidth` of the direction gives the per-pixel angular step) and its
 //!     amplitude scaled by 1/σ² so total flux is conserved when it is widened —
-//!     the same analytic anti-aliasing discipline `regolith.wgsl` uses, and it
+//!     the same analytic anti-aliasing discipline `regolith.wesl` uses, and it
 //!     matters more here.
 //!
 //! ## The Milky Way — why it is not a glowing stripe
@@ -113,15 +118,11 @@
 //! (field names → std140 offsets) and the `//!@` annotations straight out of this
 //! file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
-#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
-#import bevy_pbr::utils::coords_to_viewport_uv
-#import bevy_render::view::View
 
 // The background pipeline owns a minimal view bind group. It is intentionally
 // not the mesh/PBR view layout: a camera background needs only the camera
 // matrices and does not participate in clustered lights or mesh visibility.
 @group(0) @binding(0) var<uniform> view: View;
-#import lunco::noise::vnoise_quintic
 
 const PI: f32 = 3.14159265359;
 /// One arcminute in radians — the natural unit for a star's rendered size.
@@ -198,7 +199,7 @@ struct Material {
     sun_tan_radius:  f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 // --- hashing --------------------------------------------------------------
@@ -220,12 +221,12 @@ fn hash33(p: vec3<f32>) -> vec3<f32> {
 /// unresolved-star granularity wants the fine one, and taking a second FBM to
 /// get the second would double the cost of the most expensive thing on screen.
 /// That specialisation is why this stays here rather than folding into
-/// `lunco::noise::fbm`, which returns a scalar and would need a second pass.
+/// `lunco::shaders::lunco_noise::fbm`, which returns a scalar and would need a second pass.
 ///
 /// `vnoise_quintic`, not `vnoise`: the dust band is a large smooth low-frequency
 /// gradient, and the cubic interpolant's second-derivative break at the lattice
 /// planes reads as rectangular brightness terraces across the sky. See the note
-/// on `vnoise_quintic` in `lunco::noise`.
+/// on `vnoise_quintic` in `lunco::shaders::lunco_noise`.
 fn fbm3(p: vec3<f32>) -> vec2<f32> {
     let n0 = vnoise_quintic(p);
     let n1 = vnoise_quintic(p * 2.0);

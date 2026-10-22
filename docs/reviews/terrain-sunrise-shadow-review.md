@@ -17,7 +17,7 @@ pending uploads and acknowledgements.
 Hook review: direction projection, angular comparison, texture lifetime and
 queue writes are shared rendering math/resource invariants. Their inputs are
 existing light, terrain and quality contracts, and their output is typed
-presentation data. They remain in Rust/WGSL; authored Rhai retains quality policy.
+presentation data. They remain in Rust/WESL; authored Rhai retains quality policy.
 Native workers prepare visibility without controlling deterministic physics.
 Production and diagnostic terrain vertex stages share the surface module's
 morph weight and use the same forward/prepass, shadow, and previous-frame

@@ -28,9 +28,9 @@ def Xform "World" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/shadow_cache_sampling.wgsl@
                 custom asset inputs:surface_map = @lunco://textures/tests/shadow_cache_grid.png@
                 custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/shadow_cache_sampling.wesl@
             }
         }
     }

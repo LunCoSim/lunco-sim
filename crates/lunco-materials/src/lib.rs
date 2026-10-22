@@ -7,7 +7,7 @@
 //! the one crate allowed to name `bevy_pbr`.
 //!
 //! ## What lives here
-//! - [`dyn_params`] — the **WGSL-reflected parameter schema**. Each `.wgsl`
+//! - [`dyn_params`] — the **WESL-reflected parameter schema**. Each `.wesl`
 //!   declares its own `struct Material` (real field names) plus `//!@` annotation
 //!   comments (UI ranges, defaults, engine-filled fields); [`ParamSchema`] parses
 //!   that source into name → std140 offset, and [`ParamValue`]s pack into the
@@ -19,9 +19,9 @@
 //! - [`vertex`] — custom render-free geometry semantics: CDLOD morph targets and
 //!   [`ATTRIBUTE_GLOBE_DIRECTION`]. A `MeshVertexAttribute` is `bevy_mesh`, hence
 //!   render-free, so the contract lives here between mesh authors and shaders.
-//! - [`catalog`] — the pickable-[`ShaderCatalog`] and the WGSL starting templates
+//! - [`catalog`] — the pickable-[`ShaderCatalog`] and the WESL starting templates
 //!   (`CreateShader`). Plain strings + schema reflection.
-//! - [`naming`] — [`to_snake_case`], the camelCase-USD → snake_case-WGSL bridge
+//! - [`naming`] — [`to_snake_case`], the camelCase-USD → snake_case-WESL bridge
 //!   both authoring paths share.
 //!
 //! See `docs/architecture/render-decoupling.md`.
@@ -51,7 +51,9 @@ pub use look::{
     TextureLayer,
 };
 pub use naming::to_snake_case;
-pub use shader_stage::{ShaderStage, ShaderStageError, validate_shader_stage};
+pub use shader_stage::{
+    ShaderStage, ShaderStageError, validate_shader_stage, validate_shader_syntax,
+};
 pub use vertex::{
     ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };

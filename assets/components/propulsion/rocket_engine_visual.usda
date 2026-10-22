@@ -19,7 +19,6 @@ def Xform "Engine"
                 {
                     float inputs:throttle = 0.0
                     float inputs:flicker_scale = 7.0
-                    asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
                     color3f inputs:core_color = (6.0, 6.0, 6.0)
                     uniform token info:implementationSource = "sourceAsset"
                     float inputs:plume_length_fraction = 0.0
@@ -52,6 +51,7 @@ def Xform "Engine"
                     custom float inputs:radial_width = 1.0
                     custom float inputs:flow_phase_sin = 0.0
                     custom float inputs:flow_phase_cos = 1.0
+                    asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
                 }
             }
             def Material "FlameCore_Mat"
@@ -63,7 +63,6 @@ def Xform "Engine"
                     color3f inputs:edge_color = (16.0, 16.0, 16.0)
                     float inputs:throttle = 0.0
                     float inputs:plume_length_fraction = 0.0
-                    asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
                     float inputs:flicker = 0.9700000286102295
                     color3f inputs:core_color = (16.0, 16.0, 16.0)
                     uniform token info:implementationSource = "sourceAsset"
@@ -95,6 +94,7 @@ def Xform "Engine"
                     custom float inputs:radial_width = 0.44999998807907104
                     custom float inputs:flow_phase_sin = 0.0
                     custom float inputs:flow_phase_cos = 1.0
+                    asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
                 }
             }
         }

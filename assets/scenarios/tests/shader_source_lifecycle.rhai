@@ -44,7 +44,7 @@ fn on_tick(me, ctx) {
         }
         this.source_shader = collar.source_shader;
         this.source = collar.source;
-        this.pending = cmd("ReloadShader", #{path: "lunco://shaders/inactive-source-lifecycle-test.wgsl"});
+        this.pending = cmd("ReloadShader", #{path: "lunco://shaders/inactive-source-lifecycle-test.wesl"});
         this.phase = "reject"; return;
     }
     if this.phase == "reject" {

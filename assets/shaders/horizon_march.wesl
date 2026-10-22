@@ -1,5 +1,6 @@
+
 // Heightfield sun-shadow ray-march, shared by every terrain shader
-// (regolith.wgsl, terrain_shadow.wgsl) via naga_oil import. The CPU mirror
+// (regolith.wesl, terrain_shadow.wesl) via WESL import. The CPU mirror
 // (`HeightField::sun_visibility` in lunco-environment) implements the SAME
 // algorithm so per-entity shading agrees with per-pixel terrain shading.
 //
@@ -8,7 +9,6 @@
 // so the penumbra is razor-sharp next to the casting crest and widens
 // linearly with caster distance — the real behaviour of sun shadows.
 
-#define_import_path lunco::horizon
 
 // Bilinear heightfield fetch via textureLoad (R32Float is non-filterable in
 // core WebGPU). `g` is in texel coordinates [0, res-1].

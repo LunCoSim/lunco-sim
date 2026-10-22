@@ -1,4 +1,4 @@
-//! Shader appearance **intent** — a custom WGSL look stated as data, with
+//! Shader appearance **intent** — a custom WESL look stated as data, with
 //! **user-defined parameters**, without naming a material.
 //!
 //! # Why this is not `PbrLook`
@@ -13,7 +13,7 @@
 //!
 //! - **Parameters are a `BTreeMap<String, ParamValue>`** — any name, any of the
 //!   [`ParamType`](crate::ParamType)s. Nothing is hardcoded.
-//! - **The names, ranges, defaults and widgets are reflected out of the `.wgsl`
+//! - **The names, ranges, defaults and widgets are reflected out of the `.wesl`
 //!   itself** ([`ParamSchema`]), from its `struct Material` block and `//!@`
 //!   annotations. Adding a parameter is editing a shader, not editing Rust — and
 //!   the Inspector picks it up automatically, because it derives its sliders from
@@ -29,7 +29,7 @@
 //! slots are part of the look, and they are **named**, not positional:
 //!
 //! ```ignore
-//! ShaderLook::new("shaders/terrain_layered.wgsl")
+//! ShaderLook::new("shaders/terrain_layered.wesl")
 //!     .with("dust_scale", ParamValue::F32(0.004))
 //!     .with_texture(TextureLayer::Albedo, albedo_handle)
 //!     .with_texture(TextureLayer::Normal, dem_normals)
@@ -108,14 +108,14 @@ pub enum TextureLayer {
 /// per-instance and you mint a material per instance; bucket it instead.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct ShaderLook {
-    /// Fragment shader asset path, e.g. `"shaders/terrain_layered.wgsl"`.
+    /// Fragment shader asset path, e.g. `"shaders/terrain_layered.wesl"`.
     ///
     /// A path, not a `Handle<Shader>`, on purpose: `bevy::shader::Shader` lives in
     /// `bevy_shader`, which pulls **naga**. The binder loads the handle.
     pub shader: String,
     /// Optional vertex shader (e.g. the CDLOD geomorph). `None` = Bevy's default.
     pub vertex_shader: Option<String>,
-    /// USD-authored `info:wgsl:interface` contract declared by this shader.
+    /// USD-authored `info:wesl:interface` contract declared by this shader.
     /// This names a shader ABI, never a shader asset; the asset path remains
     /// wholly selected by the composed `UsdShade` binding. It is validation
     /// metadata and does not change the GPU material identity.
@@ -178,7 +178,7 @@ pub struct ShaderLook {
     /// [`PbrLook`](lunco_render::PbrLook) already carried this and the shader path
     /// did not, which is a real asymmetry: taking the shader path *removes* the
     /// `PbrLook`, so a prim that authored the primvar silently started casting the
-    /// moment it was given a `.wgsl`.
+    /// moment it was given a `.wesl`.
     ///
     /// It is load-bearing for authored meshes that enclose or surround a scene:
     /// such a mesh can occlude every shadow cascade unless it opts out. A
@@ -198,7 +198,7 @@ pub struct ShaderLook {
     ///
     /// Here for the reason `no_shadow_cast` is: taking the shader path REMOVES the
     /// `PbrLook`, so without this a translucent prim turns opaque the moment it is
-    /// given a `.wgsl`. An emissive VOLUME — an exhaust plume, a beam — is the case
+    /// given a `.wesl`. An emissive VOLUME — an exhaust plume, a beam — is the case
     /// that cannot work at all without it, because what shows through it is what it
     /// is.
     ///
@@ -212,7 +212,7 @@ pub struct ShaderLook {
     ///
     /// Here for the reason `no_shadow_cast` and `alpha` are: taking the shader
     /// path REMOVES the `PbrLook` that carried it, so a `doubleSided` prim
-    /// silently became backface-culled the moment it was given a `.wgsl`.
+    /// silently became backface-culled the moment it was given a `.wesl`.
     /// Procedural camera backgrounds do not use this mesh property; they are
     /// drawn by the fullscreen background pass.
     ///
@@ -243,8 +243,8 @@ pub struct ShaderLookReady;
 
 /// Reflection of the selected fragment shader's optional ABI annotation.
 ///
-/// Presence means the USD-selected WGSL source has been loaded and its stage
-/// was inspected. The identifier comes from the WGSL source itself; a missing
+/// Presence means the USD-selected WESL source has been loaded and its stage
+/// was inspected. The identifier comes from the WESL source itself; a missing
 /// annotation is represented by `None`, not by an inferred interface.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct ShaderLookSourceInterface {
@@ -270,7 +270,7 @@ impl ShaderLook {
         }
     }
 
-    /// Authored shader parameters keyed by WGSL field name.
+    /// Authored shader parameters keyed by WESL field name.
     #[inline]
     pub fn values(&self) -> &BTreeMap<String, ParamValue> {
         &self.values
@@ -531,8 +531,8 @@ mod tests {
 
     #[test]
     fn identical_looks_share_a_key() {
-        let a = ShaderLook::new("s.wgsl").with("dust", ParamValue::F32(0.5));
-        let b = ShaderLook::new("s.wgsl").with("dust", ParamValue::F32(0.5));
+        let a = ShaderLook::new("s.wesl").with("dust", ParamValue::F32(0.5));
+        let b = ShaderLook::new("s.wesl").with("dust", ParamValue::F32(0.5));
         assert_eq!(a.key(), b.key());
     }
 
@@ -540,17 +540,17 @@ mod tests {
     /// material. If this regresses, batching dies silently.
     #[test]
     fn a_rounding_error_apart_still_shares() {
-        let a = ShaderLook::new("s.wgsl").with("dust", ParamValue::F32(0.5));
-        let b = ShaderLook::new("s.wgsl").with("dust", ParamValue::F32(0.5 + 1e-7));
+        let a = ShaderLook::new("s.wesl").with("dust", ParamValue::F32(0.5));
+        let b = ShaderLook::new("s.wesl").with("dust", ParamValue::F32(0.5 + 1e-7));
         assert_eq!(a.key(), b.key());
     }
 
     #[test]
     fn a_real_difference_does_not_share() {
-        let a = ShaderLook::new("s.wgsl").with("dust", ParamValue::F32(0.5));
-        let b = ShaderLook::new("s.wgsl").with("dust", ParamValue::F32(0.7));
+        let a = ShaderLook::new("s.wesl").with("dust", ParamValue::F32(0.5));
+        let b = ShaderLook::new("s.wesl").with("dust", ParamValue::F32(0.7));
         assert_ne!(a.key(), b.key());
-        let c = ShaderLook::new("other.wgsl").with("dust", ParamValue::F32(0.5));
+        let c = ShaderLook::new("other.wesl").with("dust", ParamValue::F32(0.5));
         assert_ne!(a.key(), c.key());
     }
 
@@ -559,10 +559,10 @@ mod tests {
     /// opaque plume is not a dimmer plume, it is a solid cone.
     #[test]
     fn alpha_mode_is_part_of_material_identity() {
-        let opaque = ShaderLook::new("plume.wgsl");
+        let opaque = ShaderLook::new("plume.wesl");
         let blended = ShaderLook {
             alpha: SurfaceAlpha::Blend,
-            ..ShaderLook::new("plume.wgsl")
+            ..ShaderLook::new("plume.wesl")
         };
         assert_ne!(opaque.key(), blended.key());
     }
@@ -571,14 +571,14 @@ mod tests {
     /// heard of, and it round-trips.
     #[test]
     fn parameter_names_are_not_a_closed_set() {
-        let look = ShaderLook::new("bespoke.wgsl")
+        let look = ShaderLook::new("bespoke.wesl")
             .with("a_name_rust_has_never_heard_of", ParamValue::F32(1.0));
         assert!(look.values().contains_key("a_name_rust_has_never_heard_of"));
     }
 
     #[test]
     fn live_samples_keep_resolved_shader_slots_and_topology_stable() {
-        let mut look = ShaderLook::new("driven.wgsl")
+        let mut look = ShaderLook::new("driven.wesl")
             .with("gain", ParamValue::F32(2.0))
             .with_driven(["gain".to_owned()].into_iter().collect());
         let topology = look.port_topology_key();

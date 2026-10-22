@@ -1501,7 +1501,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<Messages<AssetLoadFailedEvent<RhaiSource>>>()
             .write(AssetLoadFailedEvent {
-                id: AssetId::invalid(),
+                id: AssetId::default(),
                 path: AssetPath::parse("missing.rhai").into_owned(),
                 error: AssetLoadError::AssetMetaReadError,
             });

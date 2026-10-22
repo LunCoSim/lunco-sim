@@ -1,8 +1,21 @@
+import bevy_pbr::render::{
+    mesh_functions,
+    view_transformations::position_world_to_clip,
+    mesh_view_bindings::view,
+};
+import super::terrain_surface::terrain_morph_weight;
+@if((PREPASS_PIPELINE))
+import bevy_pbr::prepass::io::VertexOutput;
+@if((!(PREPASS_PIPELINE)))
+import bevy_pbr::render::forward_io::VertexOutput;
+@if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS))
+import bevy_pbr::prepass::bindings::previous_view_uniforms;
+
 //! CDLOD geomorph vertex stage for the canonical terrain material.
 //!
 //! The fragment/material contract is authored by the USD Shader prim through
-//! `info:wgsl:sourceAsset` and is normally `terrain_layered.wgsl`. This file is
-//! only the optional `info:wgsl:vertexAsset` stage for streamed CDLOD tiles.
+//! `info:wesl:sourceAsset` and is normally `terrain_layered.wesl`. This file is
+//! only the optional `info:wesl:vertexAsset` stage for streamed CDLOD tiles.
 //! Keeping geometry selection here and appearance selection in USD means the
 //! static and streamed representations cannot silently acquire different
 //! shading laws.
@@ -20,26 +33,10 @@
 //! `struct Material`; this file repeats that layout only because the vertex
 //! stage reads the morph fields from the same uniform block.
 
-#import bevy_pbr::{
-    mesh_functions,
-    view_transformations::position_world_to_clip,
-    mesh_view_bindings::view,
-}
-#import lunco::terrain::terrain_morph_weight
-#ifdef PREPASS_PIPELINE
-#import bevy_pbr::prepass_io::VertexOutput
-#else
-#import bevy_pbr::forward_io::VertexOutput
-#endif
 // Motion-vector view flags also occur on forward pipelines, whose output and
 // view bindings contain no previous-position data.
-#ifdef PREPASS_PIPELINE
-#ifdef MOTION_VECTOR_PREPASS
-#import bevy_pbr::prepass_bindings::previous_view_uniforms
-#endif
-#endif
 
-// Keep this layout byte-for-byte compatible with terrain_layered.wgsl. The
+// Keep this layout byte-for-byte compatible with terrain_layered.wesl. The
 // fragment stage owns the reflected UI/default/engine annotations; this stage
 // only needs the final morph fields, but the uniform is shared by both stages.
 struct Material {
@@ -90,7 +87,7 @@ struct Material {
     site_photometry: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 // Standard mesh attributes plus the morph target at location 8 (added to the
@@ -130,39 +127,24 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
         vec4<f32>(local_pos, 1.0),
     );
     out.position = position_world_to_clip(out.world_position.xyz);
-#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
-    out.unclipped_depth = out.position.z;
-    out.position.z = min(out.position.z, 1.0);
-#endif
-#ifdef PREPASS_PIPELINE
-#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
-    out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
-#endif
-#else
-    out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
-#endif
-#ifdef PREPASS_PIPELINE
-#ifdef MOTION_VECTOR_PREPASS
+    @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.unclipped_depth = out.position.z;
+    @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.position.z = min(out.position.z, 1.0);
+    @if((PREPASS_PIPELINE) && (NORMAL_PREPASS_OR_DEFERRED_PREPASS)) out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
+    @if((!(PREPASS_PIPELINE))) out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
     // Recover the previous camera origin from its rigid view transform, then
     // evaluate the same morph band in the previous render frame.
-    let previous_view = previous_view_uniforms.view_from_world;
-    let previous_eye = -vec3(
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_view = previous_view_uniforms.view_from_world;
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_eye = -vec3(
         dot(previous_view[0].xyz, previous_view[3].xyz),
         dot(previous_view[1].xyz, previous_view[3].xyz),
         dot(previous_view[2].xyz, previous_view[3].xyz));
-    let previous_transform = mesh_functions::get_previous_world_from_local(vertex.instance_index);
-    let previous_base = mesh_functions::mesh_position_local_to_world(
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_transform = mesh_functions::get_previous_world_from_local(vertex.instance_index);
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_base = mesh_functions::mesh_position_local_to_world(
         previous_transform, vec4(vertex.position, 1.0));
-    let previous_m = morph_weight(vertex, previous_base.xyz, previous_eye);
-    out.previous_world_position = mesh_functions::mesh_position_local_to_world(
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_m = morph_weight(vertex, previous_base.xyz, previous_eye);
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) out.previous_world_position = mesh_functions::mesh_position_local_to_world(
         previous_transform, vec4(mix(vertex.position, vertex.morph_target, previous_m), 1.0));
-#endif
-#endif
-#ifdef VERTEX_UVS_A
-    out.uv = vertex.uv;
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = vertex.instance_index;
-#endif
+    @if((VERTEX_UVS_A)) out.uv = vertex.uv;
+    @if((VERTEX_OUTPUT_INSTANCE_INDEX)) out.instance_index = vertex.instance_index;
     return out;
 }

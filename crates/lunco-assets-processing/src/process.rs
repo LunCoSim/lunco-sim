@@ -1542,7 +1542,7 @@ fn encode_linear_to_srgb_u8(value: f64) -> u8 {
 /// DEM crop and write it as RGB8 PNG (`n * 0.5 + 0.5`).
 ///
 /// Convention matches `lunco-terrain-core::derive::normal_map` and the decode
-/// in `terrain_layered.wgsl`: `n = normalize(-dh/dx, 1, -dh/dz)` with `+x` =
+/// in `terrain_layered.wesl`: `n = normalize(-dh/dx, 1, -dh/dz)` with `+x` =
 /// increasing column (east) and `+z` = increasing row (south, since PDS
 /// rasters are north-up) — source/object space, no tangent basis. Consumers
 /// transform it through the terrain mesh instance before world-space lighting.
@@ -2165,7 +2165,7 @@ mod tests {
     /// This is the shape of the shipped Apollo-15 `ortho.png` bug: the nodata
     /// margin reached the 1–99 percentile stretch as a finite `-3.4e38`, became
     /// the 1st percentile, and flattened every real sample to pure white while
-    /// the margin itself went pure black. `terrain_layered.wgsl` multiplies
+    /// the margin itself went pure black. `terrain_layered.wesl` multiplies
     /// that map into the albedo, so the margin rendered as an unlit void.
     #[test]
     fn map_gray_stretch_ignores_nodata_and_bakes_it_neutral() {

@@ -1,3 +1,18 @@
+import bevy_pbr::render::{
+    mesh_functions,
+    view_transformations::position_world_to_clip,
+    forward_io,
+    mesh_view_bindings::view,
+};
+@if((PREPASS_PIPELINE))
+import bevy_pbr::prepass::io::VertexOutput;
+@if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS))
+import bevy_pbr::prepass::bindings::previous_view_uniforms;
+@if((!(PREPASS_PIPELINE)))
+import bevy_pbr::render::forward_io::VertexOutput;
+import super::transfer::{slope_hazard_color, slope_of};
+import super::terrain_surface::{surface_annotation_color, terrain_detail_position, terrain_morph_weight};
+
 //!@capability lunco.surface-annotations.v1
 //! Dedicated streamed-terrain diagnostic material.
 //!
@@ -11,21 +26,6 @@
 //! contract as the production material, so inspecting the stream does not alter
 //! its topology or hide cracks.
 
-#import bevy_pbr::{
-    mesh_functions,
-    view_transformations::position_world_to_clip,
-    forward_io,
-    mesh_view_bindings::view,
-}
-#ifdef PREPASS_PIPELINE
-#import bevy_pbr::prepass_io::VertexOutput
-#ifdef MOTION_VECTOR_PREPASS
-#import bevy_pbr::prepass_bindings::previous_view_uniforms
-#endif
-#else
-#import bevy_pbr::forward_io::VertexOutput
-#endif
-#import lunco::transfer::{slope_hazard_color, slope_of}
 
 //!@ui      mode        1 2   "Diagnostic (1 slope, 2 LOD depth)"
 //!@default mode        1
@@ -41,8 +41,7 @@
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
 
-#import lunco::terrain::{surface_annotation_color, terrain_detail_position, terrain_morph_weight}
-@group(#{MATERIAL_BIND_GROUP}) @binding(16)
+@group(constants::MATERIAL_BIND_GROUP) @binding(16)
 var surface_annotations: texture_2d<f32>;
 
 struct Material {
@@ -56,7 +55,7 @@ struct Material {
     stitch_edges: vec4<f32>,
     terrain_half_extent: f32,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> material: Material;
 
 struct GeoVertex {
@@ -91,38 +90,25 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
         vec4<f32>(local_pos, 1.0),
     );
     out.position = position_world_to_clip(out.world_position.xyz);
-#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
-    out.unclipped_depth = out.position.z;
-    out.position.z = min(out.position.z, 1.0);
-#endif
-#ifdef PREPASS_PIPELINE
-#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
-    out.world_normal = mesh_functions::mesh_normal_local_to_world(
+    @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.unclipped_depth = out.position.z;
+    @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.position.z = min(out.position.z, 1.0);
+    @if((PREPASS_PIPELINE) && (NORMAL_PREPASS_OR_DEFERRED_PREPASS)) out.world_normal = mesh_functions::mesh_normal_local_to_world(
         local_normal, vertex.instance_index);
-#endif
-#ifdef MOTION_VECTOR_PREPASS
-    let previous_view = previous_view_uniforms.view_from_world;
-    let previous_eye = -vec3(
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_view = previous_view_uniforms.view_from_world;
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_eye = -vec3(
         dot(previous_view[0].xyz, previous_view[3].xyz),
         dot(previous_view[1].xyz, previous_view[3].xyz),
         dot(previous_view[2].xyz, previous_view[3].xyz));
-    let previous_transform = mesh_functions::get_previous_world_from_local(vertex.instance_index);
-    let previous_base = mesh_functions::mesh_position_local_to_world(
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_transform = mesh_functions::get_previous_world_from_local(vertex.instance_index);
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_base = mesh_functions::mesh_position_local_to_world(
         previous_transform, vec4(vertex.position, 1.0));
-    let previous_m = morph_weight(vertex, previous_base.xyz, previous_eye);
-    out.previous_world_position = mesh_functions::mesh_position_local_to_world(
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) let previous_m = morph_weight(vertex, previous_base.xyz, previous_eye);
+    @if((PREPASS_PIPELINE) && (MOTION_VECTOR_PREPASS)) out.previous_world_position = mesh_functions::mesh_position_local_to_world(
         previous_transform, vec4(mix(vertex.position, vertex.morph_target, previous_m), 1.0));
-#endif
-#else
-    out.world_normal = mesh_functions::mesh_normal_local_to_world(
+    @if((!(PREPASS_PIPELINE))) out.world_normal = mesh_functions::mesh_normal_local_to_world(
         local_normal, vertex.instance_index);
-#endif
-#ifdef VERTEX_UVS_A
-    out.uv = vertex.uv;
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = vertex.instance_index;
-#endif
+    @if((VERTEX_UVS_A)) out.uv = vertex.uv;
+    @if((VERTEX_OUTPUT_INSTANCE_INDEX)) out.instance_index = vertex.instance_index;
     return out;
 }
 
@@ -152,8 +138,6 @@ fn fragment(in: forward_io::VertexOutput, @builtin(front_facing) is_front: bool)
     let shade = 0.45 + 0.55 * clamp(n.y, 0.0, 1.0);
     let neutral = vec3<f32>(0.5, 0.5, 0.5) * shade;
     var result = vec4<f32>(mix(neutral, colour * shade, material.opacity), 1.0);
-#ifdef VERTEX_UVS_A
-    result = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, result);
-#endif
+    @if((VERTEX_UVS_A)) result = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, result);
     return result;
 }

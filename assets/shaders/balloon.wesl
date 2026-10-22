@@ -1,3 +1,12 @@
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+    mesh_functions,
+};
+
 //! Ball / balloon material for the general `ShaderMaterial`.
 //!
 //! Draws a lat-long checkerboard on a sphere so its rotation is obvious.
@@ -16,14 +25,6 @@
 //! struct (field names → offsets) and the `//!@` annotations straight out of
 //! this file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    pbr_types,
-    pbr_functions,
-    mesh_bindings::mesh,
-    mesh_view_bindings::view,
-    mesh_functions,
-}
 
 const TAU: f32 = 6.28318530718;
 const PI:  f32 = 3.14159265359;
@@ -49,7 +50,7 @@ struct Material {
     marker_wedges: f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 fn parity(i: f32) -> bool {

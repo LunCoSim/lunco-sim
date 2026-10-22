@@ -33,7 +33,6 @@
 //! Filtering is symmetric (the USD docs say so, and a one-sided contact filter is
 //! meaningless), so authoring it on either prim filters the pair.
 
-use avian3d::collider_tree::{ColliderTreeProxyFlags, ColliderTreeProxyKey, ColliderTrees};
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
@@ -440,7 +439,7 @@ pub fn enable_shared_tire_contact_hooks(
 /// Enable contact modification for materials with distinct static and dynamic
 /// coefficients.
 ///
-/// Avian 0.7 stores both on [`Friction`], but its narrow phase currently copies
+/// Avian stores both on [`Friction`], but its narrow phase copies
 /// only `dynamic_coefficient` onto contact manifolds. The shared hook restores
 /// the authored static branch without classifying bodies by path or vehicle.
 pub fn enable_static_friction_contact_hooks(
@@ -452,58 +451,6 @@ pub fn enable_static_friction_contact_hooks(
             continue;
         }
         enable_collision_hook(&mut commands, entity, ActiveCollisionHooks::MODIFY_CONTACTS);
-    }
-}
-
-/// Keep Avian's broad-phase proxy flags in sync with the public hook component.
-///
-/// Avian 0.7 updates only its custom-filter bit from the `ActiveCollisionHooks`
-/// insert observer.  A USD material can legitimately arm contact modification
-/// after the collider proxy exists (for example when a streamed material is
-/// resolved), so relying on that observer leaves `MODIFY_CONTACTS` absent from
-/// the proxy and silently skips [`CollisionHooks::modify_contacts`].  The USD
-/// bridge owns the hook component it adds; synchronize the corresponding proxy
-/// flags here, without changing any contact or body state.
-pub fn synchronize_collision_hook_flags(
-    trees: Option<ResMut<ColliderTrees>>,
-    query: Query<(
-        &ColliderTreeProxyKey,
-        &ActiveCollisionHooks,
-        Option<&UsdPrimPath>,
-    )>,
-) {
-    let Some(mut trees) = trees else {
-        // `UsdAvianPlugin` also supplies the USD-to-Avian mapping observers to
-        // focused/headless composition harnesses that do not install Avian's
-        // physics runtime. Without a collider-tree resource there is no proxy
-        // flag to synchronize; the authored hook component remains authoritative
-        // until the physics plugin creates the proxy.
-        return;
-    };
-    for (key, hooks, prim) in &query {
-        if *key == ColliderTreeProxyKey::PLACEHOLDER {
-            continue;
-        }
-        let Some(proxy) = trees.get_proxy_mut(*key) else {
-            // The component may arrive before Avian creates the proxy.  In that
-            // case the proxy constructor reads the complete component later.
-            continue;
-        };
-        let desired_modify = hooks.contains(ActiveCollisionHooks::MODIFY_CONTACTS);
-        let was_modify = proxy.has_contact_modification();
-        proxy.flags.set(
-            ColliderTreeProxyFlags::CUSTOM_FILTER,
-            hooks.contains(ActiveCollisionHooks::FILTER_PAIRS),
-        );
-        proxy
-            .flags
-            .set(ColliderTreeProxyFlags::MODIFY_CONTACTS, desired_modify);
-        if was_modify != desired_modify {
-            info!(
-                "[usd-avian] synchronized contact hooks for proxy key={key:?} prim={}: hooks={hooks:?} modify={desired_modify}",
-                prim.map_or("<non-usd>", |p| p.path.as_str()),
-            );
-        }
     }
 }
 

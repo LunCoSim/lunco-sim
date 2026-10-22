@@ -2,21 +2,15 @@
 (
     defaultPrim = "ShaderFallbackTest"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Negative contract probe: a cube that (wrongly) points its material at
-# pbr_lit.wgsl — a shader library with no @fragment entry. The render shader owner
-# must reject the binding and publish a structured error. No renderer-selected
-# material is acceptable for an invalid authored shader.
-# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "ShaderFallbackTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Negative shader contract probe: a cube points at a shader library with no fragment entry and must be rejected by the render shader owner."
+    documentation = "Negative shader contract probe: a cube points at a shader library with no fragment entry and must be rejected by the render shader owner."
 )
 {
-    # The test observer declares that the assertion needs the graphics stack.
     def Scope "Test" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
@@ -24,63 +18,55 @@ def Xform "ShaderFallbackTest" (
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://scenarios/tests/shader_fallback.rhai@
     }
-
-
     over "Sun"
     {
         double3 xformOp:rotateXYZ = (-40.0, 30.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
-
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (4.0, 3.0, 6.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
-        double3 xformOp:translate = (4.0, 3.0, 6.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
-    # The initial presentation is authored explicitly. Avatar presence alone
-    # must never choose the window or offscreen camera.
     def Scope "CameraTrack" (
         prepend apiSchemas = ["LunCoCameraTrackAPI"]
     )
     {
+        token lunco:activeCamera
         token lunco:activeCamera.timeSamples = {
-            0: "Avatar",
+            0.0: "Avatar",
         }
     }
-
     def Scope "Looks"
     {
         def Material "BadShader"
         {
+            token outputs:surface
             token outputs:surface.connect = </ShaderFallbackTest/Looks/BadShader/Shader.outputs:surface>
-
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                # INVALID: pbr_lit.wgsl is an importable library (no @fragment).
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/pbr_lit.wgsl@
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/pbr_lit.wesl@
             }
         }
     }
-
     def Cube "BadShaderCube" (
         prepend apiSchemas = ["MaterialBindingAPI"]
     )
     {
         double size = 2.0
-        color3f[] primvars:displayColor = [(0.9, 0.3, 0.2)]
+        color3f[] primvars:displayColor = [(0.8999999761581421, 0.30000001192092896, 0.20000000298023224)]
         rel material:binding = </ShaderFallbackTest/Looks/BadShader>
     }
 }

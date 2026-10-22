@@ -176,7 +176,7 @@ pub fn persist_wheel_to_runtime_layer(
 ///
 /// ```jsonc
 /// {"type":"ExecuteCommand","command":"SetObjectProperty",
-///  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
+///  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wesl"}}
 /// {"type":"ExecuteCommand","command":"SetObjectProperty",
 ///  "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
 /// {"type":"ExecuteCommand","command":"SetObjectProperty",
@@ -184,7 +184,7 @@ pub fn persist_wheel_to_runtime_layer(
 /// ```
 ///
 /// Recognised `property` values:
-/// - `shader` → author a [`ShaderLook`] for that `.wgsl` (asset path); the render
+/// - `shader` → author a [`ShaderLook`] for that `.wesl` (asset path); the render
 ///   binder turns it into a material.
 /// - any parameter named by the shader's `Material` struct (e.g. `albedo`,
 ///   `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
@@ -417,7 +417,7 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
 
 /// The reflected parameter schema of a shader **asset path**.
 ///
-/// Read straight out of the loaded WGSL source (`Material` struct + `//!@`
+/// Read straight out of the loaded WESL source (`Material` struct + `//!@`
 /// annotations) rather than off a material — the schema is a property of the
 /// *asset*, and reading it this way keeps the shader-param paths render-free.
 /// `None` while the shader is still loading (or if it declares no `Material`) is
@@ -436,7 +436,7 @@ fn shader_schema(
     };
     let handle = asset_server.load::<bevy::shader::Shader>(path);
     let src = match &shaders.get(&handle)?.source {
-        bevy::shader::Source::Wgsl(s) => s.as_ref().to_string(),
+        bevy::shader::Source::Wesl(s) => s.as_ref().to_string(),
         _ => return None,
     };
     ParamSchema::parse(&src)
@@ -504,7 +504,7 @@ fn author_shader_parameter_to_usd(
 }
 
 /// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any parameters
-/// it already has so swapping the `.wgsl` keeps tuned values.
+/// it already has so swapping the `.wesl` keeps tuned values.
 ///
 /// Drops the [`PbrLook`] intent: an entity that carries both draws twice, because
 /// each binder materialises its own. See `lunco-render-bevy`'s caller contract.
@@ -632,7 +632,7 @@ pub fn on_set_object_property(
     match cmd.property.as_str() {
         "shader" => {
             // Preserve existing uniforms if the object already has a shader look,
-            // so swapping the .wgsl keeps tuned params.
+            // so swapping the .wesl keeps tuned params.
             let existing = q_shader_look.get(target).ok().cloned();
             author_shader_look(&mut commands, target, existing.as_ref(), &cmd.value);
             info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
@@ -701,7 +701,7 @@ pub fn on_set_object_property(
                 );
                 return;
             };
-            // USD authors params camelCase, WGSL declares them snake_case.
+            // USD authors params camelCase, WESL declares them snake_case.
             let name = lunco_materials::to_snake_case(key);
             let schema = shader_schema(&look.shader, &asset_server, &shaders);
             match shader_param_value(schema.as_ref(), &name, &cmd.value) {
@@ -716,36 +716,13 @@ pub fn on_set_object_property(
     }
 }
 
-/// Return the asset-path spellings that can identify an engine shader request.
-///
-/// A bare engine path is the public authoring spelling, while the live renderer
-/// may hold the same asset under the explicit `lunco://` source. Both are
-/// considered for a bare request so a command addresses the asset identity that
-/// is actually live. Explicit sources remain exact: `twin://…` must never be
-/// re-rooted into the engine library.
-fn shader_path_candidates(requested: &str) -> Vec<String> {
-    let requested = requested.trim();
-    if requested.is_empty() {
-        return Vec::new();
-    }
-
-    let mut candidates = Vec::with_capacity(2);
-    if !lunco_assets_core::has_scheme(requested) {
-        candidates.push(lunco_assets_core::engine_asset_uri(requested));
-    }
-    if !candidates.iter().any(|candidate| candidate == requested) {
-        candidates.push(requested.to_string());
-    }
-    candidates
-}
-
-/// Whether `path` is a standalone WGSL asset path accepted by the shader
+/// Whether `path` is a standalone WESL asset path accepted by the shader
 /// commands. Shader sub-assets are not valid command targets.
-fn is_wgsl_shader_path(path: &str) -> bool {
+fn is_wesl_shader_path(path: &str) -> bool {
     let Ok(path) = lunco_assets_core::asset_path::load_asset_path(path, None, None, None) else {
         return false;
     };
-    // Bevy's embedded source contains engine-internal WGSL modules, not
+    // Bevy's embedded source contains engine-internal WESL modules, not
     // standalone files a caller can reload or replace. Other registered
     // sources remain valid asset owners and are intentionally not enumerated
     // here; the live AssetServer identity is the authority.
@@ -756,7 +733,7 @@ fn is_wgsl_shader_path(path: &str) -> bool {
             .path()
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("wgsl"))
+            .is_some_and(|extension| extension == "wesl")
 }
 
 /// Find the live asset identities matching one shader request. The returned
@@ -773,45 +750,48 @@ fn active_shader_paths(
             let Some(path) = asset_server.get_path(id) else {
                 continue;
             };
-            if is_wgsl_shader_path(&path.to_string()) {
+            if is_wesl_shader_path(&path.to_string()) {
                 paths.insert(path.to_string());
             }
         }
         return paths.into_iter().collect();
     }
 
-    shader_path_candidates(requested)
-        .into_iter()
-        .filter(|path| {
-            is_wgsl_shader_path(path)
-                && asset_server
-                    .get_path_ids(path.clone())
-                    .into_iter()
-                    .any(|id| {
-                        id.try_typed::<bevy::shader::Shader>()
-                            .is_ok_and(|id| shaders.contains(id))
-                    })
-        })
-        .collect()
+    let path = crate::shader_doc::canonical_shader_path(requested);
+    if is_wesl_shader_path(&path)
+        && asset_server
+            .get_path_ids(path.clone())
+            .into_iter()
+            .any(|id| {
+                id.try_typed::<bevy::shader::Shader>()
+                    .is_ok_and(|id| shaders.contains(id))
+            })
+    {
+        vec![path]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Replace the live `Shader` asset(s) identified by `requested`.
 ///
 /// This is shared by the local command and journal replay. A bare request
-/// updates every active spelling of the same engine-relative path; if no
-/// spelling is active yet, it creates the canonical `lunco://` handle so a
+/// resolves to the canonical engine asset identity; if it is inactive, it loads
+/// the canonical `lunco://` handle so a
 /// replayed source edit is still available to the renderer. It does not journal
 /// the edit — the caller that owns document persistence does that separately.
 pub fn apply_shader_source_live(
     asset_server: &AssetServer,
-    shaders: &mut Assets<bevy::shader::Shader>,
+    shaders: &Assets<bevy::shader::Shader>,
+    pending: &mut crate::shader_sources::PendingShaderSources,
+    roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
     requested: &str,
     source: &str,
 ) -> Result<Vec<String>, String> {
     let requested = requested.trim();
-    if requested.is_empty() || !is_wgsl_shader_path(requested) {
+    if requested.is_empty() || !is_wesl_shader_path(requested) {
         return Err(format!(
-            "shader path must name a standalone .wgsl asset, got '{requested}'"
+            "shader path must name a standalone .wesl asset, got '{requested}'"
         ));
     }
     if source.is_empty() {
@@ -821,34 +801,25 @@ pub fn apply_shader_source_live(
     let paths = {
         let active = active_shader_paths(asset_server, shaders, requested);
         if active.is_empty() {
-            shader_path_candidates(requested)
-                .into_iter()
-                .find(|path| is_wgsl_shader_path(path))
-                .into_iter()
-                .collect()
+            vec![crate::shader_doc::canonical_shader_path(requested)]
         } else {
             active
         }
     };
 
-    for path in &paths {
-        let load_path = lunco_assets_core::asset_path::load_asset_path(path, None, None, None)
-            .map_err(|error| error.to_string())?;
-        let handle = asset_server.load::<bevy::shader::Shader>(load_path);
-        let shader = bevy::shader::Shader::from_wgsl(source.to_owned(), path.clone());
-        let _ = shaders.insert(handle.id(), shader);
-    }
+    lunco_materials::validate_shader_syntax(source)?;
+    pending.queue(asset_server, roots, &paths, source)?;
     Ok(paths)
 }
 
-/// Force-reload live WGSL assets from disk so edits apply without restarting
+/// Force-reload live WESL assets from disk so edits apply without restarting
 /// the app. Calls [`AssetServer::reload`], which re-runs the loader and lets
 /// dependent material pipelines rebuild.
 ///
-/// A supplied bare path such as `"shaders/wheel.wgsl"` resolves against the
+/// A supplied bare path such as `"shaders/wheel.wesl"` resolves against the
 /// active engine-library identity, including its explicit `lunco://` spelling.
 /// An explicit `lunco://…` or `twin://…` path is matched exactly. An empty path
-/// reloads every currently loaded WGSL asset. The command fails visibly when
+/// reloads every currently loaded WESL asset. The command fails visibly when
 /// the requested asset is not active instead of reporting a successful no-op.
 #[Command(default)]
 pub struct ReloadShader {
@@ -861,25 +832,27 @@ pub fn on_reload_shader(
     trigger: On<ReloadShader>,
     asset_server: Res<AssetServer>,
     shaders: Res<Assets<bevy::shader::Shader>>,
+    mut pending: ResMut<crate::shader_sources::PendingShaderSources>,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let requested = trigger.event().path.trim().to_string();
-    if !requested.is_empty() && !is_wgsl_shader_path(&requested) {
+    if !requested.is_empty() && !is_wesl_shader_path(&requested) {
         return Err(format!(
-            "shader path must name a standalone .wgsl asset, got '{requested}'"
+            "shader path must name a standalone .wesl asset, got '{requested}'"
         ));
     }
     let paths = active_shader_paths(&asset_server, &shaders, &requested);
     if paths.is_empty() {
         return Err(if requested.is_empty() {
-            "no loaded WGSL shader assets are available to reload".to_string()
+            "no loaded WESL shader assets are available to reload".to_string()
         } else {
             format!(
-                "no active WGSL shader asset matches '{}'; use the exact loaded source path",
+                "no active WESL shader asset matches '{}'; use the exact loaded source path",
                 requested
             )
         });
     }
 
+    pending.cancel(&paths);
     for path in &paths {
         // Owned `String` → `AssetPath<'static>`, so the queued reload doesn't
         // borrow the short-lived command trigger.
@@ -905,19 +878,19 @@ pub fn on_reload_shader(
     ))
 }
 
-/// Replace a shader asset's WGSL **source in place** from text sent over the
+/// Replace a shader asset's WESL **source in place** from text sent over the
 /// API, recompiling it live without touching disk or restarting. Overwrites the
-/// active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wgsl"`), so every
+/// active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wesl"`), so every
 /// material using them re-specializes its pipeline next frame. Bare engine
-/// paths resolve the same `lunco://`/default-source aliases as [`ReloadShader`].
+/// paths resolve to the canonical `lunco://` identity used by [`ReloadShader`].
 /// Compile/validation outcome surfaces in the render log (naga errors on a bad
 /// shader). Pairs with [`ReloadShader`] (disk) — this one is for pushing edits
 /// directly.
 #[Command(default)]
 pub struct SetShaderSource {
-    /// Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`.
+    /// Asset path of the shader to overwrite, e.g. `"shaders/wheel.wesl"`.
     pub path: String,
-    /// New WGSL source text.
+    /// New WESL source text.
     pub source: String,
 }
 
@@ -926,15 +899,24 @@ pub struct SetShaderSource {
 pub fn on_set_shader_source(
     trigger: On<SetShaderSource>,
     asset_server: Res<AssetServer>,
-    mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    shaders: Res<Assets<bevy::shader::Shader>>,
+    mut pending: ResMut<crate::shader_sources::PendingShaderSources>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut registry: ResMut<crate::shader_doc::ShaderRegistry>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let ev = trigger.event();
     let requested = ev.path.trim();
-    // Compile/replace first. A rejected source must not create a journal
-    // document or persist an edit that never reached the live renderer.
-    let paths = apply_shader_source_live(&asset_server, &mut shaders, requested, &ev.source)?;
+    // Validate and admit the source before recording the edit. Preparation
+    // resolves native imports asynchronously; GPU compilation follows publication.
+    let paths = apply_shader_source_live(
+        &asset_server,
+        &shaders,
+        &mut pending,
+        roots.as_deref(),
+        requested,
+        &ev.source,
+    )?;
     // Record the edit into the Twin journal (`DomainKind::Shader`) via the shader
     // document registry — so it SYNCS + PERSISTS like a rhai/Modelica edit, not
     // just a local `Assets<Shader>` poke. Skip recording when this arrived from the
@@ -945,7 +927,7 @@ pub fn on_set_shader_source(
         registry.apply_source(requested, ev.source.clone());
     }
     info!(
-        "SET_SHADER_SOURCE: recompiled {} active asset(s) from {} bytes of WGSL",
+        "SET_SHADER_SOURCE: queued {} active asset(s) from {} bytes of WESL",
         paths.len(),
         ev.source.len()
     );
@@ -954,23 +936,23 @@ pub fn on_set_shader_source(
         lunco_api_core::api_value!({
             "accepted": true,
             "requested": requested,
-            "applied_paths": paths,
+            "queued_paths": paths,
         }),
     ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Live shader authoring — create from a template, import any `.wgsl` from the
+// Live shader authoring — create from a template, import any `.wesl` from the
 // computer into the open Twin, and discover shaders dropped in the Twin folder.
-// All persist into `<twin>/shaders/<name>.wgsl` (fallback `assets/shaders/`),
+// All persist into the owning Twin or engine asset library,
 // register into the picker [`ShaderCatalog`], and can apply to an entity — no
 // restart. The created/imported shaders are PBR-compatible self-describing
 // shaders (see [`lunco_materials::shader_template`]).
 // ─────────────────────────────────────────────────────────────────────────
 
 /// The asset path a shader named `stem` would be installed at: under the
-/// primary open Twin (`twin://<name>/shaders/<stem>.wgsl`) or the engine library
-/// (`shaders/<stem>.wgsl`) when no Twin is open. Mirrors [`install_shader`]'s
+/// primary open Twin (`twin://<name>/shaders/<stem>.wesl`) or the engine library
+/// (`shaders/<stem>.wesl`) when no Twin is open. Mirrors [`install_shader`]'s
 /// destination logic so callers (e.g. the Inspector) can predict the path.
 pub fn shader_asset_path_for(
     twin_roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
@@ -1008,7 +990,7 @@ pub fn sanitize_stem(s: &str) -> String {
     }
 }
 
-/// Core of [`CreateShader`]/[`ImportShader`]: validate the WGSL is a
+/// Core of [`CreateShader`]/[`ImportShader`]: validate the WESL is a
 /// prop-pickable dynamic shader, persist it into the open Twin (fallback
 /// `assets/shaders/`), insert it live into [`Assets<Shader>`] so it renders
 /// this frame, register it in the picker [`ShaderCatalog`], and optionally bind
@@ -1020,14 +1002,18 @@ fn install_shader(
     target: u64,
     twin_roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
     asset_server: &AssetServer,
-    shaders: &mut Assets<bevy::shader::Shader>,
+    pending: &mut crate::shader_sources::PendingShaderSources,
     catalog: &mut lunco_materials::ShaderCatalog,
     registry: &lunco_api::registry::ApiEntityRegistry,
     q_look: &Query<&ShaderLook>,
     commands: &mut Commands,
 ) -> Option<String> {
-    if let Err(error) = lunco_assets_path::validate_portable_file_name(&format!("{stem}.wgsl")) {
+    if let Err(error) = lunco_assets_path::validate_portable_file_name(&format!("{stem}.wesl")) {
         warn!("INSTALL_SHADER: invalid filename: {error}");
+        return None;
+    }
+    if let Err(error) = lunco_materials::validate_shader_syntax(source) {
+        warn!("INSTALL_SHADER: invalid WESL: {error}");
         return None;
     }
     // Gate: must be a self-describing `Material` shader, and every `//!@engine`
@@ -1081,23 +1067,24 @@ fn install_shader(
                 return None;
             }
         };
-    // Persist to disk (native). Non-fatal on failure — the in-memory insert
-    // below still makes it usable this session.
+    // The native loader owns dependency discovery for the persisted source.
     #[cfg(not(target_arch = "wasm32"))]
     {
         match lunco_storage::write_file_sync(&disk_path, source.as_bytes()) {
             Ok(()) => info!("INSTALL_SHADER: wrote {}", disk_path.display()),
-            Err(e) => warn!("INSTALL_SHADER: write {} failed: {e}", disk_path.display()),
+            Err(e) => {
+                warn!("INSTALL_SHADER: write {} failed: {e}", disk_path.display());
+                return None;
+            }
         }
     }
     #[cfg(target_arch = "wasm32")]
     let _ = &disk_path;
 
-    // Insert the compiled source live under the asset path, so any material
-    // bound to it renders immediately (no disk round-trip / watcher wait).
-    let shader_handle = asset_server.load::<bevy::shader::Shader>(load_path);
-    let shader = bevy::shader::Shader::from_wgsl(source.to_string(), asset_path.clone());
-    let _ = shaders.insert(shader_handle.id(), shader);
+    pending.cancel(&[crate::shader_doc::canonical_shader_path(&asset_path)]);
+    // Keep loading and dependency retention on Bevy's native asset path.
+    let _shader_handle = asset_server.load::<bevy::shader::Shader>(load_path);
+    asset_server.reload(asset_path.clone());
 
     // Make it pickable.
     catalog.add(asset_path.clone());
@@ -1107,8 +1094,7 @@ fn install_shader(
         let gid = lunco_core::GlobalEntityId::from_raw(target);
         match registry.resolve(&gid) {
             Some(ent) => {
-                // Intent, not material: the binder loads the same `asset_path` we
-                // just inserted the compiled source under, so it renders at once.
+                // The binder loads the persisted source through the same asset identity.
                 author_shader_look(commands, ent, q_look.get(ent).ok(), &asset_path);
                 info!("INSTALL_SHADER: applied {asset_path} to entity {target}");
             }
@@ -1120,14 +1106,14 @@ fn install_shader(
     Some(asset_path)
 }
 
-/// Create a new dynamic shader from a built-in template (or supplied WGSL),
-/// persist it into the open Twin (`<twin>/shaders/<name>.wgsl`, or
+/// Create a new dynamic shader from a built-in template (or supplied WESL),
+/// persist it into the open Twin (`<twin>/shaders/<name>.wesl`, or
 /// `assets/shaders/` when no Twin is open), register it in the picker, and
 /// optionally bind it to a target entity — all live, no restart.
 ///
 /// ```json
 /// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
-/// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
+/// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wesl...>"}}
 /// ```
 #[Command(default)]
 pub struct CreateShader {
@@ -1135,7 +1121,7 @@ pub struct CreateShader {
     pub name: String,
     /// Template id when `source` is empty: `"solid"` (default) or `"checker"`.
     pub template: String,
-    /// Full WGSL source. Empty → generate from `template`.
+    /// Full WESL source. Empty → generate from `template`.
     pub source: String,
     /// API id of an entity to apply the new shader to. `0` = create only.
     pub target: u64,
@@ -1148,7 +1134,7 @@ pub fn on_create_shader(
     trigger: On<CreateShader>,
     twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     asset_server: Res<AssetServer>,
-    mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    mut pending: ResMut<crate::shader_sources::PendingShaderSources>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     q_look: Query<&ShaderLook>,
@@ -1167,7 +1153,7 @@ pub fn on_create_shader(
         ev.target,
         twin_roots.as_deref(),
         &asset_server,
-        &mut shaders,
+        &mut pending,
         &mut catalog,
         &registry,
         &q_look,
@@ -1175,18 +1161,18 @@ pub fn on_create_shader(
     );
 }
 
-/// Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
-/// (copies it to `<twin>/shaders/<name>.wgsl`), registers it in the picker, and
+/// Import an existing `.wesl` file from anywhere on disk INTO the open Twin
+/// (copies it to `<twin>/shaders/<name>.wesl`), registers it in the picker, and
 /// optionally binds it to a target entity. The file must be a prop-pickable
 /// dynamic shader: a `Material` struct, and every `//!@engine` field it declares
 /// must be prop-fillable per the engine-param registry.
 ///
 /// ```json
-/// {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
+/// {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wesl","name":"cool","target":42}}
 /// ```
 #[Command(default)]
 pub struct ImportShader {
-    /// Filesystem path of the `.wgsl` to import (absolute or cwd-relative).
+    /// Filesystem path of the `.wesl` to import (absolute or cwd-relative).
     pub source_path: String,
     /// Optional new stem; empty → keep the source file's own stem.
     pub name: String,
@@ -1203,7 +1189,9 @@ pub fn on_import_shader(
         Res<lunco_assets_core::twin_source::TwinRoots>,
     >,
     #[cfg(not(target_arch = "wasm32"))] asset_server: Res<AssetServer>,
-    #[cfg(not(target_arch = "wasm32"))] mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    #[cfg(not(target_arch = "wasm32"))] mut pending: ResMut<
+        crate::shader_sources::PendingShaderSources,
+    >,
     #[cfg(not(target_arch = "wasm32"))] mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     #[cfg(not(target_arch = "wasm32"))] registry: Res<lunco_api::registry::ApiEntityRegistry>,
     #[cfg(not(target_arch = "wasm32"))] q_look: Query<&ShaderLook>,
@@ -1240,7 +1228,7 @@ pub fn on_import_shader(
             ev.target,
             twin_roots.as_deref(),
             &asset_server,
-            &mut shaders,
+            &mut pending,
             &mut catalog,
             &registry,
             &q_look,
@@ -1250,15 +1238,15 @@ pub fn on_import_shader(
 }
 
 /// Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove
-/// its `.wgsl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
+/// its `.wesl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
 /// Entities currently using it keep their in-memory material for the session.
 ///
 /// ```json
-/// {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
+/// {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wesl"}}
 /// ```
 #[Command(default)]
 pub struct DeleteShader {
-    /// Asset path to remove (`twin://name/shaders/x.wgsl` or `shaders/x.wgsl`).
+    /// Asset path to remove (`twin://name/shaders/x.wesl` or `shaders/x.wesl`).
     pub path: String,
 }
 
@@ -1267,6 +1255,7 @@ pub struct DeleteShader {
 pub fn on_delete_shader(
     trigger: On<DeleteShader>,
     #[cfg(not(target_arch = "wasm32"))] schemes: Option<Res<lunco_assets_core::SchemeRegistry>>,
+    mut pending: ResMut<crate::shader_sources::PendingShaderSources>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
 ) {
     let path = trigger.event().path.trim().to_string();
@@ -1274,8 +1263,9 @@ pub fn on_delete_shader(
         warn!("DELETE_SHADER: empty path");
         return;
     }
+    pending.cancel(&[crate::shader_doc::canonical_shader_path(&path)]);
     let removed = catalog.remove(&path);
-    // `twin://<name>/<rel>` → the Twin root, a bare `shaders/foo.wgsl` → the
+    // `twin://<name>/<rel>` → the Twin root, a bare `shaders/foo.wesl` → the
     // shipped library: both are the registry's job, so this crate re-derives
     // neither root (a copy here once joined a bare relative `"assets"`, resolving
     // against the CWD instead of the library path the loader uses).
@@ -1292,47 +1282,5 @@ pub fn on_delete_shader(
     }
     if !removed {
         warn!("DELETE_SHADER: '{path}' was not in the catalog");
-    }
-}
-
-#[cfg(test)]
-mod shader_reload_tests {
-    use super::*;
-
-    #[test]
-    fn bare_engine_path_checks_canonical_and_legacy_live_identities() {
-        assert_eq!(
-            shader_path_candidates(" shaders/wheel.wgsl "),
-            vec![
-                "lunco://shaders/wheel.wgsl".to_string(),
-                "shaders/wheel.wgsl".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn explicit_asset_source_is_never_rerooted() {
-        assert_eq!(
-            shader_path_candidates("lunco://shaders/wheel.wgsl"),
-            vec!["lunco://shaders/wheel.wgsl".to_string()]
-        );
-        assert_eq!(
-            shader_path_candidates("twin://moonbase/shaders/wheel.wgsl"),
-            vec!["twin://moonbase/shaders/wheel.wgsl".to_string()]
-        );
-    }
-
-    #[test]
-    fn shader_commands_accept_only_standalone_wgsl_assets() {
-        assert!(is_wgsl_shader_path("lunco://shaders/wheel.wgsl"));
-        assert!(is_wgsl_shader_path("twin://moonbase/shaders/wheel.WGSL"));
-        assert!(is_wgsl_shader_path("custom://shaders/wheel.wgsl"));
-        assert!(is_wgsl_shader_path(
-            "twin://moonbase/shaders/literal#% probe.wgsl"
-        ));
-        assert!(!is_wgsl_shader_path("embedded://bevy_pbr/render/pbr.wgsl"));
-        assert!(!is_wgsl_shader_path("shaders/wheel.wgsl#fragment"));
-        assert!(!is_wgsl_shader_path("shaders/wheel.rhai"));
-        assert!(!is_wgsl_shader_path("twin://moonbase/shaders/wheel.wgsl#"));
     }
 }

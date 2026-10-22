@@ -472,7 +472,7 @@ production observation; they must not recreate a full asset or scenario.
 The same rule applies to shader assets. A Rust integration test that opens a
 named file under `assets/shaders/` is an asset test even when it reaches the
 file through `lunco-assets-core` or `lunco-storage`; changing the reader does
-not change ownership. WGSL schema facts are exposed by `ValidateAsset` and are
+not change ownership. WESL schema facts are exposed by `ValidateAsset` and are
 asserted by `assets/scenes/tests/shader_asset_contracts.usda` with its Rhai
 observer. Rust keeps only inline `ParamSchema`/packing tests that do not name a
 repository asset.

@@ -28,8 +28,8 @@ def Xform "NoiseContinuity" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/noise_continuity.wgsl@
                 custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/noise_continuity.wesl@
             }
         }
     }

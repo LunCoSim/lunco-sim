@@ -165,7 +165,7 @@ struct PendingBodyImage {
 /// Bind an albedo map onto a globe's look and NEUTRALISE the body colour.
 ///
 /// `surface_color` is the body's untextured appearance (ocean blue, regolith
-/// grey), and `blueprint.wgsl` MULTIPLIES it by the albedo sample. That is what
+/// grey), and `blueprint.wesl` MULTIPLIES it by the albedo sample. That is what
 /// makes an unbound albedo — Bevy's white fallback — render as the body colour
 /// exactly. Bind real imagery without touching it and the same multiply becomes
 /// a tint: Blue Marble came out through `[0.13, 0.32, 0.66]`, so the oceans went

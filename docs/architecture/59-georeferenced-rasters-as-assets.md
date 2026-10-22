@@ -126,7 +126,7 @@ Ordered, with the load-bearing item flagged.
 
 The fixed-slot GPU path is already in place for authored terrain appearance:
 `TextureLayer` declares the slots (`materials/src/look.rs:73`), standard USD
-`UsdShade` material networks name the WGSL source and authored texture inputs, and
+`UsdShade` material networks name the WESL source and authored texture inputs, and
 the generic shader projection maps them into `ShaderLook`/`TerrainAuthoredMaps`.
 The same render-free source reconciler serves the static terrain owner and
 resident streamed tiles. The production streamed shader consumes authored

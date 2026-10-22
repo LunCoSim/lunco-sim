@@ -1,7 +1,7 @@
 //! Parameter-name normalisation — **render-free**.
 //!
 //! USD authors material params in camelCase by convention (`colorA`, `baseColor`,
-//! `morphStart`); WGSL `struct Material` fields are snake_case (`color_a`,
+//! `morphStart`); WESL `struct Material` fields are snake_case (`color_a`,
 //! `base_color`, `morph_start`). Both authoring paths (USD → `lunco-usd-sim-shader`, the
 //! live `SetObjectProperty` command → `lunco-scene-authoring`) bridge the two through
 //! here, so an authored name actually resolves to a schema field instead of

@@ -1,13 +1,22 @@
+import super::terrain_surface::terrain_apply_sun_response;
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+};
+
 // Shared **PBR-lit mode** for the dynamic `ShaderMaterial`.
 //
-// A plain `ShaderMaterial` is unlit by default — its `.wgsl` returns a flat
+// A plain `ShaderMaterial` is unlit by default — its `.wesl` returns a flat
 // colour. Importing this module lets a *self-describing* shader get bevy's full
 // PBR lighting (directional/point lights, shadows, ambient, fog, tonemapping)
 // in one call, while staying dynamic (params reflected from its own `Material`
 // struct — no per-shader Rust). It is the reusable version of the PbrInput
 // boilerplate the terrain/prop shaders used to hand-copy.
 //
-//   #import lunco::pbr_lit::lit
+//   import lunco::shaders::pbr_lit::lit;
 //   @fragment
 //   fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
 //       // ... compute albedo/roughness procedurally from `mat` ...
@@ -19,17 +28,8 @@
 // and post-processing (e.g. the terrain ray-marched shadow), keep doing that
 // inline — this module is the common all-in-one path.
 
-#define_import_path lunco::pbr_lit
 
-#import lunco::terrain::terrain_apply_sun_response
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    pbr_types,
-    pbr_functions,
-    mesh_bindings::mesh,
-    mesh_view_bindings::view,
-}
 
 // Full PBR lighting using the mesh's geometric normal. `base_color`/`emissive`
 // are linear RGB; `perceptual_roughness`/`metallic` are 0..1.
@@ -114,22 +114,3 @@ fn lit_n_occluded_sun_response(
     }
     return pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
 }
-
-// `sun_to_light()` WAS HERE and is deliberately gone (2026-07-26).
-//
-// It returned the BRIGHTEST directional light as the sun. That is a guess: it is
-// correct only while the sun happens to outshine everything else, it fails
-// SILENTLY when it does not, and it gave a different answer from the engine-filled
-// `sun_dir_world` the static-mesh terrain shaders were already using — so the same
-// site could be lit from two different vectors depending on whether its terrain
-// streamed. Its own comment conceded the point ("brightness is a guess") and
-// justified it by a 3-orders-of-magnitude gap to earthshine, which is a property of
-// the scenes that exist today, not an invariant.
-//
-// The sun is a scene-global fact. It is picked STRUCTURALLY on the CPU (`pick_sun`
-// — the fill is a child of the body prim it comes from and carries `Earthshine`)
-// and written to every ShaderMaterial as `sun_dir_world` by
-// `wire_terrain_materials` / `wire_sun_for_non_terrain_materials`. Declare
-// `//!@engine sun_dir_world` and read the uniform; do not re-derive it here. The
-// light array is flat and carries no prim identity, so nothing this module can see
-// is able to answer the question correctly.

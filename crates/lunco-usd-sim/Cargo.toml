@@ -26,7 +26,7 @@ lunco-usd-actuation = { path = "../lunco-usd-actuation" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-authoring = { path = "../lunco-usd-sim-authoring" }
 lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
-# `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
+# `ShaderLook` + `ParamValue` (the open, WESL-reflected parameter set).
 # `lunco-materials` is render-free: `shader_material.rs` (the `AsBindGroup` that
 # pulled `bevy_pbr`) moved to `lunco-render-bevy` on 2026-07-13, so this crate's
 # dep GRAPH no longer reaches wgpu either. Keep it that way.

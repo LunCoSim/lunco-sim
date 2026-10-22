@@ -74,7 +74,7 @@ serde = { workspace = true }
 # `MaterialExtension` (removed 2026-07-13). Nothing here holds a shader handle now.
 #
 # `ShaderLook` + `ParamValue` — the custom-shader appearance INTENT the globe tiles
-# state (blueprint.wgsl, named by path). `lunco-materials` is render-free:
+# state (blueprint.wesl, named by path). `lunco-materials` is render-free:
 # `ShaderMaterial` (the `AsBindGroup`, hence `bevy_pbr`) moved to `lunco-render-bevy`
 # on 2026-07-13, so this crate's closure is wgpu-free. Keep it that way.
 lunco-materials = { path = "../lunco-materials" }

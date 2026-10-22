@@ -1,3 +1,4 @@
+
 // Transfer — the value→colour plane of the terrain's Data → Transfer → Blend
 // pipeline, shader side.
 //
@@ -13,7 +14,6 @@
 // uniform write: no re-bake, no pipeline permutation. Keep the constants below
 // in lockstep with `HAZARD_SAFE`/`HAZARD_WARN`/`HAZARD_CLIFF` in transfer.rs.
 
-#define_import_path lunco::transfer
 
 /// Green (traversable) → amber (caution) → red (impassable).
 const HAZARD_SAFE:  vec3<f32> = vec3(0.15, 0.75, 0.20);

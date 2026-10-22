@@ -2,36 +2,31 @@
 (
     defaultPrim = "LandingPad"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Landing Pad — blast-hardened disc. Place >=150 m down-sun from the
-# habitat/solar field so plume ejecta doesn't sandblast them.
 def Xform "LandingPad" (
     kind = "component"
-    doc = "Blast-hardened landing pad — sintered disc with a centre hub. Where landers touch down; keep it well clear (>=150 m) of the habitat and solar field so plume ejecta can't sandblast them."
+    documentation = "Blast-hardened landing pad — sintered disc with a centre hub. Where landers touch down; keep it well clear (>=150 m) of the habitat and solar field so plume ejecta can't sandblast them."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
-
     def Scope "Looks"
     {
-        # Darkened regolith — sintered/compacted blast pad.
         def Material "BlastRegolith"
         {
+            token outputs:surface
             token outputs:surface.connect = </LandingPad/Looks/BlastRegolith/Shader.outputs:surface>
-
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/regolith.wgsl@
-                color3f inputs:colorA = (0.1, 0.1, 0.1)
+                color3f inputs:colorA = (0.10000000149011612, 0.10000000149011612, 0.10000000149011612)
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/regolith.wesl@
             }
         }
     }
-
     def Cylinder "Pad" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
@@ -39,21 +34,19 @@ def Xform "LandingPad" (
         uniform token axis = "Y"
         double radius = 15.0
         double height = 0.3
-        double3 xformOp:translate = (0, 0.15, 0)
+        double3 xformOp:translate = (0.0, 0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.18, 0.17, 0.16)]
+        color3f[] primvars:displayColor = [(0.18000000715255737, 0.17000000178813934, 0.1599999964237213)]
         bool physics:collisionEnabled = true
         rel material:binding = </LandingPad/Looks/BlastRegolith>
     }
-
-    # Center marker hub.
     def Cylinder "Hub"
     {
         uniform token axis = "Y"
         double radius = 1.5
         double height = 0.35
-        double3 xformOp:translate = (0, 0.18, 0)
+        double3 xformOp:translate = (0.0, 0.18, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.7, 0.6, 0.2)]
+        color3f[] primvars:displayColor = [(0.699999988079071, 0.6000000238418579, 0.20000000298023224)]
     }
 }

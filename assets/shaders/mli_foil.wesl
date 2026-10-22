@@ -1,15 +1,16 @@
+import bevy_pbr::render::forward_io::VertexOutput;
+import bevy_pbr::render::mesh_functions;
+import super::lunco_noise::{fbm_rot_gradient, noise_footprint_weight};
+import super::pbr_lit::lit_n;
+
 //! Gold multilayer-insulation foil for a complete `ShaderMaterial`.
 //!
 //! The material is intentionally a whole fragment shader, not a PBR helper
-//! library: USD binds this file directly through `info:wgsl:sourceAsset`.
+//! library: USD binds this file directly through `info:wesl:sourceAsset`.
 //! Crinkle is object-space so the facets stay attached to the foil while the
 //! lander moves, and `v_scale` keeps the pattern readable on differently sized
 //! blankets.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_functions
-#import lunco::noise::{fbm_rot_gradient, noise_footprint_weight}
-#import lunco::pbr_lit::lit_n
 
 //!@ui      foil_color  color "Bright foil colour"
 //!@default foil_color  0.83,0.62,0.18
@@ -32,7 +33,7 @@ struct Material {
     v_scale:     f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 @fragment

@@ -69,7 +69,7 @@ pub enum EngineSource {
 /// One registered engine-provided parameter.
 #[derive(Clone, Copy, Debug)]
 pub struct EngineParam {
-    /// The WGSL field name the shader declares (`//!@engine <name>`).
+    /// The WESL field name the shader declares (`//!@engine <name>`).
     pub name: &'static str,
     /// The type the provider produces. Must agree with the reflected `Material`
     /// struct field — [`EngineParams::validate_schema`] warns when it doesn't.
@@ -293,7 +293,7 @@ impl EngineParams {
             .all(|f| self.get(&f.name).is_some_and(|p| p.prop_fillable))
     }
 
-    /// Warns for every `//!@engine` field whose reflected WGSL type disagrees
+    /// Warns for every `//!@engine` field whose reflected WESL type disagrees
     /// with the registered provider's type, or that no provider supplies. A
     /// mismatch means the provider would write bytes the shader reinterprets as
     /// something else — silent garbage — so it is reported loudly rather than
@@ -314,7 +314,7 @@ impl EngineParams {
                 ),
                 Some(p) if p.ty != f.ty => bevy::log::warn!(
                     "[engine-params] {shader}: `{}` is declared {:?} in the Material \
-                     struct but the engine provides {:?}. Fix the WGSL type — the \
+                     struct but the engine provides {:?}. Fix the WESL type — the \
                      fill would otherwise write bytes the shader misreads.",
                     f.name,
                     f.ty,

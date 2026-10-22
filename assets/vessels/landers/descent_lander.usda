@@ -1535,7 +1535,6 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
                 color3f inputs:core_color = (7.0, 1.7999999523162842, 0.15000000596046448)
                 color3f inputs:edge_color = (1.399999976158142, 0.019999999552965164, 0.0020000000949949026)
                 float inputs:throttle = 0.0
@@ -1566,6 +1565,7 @@ def Xform "DescentLander" (
                 custom float inputs:radial_width = 1.0
                 custom float inputs:flow_phase_sin = 0.0
                 custom float inputs:flow_phase_cos = 1.0
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
             }
         }
         def Material "FlameCore_Mat"
@@ -1575,7 +1575,6 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
                 color3f inputs:core_color = (30.0, 12.0, 1.2000000476837158)
                 color3f inputs:edge_color = (6.0, 0.3499999940395355, 0.004999999888241291)
                 float inputs:throttle = 0.0
@@ -1606,6 +1605,7 @@ def Xform "DescentLander" (
                 custom float inputs:radial_width = 0.44999998807907104
                 custom float inputs:flow_phase_sin = 0.0
                 custom float inputs:flow_phase_cos = 1.0
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
             }
         }
         def Material "RcsFlame_Mat"
@@ -1615,7 +1615,6 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
                 color3f inputs:core_color = (0.3499999940395355, 2.799999952316284, 7.0)
                 color3f inputs:edge_color = (0.029999999329447746, 0.3499999940395355, 1.7999999523162842)
                 float inputs:throttle = 0.0
@@ -1646,6 +1645,7 @@ def Xform "DescentLander" (
                 custom float inputs:radial_width = 1.0
                 custom float inputs:flow_phase_sin = 0.0
                 custom float inputs:flow_phase_cos = 1.0
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
             }
         }
         def Material "RcsFlameCore_Mat"
@@ -1655,7 +1655,6 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
                 color3f inputs:core_color = (1.5, 6.0, 12.0)
                 color3f inputs:edge_color = (0.20000000298023224, 1.2000000476837158, 4.0)
                 float inputs:throttle = 0.0
@@ -1686,6 +1685,7 @@ def Xform "DescentLander" (
                 custom float inputs:radial_width = 0.44999998807907104
                 custom float inputs:flow_phase_sin = 0.0
                 custom float inputs:flow_phase_cos = 1.0
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
             }
         }
         def Material "StrutGlow_Mat"
@@ -1695,7 +1695,6 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/strut_glow.wgsl@
                 color3f inputs:base_color = (0.550000011920929, 0.550000011920929, 0.5699999928474426)
                 color3f inputs:hot_color = (0.949999988079071, 0.1599999964237213, 0.05000000074505806)
                 float inputs:load_frac = 0.0
@@ -1703,6 +1702,7 @@ def Xform "DescentLander" (
                 float inputs:roughness = 0.44999998807907104
                 float inputs:metallic = 0.699999988079071
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/strut_glow.wesl@
             }
         }
         def Material "MliFoil_Mat"
@@ -1712,7 +1712,6 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/mli_foil.wgsl@
                 color3f inputs:foil_color = (0.8299999833106995, 0.6200000047683716, 0.18000000715255737)
                 color3f inputs:shade_color = (0.44999998807907104, 0.30000001192092896, 0.07999999821186066)
                 float inputs:crinkle = 26.0
@@ -1720,6 +1719,7 @@ def Xform "DescentLander" (
                 float inputs:sheen = 0.8500000238418579
                 float inputs:v_scale = 0.1899999976158142
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/mli_foil.wesl@
             }
         }
         def Material "SolarWing_Mat"
@@ -1729,7 +1729,6 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
                 float inputs:v_scale = 1.7000000476837158
                 float inputs:cell_rows = 8.0
                 float inputs:cell_cols = 14.0
@@ -1740,6 +1739,7 @@ def Xform "DescentLander" (
                 color3f inputs:bus_color = (0.8999999761581421, 0.8999999761581421, 0.949999988079071)
                 color3f inputs:frame_color = (0.15000000596046448, 0.15000000596046448, 0.18000000715255737)
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/solar_panel.wesl@
             }
         }
     }

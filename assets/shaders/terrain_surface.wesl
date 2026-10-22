@@ -1,14 +1,5 @@
-// Shared regolith SURFACE kernel for every terrain shader, via naga_oil import.
-//
-// This module is the single implementation of shared terrain surface operations.
-// The material pipeline selects the noise dimensionality for the target platform
-// with `LUNCO_NOISE_2D`; every terrain material then imports the same transfer,
-// anti-aliasing, map, and bump helpers.
-
-#define_import_path lunco::terrain
-
-#import bevy_pbr::{
-    lighting,
+import bevy_pbr::render::{
+    pbr_lighting as lighting,
     mesh_functions,
     mesh_view_bindings::{lights, view},
     mesh_view_types,
@@ -16,14 +7,22 @@
     pbr_functions,
     pbr_types,
     shadows,
-}
+};
+@if((LUNCO_NOISE_2D))
+import super::lunco_noise::{fbm2d, fbm2d_gradient};
+@if((!(LUNCO_NOISE_2D)))
+import super::lunco_noise::{fbm_rot, fbm_rot_gradient};
+import super::lunco_noise::noise_footprint_weight;
 
-#ifdef LUNCO_NOISE_2D
-#import lunco::noise::{fbm2d, fbm2d_gradient}
-#else
-#import lunco::noise::{fbm_rot, fbm_rot_gradient}
-#endif
-#import lunco::noise::noise_footprint_weight
+// Shared regolith SURFACE kernel for every terrain shader, via WESL import.
+//
+// This module is the single implementation of shared terrain surface operations.
+// The material pipeline selects the noise dimensionality for the target platform
+// with `LUNCO_NOISE_2D`; every terrain material then imports the same transfer,
+// anti-aliasing, map, and bump helpers.
+
+
+
 
 // Footprint fade thresholds, in screen pixels per noise period.
 //
@@ -68,11 +67,8 @@ fn aa_fade(scale: f32, pw: f32) -> f32 {
 /// The platform octave budget. Call sites pass the native octave count; the web
 /// path uses a reduced budget for its 2D noise implementation.
 fn oct(full: i32) -> i32 {
-#ifdef LUNCO_NOISE_2D
-    return max(1, full / 2);
-#else
-    return full;
-#endif
+    @if((LUNCO_NOISE_2D)) return max(1, full / 2);
+    @if((!(LUNCO_NOISE_2D))) return full;
 }
 
 /// Baked-map blend weights as a function of `r` — the ratio of one fragment's
@@ -208,29 +204,25 @@ fn terrain_apply_sun_response(
     lighting_input.F0_metallic = output_color.rgb;
     lighting_input.F_ab = lighting::F_AB(perceptual_roughness, NdotV);
 
-#ifdef STANDARD_MATERIAL_CLEARCOAT
-    let clearcoat = pbr_input.material.clearcoat;
-    let clearcoat_perceptual_roughness =
+    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat = pbr_input.material.clearcoat;
+    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat_perceptual_roughness =
         pbr_input.material.clearcoat_perceptual_roughness;
-    let clearcoat_roughness =
+    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat_roughness =
         lighting::perceptualRoughnessToRoughness(clearcoat_perceptual_roughness);
-    let clearcoat_N = pbr_input.clearcoat_N;
-    lighting_input.layers[lighting::LAYER_CLEARCOAT].NdotV =
+    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat_N = pbr_input.clearcoat_N;
+    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].NdotV =
         max(dot(clearcoat_N, pbr_input.V), 0.0001);
-    lighting_input.layers[lighting::LAYER_CLEARCOAT].N = clearcoat_N;
-    lighting_input.layers[lighting::LAYER_CLEARCOAT].R =
+    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].N = clearcoat_N;
+    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].R =
         reflect(-pbr_input.V, clearcoat_N);
-    lighting_input.layers[lighting::LAYER_CLEARCOAT].perceptual_roughness =
+    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].perceptual_roughness =
         clearcoat_perceptual_roughness;
-    lighting_input.layers[lighting::LAYER_CLEARCOAT].roughness = clearcoat_roughness;
-    lighting_input.clearcoat_strength = clearcoat;
-#endif
+    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].roughness = clearcoat_roughness;
+    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.clearcoat_strength = clearcoat;
 
-#ifdef STANDARD_MATERIAL_ANISOTROPY
-    lighting_input.anisotropy = pbr_input.anisotropy_strength;
-    lighting_input.Ta = pbr_input.anisotropy_T;
-    lighting_input.Ba = pbr_input.anisotropy_B;
-#endif
+    @if((STANDARD_MATERIAL_ANISOTROPY)) lighting_input.anisotropy = pbr_input.anisotropy_strength;
+    @if((STANDARD_MATERIAL_ANISOTROPY)) lighting_input.Ta = pbr_input.anisotropy_T;
+    @if((STANDARD_MATERIAL_ANISOTROPY)) lighting_input.Ba = pbr_input.anisotropy_B;
 
     let view_z = dot(vec4<f32>(
         view.view_from_world[0].z,
@@ -298,11 +290,8 @@ fn dem_normal_to_world(encoded: vec3<f32>, instance_index: u32) -> vec3<f32> {
 /// family and octave budget as the bump layers instead of calling `fbm`/`fbm2d`
 /// directly, keeping all terrain materials on the same noise family and budget.
 fn surface_fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
-#ifdef LUNCO_NOISE_2D
-    return fbm2d(p.xz, oct(octaves), gain);
-#else
-    return fbm_rot(p, oct(octaves), gain);
-#endif
+    @if((LUNCO_NOISE_2D)) return fbm2d(p.xz, oct(octaves), gain);
+    @if((!(LUNCO_NOISE_2D))) return fbm_rot(p, oct(octaves), gain);
 }
 
 // Procedural terrain detail is anchored to the authored DEM frame, not to the
@@ -336,11 +325,8 @@ fn terrain_detail_normal_to_world(local_normal: vec3<f32>, instance_index: u32) 
 
 /// One ramped FBM layer sampled at terrain-stable position `p`.
 fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
-#ifdef LUNCO_NOISE_2D
-    return ramp(fbm2d(p.xz * scale, oct(octaves), gain), lo, hi);
-#else
-    return ramp(fbm_rot(p * scale, oct(octaves), gain), lo, hi);
-#endif
+    @if((LUNCO_NOISE_2D)) return ramp(fbm2d(p.xz * scale, oct(octaves), gain), lo, hi);
+    @if((!(LUNCO_NOISE_2D))) return ramp(fbm_rot(p * scale, oct(octaves), gain), lo, hi);
 }
 
 /// Value and gradient of a smooth, bounded FBM relief layer. The cubic height
@@ -352,17 +338,14 @@ fn layer_gradient(
 ) -> vec4<f32> {
     var raw_height = 0.0;
     var raw_gradient = vec3<f32>(0.0);
-#ifdef LUNCO_NOISE_2D
-    let sample = fbm2d_gradient(p.xz * scale, oct(octaves), gain,
+    @if((LUNCO_NOISE_2D)) let sample = fbm2d_gradient(p.xz * scale, oct(octaves), gain,
         scale * pw, vec2(AA_CUT_PX, AA_RAMP_PX));
-    raw_height = sample.x;
-    raw_gradient = vec3(sample.y, 0.0, sample.z) * scale;
-#else
-    let sample = fbm_rot_gradient(p * scale, oct(octaves), gain,
+    @if((LUNCO_NOISE_2D)) raw_height = sample.x;
+    @if((LUNCO_NOISE_2D)) raw_gradient = vec3(sample.y, 0.0, sample.z) * scale;
+    @if((!(LUNCO_NOISE_2D))) let sample = fbm_rot_gradient(p * scale, oct(octaves), gain,
         scale * pw, vec2(AA_CUT_PX, AA_RAMP_PX));
-    raw_height = sample.x;
-    raw_gradient = sample.yzw * scale;
-#endif
+    @if((!(LUNCO_NOISE_2D))) raw_height = sample.x;
+    @if((!(LUNCO_NOISE_2D))) raw_gradient = sample.yzw * scale;
     let t = ramp(raw_height, lo, hi);
     let height = t * t * (3.0 - 2.0 * t);
     let gradient = raw_gradient * (6.0 * t * (1.0 - t) / (hi - lo));
@@ -411,11 +394,9 @@ fn bump_layer(
     let sample = layer_gradient(p, scale, octaves, gain, lo, hi, pw);
     *out_h = sample.x;
     var surface_gradient = sample.yzw;
-#ifdef VERTEX_UVS_A
     // UV-backed terrain detail uses a planar DEM-local xz parameterization.
     // Do not add the unused 3D noise derivative along the constant local-y axis.
-    surface_gradient.y = 0.0;
-#endif
+    @if((VERTEX_UVS_A)) surface_gradient.y = 0.0;
     let tangent_gradient = surface_gradient - n * dot(n, surface_gradient);
     let bump_slope = strength * tangent_gradient;
     // Smoothly saturate steep micro-relief slopes. Returning the base normal

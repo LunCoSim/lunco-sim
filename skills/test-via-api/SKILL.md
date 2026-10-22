@@ -41,10 +41,10 @@ falling back to headless mode.
 ## Live shader iteration
 
 Shader source edits are a live-test path. Keep the production luncosim running, edit the
-WGSL under `assets/shaders/`, then dispatch `ReloadShader` through the same API. A bare
-engine path such as `shaders/starfield.wgsl` resolves the active default-source or
-`lunco://` asset identity; an explicit `lunco://…` or `twin://…` path is exact. An empty
-path reloads every currently loaded WGSL asset, not an arbitrary hard-coded file list.
+WESL under `assets/shaders/`, then dispatch `ReloadShader` through the same API. A bare
+engine path such as `shaders/starfield.wesl` resolves the canonical `lunco://`
+asset identity; an explicit `lunco://…` or `twin://…` path is exact. An empty
+path reloads every currently loaded WESL asset, not an arbitrary hard-coded file list.
 The response reports the queued paths and fails if no active asset matches. Confirm the
 command result, then inspect the unchanged window; shader compiler errors remain in the
 render log. Do not relaunch the app just to pick up a shader edit.
@@ -351,7 +351,7 @@ and scene retirement. Scene namespaces and their properties are removed on
 reload; only explicitly application-owned surfaces survive. If the revision is
 stable, an unchanged runtime surface should not rebuild its
 view-model. Use `CaptureScreenshot` for the visual check. `ReloadShader` and
-`RunScenario` reload WGSL and Rhai respectively; neither reloads HTML/CSS.
+`RunScenario` reload WESL and Rhai respectively; neither reloads HTML/CSS.
 
 Runtime UI is a small native HUI/Flair language, not a browser DOM. Do not
 expect JavaScript, forms, text inputs, full CSS, or host-font fallback. Read the

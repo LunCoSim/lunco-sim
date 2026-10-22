@@ -124,7 +124,7 @@ component. Its `Xform` applies `LunCoProceduralSkyAPI` and binds an ordinary
 `UsdShade.Material`; USD projection stamps `ProceduralSkybox` and does not
 project geometry for that owner. The renderer draws it with a fullscreen pass,
 so it does not contain scene geometry or provide ambient lighting. Its shader
-inputs are intentionally un-authored: WGSL defaults are shared with
+inputs are intentionally un-authored: WESL defaults are shared with
 `sandbox_scene.usda`.
 
 `power_bus.usda` is a passive USD bus/membership node; it is not a wrapper for

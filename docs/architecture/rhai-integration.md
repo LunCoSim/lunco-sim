@@ -73,7 +73,7 @@ parser/projection semantics; the adapters share identity, journaling,
 undo/redo, save, and lifecycle commands. This keeps high-level policy and
 requirement decisions hot-reloadable in Twin Rhai files while Rust retains the
 small invariant kernel (identity, UTF-8/range checks, atomic history and
-storage). WGSL remains renderer-owned until it receives the same document
+storage). WESL remains renderer-owned until it receives the same document
 adapter; generic tools must not write shader files directly.
 
 `InspectScriptDocument` and `ApplyScriptOps` provide the source-backed Rhai

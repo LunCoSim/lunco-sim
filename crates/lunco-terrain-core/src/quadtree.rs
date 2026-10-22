@@ -334,7 +334,7 @@ impl Quadtree {
     /// one ring away from the rover's wheels, not under them.
     ///
     /// The shader is untouched: this is a CPU-side window assignment, not a
-    /// per-tile morph factor (which `terrain_geomorph.wgsl`'s header warns would
+    /// per-tile morph factor (which `terrain_geomorph.wesl`'s header warns would
     /// crack same-depth seams). See `WHEEL_SINKING_ANALYSIS_v3.md` §4.4.
     pub fn refine_selection_at_with(
         &self,

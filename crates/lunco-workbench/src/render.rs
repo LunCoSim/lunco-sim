@@ -2793,7 +2793,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                     .text_style(lunco_theme::TypographyRole::Body.text_style()),
                 );
                 let tone_map_label = match settings.camera_tone_map {
-                    lunco_render::ToneMap::None => "None",
+                    lunco_render::ToneMap::Linear => "Linear",
                     lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
                     lunco_render::ToneMap::AgX => "AgX",
                     lunco_render::ToneMap::AcesFitted => "ACES fitted",
@@ -2804,7 +2804,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                     format!("Tone map: {tone_map_label}"),
                     &mut settings.camera_tone_map,
                     [
-                        (lunco_render::ToneMap::None, "None"),
+                        (lunco_render::ToneMap::Linear, "Linear"),
                         (lunco_render::ToneMap::TonyMcMapface, "TonyMcMapface"),
                         (lunco_render::ToneMap::AgX, "AgX"),
                         (lunco_render::ToneMap::AcesFitted, "ACES fitted"),

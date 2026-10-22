@@ -98,12 +98,12 @@ fn authored_feed_material_ok() {
 fn wheel_shader_contract_ok(path) {
     let record = query("QueryUsdPrim", #{
         path: path + "/TireLook/Shader",
-        attrs: ["info:wgsl:sourceAsset", "inputs:dust_amount", "inputs:dust_color"],
+        attrs: ["info:wesl:sourceAsset", "inputs:dust_amount", "inputs:dust_color"],
     });
     if record == () || record.ok == false || record.attrs == () {
         return false;
     }
-    record.attrs["info:wgsl:sourceAsset"] == "lunco://shaders/wheel.wgsl"
+    record.attrs["info:wesl:sourceAsset"] == "lunco://shaders/wheel.wesl"
         && record.attrs["inputs:dust_amount"] == ()
         && record.attrs["inputs:dust_color"] == ()
 }

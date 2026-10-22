@@ -1,6 +1,6 @@
 import "lunco://scripting/tools/asset_preflight" as preflight;
 
-// The shader schema is authored in WGSL, and the material binding is authored
+// The shader schema is authored in WESL, and the material binding is authored
 // in USD. Keep this acceptance contract beside those assets: Rust owns only
 // the generic ParamSchema mechanism and ValidateAsset exposes its result.
 //
@@ -32,10 +32,10 @@ fn schema_checks(path, fields, reports) {
     let report = shader_report(path, reports);
     let failures = [];
     failures.push(t_true(report != (), path + " returned no ValidateAsset report"));
-    failures.push(t_true(report != () && report.kind == "wgsl",
-        path + " was not classified as WGSL"));
+    failures.push(t_true(report != () && report.kind == "wesl",
+        path + " was not classified as WESL"));
     failures.push(t_true(report != () && report.ok == true,
-        path + " failed standalone WGSL schema validation"));
+        path + " failed standalone WESL schema validation"));
     // ValidateAsset exposes uniform_size as UInt; this bounded threshold keeps
     // the <= 256 result exact after explicit conversion and avoids mixed types.
     failures.push(t_true(report != () && report.info.uniform_size != ()
@@ -96,7 +96,7 @@ fn continuation_facts(expected, declared, actual, reflected, valid, shader) {
 fn shader_interface_issue(expected) {
     let issue = #{};
     issue.subject = "/ShaderAssetContracts/Body/Shader";
-    issue.shader_path = "lunco://shaders/blueprint.wgsl";
+    issue.shader_path = "lunco://shaders/blueprint.wesl";
     issue.declared_interface = expected;
     issue.actual_interface = "";
     issue.source_reflected = true;
@@ -109,10 +109,10 @@ fn shader_interface_issue(expected) {
 fn shader_interface_policy_checks() {
     let expected = "lunco.lunar-surface-continuation.v1";
     let good_facts = continuation_facts(expected, expected, expected, true, true,
-        "lunco://shaders/terrain_layered.wgsl");
+        "lunco://shaders/terrain_layered.wesl");
     let good = invoke_hook("terrain.lunar_surface_continuation", [good_facts]);
     let bad_facts = continuation_facts(expected, expected, "", true, true,
-        "lunco://shaders/blueprint.wgsl");
+        "lunco://shaders/blueprint.wesl");
     let bad = invoke_hook("terrain.lunar_surface_continuation", [bad_facts]);
     let issue = shader_interface_issue(expected);
     let lint = invoke_hook("lint.usd", [empty_usd_lint_facts(issue)]);
@@ -128,7 +128,7 @@ fn shader_interface_policy_checks() {
     [
         t_true(good != () && good.status == "ok"
             && good.value.action == "compose",
-            "a reflected matching USD/WGSL interface did not compose"),
+            "a reflected matching USD/WESL interface did not compose"),
         t_true(bad != () && bad.status == "ok"
             && bad.value.action == "hold",
             "a reflected interface mismatch did not use the default hold policy"),
@@ -145,7 +145,11 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
-    this.preflight = preflight::create(["lunco://shaders/blueprint.wgsl", "lunco://shaders/solar_panel.wgsl", "lunco://shaders/terrain_layered.wgsl", "lunco://shaders/terrain_geomorph.wgsl", "lunco://shaders/terrain_debug.wgsl", "lunco://shaders/regolith.wgsl", "lunco://shaders/terrain_shadow.wgsl"]);
+    this.rejected_edits = [
+        cmd("SetShaderSource", #{path: "lunco://shaders/blueprint.WESL", source: "fn helper() {}"}),
+        cmd("SetShaderSource", #{path: "lunco://shaders/blueprint.wesl", source: "@fragment fn"}),
+    ];
+    this.preflight = preflight::create(["lunco://shaders/blueprint.wesl", "lunco://shaders/solar_panel.wesl", "lunco://shaders/terrain_layered.wesl", "lunco://shaders/terrain_geomorph.wesl", "lunco://shaders/terrain_debug.wesl", "lunco://shaders/regolith.wesl", "lunco://shaders/terrain_shadow.wesl"]);
 }
 
 fn on_tick(me, ctx) {
@@ -161,7 +165,12 @@ fn on_tick(me, ctx) {
     if !this.preflight.done { return; }
 
     let failures = [];
-    for failure in schema_checks("lunco://shaders/blueprint.wgsl", [
+    for pending in this.rejected_edits {
+        let result = if pending.id != () { command_result(pending.id) } else { pending };
+        if result == () || result.status == "pending" { return; }
+        failures.push(t_true(result.ok == false, "invalid shader edit must be rejected before publication"));
+    }
+    for failure in schema_checks("lunco://shaders/blueprint.wesl", [
         #{ name: "surface_color", type: "Vec3" },
         #{ name: "transition", type: "F32" },
         #{ name: "major_grid_spacing", type: "F32" },
@@ -176,11 +185,11 @@ fn on_tick(me, ctx) {
         #{ name: "site_base_color", type: "Vec4" },
         #{ name: "site_photometry", type: "Vec4" },
     ], this.preflight.reports) { failures.push(failure); }
-    for failure in schema_checks("lunco://shaders/solar_panel.wgsl", [
+    for failure in schema_checks("lunco://shaders/solar_panel.wesl", [
         #{ name: "seamless_u", type: "F32" },
         #{ name: "v_scale", type: "F32" },
     ], this.preflight.reports) { failures.push(failure); }
-    for failure in schema_checks("lunco://shaders/terrain_layered.wgsl", [
+    for failure in schema_checks("lunco://shaders/terrain_layered.wesl", [
         #{ name: "micro_albedo", type: "F32" },
         #{ name: "weight_albedo", type: "F32" },
         #{ name: "weight_mineral", type: "F32" },
@@ -194,7 +203,7 @@ fn on_tick(me, ctx) {
         #{ name: "authored_normal_on", type: "F32" },
         #{ name: "terrain_geometry_on", type: "F32" },
     ], this.preflight.reports) { failures.push(failure); }
-    for failure in schema_checks("lunco://shaders/terrain_geomorph.wgsl", [
+    for failure in schema_checks("lunco://shaders/terrain_geomorph.wesl", [
         #{ name: "micro_albedo", type: "F32" },
         #{ name: "weight_albedo", type: "F32" },
         #{ name: "map_texel_size_m", type: "F32" },
@@ -202,7 +211,7 @@ fn on_tick(me, ctx) {
         #{ name: "authored_surface_on", type: "F32" },
         #{ name: "terrain_geometry_on", type: "F32" },
     ], this.preflight.reports) { failures.push(failure); }
-    for failure in schema_checks("lunco://shaders/terrain_debug.wgsl", [
+    for failure in schema_checks("lunco://shaders/terrain_debug.wesl", [
         #{ name: "mode", type: "F32" },
         #{ name: "opacity", type: "F32" },
         #{ name: "safe_rad", type: "F32" },
@@ -210,12 +219,12 @@ fn on_tick(me, ctx) {
         #{ name: "lod", type: "F32" },
     ], this.preflight.reports) { failures.push(failure); }
     for path in [
-        "lunco://shaders/regolith.wgsl",
-        "lunco://shaders/terrain_shadow.wgsl",
+        "lunco://shaders/regolith.wesl",
+        "lunco://shaders/terrain_shadow.wesl",
     ] {
         let report = shader_report(path, this.preflight.reports);
         failures.push(t_true(report != () && report.ok == true,
-            path + " failed standalone WGSL schema validation"));
+            path + " failed standalone WESL schema validation"));
         failures.push(t_true(has_param(report, "shadow_cache_on", "F32"),
             path + " is missing shadow_cache_on"));
         failures.push(t_true(has_param(report, "horizon_march_steps", "F32"),

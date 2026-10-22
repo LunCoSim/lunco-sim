@@ -416,7 +416,7 @@ pub fn wire_terrain_materials(
 /// `HorizonMap` behind them.
 ///
 /// [`wire_terrain_materials`] only sees genuine heightfield terrain, but
-/// `regolith.wgsl` is bound to ordinary meshes too (the landing pad disc, the
+/// `regolith.wesl` is bound to ordinary meshes too (the landing pad disc, the
 /// marketing scenes' ground plate). The semantic sun projection writes the
 /// uniform for those materials as well; this system never chooses a light or
 /// derives a direction from render entities.

@@ -63,7 +63,7 @@ pub enum SceneFileKind {
     Modelica,
     /// A `.rhai` scenario / policy.
     Script,
-    /// A WGSL shader.
+    /// A WESL shader.
     Shader,
     /// Anything else the closure carried: meshes, textures, DEMs.
     Asset,
@@ -82,7 +82,7 @@ impl SceneFileKind {
         {
             Some("mo") => Self::Modelica,
             Some("rhai") => Self::Script,
-            Some("wgsl") => Self::Shader,
+            Some("wesl") => Self::Shader,
             _ => Self::Asset,
         }
     }
@@ -686,7 +686,7 @@ impl BrowserSection for SceneFilesSection {
                     for row in group {
                         // Openable rows are routed through the normal typed
                         // `OpenFile` surface. USD and Modelica have richer
-                        // editors; Rhai and WGSL intentionally open in the
+                        // editors; Rhai and WESL intentionally open in the
                         // shared source viewer so the exact behaviour/shader
                         // driving the scene is inspectable from the closure.
                         let openable = !row.missing
@@ -1023,7 +1023,7 @@ mod tests {
             SceneFileKind::Script
         );
         assert_eq!(
-            SceneFileKind::of(Path::new("/a/wheel.wgsl")),
+            SceneFileKind::of(Path::new("/a/wheel.wesl")),
             SceneFileKind::Shader
         );
         assert_eq!(

@@ -1,3 +1,10 @@
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    mesh_functions,
+};
+import super::pbr_lit::lit;
+import super::lunco_noise::fbm;
+
 //! Panelised spacecraft-bus hull for the general `ShaderMaterial`.
 //!
 //! Turns a plain collider box (or any hull mesh) into a believable rover body:
@@ -14,17 +21,11 @@
 //! `over "Chassis" { color3f[] primvars:displayColor = [(r,g,b)] }` overrides.
 //! A `Shader` prim that authors `inputs:display_color` explicitly still wins.
 //!
-//! Prop-safe by construction: own `Material` struct, `lunco::pbr_lit` for full
+//! Prop-safe by construction: own `Material` struct, `lunco::shaders::pbr_lit` for full
 //! scene lighting, and only prop-fillable engine inputs (`display_color`,
 //! material inputs — so it appears in the prop shader picker and works on any mesh
 //! with zero Rust.
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    mesh_functions,
-}
-#import lunco::pbr_lit::lit
-#import lunco::noise::fbm
 
 //!@engine  display_color
 //!@default display_color 0.25,0.26,0.28
@@ -57,12 +58,12 @@ struct Material {
     dust_amount:   f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 @fragment
 fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    // Mesh-local frame (see wheel.wgsl): normalize the model basis to recover
+    // Mesh-local frame (see wheel.wesl): normalize the model basis to recover
     // the rotation, then take position + normal into object space so the panel
     // grid is stamped on the hull, not on the world.
     let m = mesh_functions::get_world_from_local(input.instance_index);

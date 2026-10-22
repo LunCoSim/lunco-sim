@@ -92,7 +92,7 @@ The substrate is present, but the following are still useful follow-on work:
   without polling; and
 - a shared diagnostics panel that renders source spans and affected identities
   for every adapter while retaining domain-specific details; and
-- a `ShaderDocument` adapter. WGSL is currently asset/renderer-owned through
+- a `ShaderDocument` adapter. WESL is currently asset/renderer-owned through
   `CreateShader`/`ImportShader`, so source-range shader edits should not be
   exposed until they use this same identity, generation and history contract.
 

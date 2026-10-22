@@ -9,7 +9,7 @@ def Xform "SunTrackerTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     documentation = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
-    prepend apiSchemas = "LunCoCatalogAPI"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
@@ -22,7 +22,6 @@ def Xform "SunTrackerTest" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
                 color3f inputs:cell_color = (0.05000000074505806, 0.05000000074505806, 0.3499999940395355)
                 color3f inputs:bus_color = (0.8500000238418579, 0.8500000238418579, 0.8999999761581421)
                 color3f inputs:frame_color = (0.3499999940395355, 0.3499999940395355, 0.3799999952316284)
@@ -32,6 +31,7 @@ def Xform "SunTrackerTest" (
                 float inputs:bus_width = 0.004000000189989805
                 float inputs:border = 0.03999999910593033
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/solar_panel.wesl@
             }
         }
     }
@@ -104,7 +104,7 @@ def Xform "SunTrackerTest" (
             color3f[] primvars:displayColor = [(0.44999998807907104, 0.44999998807907104, 0.47999998927116394)]
             float physics:mass = 50.0
             def Cube "Panel" (
-                prepend apiSchemas = "MaterialBindingAPI"
+                prepend apiSchemas = ["MaterialBindingAPI"]
             )
             {
                 double size = 1.0
@@ -132,7 +132,7 @@ def Xform "SunTrackerTest" (
         {
         }
         def Xform "Controller" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"
@@ -149,7 +149,7 @@ def Xform "SunTrackerTest" (
     {
         custom string lunco:scenario = "sun-tracker"
         def Scope "Test" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"
@@ -157,7 +157,7 @@ def Xform "SunTrackerTest" (
         }
     }
     def Xform "SpacecraftTarget" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "spacecraft_b"
@@ -165,7 +165,7 @@ def Xform "SunTrackerTest" (
         custom token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "SpacecraftController" (
-        prepend apiSchemas = "LunCoProgramAPI"
+        prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         uniform token info:implementationSource = "sourceAsset"

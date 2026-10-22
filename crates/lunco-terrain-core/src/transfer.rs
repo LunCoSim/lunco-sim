@@ -6,14 +6,14 @@
 //!
 //! - the terrain shader samples the field texture then runs this same math (its
 //!   parameters are shader **uniforms**, so re-tuning a critical angle is a uniform
-//!   write — no rebuild, no pipeline permutation) — `assets/shaders/transfer.wgsl`;
+//!   write — no rebuild, no pipeline permutation) — `assets/shaders/transfer.wesl`;
 //! - the Inspector **legend** builds its swatches by sampling [`TransferFn::sample`]
 //!   at the tick values (`lunco-luncosim-edit-inspector-ui::inspector::draw_slope_legend`);
 //! - a **headless PNG / GeoTIFF export** colours a materialised field raster with it.
 //!
 //! Because the parameters are a few floats + colours, the whole function travels as
 //! uniforms; only the field *data* is a texture. The three [`HAZARD_SAFE`] /
-//! [`HAZARD_WARN`] / [`HAZARD_CLIFF`] swatches here are THE definition — the WGSL
+//! [`HAZARD_WARN`] / [`HAZARD_CLIFF`] swatches here are THE definition — the WESL
 //! module mirrors them and must be edited in lockstep. See
 //! `docs/architecture/terrain-layered-rendering.md`.
 
@@ -34,16 +34,16 @@ fn lerp4(a: Rgba, b: Rgba, t: f32) -> Rgba {
 /// **red** (impassable).
 ///
 /// **THIS IS THE SINGLE SOURCE OF TRUTH** for the hazard palette. `assets/shaders/
-/// transfer.wgsl` mirrors these three constants (and [`hazard_color`] /
+/// transfer.wesl` mirrors these three constants (and [`hazard_color`] /
 /// [`crate::derive::hazard_from_slope`]) so the terrain pixel, the Inspector legend
 /// swatch, and a headless export all produce the SAME colour. Change a swatch here
-/// and you MUST change it there — WGSL has no way to import a Rust const.
+/// and you MUST change it there — WESL has no way to import a Rust const.
 pub const HAZARD_SAFE: Rgba = [0.15, 0.75, 0.20, 1.0];
 pub const HAZARD_WARN: Rgba = [0.95, 0.85, 0.10, 1.0];
 pub const HAZARD_CLIFF: Rgba = [0.90, 0.15, 0.10, 1.0];
 
 /// Map a hazard weight `t ∈ [0,1]` through the green→amber→red ramp. Mirrored by
-/// `hazard_color` in `assets/shaders/transfer.wgsl`.
+/// `hazard_color` in `assets/shaders/transfer.wesl`.
 pub fn hazard_color(t: f32) -> Rgba {
     let t = t.clamp(0.0, 1.0);
     if t < 0.5 {
@@ -70,7 +70,7 @@ pub enum TransferFn {
 
 impl TransferFn {
     /// Colour for a field value. Pure; identical on every platform — and identical to
-    /// `slope_hazard_color` in `assets/shaders/transfer.wgsl`, which is what makes the
+    /// `slope_hazard_color` in `assets/shaders/transfer.wesl`, which is what makes the
     /// legend swatch and the terrain pixel agree by construction.
     pub fn sample(&self, v: f32) -> Rgba {
         match self {

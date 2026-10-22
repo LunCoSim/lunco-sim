@@ -345,7 +345,7 @@ fn shader_interface_contract(facts) {
                 + "`, WGSL reflects `" + shader.actual_interface + "`; ";
             let repair = "make the USD interface declaration match the selected WGSL source.";
             if shader.continuation_required {
-                repair = "author the USD-selected body Shader with `info:wgsl:interface` equal to `";
+                repair = "author the USD-selected body Shader with `info:wesl:interface` equal to `";
                 repair += shader.expected_interface;
                 repair += "` and use a valid WGSL source that declares the same interface.";
             }

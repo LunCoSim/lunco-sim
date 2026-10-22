@@ -40,7 +40,7 @@ def Xform "World" (
         {
             def Shader "Shader"
             {
-                custom asset info:wgsl:vertexAsset = @lunco://shaders/tests/sun_material_precision.wgsl@
+                custom asset info:wesl:vertexAsset = @lunco://shaders/tests/sun_material_precision.wesl@
             }
         }
     }

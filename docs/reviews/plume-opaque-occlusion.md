@@ -3,13 +3,13 @@
 A leg inside a plume bound must hide gas behind its surface while retaining gas
 in front. Proxy-face depth testing cannot enforce that interval. The renderer
 now supplies Bevy's native depth prepass to source-declared volume consumers;
-WGSL reconstructs the opaque surface and clips each integration interval there.
+WESL reconstructs the opaque surface and clips each integration interval there.
 An inside-volume camera also needs the proxy to bypass surface depth rejection.
 The bound does not write depth.
 
 `lunco-render-bevy` owns native camera resources and pipeline state. The existing
 shader capability parser and reflected material schema carry the requirement;
-`plume.wgsl` is the real consumer. No new USD schema, custom depth target,
+`plume.wesl` is the real consumer. No new USD schema, custom depth target,
 render graph, dependency patch, Modelica equation, or Rhai visibility driver is
 needed. Rhai policy hooks are inappropriate for native render-resource lifetime
 and per-fragment integration. Source, mesh/material presence and camera changes
@@ -55,5 +55,5 @@ Bloom is disabled only in this geometric pixel test.
 Logs, numerical results and inspected images are retained locally under
 `/tmp/griffin-plume-depth-20261019`. The runtime build used optimization's
 existing target and the task checkout's explicit asset root. Both the renderer
-binary and WGSL must be updated together; an asset-only reload cannot install
+binary and WESL must be updated together; an asset-only reload cannot install
 the new pipeline/resource behavior.

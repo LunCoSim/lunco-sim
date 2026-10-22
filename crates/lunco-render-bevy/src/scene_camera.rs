@@ -7,13 +7,11 @@
 //! See `lunco_render::camera` for why, and for the two `R4` bugs this closes.
 
 use bevy::camera::{ClearColorConfig, Hdr};
-use bevy::core_pipeline::{
-    prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass},
-    tonemapping::Tonemapping,
-};
+use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass};
 use bevy::light::{ClusteredDecal, LightProbe, PointLight, SpotLight, cluster::ClusterConfig};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::render::view::Tonemapping;
 use lunco_render::camera::{MsaaLevel, SceneCamera, ToneMap};
 
 use crate::RenderProfile;
@@ -56,7 +54,7 @@ pub(crate) fn build(app: &mut App) {
 
 fn tonemapping_of(t: ToneMap) -> Tonemapping {
     match t {
-        ToneMap::None => Tonemapping::None,
+        ToneMap::Linear => Tonemapping::Linear,
         ToneMap::TonyMcMapface => Tonemapping::TonyMcMapface,
         ToneMap::AgX => Tonemapping::AgX,
         ToneMap::AcesFitted => Tonemapping::AcesFitted,
@@ -180,7 +178,7 @@ fn msaa_of(m: MsaaLevel) -> Msaa {
 fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderProfile) {
     let mut ec = commands.entity(e);
     let (tonemapping, msaa) = if profile.is_fast() {
-        (Tonemapping::None, Msaa::Off)
+        (Tonemapping::Linear, Msaa::Off)
     } else {
         (tonemapping_of(cam.tone_map), msaa_of(cam.msaa))
     };
@@ -527,7 +525,7 @@ mod tests {
 
         let entity = a.world().entity(e);
         assert_eq!(entity.get::<Msaa>(), Some(&Msaa::Off));
-        assert_eq!(entity.get::<Tonemapping>(), Some(&Tonemapping::None));
+        assert_eq!(entity.get::<Tonemapping>(), Some(&Tonemapping::Linear));
         assert!(!entity.contains::<Hdr>());
         assert!(!entity.contains::<Bloom>());
     }

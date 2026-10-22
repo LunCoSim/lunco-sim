@@ -64,7 +64,7 @@ pub async fn read_asset_bytes(
     lunco_assets_core::web_fetch::fetch_bytes_cached(ASSET_CACHE_BUCKET, &url, settings).await
 }
 
-/// Read a discovered asset's bytes as UTF-8 text (`*.usda`, `*.wgsl`).
+/// Read a discovered asset's bytes as UTF-8 text (`*.usda`, `*.wesl`).
 pub async fn read_asset_text(
     asset: &AssetFile,
     settings: &lunco_settings::DownloadSettings,

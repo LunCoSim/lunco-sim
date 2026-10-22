@@ -152,7 +152,7 @@ impl HeightField {
     }
 
     /// Sun visibility 0..1 at a terrain-local XZ position — the CPU mirror
-    /// of `horizon_march.wgsl::sun_visibility` (keep the two in sync!).
+    /// of `horizon_march.wesl::sun_visibility` (keep the two in sync!).
     /// `None` outside the heightfield bounds.
     pub fn sun_visibility(
         &self,
@@ -215,9 +215,9 @@ impl HeightField {
             // lunar `tan_sun_r ≈ 0.0046` the physical width is centimetres) even perfectly
             // FLAT ground came back ~32% lit. The floor is a sampling-resolution device
             // for the shadow's soft EDGE; it must never dim ground that has no occluder.
-            // Keep in sync with `horizon_march.wgsl`, which marches the same formula.
+            // Keep in sync with `horizon_march.wesl`, which marches the same formula.
             let rise = (h - (h0 + slope * t)) / width;
-            // Match horizon_march.wgsl: a continuous cubic edge prevents each
+            // Match horizon_march.wesl: a continuous cubic edge prevents each
             // one-texel crater rim from becoming a saw-toothed shadow boundary.
             let edge = smoothstep01(rise.clamp(0.0, 1.0));
             vis = vis.min(1.0 - edge);

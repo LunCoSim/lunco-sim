@@ -324,12 +324,12 @@ pub trait UsdRead {
 
     /// The authored path of an `asset`-typed attribute, as a plain string.
     ///
-    /// USD's `asset` is its own value type (`@shaders/wheel.wgsl@`), NOT a `string`.
+    /// USD's `asset` is its own value type (`@shaders/wheel.wesl@`), NOT a `string`.
     /// The distinction is load-bearing: only an `asset` is seen by USD's asset
     /// resolver, and only an `asset` is discoverable by anything that walks a layer
     /// looking for the files a scene depends on — asset-sync's reference closure, a
     /// packaging step, `usdzip`. A shader path smuggled in a `string` travels
-    /// nowhere: the scene references a `.wgsl` that does not ship with it.
+    /// nowhere: the scene references a `.wesl` that does not ship with it.
     ///
     /// `scalar::<String>` will NOT read one — the value is `Value::AssetPath`, so a
     /// `String` extraction returns `None`. That is the whole reason this exists: the

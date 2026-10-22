@@ -1,7 +1,7 @@
-//! Shader uniforms as connection targets — WGSL-defined parameters driven from
+//! Shader uniforms as connection targets — WESL-defined parameters driven from
 //! USD `.connect` wires.
 //!
-//! A custom shader declares its parameters in WGSL (`struct Material { … }`) and
+//! A custom shader declares its parameters in WESL (`struct Material { … }`) and
 //! a prim binds them in USD. Constants are authored inline
 //! (`float inputs:glow = 0.2`); a value that must FOLLOW the simulation is
 //! authored as a connection, exactly like every other port in the engine:
@@ -67,7 +67,7 @@
 //!
 //! ## Naming
 //!
-//! Runtime names are the exact WGSL keys published by `ListPorts`. USD material
+//! Runtime names are the exact WESL keys published by `ListPorts`. USD material
 //! authoring converts parameter spelling before constructing `ShaderLook`;
 //! connection, command and hold identities all use the published runtime key.
 
@@ -316,7 +316,7 @@ mod tests {
     }
 
     /// A value arriving through the ordinary port graph lands on the published
-    /// WGSL parameter, through the same owner used without a renderer.
+    /// WESL parameter, through the same owner used without a renderer.
     #[test]
     fn a_port_write_drives_the_declared_uniform() {
         let mut app = app();

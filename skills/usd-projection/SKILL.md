@@ -19,6 +19,11 @@ cutover: update the authored source and all readers, delete the superseded spell
 and compatibility branch, regenerate schema artifacts, and add a negative
 test. Never make the ECS projection a second source of truth.
 
+Use `MoveProperty` through `ApplyUsdOp(s)` to rename authored properties while
+preserving metadata, samples, and namespace-dependent connections. Inspect the
+exact source document and property authorship before editing; composed values
+can originate in a different layer.
+
 **USD is the source of truth. The ECS is a projection of it.** Every entity you
 see is a rendering of a prim. Nothing is authoritative because it is in the
 world; it is in the world because it is in the document.
@@ -613,7 +618,7 @@ The procedural camera-background contract is an `Xform` with
 `LunCoProceduralSkyAPI` and a standard `UsdShade` material binding. Read
 that API once in `lunco-usd-bevy` and stamp the existing render-free
 `ProceduralSkybox` component. Do not project a `UsdGeomGprim` for the
-background, carry `info:wgsl:vertexAsset`, or read the API again in a
+background, carry `info:wesl:vertexAsset`, or read the API again in a
 downstream shader projector. `UsdLuxDomeLight` remains the standard path for
 textured environment lighting.
 

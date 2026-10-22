@@ -23,7 +23,7 @@
 //! @group(2) @binding(0) var<uniform> mat: Material;
 //! ```
 //!
-//! [`ParamSchema::parse`] reads the struct (field names + WGSL types →
+//! [`ParamSchema::parse`] reads the struct (field names + WESL types →
 //! std140/uniform byte offsets) and the annotations (UI metadata). Values
 //! are stored by name and packed into a fixed 256-byte uniform block
 //! (`[Vec4; 16]`) at their reflected offsets — the shader reinterprets those
@@ -41,7 +41,7 @@ pub const BLOCK_VEC4S: usize = 16;
 const BLOCK_F32S: usize = BLOCK_VEC4S * 4;
 const BLOCK_BYTES: usize = BLOCK_F32S * 4;
 
-/// A WGSL uniform field type we can lay out and pack.
+/// A WESL uniform field type we can lay out and pack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParamType {
     F32,
@@ -64,7 +64,7 @@ impl ParamType {
             _ => return None,
         })
     }
-    /// std140 / WGSL-uniform alignment in bytes.
+    /// std140 / WESL-uniform alignment in bytes.
     fn align(self) -> usize {
         match self {
             ParamType::F32 | ParamType::I32 | ParamType::U32 => 4,
@@ -258,15 +258,30 @@ impl ParamSchema {
         self.index.get(name).map(|&i| &self.fields[i])
     }
 
-    /// Reflects a schema from WGSL source, or `None` if it declares no
+    /// Reflects a schema from WESL source, or `None` if it declares no
     /// `Material` uniform struct (→ caller keeps its empty default schema).
     pub fn parse(wgsl: &str) -> Option<ParamSchema> {
-        let body = extract_struct_body(wgsl, "Material")?;
+        use wesl::syntax::{GlobalDeclaration, TranslationUnit};
+        let module = wgsl.parse::<TranslationUnit>().ok()?;
+        let material =
+            module
+                .global_declarations
+                .iter()
+                .find_map(|declaration| match &**declaration {
+                    GlobalDeclaration::Struct(structure)
+                        if structure.ident.to_string() == "Material" =>
+                    {
+                        Some(structure)
+                    }
+                    _ => None,
+                })?;
         let ann = parse_annotations(wgsl);
 
         let mut fields = Vec::new();
         let mut cursor = 0usize;
-        for (name, ty) in parse_struct_fields(&body) {
+        for member in &material.members {
+            let name = member.ident.to_string();
+            let ty = ParamType::from_wgsl(&member.ty.to_string())?;
             let align = ty.align();
             let offset = round_up(cursor, align);
             cursor = offset + ty.size();
@@ -350,57 +365,6 @@ fn default_ui(ty: ParamType) -> UiKind {
 
 fn round_up(x: usize, a: usize) -> usize {
     x.div_ceil(a) * a
-}
-
-/// Extracts the `{ ... }` body of `struct <name> { ... }` (comments stripped).
-fn extract_struct_body(wgsl: &str, name: &str) -> Option<String> {
-    let stripped = strip_line_comments(wgsl);
-    let key = format!("struct {name}");
-    let mut from = 0;
-    let start = loop {
-        let i = stripped[from..].find(&key)? + from;
-        match stripped[i + key.len()..].chars().next() {
-            Some(c) if c.is_ascii_alphanumeric() || c == '_' => from = i + key.len(),
-            _ => break i,
-        }
-    };
-    let open = stripped[start..].find('{')? + start;
-    let close = stripped[open..].find('}')? + open;
-    Some(stripped[open + 1..close].to_string())
-}
-
-/// Removes `// ...` line comments (so the struct body parse ignores them).
-/// `//!@` annotation lines are parsed separately before this runs.
-fn strip_line_comments(s: &str) -> String {
-    s.lines()
-        .map(|l| match l.find("//") {
-            Some(i) => &l[..i],
-            None => l,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Parses `name: type` field declarations from a struct body.
-fn parse_struct_fields(body: &str) -> Vec<(String, ParamType)> {
-    let mut out = Vec::new();
-    for decl in body.split(',') {
-        let decl = decl.trim();
-        if decl.is_empty() {
-            continue;
-        }
-        let Some((name, ty)) = decl.split_once(':') else {
-            continue;
-        };
-        let name = name.trim();
-        if name.is_empty() {
-            continue;
-        }
-        if let Some(ty) = ParamType::from_wgsl(ty.trim()) {
-            out.push((name.to_string(), ty));
-        }
-    }
-    out
 }
 
 #[derive(Default)]

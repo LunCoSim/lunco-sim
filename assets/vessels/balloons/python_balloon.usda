@@ -2,19 +2,11 @@
 (
     defaultPrim = "PythonBalloon"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Reusable Python-driven balloon. Mirrors `modelica_balloon.usda`; the engine that
-# runs the program comes from its source's extension, so a `.py` routes to the Python
-# backend and a `.mo` to Modelica — nothing else about the prim changes.
-#
-# The balloon IS its plant, so the program is authored here rather than the model
-# being carried as a separate child program. The root is an `Xform` — the envelope is a
-# child gprim that renders and collides, and the rigid body is the root.
-
 def Xform "PythonBalloon" (
-    doc = "Rigid scientific balloon driven by a Python flight model and buoyancy force."
+    documentation = "Rigid scientific balloon driven by a Python flight model and buoyancy force."
     kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
 )
@@ -22,69 +14,48 @@ def Xform "PythonBalloon" (
     uniform bool lunco:spawnable = true
     bool physics:rigidBodyEnabled = true
     float physics:mass = 4.5
-
-    # ── The plant ────────────────────────────────────────────────────────────
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/GreenBalloon.py@
-
-    # It drives `force_y` every solver step on a body the client predicts, so it must
-    # promise it steps fast enough to be trusted with a force.
     uniform bool lunco:program:realtimeSafe = true
-
-    # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection` by
-    # `reconcile_usd_connections`). Self-loop on this one prim, which carries both
-    # the Python model ports (out: netForce; in: height, velocity) and the Avian
-    # physics ports (out: position_y, velocity_y; in: force_y). `inputs:`/`outputs:`
-    # attrs are the active-cosim marker; the connector name is the leaf.
     float outputs:netForce = 0.0
+    float inputs:force_y
     float inputs:force_y.connect = </PythonBalloon.outputs:netForce>
+    float inputs:height
     float inputs:height.connect = </PythonBalloon.outputs:position_y>
+    float inputs:velocity
     float inputs:velocity.connect = </PythonBalloon.outputs:velocity_y>
-
-    # Buoyancy uses the same local gravity as physics, supplied by a distinct
-    # USD environment source rather than a synthetic program self-wire.
+    float inputs:gravity
     float inputs:gravity.connect = </PythonBalloon/Environment.outputs:gravity_accel>
-    # `rho0` stays at the script's default of 0 — VACUUM, the lunar default.
-    # A scene with an atmosphere states it:
-    #
-    #     over "GreenBalloon" { float inputs:rho0 = 1.225 }   # Earth, sea level
-
     def Xform "Environment" (
         prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
     )
     {
     }
-
-    # ── Looks: the envelope's skin ───────────────────────────────────────────
-    # Spin-revealing checker (see assets/shaders/balloon.wgsl), bound the way USD binds
-    # every shader: a `Material` whose surface comes from a `Shader`.
     def Scope "Looks"
     {
         def Material "Envelope"
         {
+            token outputs:surface
             token outputs:surface.connect = </PythonBalloon/Looks/Envelope/Shader.outputs:surface>
-
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/balloon.wgsl@
-                color3f inputs:cell_a = (0.2, 0.8, 0.3)    # cell A (balloon identity)
-                color3f inputs:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
-                color3f inputs:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
-                float inputs:wedge_count = 8.0             # longitude cells
-                float inputs:band_count = 6.0              # latitude cells
+                color3f inputs:cell_a = (0.20000000298023224, 0.800000011920929, 0.30000001192092896)
+                color3f inputs:cell_b = (0.11999999731779099, 0.11999999731779099, 0.14000000059604645)
+                color3f inputs:marker_color = (1.0, 1.0, 1.0)
+                float inputs:wedge_count = 8.0
+                float inputs:band_count = 6.0
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/balloon.wesl@
             }
         }
     }
-
-    # ── The envelope: renders and collides ───────────────────────────────────
     def Sphere "Envelope" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double radius = 1.0
-        color3f[] primvars:displayColor = [(0.2, 0.9, 0.2)]
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.8999999761581421, 0.20000000298023224)]
         bool physics:collisionEnabled = true
         rel material:binding = </PythonBalloon/Looks/Envelope>
     }

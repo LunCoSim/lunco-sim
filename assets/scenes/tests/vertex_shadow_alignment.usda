@@ -28,10 +28,10 @@ def Xform "VertexShadowAlignment" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wgsl@
                 custom token outputs:surface = ""
-                custom asset info:wgsl:vertexAsset = @lunco://shaders/tests/vertex_shadow_alignment.wgsl@
                 custom float3 inputs:offset = (3.0, 0.0, 0.0)
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wesl@
+                custom asset info:wesl:vertexAsset = @lunco://shaders/tests/vertex_shadow_alignment.wesl@
             }
         }
         def Material "Receiver"
@@ -41,8 +41,8 @@ def Xform "VertexShadowAlignment" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                custom asset info:wgsl:sourceAsset = @lunco://shaders/tests/vertex_shadow_receiver.wgsl@
                 custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/vertex_shadow_receiver.wesl@
             }
         }
     }

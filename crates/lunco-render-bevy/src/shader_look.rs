@@ -2,7 +2,7 @@
 //! render boundary.
 //!
 //! [`lunco_render::PbrLook`] covers a plain PBR surface; a *custom shader* look is
-//! open-ended (the parameter set belongs to the `.wgsl`, not to Rust), so domain
+//! open-ended (the parameter set belongs to the `.wesl`, not to Rust), so domain
 //! crates state it as [`lunco_materials::ShaderLook`] — a shader **path**, a
 //! `BTreeMap` of named [`ParamValue`](lunco_materials::ParamValue)s, and named
 //! [`TextureLayer`]s. Neither the path nor `ShaderTexture` touches `bevy_pbr`, so
@@ -24,7 +24,7 @@
 //! asset in place; structural shared-material changes do not cause a per-tile
 //! repack or an `AssetEvent` storm.
 //!
-//! The schema (parameter name → std140 offset, reflected out of the WGSL) is
+//! The schema (parameter name → std140 offset, reflected out of the WESL) is
 //! filled in by [`reflect_shader_schemas`](crate::reflect_shader_schemas) once the shader
 //! source loads; a freshly built material carries the empty schema and its values
 //! by name, and is repacked the moment the schema lands. Stage validation,
@@ -32,7 +32,7 @@
 //! never re-parses an unchanged shader.
 
 use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
-use crate::shader_material::{ShaderMaterial, build_shader_material, wgsl_source};
+use crate::shader_material::{ShaderMaterial, build_shader_material, wesl_source};
 use bevy::asset::AssetId;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
@@ -155,7 +155,7 @@ fn shader_material(
         *slot = rasters.get(image).cloned();
     }
     // Packs against the (initially empty) schema; `reflect_shader_schemas` upgrades
-    // it and repacks once the WGSL source lands. Same lifecycle as every other
+    // it and repacks once the WESL source lands. Same lifecycle as every other
     // `ShaderMaterial` in the codebase.
     m.repack();
     build_shader_material(handles.fragment.clone(), m)
@@ -221,7 +221,7 @@ impl ShaderSourceCache {
         shader: &Shader,
     ) -> ShaderLookSourceInterface {
         if !self.interfaces.contains_key(&id) {
-            let source = wgsl_source(shader);
+            let source = wesl_source(shader);
             let source_valid = source
                 .is_some_and(|source| self.failure(id, ShaderStage::Fragment, source).is_none());
             let schema = source.and_then(|source| self.schema(id, source));
@@ -284,7 +284,7 @@ fn loaded_shader_stage_failure(
         Ok(id) => id,
         Err(error) => return Some((ShaderStage::Fragment, error)),
     };
-    if let Some(source) = shaders.get(fragment_id).and_then(wgsl_source) {
+    if let Some(source) = shaders.get(fragment_id).and_then(wesl_source) {
         if let Some(detail) = cache.failure(fragment_id, ShaderStage::Fragment, source) {
             return Some((ShaderStage::Fragment, detail));
         }
@@ -297,7 +297,7 @@ fn loaded_shader_stage_failure(
     };
     shaders
         .get(vertex_id)
-        .and_then(wgsl_source)
+        .and_then(wesl_source)
         .and_then(|source| {
             cache
                 .failure(vertex_id, ShaderStage::Vertex, source)
@@ -622,7 +622,7 @@ fn rebind_changed_shader_look(
                 // whose schema is `empty_schema_arc()`, and its trailing `repack()`
                 // then packs against NO fields — every parameter zeroed. Harmless
                 // when a material is being CREATED (`reflect_shader_schemas` fills
-                // the schema in once the WGSL lands), fatal when it recurs: the two
+                // the schema in once the WESL lands), fatal when it recurs: the two
                 // systems are unordered `Update` members contending for
                 // `Assets<ShaderMaterial>`, so if reflection runs first the zeroing
                 // write is the last one each frame and the uniforms stay dead.
@@ -870,7 +870,7 @@ fn validate_shader_assets_on_change(
         // identifies when validation is needed, but the diagnostic set is the
         // complete current state for this producer; otherwise an unrelated
         // reload would erase an older shader error from the status surface.
-        let fragment_source = shaders.get(&fragment).and_then(wgsl_source);
+        let fragment_source = shaders.get(&fragment).and_then(wesl_source);
         let fragment_loaded = fragment_source.is_some() || removed.contains(&fragment.id());
         let mut failure = fragment_source
             .and_then(|source| {
@@ -886,14 +886,14 @@ fn validate_shader_assets_on_change(
             });
 
         let vertex_loaded = vertex.as_ref().is_none_or(|vertex_handle| {
-            shaders.get(vertex_handle).and_then(wgsl_source).is_some()
+            shaders.get(vertex_handle).and_then(wesl_source).is_some()
                 || removed.contains(&vertex_handle.id())
         });
         if failure.is_none() {
             if let Some(vertex_handle) = vertex.as_ref() {
                 failure = shaders
                     .get(vertex_handle)
-                    .and_then(wgsl_source)
+                    .and_then(wesl_source)
                     .and_then(|source| {
                         shader_cache
                             .failure(vertex_handle.id(), ShaderStage::Vertex, source)
@@ -1020,7 +1020,7 @@ pub(crate) fn build(app: &mut App) {
     // `ShaderLook::live`, which `rebind_changed_shader_look` above drains.
 }
 
-/// Resolve the actual WGSL interface for every authored look, including USD
+/// Resolve the actual WESL interface for every authored look, including USD
 /// material carriers that do not own a render mesh. The source path remains in
 /// `ShaderLook`; this render-side fact only records what the loaded asset says.
 fn queue_shader_look_source_reflection(
@@ -1305,7 +1305,7 @@ fn material_is_render_ready(
     let Some(shader) = shaders.get(&material.shader) else {
         return false;
     };
-    let Some(source) = wgsl_source(shader) else {
+    let Some(source) = wesl_source(shader) else {
         return false;
     };
     if cache
@@ -1322,7 +1322,7 @@ fn material_is_render_ready(
     let vertex_ready = material.vertex_shader.as_ref().is_none_or(|vertex_handle| {
         shaders
             .get(vertex_handle)
-            .and_then(wgsl_source)
+            .and_then(wesl_source)
             .is_some_and(|source| {
                 cache
                     .failure(vertex_handle.id(), ShaderStage::Vertex, source)
@@ -1417,11 +1417,11 @@ mod tests {
                 }
             },
         );
-        let terrain = app.world_mut().spawn(ShaderLook::new("surface.wgsl")).id();
-        let mut shell_look = ShaderLook::new("surface.wgsl");
+        let terrain = app.world_mut().spawn(ShaderLook::new("surface.wesl")).id();
+        let mut shell_look = ShaderLook::new("surface.wesl");
         shell_look.no_shadow_cast = true;
         shell_look.no_shadow_receive = true;
-        assert_eq!(shell_look.key(), ShaderLook::new("surface.wgsl").key());
+        assert_eq!(shell_look.key(), ShaderLook::new("surface.wesl").key());
         let shell = app.world_mut().spawn(shell_look).id();
         app.update();
         assert!(app.world().entity(shell).contains::<NotShadowReceiver>());
@@ -1478,9 +1478,9 @@ mod tests {
         let shader = app
             .world_mut()
             .resource_mut::<Assets<Shader>>()
-            .add(Shader::from_wgsl(
+            .add(Shader::from_wesl(
                 "@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
-                "test.wgsl",
+                "test.wesl",
             ));
         let mut material = ShaderMaterial {
             shader,
@@ -1604,9 +1604,9 @@ mod tests {
             .init_asset::<Image>()
             .init_resource::<ShaderSourceCache>();
         let shader = app.world_mut().resource_mut::<Assets<Shader>>().add(
-            Shader::from_wgsl(
+            Shader::from_wesl(
                 "//!@interface test-source\n@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
-                "inline.wgsl",
+                "inline.wesl",
             ),
         );
         let material = app
@@ -1619,10 +1619,10 @@ mod tests {
         let entity = app
             .world_mut()
             .spawn((
-                ShaderLook::new("inline.wgsl"),
+                ShaderLook::new("inline.wesl"),
                 ShaderLookSourceHandle {
                     handle: shader.clone(),
-                    shader: "inline.wgsl".into(),
+                    shader: "inline.wesl".into(),
                 },
                 ShaderLookReady,
                 MeshMaterial3d(material),
@@ -1692,11 +1692,11 @@ mod tests {
         let shader = app
             .world_mut()
             .resource_mut::<Assets<Shader>>()
-            .add(Shader::from_wgsl(valid, "test.wgsl"));
+            .add(Shader::from_wesl(valid, "test.wesl"));
         // Publish initial addition before using the source cache.
         app.update();
         let id = shader.id();
-        let source = Shader::from_wgsl(valid, "test.wgsl");
+        let source = Shader::from_wesl(valid, "test.wesl");
         let first_schema;
         {
             let mut cache = app.world_mut().resource_mut::<ShaderSourceCache>();
@@ -1709,20 +1709,20 @@ mod tests {
                     &first_schema,
                     &cache.schema(id, valid).unwrap()
                 ));
-                let interface = cache.interface(id, "alias.wgsl", &source);
+                let interface = cache.interface(id, "alias.wesl", &source);
                 assert!(interface.source_valid);
-                assert_eq!(interface.shader, "alias.wgsl");
+                assert_eq!(interface.shader, "alias.wesl");
             }
             assert_eq!(cache.stage_failures.len(), 2);
             assert_eq!(cache.schemas.len(), 1);
             assert_eq!(cache.interfaces.len(), 1);
-            cache.ids_by_path.insert("test.wgsl".to_owned(), id);
+            cache.ids_by_path.insert("test.wesl".to_owned(), id);
         }
         // An in-place reload keeps asset identity but retires all derived facts.
         *app.world_mut()
             .resource_mut::<Assets<Shader>>()
             .get_mut(id)
-            .unwrap() = Shader::from_wgsl("not a shader", "test.wgsl");
+            .unwrap() = Shader::from_wesl("not a shader", "test.wesl");
         app.update();
         {
             let mut cache = app.world_mut().resource_mut::<ShaderSourceCache>();
@@ -1730,8 +1730,8 @@ mod tests {
             assert!(cache.schemas.is_empty());
             assert!(cache.interfaces.is_empty());
             assert!(cache.ids_by_path.is_empty());
-            let invalid = Shader::from_wgsl("not a shader", "test.wgsl");
-            assert!(!cache.interface(id, "test.wgsl", &invalid).source_valid);
+            let invalid = Shader::from_wesl("not a shader", "test.wesl");
+            assert!(!cache.interface(id, "test.wesl", &invalid).source_valid);
             assert!(
                 cache
                     .failure(id, ShaderStage::Fragment, "not a shader")
@@ -1741,11 +1741,11 @@ mod tests {
         *app.world_mut()
             .resource_mut::<Assets<Shader>>()
             .get_mut(id)
-            .unwrap() = Shader::from_wgsl(valid, "test.wgsl");
+            .unwrap() = Shader::from_wesl(valid, "test.wesl");
         app.update();
         {
             let mut cache = app.world_mut().resource_mut::<ShaderSourceCache>();
-            assert!(cache.interface(id, "test.wgsl", &source).source_valid);
+            assert!(cache.interface(id, "test.wesl", &source).source_valid);
             let restored = cache.schema(id, valid).expect("restored layout");
             assert!(!Arc::ptr_eq(&first_schema, &restored));
         }
@@ -1772,8 +1772,8 @@ mod tests {
     #[test]
     fn identical_looks_share_one_material() {
         let mut app = app();
-        let look = ShaderLook::new("shaders/terrain_layered.wgsl")
-            .with_vertex_shader("shaders/terrain_geomorph.wgsl")
+        let look = ShaderLook::new("shaders/terrain_layered.wesl")
+            .with_vertex_shader("shaders/terrain_geomorph.wesl")
             .with("morph_start", ParamValue::F32(0.7))
             .with("morph_end", ParamValue::F32(1.0));
         let ids: Vec<Entity> = (0..64)
@@ -1795,16 +1795,16 @@ mod tests {
     fn different_looks_get_different_materials() {
         let mut app = app();
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_layered.wgsl")
+            ShaderLook::new("shaders/terrain_layered.wesl")
                 .with("morph_start", ParamValue::F32(0.0)),
         );
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_layered.wgsl")
+            ShaderLook::new("shaders/terrain_layered.wesl")
                 .with("morph_start", ParamValue::F32(1.0)),
         );
         // A different shader path is also a different material.
         app.world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_debug.wgsl"));
+            .spawn(ShaderLook::new("shaders/terrain_debug.wesl"));
         app.update();
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 3);
     }
@@ -1817,7 +1817,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn(
-                ShaderLook::new("shaders/terrain_layered.wgsl")
+                ShaderLook::new("shaders/terrain_layered.wesl")
                     .with("morph_start", ParamValue::F32(0.0)),
             )
             .id();
@@ -1855,7 +1855,7 @@ mod tests {
         let mut app = app();
         let e = app
             .world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_layered.wgsl"))
+            .spawn(ShaderLook::new("shaders/terrain_layered.wesl"))
             .id();
         app.update();
         let handle = material_of(&app, e);
@@ -1883,13 +1883,13 @@ mod tests {
         let e = app
             .world_mut()
             .spawn(
-                ShaderLook::new("shaders/terrain_layered.wgsl")
+                ShaderLook::new("shaders/terrain_layered.wesl")
                     .with_texture(TextureLayer::Surface, surface.clone())
                     .with_texture(TextureLayer::Normal, normal.clone()),
             )
             .id();
         app.world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_layered.wgsl"));
+            .spawn(ShaderLook::new("shaders/terrain_layered.wesl"));
         app.update();
 
         let h = material_of(&app, e);
@@ -1901,7 +1901,7 @@ mod tests {
         assert_eq!(mats.len(), 2, "a bound texture is part of the sharing key");
     }
 
-    /// A USD material can be projected as plain PBR before its WGSL binding is
+    /// A USD material can be projected as plain PBR before its WESL binding is
     /// resolved. Taking the shader path must replace the concrete material too,
     /// not merely the render-free intent, or Bevy draws the mesh twice.
     #[test]
@@ -1916,7 +1916,7 @@ mod tests {
             .world_mut()
             .spawn((
                 MeshMaterial3d(standard),
-                ShaderLook::new("shaders/wheel.wgsl"),
+                ShaderLook::new("shaders/wheel.wesl"),
             ))
             .id();
 
@@ -1940,14 +1940,14 @@ mod tests {
         let before_look = app
             .world_mut()
             .spawn((
-                ShaderLook::new("shaders/starfield.wgsl"),
+                ShaderLook::new("shaders/starfield.wesl"),
                 ProceduralSkybox,
                 MeshMaterial3d(existing),
             ))
             .id();
         let after_look = app
             .world_mut()
-            .spawn(ShaderLook::new("shaders/starfield.wgsl"))
+            .spawn(ShaderLook::new("shaders/starfield.wesl"))
             .id();
 
         app.update();

@@ -1,4 +1,6 @@
-// Shared procedural value noise for the terrain/prop shaders, via naga_oil
+import bevy_pbr::render::utils::rand_u;
+
+// Shared procedural value noise for the terrain/prop shaders, via WESL
 // import. Both dimensionalities use Bevy's integer PCG hash for lattice values.
 // Floating-point arithmetic is reserved for interpolation between those values.
 //
@@ -11,9 +13,7 @@
 //     into diagonal grid streaks that read as static under grazing lunar
 //     light; the per-octave rotation decorrelates them into isotropic grain.
 
-#define_import_path lunco::noise
 
-#import bevy_pbr::utils::rand_u
 
 fn hash13(p: vec3<f32>) -> f32 {
     // Callers supply floor(p) plus integer corner offsets. Hash the integer
@@ -21,7 +21,7 @@ fn hash13(p: vec3<f32>) -> f32 {
     // independent of floating-point contraction/reassociation. A float fract-dot
     // hash magnifies rounding at kilometre-scale grain coordinates into seams.
     let cell = bitcast<vec3<u32>>(vec3<i32>(p));
-    var state = cell.x * 1597334677u ^ cell.y * 3812015801u ^ cell.z * 2798796415u;
+    var state = (cell.x * 1597334677u) ^ (cell.y * 3812015801u) ^ (cell.z * 2798796415u);
     // The upper 24 bits convert exactly to f32 and keep the value below one.
     return f32(rand_u(&state) >> 8u) * (1.0 / 16777216.0);
 }

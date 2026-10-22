@@ -480,7 +480,7 @@ pub fn is_engine_scene_asset(relative: &str) -> bool {
 /// directory and extension. The result is suitable for `lunco://` conversion
 /// and `AssetServer::load`.
 pub fn engine_shader_asset_rel(stem: &str) -> String {
-    format!("{ENGINE_SHADERS_DIR}/{stem}.wgsl")
+    format!("{ENGINE_SHADERS_DIR}/{stem}.wesl")
 }
 
 /// Absolute path of an engine-library shader generated from a safe file stem.
@@ -620,8 +620,8 @@ pub fn scenarios_dir() -> PathBuf {
 /// Resolve a built-in engine-library asset reference to a load path that is
 /// **independent of the active document's root**.
 ///
-/// A bare, scheme-less path like `shaders/wheel.wgsl` (as USD authors it in
-/// `info:wgsl:sourceAsset`, or as engine code hard-codes it) otherwise loads
+/// A bare, scheme-less path like `shaders/wheel.wesl` (as USD authors it in
+/// `info:wesl:sourceAsset`, or as engine code hard-codes it) otherwise loads
 /// against Bevy's *default* source — which, once an external Twin is open, is the
 /// wrong root: the shipped shader isn't co-located with a user's scene, so the
 /// load misses (a ShaderMaterial with an unresolved shader renders as a black
@@ -645,7 +645,7 @@ pub fn has_scheme(reference: impl AsRef<str>) -> bool {
 ///
 /// A reference that ALREADY carries a scheme (`lunco://…`, `twin://…`,
 /// `http(s)://…`, or another registered scheme) is returned unchanged — a Twin shipping
-/// its OWN shader (`twin://name/shaders/custom.wgsl`) must keep resolving against
+/// its OWN shader (`twin://name/shaders/custom.wesl`) must keep resolving against
 /// the Twin, and an already-`lunco://` path must not be double-prefixed.
 ///
 /// A leading `assets/` is stripped first: that directory is the *root* the
@@ -667,7 +667,7 @@ pub fn engine_asset_uri(reference: &str) -> String {
 
 /// The engine-library-relative form of a reference — the path UNDER `assets/`,
 /// with the `lunco://` scheme (if any) stripped. Bare and `lunco://` references
-/// both collapse to the same relative path (`shaders/wheel.wgsl`); a reference
+/// both collapse to the same relative path (`shaders/wheel.wesl`); a reference
 /// carrying ANOTHER scheme (`twin://`, `http…`) is returned untouched, since it
 /// does not live in the shipped library. The inverse of [`engine_asset_uri`] for
 /// the `lunco://` case — use it before string-matching or comparing a reference
@@ -684,8 +684,8 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 /// `lunco://` → runtime `assets/` mapping that [`register_lunco_asset_sources`]
 /// installs, so code that must inspect an asset WITHOUT the `AssetServer` (e.g.
 /// the shader `@fragment` pre-validator) resolves a reference exactly as the
-/// loader will — whether it was authored bare (`shaders/wheel.wgsl`) or schemed
-/// (`lunco://shaders/wheel.wgsl`).
+/// loader will — whether it was authored bare (`shaders/wheel.wesl`) or schemed
+/// (`lunco://shaders/wheel.wesl`).
 ///
 /// It probes the SAME chain the source reads — `assets/`, then the packed
 /// cache, then the shared pool ([`cache_roots`]) — and returns the first root

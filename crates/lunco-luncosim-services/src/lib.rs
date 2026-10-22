@@ -543,7 +543,7 @@ fn replay_scenario_journal_experiment(
 }
 
 /// Per-domain journal consume leg for `DomainKind::Shader` — projects a peer's
-/// journaled WGSL edits (`ShaderOp::SetSource`) onto the local `ShaderRegistry`
+/// journaled WESL edits (`ShaderOp::SetSource`) onto the local `ShaderRegistry`
 /// and **hot-reloads** the live `Assets<Shader>`, so a shader tweak on one machine
 /// recompiles on every peer. No single-doc limitation: the op carries the shader
 /// `path` (cross-peer-stable), so `apply_replayed` routes by path. `Assets<Shader>`
@@ -562,7 +562,9 @@ fn replay_scenario_journal_shader(
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scene_authoring::shader_doc::ShaderRegistry>>,
     asset_server: Option<Res<AssetServer>>,
-    shaders: Option<ResMut<Assets<bevy::shader::Shader>>>,
+    shaders: Option<Res<Assets<bevy::shader::Shader>>>,
+    pending_sources: Option<ResMut<lunco_scene_authoring::shader_sources::PendingShaderSources>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
     let scope = if role.is_host() {
@@ -586,8 +588,13 @@ fn replay_scenario_journal_shader(
     } else {
         journal.map(|journal| journal.clone())
     };
-    let (Some(journal), Some(mut registry), Some(asset_server), Some(mut shaders)) =
-        (journal, registry, asset_server, shaders)
+    let (
+        Some(journal),
+        Some(mut registry),
+        Some(asset_server),
+        Some(shaders),
+        Some(mut pending_sources),
+    ) = (journal, registry, asset_server, shaders, pending_sources)
     else {
         return;
     };
@@ -620,7 +627,9 @@ fn replay_scenario_journal_shader(
                 // material is keyed under the explicit `lunco://` source.
                 if let Err(error) = lunco_scene_authoring::properties::apply_shader_source_live(
                     &asset_server,
-                    &mut shaders,
+                    &shaders,
+                    &mut pending_sources,
+                    roots.as_deref(),
                     &path,
                     &source,
                 ) {

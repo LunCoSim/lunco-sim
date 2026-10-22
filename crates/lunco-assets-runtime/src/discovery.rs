@@ -44,7 +44,7 @@ pub struct AssetFile {
     /// catalogs. Catalog owners disambiguate collisions using `asset_path`.
     pub stem: String,
     /// Path relative to its own root (`vessels/rovers/skid_rover.usda`,
-    /// `shaders/regolith.wgsl`). Use for category heuristics, and as the URL
+    /// `shaders/regolith.wesl`). Use for category heuristics, and as the URL
     /// suffix the web reads the file's bytes from.
     pub rel: String,
     /// Absolute on-disk path — for native consumers that read the file's contents
@@ -512,7 +512,7 @@ mod wasm_manifest {
 
 /// List every `*.<ext>` in the project: the engine `assets/` library first, then
 /// each open Twin root (sorted by name). `ext` is the bare extension without the
-/// dot (`"usda"`, `"wgsl"`).
+/// dot (`"usda"`, `"wesl"`).
 ///
 /// The engine library comes from [`AssetManifest`] on both platforms — so both
 /// read one listing, rather than native walking and web consulting a table that
@@ -683,7 +683,7 @@ fn scene_globs_of_twin(_root: &Path) -> Result<Vec<String>, lunco_assets_core::T
 /// only way a file is discoverable at all. Omitting it made script modules a
 /// native-only feature by accident.
 #[cfg(not(target_arch = "wasm32"))]
-const MANIFEST_EXTS: &[&str] = &["json", "rhai", "usda", "wgsl"];
+const MANIFEST_EXTS: &[&str] = &["json", "rhai", "usda", "wesl"];
 
 #[cfg(not(target_arch = "wasm32"))]
 fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
@@ -797,7 +797,7 @@ mod tests {
         let mut m = AssetManifest::default();
         m.set(vec![
             "vessels/rovers/skid_rover.usda".into(),
-            "shaders/regolith.wgsl".into(),
+            "shaders/regolith.wesl".into(),
         ]);
         let roots = TwinRoots::default();
         let usd = list_usd_assets(&m, &roots).expect("list assets");
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(usd[0].stem, "skid_rover");
         assert_eq!(usd[0].rel, "vessels/rovers/skid_rover.usda");
         assert_eq!(
-            list_assets(&m, &roots, "wgsl").expect("list assets").len(),
+            list_assets(&m, &roots, "wesl").expect("list assets").len(),
             1
         );
     }
@@ -815,17 +815,17 @@ mod tests {
         let mut m = AssetManifest::default();
         m.set(vec![
             "vessels/rovers/skid_rover.usda".into(),
-            "shaders/regolith.wgsl".into(),
+            "shaders/regolith.wesl".into(),
             "scenarios/landing.rhai".into(),
         ]);
-        let assets = list_assets_with_extensions(&m, &TwinRoots::default(), &["usda", "wgsl"])
+        let assets = list_assets_with_extensions(&m, &TwinRoots::default(), &["usda", "wesl"])
             .expect("list assets");
         assert_eq!(
             assets
                 .iter()
                 .map(|asset| asset.rel.as_str())
                 .collect::<Vec<_>>(),
-            vec!["vessels/rovers/skid_rover.usda", "shaders/regolith.wgsl"]
+            vec!["vessels/rovers/skid_rover.usda", "shaders/regolith.wesl"]
         );
     }
 }

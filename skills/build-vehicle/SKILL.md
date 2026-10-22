@@ -97,13 +97,13 @@ contract without checking its consumer and test.
 | Part | File | Owns |
 |---|---|---|
 | Wheel hub | `mobility/wheel.usda` | dimensions, mass, brake, contact, and solved shaft boundary — THE default set every wheel composes |
-| Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`, `physxVehicleTire:lateralStiffnessGraph`, `physxVehicleTire:restLoad`) + look (wheel.wgsl inputs: tread lugs, relief, wear) — chosen via the wheel's `tire` variantSet |
+| Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`, `physxVehicleTire:lateralStiffnessGraph`, `physxVehicleTire:restLoad`) + look (wheel.wesl inputs: tread lugs, relief, wear) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
 | Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover-root collection composes it with loads and synthesizes one acausal network DAE |
 | Ideal rail | `power/ideal_voltage_source.usda` | authored unlimited-power source for the `infinite` power variant; it is still compiled into the same electrical network |
 | Motor / reduction / shaft | `mobility/motor.usda`, `mobility/gearbox.usda`, `mobility/avian_shaft.usda` | Modelica electrical and rotational equations plus the generic Avian mechanical boundary |
 | Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from the rover-root network — chosen via the rover's `thermal` variantSet |
-| Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wgsl`) |
+| Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wesl`) |
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
 | Drive law | `mobility/drive_laws/modelica_{skid,ackermann,six_independent}.usda` | Authored Modelica controller and generic drive/heading outputs |
 | Drivetrain realization | `mobility/physical_drivetrain.usda` | the `physical` variant: articulation root + per-wheel revolute joints. The `raycast` variant is EMPTY — a raycast wheel is the absence of a joint. Wheel MOUNTS are never authored here: the wheel prim is the axle in both realizations, so it belongs to the rover, outside the variantSet. |
@@ -354,7 +354,7 @@ from an exemplar — that is the intended way to extend, not a Rust change.
 
 **Colour is `primvars:displayColor`, always — the shader CONSUMES it.** One
 authored attribute, in the standard USD place, whether the part renders through
-plain PBR or through a shader. `rover_hull.wgsl` declares
+plain PBR or through a shader. `rover_hull.wesl` declares
 `//!@engine display_color` and the engine fills it from the prim's composed
 `primvars:displayColor` (element 0 — it is a `color3f[]` ARRAY by schema).
 Restyle a rover, or a difficulty tier, by overriding that one attribute:
@@ -368,7 +368,7 @@ Shader `inputs:` are for what displayColor cannot say — `accent_color`,
 explicitly still wins over the engine fill, but you rarely want that; it hides
 the colour from every other tool that reads USD.
 
-Tire look lives on the tire component (`wheel.wgsl` inputs `tread_lugs`,
+Tire look lives on the tire component (`wheel.wesl` inputs `tread_lugs`,
 `lug_depth`, `wear`) — a tire that grips differently should
 LOOK different in the same file. Tires author their colours as shader `inputs:`
 deliberately; that is unchanged.
@@ -456,7 +456,7 @@ same-path preview entities must never own a mounted wheel's support ray.
 - ❌ Adding a second name for a quantity that already exists — one authoritative
   motor/gearbox reduction, one reader, one place to change it.
 - ❌ Overriding a shader `inputs:` to repaint a rover — author
-  `primvars:displayColor`; `rover_hull.wgsl` consumes it via `//!@engine
+  `primvars:displayColor`; `rover_hull.wesl` consumes it via `//!@engine
   display_color` ([`use-asset-library`](../use-asset-library/SKILL.md#add-a-shader-wgsl)).
 - ❌ Changing wheel physics without re-running the drivetrain parity scene —
   the two realizations drift silently otherwise.

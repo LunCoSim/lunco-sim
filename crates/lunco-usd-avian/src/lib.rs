@@ -569,8 +569,6 @@ impl Plugin for UsdAvianPlugin {
                     enforce_kinematic_on_animated,
                     collision_filters::enable_shared_tire_contact_hooks,
                     collision_filters::enable_static_friction_contact_hooks,
-                    collision_filters::synchronize_collision_hook_flags
-                        .after(collision_filters::enable_static_friction_contact_hooks),
                     project_mobility_to_rigid_body,
                 ),
             );

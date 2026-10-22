@@ -28,12 +28,12 @@ Parameters are cheap and open-ended. **Texture slots are the scarce resource.** 
 
 A shader declares its own parameters in its `struct Material` block, with ranges,
 defaults and widget hints in `//!@` annotations. Rust reflects that into a
-`ParamSchema` at load time. **Adding a parameter means editing a `.wgsl` file. It
+`ParamSchema` at load time. **Adding a parameter means editing a `.wesl` file. It
 never means editing Rust**, and the Inspector picks it up automatically, because it
 derives its sliders from the schema instead of a hand-written list.
 
 ```wgsl
-// assets/shaders/my_look.wgsl
+// assets/shaders/my_look.wesl
 struct Material {
     //!@ range(0.0, 1.0) default(0.35) name("Dust density")
     dust_density: f32,
@@ -49,7 +49,7 @@ Set them from Rust by **name**:
 ```rust
 use lunco_materials::{ShaderLook, ParamValue, TextureLayer};
 
-let look = ShaderLook::new("shaders/my_look.wgsl")
+let look = ShaderLook::new("shaders/my_look.wesl")
     .with("dust_density", ParamValue::F32(0.35))
     .with("clump_scale",  ParamValue::F32(8.0))
     .with("tint",         ParamValue::Color(Vec4::new(0.6, 0.6, 0.62, 1.0)));
@@ -73,7 +73,7 @@ by USD material projection, live authoring and the render binder. It returns
 spellings allocate one normalized string. Consumers borrow during lookup and
 call `into_owned` only when storing a name. Runtime ports use exact keys from
 `ShaderLook`, published by `ListPorts`. Geometry connections and commands must
-use those WGSL keys so wiring, holds and admission retain one input identity.
+use those WESL keys so wiring, holds and admission retain one input identity.
 Named declaration, metadata, resolution and reads use that same exact name.
 Named and resolved scalar reads share the live-slot reader and widen integer samples
 directly to `f64`; only writes to explicitly typed, driven `F32` parameters
@@ -107,8 +107,8 @@ neighbouring field.
 `ShaderLook::vertex_shader` is an optional second stage of the same material, not a
 second parameter block. Both stages read `@binding(0)` from the one 256-byte block;
 the fragment stage's reflected schema is the layout that gets packed. A linked vertex
-shader must therefore declare the same `Material` fields, order, and WGSL types as its
-fragment shader. The terrain pair (`terrain_layered.wgsl` + `terrain_geomorph.wgsl`)
+shader must therefore declare the same `Material` fields, order, and WESL types as its
+fragment shader. The terrain pair (`terrain_layered.wesl` + `terrain_geomorph.wesl`)
 uses one canonical fragment and a vertex-only geomorph stage; the cross-shader
 contract test guards the required ABI at that stage boundary.
 
@@ -116,22 +116,42 @@ For USD-authored terrain, the Shader prim owns the selection:
 
 ```usda
 uniform token info:implementationSource = "sourceAsset"
-uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
-uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
+uniform asset info:wesl:sourceAsset = @lunco://shaders/terrain_layered.wesl@
+uniform asset info:wesl:vertexAsset = @lunco://shaders/terrain_geomorph.wesl@
 ```
 
 The second property is omitted when the default mesh vertex stage is sufficient.
 Rust consumes the projected `ShaderLook`; it must not hardcode which terrain
 fragment or vertex asset a scene uses. `info:implementationSource =
-"sourceAsset"` is the standard UsdShade selector. The `info:wgsl:sourceAsset`
+"sourceAsset"` is the standard UsdShade selector. The `info:wesl:sourceAsset`
 spelling follows UsdShade's standard source-type convention; `vertexAsset` is a
 LunCo renderer extension because UsdShade has no second stage selector. A
 portable material can instead keep both entry points in one source asset and
 use that same asset for both projected stages.
 
+Shader source assets use `.wesl` and USD `info:wesl:*` properties. Imports
+are native WESL module paths derived from asset identity, with relative imports
+for neighbouring modules and Bevy's published package paths for engine modules.
+Conditional source uses `@if` attributes; pipeline integers use `constants::NAME`.
+Bevy's shader loader loads dependencies through the registered asset sources;
+`lunco-assets-core` owns source identity and source-scoped path resolution.
+There is no manifest-wide shader-module load or separate import registry.
+Live source edits use Bevy’s asynchronous dependency preparation through the
+same registered readers. The authoring owner publishes only the latest queued
+edit for each asset, checks the captured Twin mount before publication, and
+retires pending Twin work on `TwinClosed`. Explicit reload, replacement and deletion cancel a pending
+source edit. Persisted shader creation uses the native asset loader.
+
+The shared WESL frontend parses material structs and stage declarations without
+`bevy_render` or a GPU. `ValidateAsset` checks source syntax and material facts;
+its success is preflight evidence. Bevy's native shader cache owns linking and
+pipeline specialization, and the renderer owns GPU validation. Graphics gates
+must reject shader compilation errors in the process log as well as domain
+runtime diagnostics.
+
 Stage selection is a positive contract, not a blacklist. A source asset used as
 `sourceAsset` must declare a callable `@fragment` entry point; an optional
-`vertexAsset` must declare a callable `@vertex` entry point. One WGSL module may
+`vertexAsset` must declare a callable `@vertex` entry point. One WESL module may
 declare both stages and is valid for either role. The render binder validates
 the requested stage after the asset is loaded. If
 the contract is invalid, the owning material is rejected and a structured
@@ -146,7 +166,7 @@ Shader-source preparation is asset-scoped in `lunco-render-bevy`. Its shared
 shared `ParamSchema`, and interface/default facts per shader asset. Binding,
 replacement readiness, source-interface publication, and schema assignment use
 that same cache. A tile changing its look only resolves the material and checks
-loaded dependencies plus reflected-layout identity; it does not parse WGSL.
+loaded dependencies plus reflected-layout identity; it does not parse WESL.
 The cache invalidates on Added, Modified, Removed, or Unused shader events,
 after Bevy publishes asset events in PostUpdate and before the next owner Update.
 LoadedWithDependencies does not change source facts. This is a render mechanism,
@@ -175,9 +195,9 @@ decode/filter math stays in the offline Rust asset pipeline; Rhai assembly
 policy chooses the produced asset and authors the standard USD inputs.
 
 The packed surface map's G channel is ambient occlusion. Both terrain paths
-resolve it through `lunco::terrain::terrain_surface_occlusion` and pass the
+resolve it through `lunco::shaders::terrain_surface::terrain_surface_occlusion` and pass the
 result to Bevy's `PbrInput.diffuse_occlusion` (the shared
-`lunco::pbr_lit::lit_n_occluded` helper is used by the streamed path). AO is
+`lunco::shaders::pbr_lit::lit_n_occluded` helper is used by the streamed path). AO is
 therefore applied to indirect diffuse light only; it is not an albedo term and
 must not be multiplied into the authored colour raster or direct sunlight.
 
@@ -255,8 +275,8 @@ pub enum TextureLayer {
 ```
 
 ```rust
-let moon = ShaderLook::new("shaders/terrain_layered.wgsl")
-    .with_vertex_shader("shaders/terrain_geomorph.wgsl")
+let moon = ShaderLook::new("shaders/terrain_layered.wesl")
+    .with_vertex_shader("shaders/terrain_geomorph.wesl")
     .with_texture(TextureLayer::Albedo,  colour_mosaic)
     .with_texture(TextureLayer::Normal,  dem_normals)
     .with_texture(TextureLayer::Surface, packed_scalars)
@@ -319,7 +339,7 @@ highest shipped preset is `RenderingQuality::High`; the CLI can select it for a
 process with `--render-quality high`.
 
 This setting is a budget choice, not a shader-identity switch. USD remains the
-authority for the scene's `ShaderLook` and authored WGSL source. A Summer Space
+authority for the scene's `ShaderLook` and authored WESL source. A Summer Space
 School scene can therefore keep its authored lunar terrain and starfield shaders
 while the high preset supplies the largest renderer budgets around them.
 

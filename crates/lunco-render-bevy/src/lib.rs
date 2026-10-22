@@ -88,7 +88,7 @@ impl RenderProfile {
 /// Three kinds of intent, three binders:
 /// - [`PbrLook`] → `MeshMaterial3d<StandardMaterial>` (below) — a plain surface;
 /// - [`lunco_materials::ShaderLook`] → `MeshMaterial3d<ShaderMaterial>`
-///   (`shader_look`) — a custom `.wgsl` with an open, user-defined parameter set;
+///   (`shader_look`) — a custom `.wesl` with an open, user-defined parameter set;
 /// - [`lunco_render::SceneCamera`] → `Camera3d` + tonemapping + MSAA + bloom
 ///   (`scene_camera`) — because `Camera3d` was being used as the *query filter* for
 ///   "which entity is the scene camera", which made domain crates link a GPU stack
@@ -189,7 +189,7 @@ impl Plugin for LuncoRenderPlugin {
         // than through a script that samples a port every tick.
         // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
         // asset stores (idempotently), which `ShaderMaterialPlugin` needs in place
-        // before it loads the shared WGSL modules through the `AssetServer`.
+        // before it loads the shared WESL modules through the `AssetServer`.
         shader_look::build(app);
         procedural_sky::build(app);
         // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
@@ -551,7 +551,7 @@ fn bind_pbr_look(
     let mut ec = commands.entity(e);
     // Keep the concrete render material exclusive too. Although callers must
     // replace the render-free look, a late observer can otherwise leave an old
-    // WGSL material beside this StandardMaterial and submit the same mesh twice.
+    // WESL material beside this StandardMaterial and submit the same mesh twice.
     // `try_remove` for the same reason as the `try_insert` beside it: the entity may
     // already be despawned when the deferred command runs, and a plain `remove` turns
     // that into a formatted error through the command error handler every frame.
@@ -1066,7 +1066,7 @@ mod tests {
         );
     }
 
-    /// A late PBR projection supersedes an existing WGSL material instead of
+    /// A late PBR projection supersedes an existing WESL material instead of
     /// leaving two render pipelines attached to one mesh.
     #[test]
     fn pbr_look_replaces_a_preexisting_shader_material() {

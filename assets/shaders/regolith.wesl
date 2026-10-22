@@ -1,6 +1,18 @@
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+};
+import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
+import super::lunar_brdf::regolith_factor;
+import super::terrain_surface::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position};
+
 //! Lunar regolith material for the general `ShaderMaterial`.
 //!
-//! WGSL port of the procedural Blender node graph in the moonbase Twin's
+//! WESL port of the procedural Blender node graph in the moonbase Twin's
 //! `shackleton_connecting_ridge_render_readyframing.blend` (material
 //! `Shackleton_Realistic_Regolith`) — the look that could not survive glTF
 //! export. Two DEM-anchored FBM noise layers drive bump-style normal
@@ -37,17 +49,6 @@
 //! ranges/defaults in the annotation block below. Edit live (hot-reload) or
 //! via the Inspector / `SetObjectProperty`.
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    pbr_types,
-    pbr_functions,
-    mesh_functions,
-    mesh_bindings::mesh,
-    mesh_view_bindings::view,
-}
-#import lunco::horizon::{sun_visibility_resolved, horizon_shadow_blend}
-#import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -71,10 +72,10 @@
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6       "Albedo mottle"
 //!@default mottle            0.22
-// --- lunar photometry (lunco::lunar) ---------------------------------------
+// --- lunar photometry (lunco::shaders::lunar_brdf) ---------------------------------------
 // Fitted lunar values (Chrono/UW-Madison, arxiv 2410.04371 Table 1), not taste.
 // Keep the fitted values aligned with the canonical authored terrain fragment;
-// `terrain_geomorph.wgsl` is only its optional vertex stage.
+// `terrain_geomorph.wesl` is only its optional vertex stage.
 //!@ui      surge_amp         0 3         "Opposition surge amplitude (Hapke Bs0)"
 //!@default surge_amp         1.80
 //!@ui      surge_width       0.01 0.3    "Opposition surge width, rad (Hapke hs)"
@@ -112,23 +113,23 @@ struct Material {
     horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 // Terrain heightfield (R32Float, world-space heights) written by the
 // horizon-shadow system after its bake; sun shadows are ray-marched against
-// it per pixel (see horizon_march.wgsl). With no heightfield bound the
+// it per pixel (see horizon_march.wesl). With no heightfield bound the
 // march no-ops to fully lit.
-@group(#{MATERIAL_BIND_GROUP}) @binding(1)
+@group(constants::MATERIAL_BIND_GROUP) @binding(1)
 var height_map: texture_2d<f32>;
 
 // Pre-baked horizon shadow cache (R8Unorm, 0..1 sun visibility) — sampled
 // with a single `textureSampleLevel` when `mat.shadow_cache_on > 0.5` instead
-// of the configured heightfield ray-march (see `horizon_march.wgsl`). Filterable,
+// of the configured heightfield ray-march (see `horizon_march.wesl`). Filterable,
 // so the GPU bilinearly interpolates the cache for free.
-@group(#{MATERIAL_BIND_GROUP}) @binding(10)
+@group(constants::MATERIAL_BIND_GROUP) @binding(10)
 var shadow_cache: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(11)
+@group(constants::MATERIAL_BIND_GROUP) @binding(11)
 var shadow_cache_sampler: sampler;
 
 // Blender linear ColorRamp with two stops (black @ lo, white @ hi).
@@ -161,10 +162,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let dist = distance(view.world_position, world_p);
     var detail_p = world_p;
     var detail_n = normalize(in.world_normal);
-#ifdef VERTEX_UVS_A
-    detail_p = terrain_detail_position(in.uv, mat.hf_size.x * 0.5);
-    detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
-#endif
+    @if((VERTEX_UVS_A)) detail_p = terrain_detail_position(in.uv, mat.hf_size.x * 0.5);
+    @if((VERTEX_UVS_A)) detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
     // Pixel footprint in world metres (computed BEFORE any branch — fwidth
     // needs uniform control flow). Drives per-layer anti-alias fades.
     let pw = length(fwidth(detail_p));
@@ -190,9 +189,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
 
     var n = detail_n;
-#ifdef VERTEX_UVS_A
-    n = terrain_detail_normal_to_world(detail_n, in.instance_index);
-#endif
+    @if((VERTEX_UVS_A)) n = terrain_detail_normal_to_world(detail_n, in.instance_index);
 
     // Albedo variation — the Moon is low-contrast, but perfectly uniform
     // grey reads as plastic. Metre-scale mottle from the mid layer plus
@@ -247,20 +244,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // terrain receives native CSM for mesh-accurate near and dynamic-object
     // shadows, so the march fades in just outside the cascade range rather
     // than multiplying a second terrain-shadow term over the CSM result.
-#ifdef VERTEX_UVS_A
-    let csm_far = mat.csm_far;
-    let march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
-    var sun_vis = 1.0;
-    if (march_blend > 0.0) {
+    @if((VERTEX_UVS_A)) let csm_far = mat.csm_far;
+    @if((VERTEX_UVS_A)) let march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
+    @if((VERTEX_UVS_A)) var sun_vis = 1.0;
+    @if((VERTEX_UVS_A)) if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
     }
-#else
-    let sun_vis = 1.0;
-    let march_blend = 0.0;
-#endif
+    @if((!(VERTEX_UVS_A))) let sun_vis = 1.0;
+    @if((!(VERTEX_UVS_A))) let march_blend = 0.0;
 
     color = terrain_apply_sun_response(
         pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);

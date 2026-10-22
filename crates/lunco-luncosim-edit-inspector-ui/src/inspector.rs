@@ -2993,7 +2993,7 @@ fn parts_selector(
 }
 
 /// Shader picker for a single part. Lists the [`ShaderCatalog`] entries and,
-/// on pick, emits a typed `.wgsl` swap request for `part`.
+/// on pick, emits a typed `.wesl` swap request for `part`.
 fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
     let entries = ctx
         .resource::<lunco_materials::ShaderCatalog>()
@@ -3079,7 +3079,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         op: UsdOp::SetAttribute {
             edit_target,
             path: shader_prim,
-            name: "info:wgsl:sourceAsset".to_string(),
+            name: "info:wesl:sourceAsset".to_string(),
             type_name: "asset".to_string(),
             value: format!("@{}@", path),
         },
@@ -3157,10 +3157,10 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
 
             ui.separator();
             // ── Import from disk ──
-            ui.label("Import .wgsl from disk:");
+            ui.label("Import .wesl from disk:");
             ui.add(
                 lunco_workbench_widgets::text_editor::singleline(&mut st.import)
-                    .hint_text("/path/to/shader.wgsl")
+                    .hint_text("/path/to/shader.wesl")
                     .desired_width(220.0),
             );
             if ui
@@ -3168,7 +3168,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                     !st.import.trim().is_empty(),
                     egui::Button::new("Import & apply"),
                 )
-                .on_disabled_hover_text("Enter the path of a .wgsl file first")
+                .on_disabled_hover_text("Enter the path of a .wesl file first")
                 .clicked()
             {
                 let src = st.import.trim().to_string();
@@ -3179,7 +3179,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
             ui.horizontal(|ui| {
                 if ui
                     .button("Rescan twin folder")
-                    .on_hover_text("Register any .wgsl dropped into the twin's shaders/ folder")
+                    .on_hover_text("Register any .wesl dropped into the twin's shaders/ folder")
                     .clicked()
                 {
                     ctx.trigger(lunco_scene_catalog::catalog::RescanShaders {});
@@ -3211,7 +3211,7 @@ fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str)
     apply_if_registered(world, part, &stem);
 }
 
-/// Import an external `.wgsl` (registers it), then bind it to `part`.
+/// Import an external `.wesl` (registers it), then bind it to `part`.
 fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
     world.trigger(lunco_scene_authoring::properties::ImportShader {
         source_path: src_path.to_string(),
@@ -3359,7 +3359,7 @@ fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, par
     }
 }
 
-/// Reflected schemas keyed by shader asset, so each loaded WGSL source is
+/// Reflected schemas keyed by shader asset, so each loaded WESL source is
 /// parsed once — not once per frame while the shader section is open. The
 /// `(ptr, len)` pair fingerprints the source `Cow`; a hot-reload swaps the
 /// allocation, so the entry re-parses. This crate cannot name the render
@@ -3402,7 +3402,9 @@ mod lifecycle_tests {
             .init_resource::<ShaderSchemaCache>()
             .add_systems(Update, retire_shader_schemas);
         let shader = bevy::asset::AssetId::default();
-        let shared = bevy::asset::AssetId::invalid();
+        let shared = bevy::asset::AssetId::Uuid {
+            uuid: bevy::asset::uuid::Uuid::from_u128(1),
+        };
         let schema = Arc::new(lunco_materials::ParamSchema::default());
         let weak = Arc::downgrade(&schema);
         let shared_schema = Arc::new(lunco_materials::ParamSchema::default());
@@ -3441,7 +3443,7 @@ mod lifecycle_tests {
 }
 
 /// The reflected [`ParamSchema`](lunco_materials::ParamSchema) of a shader asset
-/// path — parsed from the loaded WGSL source, so the editor derives its widgets from
+/// path — parsed from the loaded WESL source, so the editor derives its widgets from
 /// the *shader* rather than from a material (or a hardcoded table).
 ///
 /// `None` while the shader is still loading, or if it declares no `Material` struct.
@@ -3466,7 +3468,7 @@ fn shader_schema_of(
     let cached = ctx.resource_scope(|ctx, cache: &mut ShaderSchemaCache| {
         let shaders = ctx.resource::<Assets<bevy::shader::Shader>>()?;
         let src = match &shaders.get(id)?.source {
-            bevy::shader::Source::Wgsl(s) => s.as_ref(),
+            bevy::shader::Source::Wesl(s) => s.as_ref(),
             _ => return None,
         };
         let key = (src.as_ptr() as usize, src.len());
@@ -3486,7 +3488,7 @@ fn shader_schema_of(
 /// parameters.
 ///
 /// The rows are DERIVED — from the shader's own `ParamSchema` (reflected out of its
-/// WGSL `Material` struct), never from a hand-written list; the current values come
+/// WESL `Material` struct), never from a hand-written list; the current values come
 /// from `ShaderLook::values` (falling back to each field's declared default). An
 /// edit mutates the component and the binder re-materialises on `Changed<ShaderLook>`,
 /// so nothing here touches a material asset.
@@ -3512,7 +3514,7 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         locked: bool,
     }
     let rows: Vec<Row> = {
-        // The schema is a property of the ASSET: read it from the loaded WGSL
+        // The schema is a property of the ASSET: read it from the loaded WESL
         // source. `None` = the shader hasn't loaded yet.
         let Some(schema) = shader_schema_of(ctx, &look.shader) else {
             ui.label("Shader still loading…");
@@ -3523,7 +3525,7 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
             .iter()
             .map(|f| {
                 // A parameter is ENGINE-OWNED when it is filled from simulation state
-                // rather than authored — either annotated `//!@engine` in the WGSL
+                // rather than authored — either annotated `//!@engine` in the WESL
                 // (Rust fills it, e.g. `sun_vis`) or currently driven by a USD
                 // connection (a wire writes it every tick).
                 //

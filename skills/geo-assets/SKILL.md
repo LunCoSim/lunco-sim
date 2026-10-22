@@ -105,12 +105,12 @@ the DEM and all in-crop heights unchanged. Refine the globe only in the band
 between the exact crop and the collar's outer cutout; set the local minimum tile
 size from that handoff footprint, independent of DEM posting density.
 The collar reads map roles from the cropped DEM prim and appearance from the
-body's USD-selected `UsdShade` material. A continuation-capable WGSL shader and
+body's USD-selected `UsdShade` material. A continuation-capable WESL shader and
 its USD Shader prim must declare the matching
 `lunco.lunar-surface-continuation.v1` interface. Rhai admits compatible sources,
 waits for reflection, and holds simulation on a mismatch. The compositor keeps
 unadmitted collars hidden; the globe cutout waits for the composed material and
-visibility. `RunLint` checks the composed declaration against reflected WGSL.
+visibility. `RunLint` checks the composed declaration against reflected WESL.
 Read the body's composed look from `GlobeLod`, with its authored declaration
 entity as validation provenance. The shader asset path is never selected in Rust. Inspect the actual boundary
 vertices through bounded `TerrainLodStatus` geometry pages; `mesh_entity` selects
@@ -280,9 +280,9 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
+            uniform asset info:wesl:sourceAsset = @lunco://shaders/terrain_layered.wesl@
             # Optional for streamed CDLOD; omit for a static/root mesh.
-            uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
+            uniform asset info:wesl:vertexAsset = @lunco://shaders/terrain_geomorph.wesl@
             asset inputs:albedo_map  = @terrain/<site>/materials/textures/albedo.png@
             float inputs:weight_albedo = 1.0
             asset inputs:normal_map  = @terrain/<site>/materials/textures/normal.png@
@@ -294,11 +294,11 @@ def Scope "Looks"
 }
 ```
 
-For authored DEM terrain, `terrain_layered.wgsl` owns the canonical material
-fragment. `terrain_geomorph.wgsl` is only its optional CDLOD vertex stage;
-`terrain_shadow.wgsl` is an explicit material for non-authored terrain and is
+For authored DEM terrain, `terrain_layered.wesl` owns the canonical material
+fragment. `terrain_geomorph.wesl` is only its optional CDLOD vertex stage;
+`terrain_shadow.wesl` is an explicit material for non-authored terrain and is
 never an automatic recovery choice. Keep shared regolith detail and lunar
-photometry in the imported `lunco::terrain` and `lunco::lunar` shader modules.
+photometry in the imported `lunco::shaders::terrain_surface` and `lunco::shaders::lunar_brdf` shader modules.
 See the [terrain rendering decision record](../../docs/architecture/terrain-layered-rendering.md)
 before adding another terrain shader path.
 
@@ -344,9 +344,9 @@ one `ShaderLook`; the terrain source reconciler derives the typed roles from tha
 same look. Roles are `albedo`, `mineral`, `surface` (packed R=rough G=AO B=rockDens),
 and `normal`.
 
-The bound Shader also owns the render stages: `info:wgsl:sourceAsset` must expose
-`@fragment`, and optional `info:wgsl:vertexAsset` must expose `@vertex`. A single
-WGSL module may provide both. Missing or invalid stages are reported as a
+The bound Shader also owns the render stages: `info:wesl:sourceAsset` must expose
+`@fragment`, and optional `info:wesl:vertexAsset` must expose `@vertex`. A single
+WESL module may provide both. Missing or invalid stages are reported as a
 structured diagnostic and leave the material unbound. Rust never swaps in a
 neutral or terrain shader to hide a bad asset; if a Twin wants an explicit
 non-authored material, author that choice in USD/Rhai so it can be changed

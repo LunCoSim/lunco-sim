@@ -1,7 +1,8 @@
+
 //!@engine sun_dir_view
 //!@engine sun_tan_radius
 struct Material { sun_dir_view: vec3<f32>, sun_tan_radius: f32, }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 @fragment
 fn fragment() -> @location(0) vec4<f32> {

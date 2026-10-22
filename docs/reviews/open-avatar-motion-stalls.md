@@ -14,7 +14,7 @@ separate diagnostic run. Polling samples do not cover every rendered frame.
   Active preview transforms stay in ECS, while placement authors USD.
 - `lunco-render-bevy` shares shader-stage validation, optional uniform layout,
   and interface facts by published shader asset revision. Tile replacements
-  check loaded dependencies and layout identity without parsing WGSL. Resolved
+  check loaded dependencies and layout identity without parsing WESL. Resolved
   interfaces are visited only after shader asset events. See
   [shader layers](../architecture/shader-layers-and-params.md).
 - Document notification publishers check their event queues before acquiring

@@ -1,4 +1,4 @@
-//! Shaders as a journaled, synced, live-editable **domain** — the WGSL twin of
+//! Shaders as a journaled, synced, live-editable **domain** — the WESL twin of
 //! rhai's `ScriptDocument` (`lunco-scripting`) and Modelica's document model.
 //!
 //! A shader edit is no longer a fire-and-forget `Assets<Shader>` poke: it flows
@@ -26,7 +26,7 @@ use std::collections::HashMap;
 pub struct ShaderDocument {
     pub id: u64,
     pub generation: u64,
-    /// Canonical asset path (`twin://…/foo.wgsl` or `lunco://…/foo.wgsl`) — the
+    /// Canonical asset path (`twin://…/foo.wesl` or `lunco://…/foo.wesl`) — the
     /// identity the Bevy asset system + every `ShaderMaterial` handle key on,
     /// and the stable cross-peer routing key.
     pub path: String,
@@ -201,12 +201,12 @@ mod tests {
     #[test]
     fn apply_source_bumps_generation_and_round_trips() {
         let mut reg = ShaderRegistry::default();
-        let id = reg.apply_source("shaders/foo.wgsl", "v1".into());
-        assert_eq!(reg.source_of("shaders/foo.wgsl"), Some("v1"));
-        assert_eq!(reg.source_of("lunco://shaders/foo.wgsl"), Some("v1"));
-        let id2 = reg.apply_source("lunco://shaders/foo.wgsl", "v2".into());
+        let id = reg.apply_source("shaders/foo.wesl", "v1".into());
+        assert_eq!(reg.source_of("shaders/foo.wesl"), Some("v1"));
+        assert_eq!(reg.source_of("lunco://shaders/foo.wesl"), Some("v1"));
+        let id2 = reg.apply_source("lunco://shaders/foo.wesl", "v2".into());
         assert_eq!(id, id2, "same path reuses the doc id");
-        assert_eq!(reg.source_of("shaders/foo.wgsl"), Some("v2"));
+        assert_eq!(reg.source_of("shaders/foo.wesl"), Some("v2"));
     }
 
     #[test]
@@ -215,14 +215,14 @@ mod tests {
         // (find-or-create by path) — no shared DocumentId needed.
         let mut reg = ShaderRegistry::default();
         let op = ShaderOp::SetSource {
-            path: "shaders/bar.wgsl".into(),
+            path: "shaders/bar.wesl".into(),
             source: "remote".into(),
         };
         let got = reg.apply_replayed(&op).expect("routes by path");
         assert_eq!(
             got,
-            ("lunco://shaders/bar.wgsl".to_string(), "remote".to_string())
+            ("lunco://shaders/bar.wesl".to_string(), "remote".to_string())
         );
-        assert_eq!(reg.source_of("shaders/bar.wgsl"), Some("remote"));
+        assert_eq!(reg.source_of("shaders/bar.wesl"), Some("remote"));
     }
 }

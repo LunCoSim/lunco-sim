@@ -194,7 +194,7 @@ fn capture_fence(
     let domains: &[&'static str] = if matches!(kind, QueryKind::Twin | QueryKind::TwinLint) {
         &["twin"]
     } else {
-        &["modelica", "usd", "sysml", "wgsl", "rhai"]
+        &["modelica", "usd", "sysml", "wesl", "rhai"]
     };
     Ok(OwnerFence {
         runtime,

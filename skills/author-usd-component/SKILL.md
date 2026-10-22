@@ -353,7 +353,7 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   = [(r,g,b)]`. A scalar `color3f` is silently ignored, and the bare
   `displayColor` alias is not read at all. Same for `float[] primvars:displayOpacity`.
   Values are **linear**, not sRGB.
-- **`displayColor` is the ONE place a colour is authored, shader or not.** A WGSL
+- **`displayColor` is the ONE place a colour is authored, shader or not.** A WESL
   shader opts in with `//!@engine display_color` and the engine fills that uniform
   from the prim's composed `primvars:displayColor` — so a shader-bound part is
   still painted the ordinary USD way. Don't author a parallel colour input on the
@@ -384,11 +384,11 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   `primvars:st`. If distinct metallic and roughness textures are both connected,
   the **metallic one is silently dropped** (one Bevy slot).
 
-Custom WGSL is bindable through a standard composed `UsdShade.Material` and
-`UsdShade.Shader`, using `uniform asset info:wgsl:sourceAsset =
-@lunco://shaders/x.wgsl@` and typed `inputs:*` parameters on the Shader. The
+Custom WESL is bindable through a standard composed `UsdShade.Material` and
+`UsdShade.Shader`, using `uniform asset info:wesl:sourceAsset =
+@lunco://shaders/x.wesl@` and typed `inputs:*` parameters on the Shader. The
 same material-binding resolution handles inherited and collection bindings.
-Binding a library shader with no `@fragment` entry (e.g. `pbr_lit.wgsl`) is an
+Binding a library shader with no `@fragment` entry (e.g. `pbr_lit.wesl`) is an
 authored render error; bind a complete material shader instead.
 
 ## Physics

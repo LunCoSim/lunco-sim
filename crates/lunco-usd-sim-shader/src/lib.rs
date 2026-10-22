@@ -100,7 +100,7 @@ fn reset_usd_shader_resolution(
 }
 
 /// Authors [`ShaderLook`] from the `UsdShade` material a prim is bound to — the
-/// `Shader` prim's `info:wgsl:sourceAsset` and its `inputs:`. Runs between
+/// `Shader` prim's `info:wesl:sourceAsset` and its `inputs:`. Runs between
 /// `sync_usd_visuals` and the sim consumers (see module docs).
 pub fn apply_usd_shader_materials(
     q: Query<
@@ -191,9 +191,9 @@ fn apply_usd_shader_material_read(
     }
 
     // A shader is bound the way USD binds shaders: `rel material:binding` → a
-    // `Material` → the `Shader` its surface comes from. Nothing here is ours — a WGSL
+    // `Material` → the `Shader` its surface comes from. Nothing here is ours — a WESL
     // shader is simply a shader whose source is named for the `wgsl` render context
-    // (`info:wgsl:sourceAsset`), exactly as an MDL shader is named by
+    // (`info:wesl:sourceAsset`), exactly as an MDL shader is named by
     // `info:mdl:sourceAsset`. So usdview, Blender and Omniverse all see a material
     // where a material is, and a prim bound to a `UsdPreviewSurface` instead keeps its
     // `PbrLook` — it has no `wgsl` source, and that is the whole test.
@@ -214,7 +214,7 @@ fn apply_usd_shader_material_read(
     let shader_path = match resolved_shader_asset(
         reader,
         &shader_prim,
-        "info:wgsl:sourceAsset",
+        "info:wesl:sourceAsset",
         asset_server,
         prim_path.stage_handle.id(),
         twin_roots,
@@ -243,7 +243,7 @@ fn apply_usd_shader_material_read(
             visual_target,
             prim_path,
             "implementation-source",
-            "WGSL source is authored but info:implementationSource is not `sourceAsset`",
+            "WESL source is authored but info:implementationSource is not `sourceAsset`",
         ));
     }
     // The shader's parameters are the Shader prim's `inputs:` — typed, declared, and
@@ -326,7 +326,7 @@ fn apply_usd_shader_material_read(
     }
     // No platform swap: the terrain shaders are one file per family now. What used
     // to justify a `_web` twin — 2D vs 3D noise and a halved octave budget — lives
-    // in `lunco::terrain` (terrain_surface.wgsl) behind the `LUNCO_NOISE_2D`
+    // in `lunco::terrain` (terrain_surface.wesl) behind the `LUNCO_NOISE_2D`
     // shader_def that `shader_material.rs::specialize` sets on wasm. The twins were
     // 88-92% identical and had already drifted apart twice; a shader_def cannot.
     debug!("[shader] applied {} to {}", shader_path, prim_path.path);
@@ -336,7 +336,7 @@ fn apply_usd_shader_material_read(
     // attribute and same polarity the `PbrLook` path reads in `lunco-usd-bevy`;
     // it has to be carried here too because taking the shader path REMOVES the
     // `PbrLook`, which dropped the author's shadow intent on the floor the moment a
-    // prim gained a `.wgsl`.
+    // prim gained a `.wesl`.
     let no_shadow_cast =
         match read_authored_bool_strict(reader, sdf_path, "primvars:doNotCastShadows") {
             Ok(value) => value.unwrap_or(false),
@@ -432,7 +432,7 @@ fn apply_usd_shader_material_read(
         }
     };
     // Optional per-material VERTEX stage, named exactly as the fragment source is:
-    // `info:wgsl:vertexAsset` on the same `Shader` prim. Procedural camera
+    // `info:wesl:vertexAsset` on the same `Shader` prim. Procedural camera
     // backgrounds always use the renderer's fullscreen vertex and therefore do
     // not read or carry a mesh vertex stage.
     let vertex_shader = if procedural_skybox {
@@ -441,7 +441,7 @@ fn apply_usd_shader_material_read(
         match resolved_shader_asset(
             reader,
             &shader_prim,
-            "info:wgsl:vertexAsset",
+            "info:wesl:vertexAsset",
             asset_server,
             prim_path.stage_handle.id(),
             twin_roots,
@@ -459,7 +459,7 @@ fn apply_usd_shader_material_read(
             }
         }
     };
-    let interface = reader.text(&shader_prim, "info:wgsl:interface");
+    let interface = reader.text(&shader_prim, "info:wesl:interface");
     let mut look = ShaderLook::new(shader)
         .with_values(values)
         .with_driven(driven);
@@ -712,7 +712,7 @@ mod tests {
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
     use lunco_usd_compose::recipe::StageRecipe;
 
-    /// A gprim that binds a WGSL material AND carries simulation wires — the shape
+    /// A gprim that binds a WESL material AND carries simulation wires — the shape
     /// every instrumented part in a scene has.
     ///
     /// `inputs:altitude` and `inputs:descent_rate` are SIMULATION ports feeding a
@@ -732,7 +732,7 @@ def Xform "World"
             def Shader "StrutShader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/strut.wgsl@
+                uniform asset info:wesl:sourceAsset = @shaders/strut.wesl@
                 float inputs:load_frac = 0.0
                 token outputs:surface
             }
@@ -756,7 +756,7 @@ def Xform "World"
     fn stages() -> (CanonicalStages, AssetId<UsdStageAsset>) {
         let mut cs = CanonicalStages::default();
         let recipe = StageRecipe::from_source("leg.usda", LEG);
-        let id: AssetId<UsdStageAsset> = AssetId::invalid();
+        let id: AssetId<UsdStageAsset> = AssetId::default();
         cs.get_or_build(id, &recipe).expect("stage builds");
         cs.drain_all_changes();
         (cs, id)

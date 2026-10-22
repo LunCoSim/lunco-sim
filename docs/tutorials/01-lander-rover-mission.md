@@ -417,7 +417,7 @@ further children of `MyLander`:
     }
 
     # The wings' look is a real shader, so it is a real UsdShade material: a
-    # `Material` whose surface connects to a `Shader` naming the WGSL under the
+    # `Material` whose surface connects to a `Shader` naming the WESL under the
     # `wgsl` render context. Every `inputs:` on that shader is one of its
     # parameters. Materials live under a `Looks` scope by convention.
     def Scope "Looks"
@@ -429,7 +429,7 @@ further children of `MyLander`:
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/solar_panel.wesl@
                 float inputs:cell_rows = 8.0
                 float inputs:cell_cols = 14.0
                 color3f inputs:cell_color = (0.04, 0.05, 0.28)
@@ -457,17 +457,17 @@ further children of `MyLander`:
 
 Two things to notice. The hull's warm gold is just `displayColor` — that's
 multi-layer insulation foil, and a plain PBR surface renders it fine. The wings, by
-contrast, bind a UsdShade material whose shader names a real WGSL file, and its
+contrast, bind a UsdShade material whose shader names a real WESL file, and its
 knobs are ordinary `inputs:` you can tune. Reach for a shader when the surface has
 *structure* (cells, busbars); reach for `displayColor` when it just has a colour.
 
 Binding is the **only** way to dress a prim with a shader. Use a composed
 `UsdShade.Material`/`UsdShade.Shader` network and its
-`info:wgsl:sourceAsset`; the same network composes, round-trips, and opens in
+`info:wesl:sourceAsset`; the same network composes, round-trips, and opens in
 usdview.
 
-Beware one trap: `info:wgsl:sourceAsset` must name a whole shader with a `@fragment`
-entry point. Point it at a shader *library* like `pbr_lit.wgsl` (which only exports
+Beware one trap: `info:wesl:sourceAsset` must name a whole shader with a `@fragment`
+entry point. Point it at a shader *library* like `pbr_lit.wesl` (which only exports
 functions) and you build an invalid render pipeline — the viewport blinks, the log
 fills with validation spam, and nothing tells you why.
 

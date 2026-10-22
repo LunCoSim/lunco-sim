@@ -91,7 +91,7 @@ Choose the format whose owner already matches the requested fact:
 | Modelica (`.mo`) | continuous equations, state, energy balance, and solved outputs | USD traversal or mission policy |
 | Rhai (`.rhai`) | events, commands, sequencing, policy, authored tests, and reusable tools | continuous dynamics or a second engine core |
 | Rust crates | generic engine mechanisms, projection, scheduling, and hot paths | model-specific names, hidden policy, or a duplicate authoring API |
-| WGSL | shader stages and visual computation | simulation state ownership |
+| WESL | shader stages and visual computation | simulation state ownership |
 | runtime HTML/CSS-like UI | Twin-authored presentation and semantic UI actions | direct mutation of domain state |
 | API JSON / MCP | transport of typed commands, queries, and discovery | a second persistent domain format |
 
@@ -190,7 +190,7 @@ model-specific Rust path, compatibility alias, silent fallback, or second owner.
 
 **“Do I need a rebuild?”**
 
-Usually not for authored `.rhai` scenarios/tools or WGSL shader source when the
+Usually not for authored `.rhai` scenarios/tools or WESL shader source when the
 existing reload surface covers the change. A new Rust command, observer,
 projection path, schema, or dependency requires a focused rebuild and a
 replacement production session. Use API `Exit` before replacing a session.

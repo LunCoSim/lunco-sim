@@ -47,6 +47,7 @@ impl Plugin for HeadlessAssetTypePlugin {
         // plugins remain an application-edge concern.
         app.init_asset::<bevy::mesh::Mesh>();
         app.init_asset::<bevy::shader::Shader>();
+        app.init_asset_loader::<bevy::shader::ShaderLoader>();
         app.init_asset::<bevy::image::Image>();
     }
 }

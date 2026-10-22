@@ -2,35 +2,27 @@
 (
     defaultPrim = "StarfieldSky"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Reusable lunar night sky. The starfield shader owns the sky appearance; this
-# component owns the standard USD material binding and the opaque background
-# presentation contract that lets terrain in front of it remain visible.
 def Xform "StarfieldSky" (
-    doc = "Reusable opaque lunar procedural camera background."
+    documentation = "Reusable opaque lunar procedural camera background."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoProceduralSkyAPI", "MaterialBindingAPI"]
 )
 {
-    # This applied schema selects the fullscreen camera-background path. The
-    # shader source and material inputs remain ordinary UsdShade authoring.
     rel material:binding = </StarfieldSky/Looks/Starfield>
-
     def Scope "Looks"
     {
         def Material "Starfield"
         {
+            token outputs:surface
             token outputs:surface.connect = </StarfieldSky/Looks/Starfield/Shader.outputs:surface>
-
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
-                # The WGSL defaults are the single sky presentation contract.
-                # Hosts do not replace them with a resolution-dependent profile.
                 token outputs:surface
+                uniform asset info:wesl:sourceAsset = @lunco://shaders/starfield.wesl@
             }
         }
     }

@@ -11,7 +11,7 @@ to the reusable component. `engine_count` divides aggregate thrust/flow into
 identical per-nozzle values; independent engines use their own model, count 1.
 
 Modelica supplies five conservative gas stations and an energy-bounded optical
-estimate. WGSL integrates emitted light in metres inside a Cylinder and adds
+estimate. WESL integrates emitted light in metres inside a Cylinder and adds
 advected detail. Zero delivered flow/thrust is dark. The observation horizon
 (default 20 exit radii) is a rendering limit, not a physical end to vacuum
 exhaust. Optical defaults and fuel RGB palettes are uncalibrated assumptions.

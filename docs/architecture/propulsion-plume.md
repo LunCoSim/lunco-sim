@@ -79,7 +79,7 @@ assumptions**. They are not a combustion spectrum, blackbody law, or measured
 Griffin radiometry. Calibration needs species/temperature/emission data.
 
 USD connects the physical scalar outputs to a unit Cylinder's scale/center and
-to `plume.wgsl`. The nozzle is at local y=-0.5 after its 180 degree rotation;
+to `plume.wesl`. The nozzle is at local y=-0.5 after its 180 degree rotation;
 exhaust expands downstream. The cylinder is an invertible render bound, never
 a collider or force-actuator frame. Keep a shared RCS actuator on its original
 mount and put its visual volume in a child, so volume scaling cannot change
@@ -106,7 +106,7 @@ against the depth buffer does not stop a ray from integrating behind a leg
 inside the bound. Conversely, testing an inside-camera exit face can reject
 foreground gas because that face lies behind a solid object.
 
-`plume.wgsl` declares `//!@capability lunco.volume-depth.v1`. The render adapter
+`plume.wesl` declares `//!@capability lunco.volume-depth.v1`. The render adapter
 enables Bevy's native `DepthPrepass` on 3D views while a bound mesh consumes that
 capability, including preview and alternate cameras. It retires only prepasses
 it supplied; existing explicit prepasses remain owned by their caller. Source,

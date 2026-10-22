@@ -815,7 +815,7 @@ mod tests {
             "scripts/teleop_policy.rhai"
         )));
         assert!(is_source_only_text_path(Path::new(
-            "shaders/terrain_layered.wgsl"
+            "shaders/terrain_layered.wesl"
         )));
         assert!(!is_source_only_text_path(Path::new("textures/ortho.png")));
     }

@@ -1269,7 +1269,7 @@ mod tests {
                 crate::globe_lod::GlobeLod {
                     radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
-                    look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                    look: lunco_materials::ShaderLook::new("shaders/blueprint.wesl"),
                     authored_look_source: None,
                     res: 8,
                     max_lod: 1,
@@ -1422,7 +1422,7 @@ mod tests {
             crate::globe_lod::GlobeLod {
                 radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
-                look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                look: lunco_materials::ShaderLook::new("shaders/blueprint.wesl"),
                 authored_look_source: None,
                 res: 8,
                 max_lod: 1,
@@ -1482,7 +1482,7 @@ mod tests {
             crate::globe_lod::GlobeLod {
                 radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
-                look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                look: lunco_materials::ShaderLook::new("shaders/blueprint.wesl"),
                 authored_look_source: None,
                 res: 8,
                 max_lod: 1,
@@ -1559,7 +1559,7 @@ mod tests {
                 crate::globe_lod::GlobeLod {
                     radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
-                    look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                    look: lunco_materials::ShaderLook::new("shaders/blueprint.wesl"),
                     authored_look_source: None,
                     res: 8,
                     max_lod: 1,

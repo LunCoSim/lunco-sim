@@ -4,7 +4,7 @@
 //! These are the engine-neutral half of the layered terrain pipeline (design
 //! `docs/architecture/terrain-layered-rendering.md` Part C.2 / tracker P3b). The Bevy
 //! layer turns the returned buffers into `Image`s and binds them to the
-//! `terrain_layered.wgsl` material's `surface_map` (binding 6/7, packed
+//! `terrain_layered.wesl` material's `surface_map` (binding 6/7, packed
 //! R=roughness G=AO B=rockDens A=hazard) and `normal_map` (binding 8/9) slots —
 //! but the math lives here so it stays:
 //!
@@ -453,7 +453,7 @@ pub fn hazard_from_slope(slope_rad: f32, safe_rad: f32, cliff_rad: f32) -> f32 {
     t * t * (3.0 - 2.0 * t) // smoothstep
 }
 
-/// Pack the surface data layers into the RGBA8 layout the `terrain_layered.wgsl`
+/// Pack the surface data layers into the RGBA8 layout the `terrain_layered.wesl`
 /// `surface_map` slot samples: **R = roughness, G = AO, B = rock density,
 /// A = unused**. Inputs are `[0, 1]` per channel, row-major `res×res`; `rock` may
 /// be empty (→ 0) until a rock-density layer feeds it.

@@ -1,3 +1,13 @@
+import bevy_pbr::render::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_bindings::mesh,
+    mesh_types,
+    mesh_view_bindings::view,
+    mesh_functions,
+};
+
 //! Wheel material for the general `ShaderMaterial`.
 //!
 //! Draws a wheel on a cylinder so its rotation is obvious: tire tread on the
@@ -18,15 +28,6 @@
 //! struct (field names → offsets) and the `//!@` annotations straight out of
 //! this file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
-#import bevy_pbr::{
-    forward_io::VertexOutput,
-    pbr_types,
-    pbr_functions,
-    mesh_bindings::mesh,
-    mesh_types,
-    mesh_view_bindings::view,
-    mesh_functions,
-}
 const TAU: f32 = 6.28318530718;
 
 //!@ui      rim_color   color "Rim / spoke colour"
@@ -53,7 +54,7 @@ struct Material {
     wear:        f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
 @fragment

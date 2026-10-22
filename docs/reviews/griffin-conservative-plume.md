@@ -2,7 +2,7 @@
 
 Modelica owns the reduced ideal-gas streamtube, mass/enthalpy closure,
 pressure-thrust separation, limiting-reactant combustion and transported phase.
-USD owns geometry, connections and the explicit GPU narrowing boundary. WGSL
+USD owns geometry, connections and the explicit GPU narrowing boundary. WESL
 integrates the emitted field. Existing engine mechanisms suffice; there are no
 Rust or dependency changes. Equations and validity limits are in
 [the plume architecture](../architecture/propulsion-plume.md).

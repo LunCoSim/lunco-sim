@@ -1,11 +1,12 @@
-#import bevy_render::view::View
-#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
-#import bevy_pbr::utils::coords_to_viewport_uv
+import bevy_render::view::View;
+import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
+import bevy_pbr::render::utils::coords_to_viewport_uv;
+
 @group(0) @binding(0) var<uniform> view: View;
 //!@engine sun_dir_view
 //!@engine sun_tan_radius
 struct Material { sun_dir_view: vec3<f32>, sun_tan_radius: f32, }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> mat: Material;
 
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {

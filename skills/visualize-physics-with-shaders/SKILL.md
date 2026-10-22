@@ -1,7 +1,7 @@
 ---
 name: visualize-physics-with-shaders
 description: >
-  Wire simulated values into visible WGSL material parameters in LunCoSim, such
+  Wire simulated values into visible WESL material parameters in LunCoSim, such
   as load, heat, charge, slip, or temperature visualization. Use for shader
   `Material` inputs, `ShaderLook::live`, USD connections, and values that must
   follow physics. Visual consequences are wired from authoritative outputs, not
@@ -19,7 +19,7 @@ paints anything.
 The chain is three links, each owned by the layer that knows the fact:
 
 ```
-Modelica / avian  ──►  a port  ──►  a USD connection  ──►  a WGSL uniform
+Modelica / avian  ──►  a port  ──►  a USD connection  ──►  a WESL uniform
    computes it        publishes it     wires it            draws it
 ```
 
@@ -40,7 +40,7 @@ only with the authored parameter shape.
 
 ## Recipe
 
-**1. Declare the parameter in the WGSL.** The engine reflects the `Material`
+**1. Declare the parameter in the WESL.** The engine reflects the `Material`
 struct — field names, offsets, and the `//!@` annotations — straight out of the
 file. A field that isn't declared here does not exist.
 
@@ -116,8 +116,8 @@ def SphereLight "PlumeLight"
 
 The engine plume is the worked example: Modelica supplies conservative gas
 stations, an energy-bounded optical estimate and transported distance; USD
-connects these to `plume.wgsl` and a local light. A Cylinder bounds the expanding
-field. Modelica owns gas math; WGSL integrates emission and advected detail;
+connects these to `plume.wesl` and a local light. A Cylinder bounds the expanding
+field. Modelica owns gas math; WESL integrates emission and advected detail;
 Rhai authors connections and test stimuli. Read the
 [model and limits](../../docs/architecture/propulsion-plume.md) before changing
 this contract. The observation horizon is not a physical vacuum plume length,
@@ -212,32 +212,32 @@ deferral with a known migration path, not the absence of a standard.
   approaches zero. Check both material modes in a windowed burn and shutdown,
   including an oblique view and a small RCS nozzle.
 
-- **DECLARE A DRIVEN PARAMETER ON THE SHADER PRIM, not only in the WGSL.** This is
+- **DECLARE A DRIVEN PARAMETER ON THE SHADER PRIM, not only in the WESL.** This is
   the one that silently kills a wire. The authoring pass decides what counts as a
   shader drive by intersecting the gprim's connected `inputs:` against the
   parameters the bound **Shader prim** authors — it reads USD, not the reflected
-  schema, which does not exist until the `.wgsl` asset loads. A parameter that
+  schema, which does not exist until the `.wesl` asset loads. A parameter that
   appears in `struct Material` but is absent from the Shader prim is therefore not
   in the driven set: the port backend refuses the write and the uniform sits at its
   default forever. Author it with its resting value:
 
   ```usda
   def Shader "Surface" {
-      uniform asset info:wgsl:sourceAsset = @lunco://shaders/strut_glow.wgsl@
+      uniform asset info:wesl:sourceAsset = @lunco://shaders/strut_glow.wesl@
       float inputs:load_frac = 0     # ← declared here, or the wire is dead
   }
   ```
 
-  The Shader prim is the shader's **interface**; the WGSL is its implementation.
+  The Shader prim is the shader's **interface**; the WESL is its implementation.
   Both must name the parameter.
 - **A name neither declares is refused** — and that is the feature. It surfaces as a
   dangling-wire warning from propagation instead of the classic silent dead uniform.
   If your wire logs as dangling, check the Shader prim's `inputs:` first, then the
-  WGSL field list.
-- **Runtime names are the exact snake_case WGSL keys.** `ListPorts` publishes
+  WESL field list.
+- **Runtime names are the exact snake_case WESL keys.** `ListPorts` publishes
   these keys; geometry connections, named reads, writes and resolved connections
   use them without conversion. USD material parameter authoring performs its
-  WGSL name conversion before publishing `ShaderLook`. Scalar writes
+  WESL name conversion before publishing `ShaderLook`. Scalar writes
   require a driven input with an explicitly authored `F32` value and must fit
   its GPU storage range. Run `lander_plume_activity` through the production
   scene runner and repeat its authored gate in the windowed API host when changing this boundary;
@@ -277,7 +277,7 @@ deferral with a known migration path, not the absence of a standard.
   prim commonly carries simulation wires alongside its shader drives. The
   material layer intersects against the shader's declared inputs precisely so
   those simulation wires are not mistaken for shader drives — if you add a
-  parameter to the WGSL, check you have not just shadowed a sim port name.
+  parameter to the WESL, check you have not just shadowed a sim port name.
 - **A vec parameter cannot be driven by one wire.** A connection carries one
   `f64`. Drive components individually (`inputs:tint_r`) or ramp the colour inside
   the shader from a scalar — the latter is almost always what you want, because

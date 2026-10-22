@@ -92,6 +92,25 @@ fn on_tick(me, ctx) {
             return;
         }
 
+        let root = query("InspectUsdDocument", #{doc_id: this.doc, path: "/"});
+        if root == () || root.ok == false || !root.prim.children.contains(ROOT) {
+            this = fail(this, "pseudo-root children did not use canonical absolute USD paths"); return;
+        }
+        for child in root.prim.children {
+            if child.starts_with("//") {
+                this = fail(this, "pseudo-root child has a doubled namespace separator"); return;
+            }
+        }
+        let local = query("InspectUsdDocument", #{doc_id: this.doc, path: ROOT + "/Scenario/Test"});
+        let local_source = false;
+        for attribute in local.prim.attributes {
+            if attribute.name == "info:sourceAsset" {
+                local_source = attribute.authored.root && !attribute.authored.runtime && !attribute.authored.view;
+            }
+        }
+        if !local_source {
+            this = fail(this, "local property inspection lost its exact authored layer"); return;
+        }
         let document = query("InspectUsdDocument", #{ doc_id: this.doc, path: ROOT + "/Assembly" });
         if document == () || document.ok == false || document.prim == ()
             || !document.prim.exists || document.prim.type != "Xform"
@@ -132,7 +151,8 @@ fn on_tick(me, ctx) {
             if attribute.name == "visibility" { visibility = attribute; }
         }
         if visibility == () || visibility.type != "token"
-            || visibility.value != "\"inherited\"" {
+            || visibility.value != "\"inherited\""
+            || visibility.authored.root || visibility.authored.runtime || visibility.authored.view {
             this = fail(this, "InspectUsdDocument did not resolve the native schema fallback attribute");
             return;
         }
