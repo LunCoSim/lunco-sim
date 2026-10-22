@@ -1502,6 +1502,7 @@ fn commit_ready_compiler_completions(
                     loaded_source_root_id: Some(commit.root_id),
                     loaded_source_root_namespaces: commit.namespaces,
                     loaded_source_root_sources: commit.sources,
+                    loaded_source_root_files: commit.files,
                     source_root_operation_id: Some(source_root_operation_id),
                     error: commit.error,
                     ..Default::default()
@@ -4346,8 +4347,9 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             // library into its session after the host has supplied source text.
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let t0 = web_time::Instant::now();
-            let report =
-                compiler.install_source_root(prepare_source_root_payload(id.clone(), payload));
+            let prepared = prepare_source_root_payload(id.clone(), payload);
+            let files = prepared.source_files();
+            let report = compiler.install_source_root(prepared);
             if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
                 w.library_gen += 1;
                 w.compiled_artifacts.clear();
@@ -4371,6 +4373,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                 Vec::new()
             };
             send(ModelicaResult {
+                loaded_source_root_files: if err.is_none() { files } else { Vec::new() },
                 loaded_source_root_sources: if err.is_none() {
                     compiler.source_root_source_facts(&id)
                 } else {

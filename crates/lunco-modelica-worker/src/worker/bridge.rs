@@ -794,12 +794,16 @@ pub fn handle_modelica_responses(
     // Presentation retires actor-scoped plot bindings after a checked session
     // installation; retained state stays owned by shared telemetry.
     mut session_starts: MessageWriter<ModelicaSessionStarted>,
-    source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
+    source_context: (
+        Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
+        Option<Res<lunco_modelica_core::engine_resource::ModelicaEngineHandle>>,
+    ),
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
     step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
+    let (source_roots, authoring) = source_context;
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let mut compile_states = compile_states;
@@ -833,6 +837,11 @@ pub fn handle_modelica_responses(
             continue;
         }
         if let Some(root_id) = result.unloaded_source_root_id.as_ref() {
+            if let (Some(handle), Some(operation)) =
+                (authoring.as_deref(), result.source_root_operation_id)
+            {
+                handle.update_admitted_source_root_async(root_id.clone(), operation, None);
+            }
             if let Some(error) = result.error.as_ref() {
                 let detail = format!(
                     "Modelica source root `{root_id}` unload operation {:?} failed: {error}",
@@ -868,6 +877,17 @@ pub fn handle_modelica_responses(
                         result.loaded_source_root_sources.clone(),
                         result.error.clone(),
                     ) {
+                        if let Some(handle) = authoring.as_deref() {
+                            let files = result
+                                .error
+                                .is_none()
+                                .then(|| std::mem::take(&mut result.loaded_source_root_files));
+                            handle.update_admitted_source_root_async(
+                                root_id.clone(),
+                                operation_id,
+                                files,
+                            );
+                        }
                         match roots.state(root_id) {
                             Some(lunco_modelica_source_roots::LoadState::Ready) => {
                                 bevy::log::info!(

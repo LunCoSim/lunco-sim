@@ -42,7 +42,7 @@
 
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::engine::ModelicaEngine;
@@ -75,6 +75,9 @@ pub struct ModelicaEngineHandle {
     /// observed all completion queues empty. This ordering prevents a
     /// completion racing with the clear from being lost.
     sync_wakeup: Arc<AtomicBool>,
+    /// Monotonic admission leases. Parsing never holds the engine lock, and a
+    /// delayed load cannot reinstall a root after a newer replacement/unload.
+    source_operations: Arc<Mutex<HashMap<String, Arc<AtomicU64>>>>,
 }
 
 impl Default for ModelicaEngineHandle {
@@ -82,11 +85,57 @@ impl Default for ModelicaEngineHandle {
         Self {
             engine: Arc::new(Mutex::new(ModelicaEngine::new())),
             sync_wakeup: Arc::new(AtomicBool::new(false)),
+            source_operations: Arc::default(),
         }
     }
 }
 
 impl ModelicaEngineHandle {
+    fn reserve_source_operation(&self, root: &str, operation: u64) -> Option<Arc<AtomicU64>> {
+        let mut operations = self
+            .source_operations
+            .lock()
+            .expect("source operation mutex poisoned");
+        let current = operations.entry(root.to_owned()).or_default();
+        if operation <= current.load(Ordering::Acquire) {
+            return None;
+        }
+        current.store(operation, Ordering::Release);
+        Some(current.clone())
+    }
+
+    /// Consume the exact snapshot whose compiler acknowledgement the source
+    /// registry accepted. This is declaration projection, never a second disk
+    /// discovery or runtime compile. `None` retires that scoped source set.
+    pub fn update_admitted_source_root_async(
+        &self,
+        root: String,
+        operation: u64,
+        sources: Option<Vec<(String, String)>>,
+    ) {
+        let Some(lease) = self.reserve_source_operation(&root, operation) else {
+            return;
+        };
+        let handle = self.clone();
+        bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+            let parsed = sources.map(|sources| sources.into_iter().map(|(uri, source)| {
+                rumoca_compile::compile::ParsedSourceDocument::parse(uri, source)
+                    .map_err(|error| format!("{error:?}"))
+            }).collect::<Result<Vec<_>, _>>());
+            let mut engine = handle.lock();
+            if lease.load(Ordering::Acquire) != operation { return; }
+            match parsed {
+                Some(Ok(files)) => engine.update_admitted_source_set(&root, Some(files)),
+                None => engine.update_admitted_source_set(&root, None),
+                Some(Err(error)) => {
+                    engine.update_admitted_source_set(&root, None);
+                    bevy::log::error!("Modelica admitted source snapshot `{root}` could not be projected: {error}");
+                }
+            }
+            handle.wake_sync();
+        }).detach();
+    }
+
     /// Lock the engine for a query. Panics if the mutex is poisoned
     /// (would mean a previous panic happened while holding the lock —
     /// the engine state is then suspect anyway).
@@ -1020,6 +1069,32 @@ impl Plugin for ModelicaEnginePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admitted_source_operations_fence_delayed_loads_and_duplicates() {
+        let handle = ModelicaEngineHandle::default();
+        let old_load = handle.reserve_source_operation("twin:1:models", 7).unwrap();
+        assert!(
+            handle
+                .reserve_source_operation("twin:1:models", 7)
+                .is_none()
+        );
+        let unload = handle.reserve_source_operation("twin:1:models", 8).unwrap();
+        assert_eq!(old_load.load(Ordering::Acquire), 8);
+        assert_eq!(unload.load(Ordering::Acquire), 8);
+        assert!(
+            handle
+                .reserve_source_operation("twin:1:models", 6)
+                .is_none()
+        );
+        // A second Twin's clock and source owner are independent.
+        assert!(
+            handle
+                .reserve_source_operation("twin:2:models", 1)
+                .is_some()
+        );
+        assert_eq!(unload.load(Ordering::Acquire), 8);
+    }
 
     #[test]
     fn scene_parse_admission_preserves_editor_and_unlinked_document_priorities() {

@@ -266,6 +266,12 @@ pub struct PreparedSourceRoot {
 }
 
 impl PreparedSourceRoot {
+    /// Exact immutable input admitted by this operation. Presentation sessions
+    /// consume this snapshot instead of rediscovering dependencies on disk.
+    pub fn source_files(&self) -> Vec<(String, String)> {
+        self.files.clone()
+    }
+
     /// Stable source-root owner identity carried into the session commit.
     pub fn source_set_id(&self) -> &str {
         &self.id

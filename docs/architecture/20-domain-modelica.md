@@ -493,6 +493,14 @@ names on the scoped owner entry, and compile admission resolves each qualified
 namespace to its unique source-set ID. Missing or ambiguous namespace ownership
 is a terminal diagnostic. Failed or stale acknowledgements cannot publish Ready
 or recreate a retired namespace; Twin close removes the entry and its names.
+The same accepted acknowledgement carries the exact source-file snapshot to
+the authoring engine. Its background declaration projection installs a named
+source set, so diagrams can resolve sibling Twin classes without opening every
+file or independently searching disk. Monotonic operation leases fence delayed
+projection after replacement or unload; retiring one set preserves other
+Twins and application libraries. Completion invalidates open diagram projections
+through the existing source-root notification. Native and browser workers
+publish the same snapshot contract.
 Root-owned unqualified source assets reuse the loaded definition when their
 exact source CID belongs to the admitted content closure. A changed definition
 is rejected until the source root is updated and readmitted; no user overlay

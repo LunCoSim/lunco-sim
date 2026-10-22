@@ -378,6 +378,31 @@ impl ModelicaEngine {
         self.installed_source_sets.contains(set_id)
     }
 
+    /// Mirror one compiler-admitted source operation into the authoring session.
+    /// A complete named set can be replaced or retired without leaving sibling
+    /// declarations behind. Open document overlays keep their existing owner.
+    pub fn update_admitted_source_set(
+        &mut self,
+        id: &str,
+        files: Option<Vec<rumoca_compile::compile::ParsedSourceDocument>>,
+    ) {
+        match files {
+            Some(files) => {
+                self.replace_in_memory_source_set(
+                    id,
+                    rumoca_compile::compile::SourceRootKind::DurableExternal,
+                    files,
+                );
+            }
+            None => {
+                self.session.remove_source_set(id);
+                self.installed_source_sets.remove(id);
+                lunco_modelica_ast::source_memo::invalidate_source_memos();
+            }
+        }
+        self.completed_source_roots.push(id.to_owned());
+    }
+
     /// Reserve a bundled source root for asynchronous loading. The caller
     /// performs the package read and parse off the update thread, then calls
     /// [`Self::finish_source_root_load`].
@@ -677,6 +702,44 @@ mod tests {
 
         engine.close_document(DocumentId::new(1));
         assert!(!engine.has_class("Foo"), "Foo gone after close");
+    }
+
+    #[test]
+    fn admitted_source_sets_resolve_diagrams_and_retire_only_their_owner() {
+        use rumoca_compile::compile::ParsedSourceDocument;
+        let file = |uri: &str, source: &str| ParsedSourceDocument::parse(uri, source).unwrap();
+        let mut engine = ModelicaEngine::new();
+        engine.update_admitted_source_set(
+            "application:models",
+            Some(vec![file(
+                "support.mo",
+                "model Support Real x; end Support;",
+            )]),
+        );
+        engine.update_admitted_source_set(
+            "twin:1:models",
+            Some(vec![file(
+                "plant.mo",
+                "model Plant Support support; end Plant;",
+            )]),
+        );
+        assert!(
+            engine
+                .diagram_snapshot("Plant", crate::diagram::DiagramScope::ComponentGraph)
+                .is_ok()
+        );
+        engine.update_admitted_source_set(
+            "twin:1:models",
+            Some(vec![file(
+                "replacement.mo",
+                "model Replacement Support support; end Replacement;",
+            )]),
+        );
+        assert!(!engine.has_class("Plant"));
+        assert!(engine.has_class("Replacement"));
+        engine.update_admitted_source_set("twin:1:models", None);
+        assert!(!engine.has_class("Replacement"));
+        assert!(engine.has_class("Support"));
     }
 
     #[test]
