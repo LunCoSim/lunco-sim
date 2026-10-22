@@ -234,6 +234,15 @@ both a selected shape and an aggregate parent. Ancestor transforms and USD
 reset stacks apply before accumulation. A local shape bound must not be
 compared directly with those stage-space envelopes.
 
+Cooked hull and triangle-mesh `vertices` remain in canonical stage metres.
+Their `local_to_stage` contains the native f64 rigid cooking-frame pose
+(`translation_m`, scalar-first `rotation_wxyz`), as it does for analytic
+shapes. Invert that pose with native quaternion/vector operations to measure
+the scaled cooked geometry in its own frame. Do not compare a rotated stage
+AABB with local section dimensions or use the renderer's f32 topology pose
+for that measurement. Static source gates should resolve and pass their
+explicit document id, rather than require an active dynamic physics frame.
+
 ## Example (curl)
 
 ```bash

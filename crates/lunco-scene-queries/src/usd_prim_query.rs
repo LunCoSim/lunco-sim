@@ -300,6 +300,7 @@ fn collider_part_api_value(
                 "shape": "triangle_mesh",
                 "vertices": ApiValue::Array(vertices),
                 "triangles": ApiValue::Array(triangles),
+                "local_to_stage": collider_pose_api_value(collider_transform),
             })
         }
         ColliderGeometryPart::ConvexHull { vertices } => {
@@ -311,6 +312,7 @@ fn collider_part_api_value(
                 "shape": "convex_hull",
                 "vertices": ApiValue::Array(vertices),
                 "triangles": ApiValue::Unit,
+                "local_to_stage": collider_pose_api_value(collider_transform),
             })
         }
         ColliderGeometryPart::Sphere { radius } => api_value!({
