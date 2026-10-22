@@ -47,6 +47,7 @@ use avian3d::dynamics::solver::islands::PhysicsIslands;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
+mod source_contacts;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -1518,6 +1519,9 @@ fn extract_avian_prim(
                 if let Some(hooks) = hooks {
                     child.insert(hooks);
                 }
+                child.world_scope(|world| {
+                    source_contacts::bind_native_collider(world, collider_entity)
+                });
             });
             if let Some(density) = density {
                 commands.entity(collider_entity).try_insert(density);
@@ -1558,6 +1562,9 @@ fn extract_avian_prim(
                 return;
             }
             apply_collision_groups(commands, entity, groups, sdf_path);
+        } else {
+            commands
+                .queue(move |world: &mut World| source_contacts::bind_source_prim(world, entity));
         }
         commands.entity(entity).try_insert(UsdPhysicsProjected);
     } else {

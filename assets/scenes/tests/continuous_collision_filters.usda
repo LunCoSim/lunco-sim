@@ -1,0 +1,87 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend references = @continuous_contacts.usda@</World>
+)
+{
+    over "Observer"
+    {
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/continuous_collision_filters.rhai@
+    }
+    def Sphere "FilteredFast" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "PhysicsFilteredPairsAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        custom bool physxRigidBody:enableCCD = true
+        custom double3 xformOp:translate = (0.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+        rel physics:filteredPairs = </World/FilteredWall>
+    }
+    def Cube "FilteredWall" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        bool physics:rigidBodyEnabled = false
+        double size = 1.0
+        custom double3 xformOp:translate = (1.0, 40.0, 0.0)
+        custom double3 xformOp:scale = (1.0, 10.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Cube "FilteredStop" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        bool physics:rigidBodyEnabled = false
+        double size = 1.0
+        custom double3 xformOp:translate = (3.0, 40.0, 0.0)
+        custom double3 xformOp:scale = (1.0, 10.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Sphere "JointFast" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double radius = 0.1
+        float physics:mass = 1.0
+        custom bool physxRigidBody:enableCCD = true
+        custom double3 xformOp:translate = (0.0, 50.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        vector3f physics:velocity = (1200.0, 0.0, 0.0)
+    }
+    def Cube "JointWall" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        bool physics:rigidBodyEnabled = false
+        double size = 1.0
+        custom double3 xformOp:translate = (1.0, 50.0, 0.0)
+        custom double3 xformOp:scale = (1.0, 10.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Cube "JointStop" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        bool physics:rigidBodyEnabled = false
+        double size = 1.0
+        custom double3 xformOp:translate = (3.0, 50.0, 0.0)
+        custom double3 xformOp:scale = (1.0, 10.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def PhysicsDistanceJoint "ExcludedJoint"
+    {
+        rel physics:body0 = </World/JointFast>
+        rel physics:body1 = </World/JointWall>
+        bool physics:collisionEnabled = false
+        float physics:minDistance = 0.0
+        float physics:maxDistance = 1000.0
+    }
+}

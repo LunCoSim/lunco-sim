@@ -1,0 +1,88 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461395.5
+    def DistantLight "TestLight"
+    {
+    }
+    def PhysicsScene "Physics"
+    {
+        vector3f physics:gravityDirection = (0.0, -1.0, 0.0)
+        float physics:gravityMagnitude = 9.8100004196167
+    }
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (0.0, -0.5, 0.0)
+        custom double3 xformOp:scale = (10.0, 1.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Xform "Body" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 20.0
+        float3 physics:diagonalInertia = (10.0, 10.0, 10.0)
+        custom double3 xformOp:translate = (0.0, 1.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "Lower" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            custom double3 xformOp:translate = (0.0, -0.5, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            custom double outputs:contact_force = 0.0
+        }
+        def Cube "Upper" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            custom double3 xformOp:translate = (0.0, 1.5, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            custom double outputs:contact_force = 0.0
+        }
+        def Cube "Disabled" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            bool physics:collisionEnabled = false
+            custom double3 xformOp:translate = (0.0, -0.5, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/part_contact_sources.rhai@
+        }
+    }
+    def Xform "Observer" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/PartContactObservation.mo@
+        custom double inputs:lower_force = 0.0
+        double inputs:lower_force.connect = </World/Body/Lower.outputs:contact_force>
+        custom double inputs:upper_force = 0.0
+        double inputs:upper_force.connect = </World/Body/Upper.outputs:contact_force>
+        custom double outputs:supported_force = 0.0
+    }
+}

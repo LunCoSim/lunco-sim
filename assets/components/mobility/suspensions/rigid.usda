@@ -2,54 +2,28 @@
 (
     defaultPrim = "Suspension"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# A RIGID wheel mount — no travel. `restLength = 0` bolts the wheel to the hull: the
-# spring is stiff and heavily damped purely to keep the contact solver quiet, not to
-# give the wheel anywhere to go.
-#
-# For vehicles whose compliance lives somewhere else entirely — a wheel bolted straight
-# to a chassis, a test rig where suspension would only confuse the measurement.
-#
-# A wheel composes it as a second reference arc alongside the wheel itself:
-#
-#   def Cylinder "Wheel_FL" (
-#       prepend references = [
-#           @lunco://components/mobility/wheel.usda@</Wheel>,
-#           @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
-#       ]
-#   )
-#
-# See `standard.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Suspension" (
     prepend apiSchemas = ["PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI"]
     kind = "component"
 )
 {
-    float lunco:suspension:restLength = 0.0          # m — no travel
-    float physxVehicleSuspension:springStrength = 15000.0 # N/m
-    float physxVehicleSuspension:springDamperRate = 5000.0    # N·s/m — heavy, to settle contacts
-
-    # Visual mount — a rigid suspension is a bracket, not a shock, so there is
-    # ONE static casing and NO piston/spring roles: with zero travel nothing
-    # moves, and authoring `LunCoSuspensionVisualAPI` prims here would just ask
-    # lunco-mobility to animate a strut that cannot compress. The casing spans
-    # the mount point so the wheel visibly bolts to the body instead of
-    # floating beside it.
-
+    float lunco:suspension:restLength = 0.0
+    float physxVehicleSuspension:springStrength = 15000.0
+    float physxVehicleSuspension:springDamperRate = 5000.0
+    float physxVehicleSuspension:travelDistance = 0.0
     def Cylinder "SuspensionCasing" (
-        doc = "Visual mounting bracket of the rigid wheel mount. Nothing moves; plain geometry only."
+        documentation = "Visual mounting bracket of the rigid wheel mount. Nothing moves; plain geometry only."
     )
     {
         uniform token axis = "Y"
         double radius = 0.04
         double height = 0.2
-        # Centred on the mount point, reaching toward the hull above.
         double3 xformOp:translate = (0.0, 0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.2, 0.2, 0.2)] # Dark grey bracket
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.20000000298023224, 0.20000000298023224)]
         bool physics:collisionEnabled = false
     }
 }

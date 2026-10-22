@@ -256,6 +256,7 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<lunco_port_core::PortSurfaceReady>)
             .add_observer(endpoint_pending_on_add::<lunco_port_core::PortSurfacePending>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
+            .add_observer(endpoint_ready_on_add::<lunco_physics::SourceColliders>)
             // Force and torque actuators are native scalar port endpoints too.
             // USD projects them after the authored wiring pass has started and
             // they are authored without a SimComponent, so admission must

@@ -146,9 +146,15 @@ pub fn solver_configuration_fingerprint(world: &World) -> Option<u64> {
         return None;
     }
     let mut fingerprint = lunco_hash::Fnv1a::new();
-    fingerprint.write_bytes(b"lunco.physics.solver-clock.v1");
+    fingerprint.write_bytes(b"lunco.physics.solver-clock.v2");
     fingerprint.write_u64(substeps);
     fingerprint.write_u64(fixed_step_ns);
+    fingerprint.write_u64(u64::from(
+        world
+            .get_resource::<avian3d::dynamics::solver::xpbd::JointVelocitySolverConfig>()?
+            .iterations
+            .get(),
+    ));
     Some(fingerprint.finish())
 }
 
@@ -342,9 +348,23 @@ pub struct ContactPartDebugSnapshot {
     pub normal_impulse: f64,
 }
 
-/// Native colliders currently attached to a body, or the selected standalone
-/// collider. Avian's relationship is authoritative and excludes nested bodies.
+/// Authored source entity whose observations this cooked collider supplies.
+/// Native body attachment remains owned by Avian's `ColliderOf` relationship.
+#[derive(Component, Debug)]
+#[relationship(relationship_target = SourceColliders)]
+pub struct ColliderSourceEntity(pub Entity);
+
+/// Cooked colliders belonging to one authored shape. Bevy maintains membership
+/// and removes retired source links without a parallel contact-state cache.
+#[derive(Component, Debug, Default)]
+#[relationship_target(relationship = ColliderSourceEntity)]
+pub struct SourceColliders(Vec<Entity>);
+
+/// Native colliders for a body, standalone collider, or authored shape source.
+/// Body observations include every attached shape; a source observes only its
+/// own cooked geometry. Nested rigid bodies remain separate owners.
 pub fn collider_entities(world: &World, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
+    let body_colliders = world.get::<avian3d::prelude::RigidBodyColliders>(entity);
     std::iter::once(entity)
         .filter(move |candidate| {
             world
@@ -352,10 +372,22 @@ pub fn collider_entities(world: &World, entity: Entity) -> impl Iterator<Item = 
                 .is_some()
         })
         .chain(
-            world
-                .get::<avian3d::prelude::RigidBodyColliders>(entity)
+            body_colliders
                 .into_iter()
                 .flat_map(|colliders| colliders.iter())
+                .filter(move |candidate| {
+                    *candidate != entity
+                        && world
+                            .get::<avian3d::prelude::Collider>(*candidate)
+                            .is_some()
+                }),
+        )
+        .chain(
+            world
+                .get::<SourceColliders>(entity)
+                .into_iter()
+                .filter(move |_| body_colliders.is_none())
+                .flat_map(|sources| sources.0.iter().copied())
                 .filter(move |candidate| {
                     *candidate != entity
                         && world
@@ -633,15 +665,6 @@ pub fn joint_drive_snapshot(world: &World, entity: Entity) -> Option<JointDriveS
     })
 }
 
-/// Avian's `ContactPoint::normal_impulse` is a diagnostic accumulation of the
-/// clamped contact impulse across the substep solver's carried warm-start and
-/// its biased and relaxation passes. The accumulation has two solver-phase
-/// samples of the physical contact impulse for the current solver contract:
-/// one biased solve and one relaxation solve. Keep that
-/// conversion here, at the Avian/physics boundary, so tire realizations do not
-/// each invent a different load interpretation.
-const AVIAN_CONTACT_IMPULSE_SAMPLES: f64 = 2.0;
-
 /// Convert Avian's accumulated normal contact impulse to the physical load
 /// delivered over one master physics interval.
 ///
@@ -651,7 +674,7 @@ const AVIAN_CONTACT_IMPULSE_SAMPLES: f64 = 2.0;
 #[inline]
 pub fn contact_force_from_impulse(normal_impulse: f64, physics_dt: f64) -> f64 {
     if normal_impulse.is_finite() && physics_dt > 0.0 {
-        normal_impulse / (physics_dt * AVIAN_CONTACT_IMPULSE_SAMPLES)
+        normal_impulse / physics_dt
     } else {
         0.0
     }
@@ -663,7 +686,7 @@ pub fn contact_force_from_impulse(normal_impulse: f64, physics_dt: f64) -> f64 {
 /// `contact_pairs_with` includes pairs whose AABBs overlap without touching;
 /// only pairs for which Avian reports `is_touching()` contribute to the result.
 /// The force conversion uses the native representation of the master physics
-/// interval and the shared solver-phase contract in [`contact_force_from_impulse`].
+/// interval and the physical impulse contract in [`contact_force_from_impulse`].
 /// The graph retains the last solved interval. Admission can zero Avian's
 /// current delta while awaiting a participant or pausing; that scheduling
 /// permission must not change the physical meaning of an already solved impulse.
@@ -720,6 +743,26 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
             world.get::<Sensor>(candidate).is_some()
         });
     (touching, force)
+}
+
+/// Maximum closing normal speed from the native pre-solver contact samples.
+/// Separating and absent solid contacts contribute zero. Missing native graph
+/// state remains unavailable, so a consumer cannot admit a fabricated sample.
+pub fn contact_approach_speed_from_world(world: &World, entity: Entity) -> Option<f64> {
+    let graph = world.get_resource::<ContactGraph>()?;
+    Some(
+        collider_entities(world, entity)
+            .flat_map(|collider| graph.contact_pairs_with(collider))
+            .filter(|pair| {
+                pair.is_touching()
+                    && world.get::<Sensor>(pair.collider1).is_none()
+                    && world.get::<Sensor>(pair.collider2).is_none()
+            })
+            .flat_map(|pair| &pair.manifolds)
+            .flat_map(|manifold| &manifold.points)
+            .map(|point| f64::from(-point.normal_speed).max(0.0))
+            .fold(0.0, f64::max),
+    )
 }
 
 /// A target pose for a kinematic Avian body driven outside the physics clock.
@@ -1189,9 +1232,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn contact_impulse_uses_the_current_avian_accumulator_contract() {
-        assert!((contact_force_from_impulse(32.4, 1.0) - 16.2).abs() < 1.0e-12);
-        assert!((contact_force_from_impulse(0.324, 0.01) - 16.2).abs() < 1.0e-12);
+    fn contact_impulse_is_physical_momentum_over_interval() {
+        assert!((contact_force_from_impulse(16.2, 1.0) - 16.2).abs() < 1.0e-12);
+        assert!((contact_force_from_impulse(0.162, 0.01) - 16.2).abs() < 1.0e-12);
     }
 
     #[test]

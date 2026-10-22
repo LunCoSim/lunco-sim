@@ -660,5 +660,5 @@ strip = "none"
 
 [patch.crates-io]
 bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338" }
-avian3d = { git = "https://github.com/LunCoSim/avian", rev = "e4f073bb8914beb9fb0aa97795ae93d08a478528" }
+avian3d = { git = "https://github.com/LunCoSim/avian", rev = "9097ce92e5d236c747a68567368575014c28fff5" }
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "01302a171ac3db662c0c322ef9e98fe7d5f33a6a" }

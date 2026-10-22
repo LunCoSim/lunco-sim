@@ -537,8 +537,20 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
     source: "Avian contact solver",
     present: |w, e| lunco_physics::collider_entities(w, e).next().is_some(),
     entities: |world, out| {
-        out.extend(world.query_filtered::<Entity, Or<(With<Collider>, With<avian3d::prelude::RigidBodyColliders>)>>().iter(world)
-            .filter(|entity| lunco_physics::collider_entities(world, *entity).next().is_some()));
+        out.extend(
+            world
+                .query_filtered::<Entity, Or<(
+                    With<Collider>,
+                    With<avian3d::prelude::RigidBodyColliders>,
+                    With<lunco_physics::SourceColliders>,
+                )>>()
+                .iter(world)
+                .filter(|entity| {
+                    lunco_physics::collider_entities(world, *entity)
+                        .next()
+                        .is_some()
+                }),
+        );
     },
     topology_key: collider_contact_topology_key,
     ports: &[
@@ -560,6 +572,13 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::FORCE,
             dir: PortDirection::Out,
             read: Some(|w, e| Some(lunco_physics::contact_from_world(w, e).1)),
+            write: None,
+        },
+        AvianPort {
+            name: "contact_approach_speed",
+            contract: AvianPortContract::SPEED,
+            dir: PortDirection::Out,
+            read: Some(lunco_physics::contact_approach_speed_from_world),
             write: None,
         },
         // This SHAPE's own mass (kg), as physics computes it from the geometry and
@@ -593,6 +612,10 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
 
 fn register_collider_contact_topology(app: &mut App) {
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Collider>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<lunco_physics::SourceColliders>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<lunco_physics::SourceColliders>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<lunco_physics::ColliderSourceEntity>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<lunco_physics::ColliderSourceEntity>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Collider>)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ColliderOf>)
         // Reattachment changes both bodies' contact surfaces. Re-admitting the

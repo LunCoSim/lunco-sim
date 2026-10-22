@@ -191,3 +191,12 @@ shared asset owner. They must not own filesystem/cache searches, URI percent
 decoding, byte readers or UI load-state caches. Modelica resource consumers use
 `SourceRootRegistry`'s immutable context and the common asynchronous asset/image
 loaders; keep source-set operation and document/Twin retirement checks intact.
+
+For impact validity envelopes, wire the native `contact_approach_speed` output
+(m/s, positive closing) into Modelica. Keep energy and absorption assumptions in
+the model, then use its authored event to invoke the existing coupled-object
+pause from Rhai. Do not poll contact debug snapshots or infer impact speed from
+post-collision body velocity. Qualify both a nominal contact and an overload,
+including the paused physical pose and continuous-model clock. React to the
+retained event fact and source identity; a transient output can clear before its
+event reaches the consumer.

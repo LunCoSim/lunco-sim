@@ -21,7 +21,11 @@ without depending on Avian. It also owns the backend-neutral
 propagation that realize those contracts.
 
 Avian contact ports consume the physics owner's retained-interval interpretation
-of its native contact graph. A coupling hold changes scheduling permission,
+of its native contact graph. Native normal impulse counts applied warm-start,
+incremental solver and restitution impulses once, independently of relaxation
+pass count. Contact force is this momentum divided by the completed master
+interval; there is no solver-phase scaling in the application.
+A coupling hold changes scheduling permission,
 without changing the duration or load represented by that completed sample.
 
 Authored mechanism policy can inspect `joint_drive(id)` and change the native
@@ -1149,3 +1153,28 @@ Prepared graph identity includes exact initial-input bits.
 Checked Modelica initialization publishes its t=0 observation through this same
 schedule, allowing connected participants to initialize while the fixed clock is
 held. A compiled participant is Idle until its first simulation tick.
+
+### Contact impact observation
+
+The native `contact_approach_speed` output is the maximum positive closing speed
+from Avian's pre-solver contact points, in m/s. It reads the retained contact graph
+on demand without allocating a debug snapshot. Separating contacts and no solid
+contact have zero closing speed; an unavailable graph supplies no sample. Sensors
+do not contribute. Body ports aggregate their attached native shapes. An authored
+collision prim observes only its own cooked shapes, through a Bevy relationship
+maintained when USD projects the source or recooks its native colliders. Removing
+all of a source's shapes retires its native contact port surface; sibling parts do
+not inherit that source's contacts. No contact samples are mirrored onto USD
+entities. `part_contact_sources` qualifies part isolation, body aggregation and
+unavailable observations on disabled shapes, including an authored Modelica
+consumer. Co-simulation publishes the ordinary endpoint-ready lifecycle fact
+when a source gains its native collider relationship, so USD wiring can admit
+these inputs before Modelica compilation. Physical USD edits currently reset
+the stage through the existing projection owner; partial body reload is TODO.
+Wire this scalar directly into an authored Modelica impact
+envelope; Modelica owns mass, energy and absorption capacity, while an authored
+event and Rhai policy select the response. Collision event reporting is not
+required to consume this physical observation. A connected event retains the
+producer's value and tick. Its Rhai consumer runs on a later eligible pass; use
+that retained event fact to react to a transient boundary violation instead of
+rereading a current output that may already have cleared.

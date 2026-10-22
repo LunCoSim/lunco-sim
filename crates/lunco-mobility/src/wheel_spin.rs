@@ -421,6 +421,7 @@ mod tests {
             },
             Suspension {
                 rest_length: 1.0,
+                travel_distance: 1.0,
                 spring_k: 1000.0,
                 damping_c: 100.0,
                 local_axis: DVec3::Y,
@@ -530,6 +531,7 @@ mod tests {
                 },
                 Suspension {
                     rest_length: 0.7,
+                    travel_distance: 0.7,
                     spring_k: 5000.0,
                     damping_c: 600.0,
                     local_axis: DVec3::Y,

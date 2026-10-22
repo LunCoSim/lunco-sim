@@ -83,6 +83,11 @@ The shared headless and graphical compositions install those native plugins.
 Application integration owns authored SI conversion, validated admission,
 BigSpace frame transport, ordered multi-body gear relations, and typed telemetry.
 Contact provenance and impulses come from native `ContactGraph` pairs.
+For a part-specific impact envelope, wire `contact_approach_speed` from that
+collision prim. A rigid body aggregates all attached shapes; the authored
+collision prim observes only its own cooked shapes. `part_contact_sources`
+checks sibling isolation, body aggregation and disabled shapes. Removing all
+native shapes makes the part's native contact ports unavailable.
 Native 3D slider alignment, orientation and active travel stops are solved
 together. Inspect measured `displacement` and contact penetration when checking
 a loaded suspension; drive targets and body center height are not substitutes

@@ -772,10 +772,10 @@ dependencies = [
 [[package]]
 name = "avian3d"
 version = "0.8.0"
-source = "git+https://github.com/LunCoSim/avian?rev=e4f073bb8914beb9fb0aa97795ae93d08a478528#e4f073bb8914beb9fb0aa97795ae93d08a478528"
+source = "git+https://github.com/LunCoSim/avian?rev=9097ce92e5d236c747a68567368575014c28fff5#9097ce92e5d236c747a68567368575014c28fff5"
 dependencies = [
  "approx 0.5.1",
- "avian_derive 0.2.3 (git+https://github.com/LunCoSim/avian?rev=e4f073bb8914beb9fb0aa97795ae93d08a478528)",
+ "avian_derive 0.2.3 (git+https://github.com/LunCoSim/avian?rev=9097ce92e5d236c747a68567368575014c28fff5)",
  "bevy",
  "bevy_curve",
  "bevy_heavy",
@@ -812,7 +812,7 @@ dependencies = [
 [[package]]
 name = "avian_derive"
 version = "0.2.3"
-source = "git+https://github.com/LunCoSim/avian?rev=e4f073bb8914beb9fb0aa97795ae93d08a478528#e4f073bb8914beb9fb0aa97795ae93d08a478528"
+source = "git+https://github.com/LunCoSim/avian?rev=9097ce92e5d236c747a68567368575014c28fff5#9097ce92e5d236c747a68567368575014c28fff5"
 dependencies = [
  "proc-macro-error3",
  "proc-macro2",

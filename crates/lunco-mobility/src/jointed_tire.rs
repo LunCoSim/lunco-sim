@@ -231,9 +231,8 @@ pub fn apply_jointed_tire_forces(
                     };
                     let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
                     for point in &manifold.points {
-                        // The physics boundary converts Avian's biased and
-                        // relaxation accumulation to one physical load over
-                        // the completed master interval.
+                        // Native impulse already counts delivered momentum once;
+                        // the completed master interval converts it to load.
                         let normal_force = lunco_physics::contact_force_from_impulse(
                             f64::from(point.normal_impulse),
                             full_dt,

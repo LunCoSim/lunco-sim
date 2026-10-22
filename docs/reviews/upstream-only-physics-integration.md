@@ -1,21 +1,43 @@
 # Upstream physics integration review
 
 Status: Bevy 0.20 / Avian 0.8 migration in progress, 2026-10-22.
-The application retains the native `e4f073b` pin; the dense island candidate is
-not adopted. The regular production Tracy rebuild passes. Current production
+The application pins the published native Avian revision `9097ce9`.
+Current production
 gates pass isolated tire (4 checks), Lunokhod (102), shared drivetrain parity
 (20), Modelica raycast drive (8), object suspension (11) and coupled wheel
 suspension (16). Three-Twin qualification remains incomplete. Tesla's raycast
 realization passes
 wall holding/release, steering at 5/15/30 m/s, ramp driving and all four entry
 cases, motor launch, moving jump, 120 kWh mass/energy balance and 14 graphical
-wheel checks. Tesla `38128c4` also passes all seven full-course SysML checks,
-seven early-timing checks, a measured late-collision case and seven coupled
-adhesion-pause checks, with inspected shared-HUD failure presentation. Drop
-travel and roof impact remain open.
+wheel checks. Current Tesla qualification passes all seven full-course SysML
+checks in 28.73 simulation seconds with retained roof-impact policy and
+part-specific cabin contact input. The course observer fails immediately when
+its vehicle is paused, carrying the retained cause. Earlier timing and adhesion
+cases qualify their recorded inputs.
+The suspension-travel gate passes three checks. Cabin impact passes nine
+checks, including retained failure presentation and suspension of the complete
+coupled object; the below-capacity roof control passes four checks.
 Griffin's high-energy engine-off drop needs physical failure classification
 rather than a settling assertion.
-Earlier measurements below qualify their recorded artifacts only.
+The isolated loaded-slider gate passes seven checks with unchanged drift and
+relative-rate limits. Griffin's sixty-second drift and angular-speed checks
+pass, but peak ground speed exceeds its 0.05 m/s limit. Its stowed folded ramp
+geometry overlaps the transition plates, and unfolding/full-mission acceptance
+remains open. The active full-step target is below 1 ms and is not yet met.
+See [the current handoff](griffin-physics-handoff-2026-10-22.md) for source
+cohorts, measurements and evidence. Earlier measurements below qualify their
+recorded artifacts only.
+
+The production source-contact gate passes six checks, including sibling
+isolation, supported load, unavailable disabled geometry and an actual Modelica
+consumer. Eleven further production gates pass against the published native
+revision: loaded slider, CCD filters, force drives, continuous contact,
+drivetrain parity, coupled object pause, paused wheel effort, suspension travel,
+Summer Lunokhod, body acceleration and FLIP route following. Receipts are under
+`.cache/codex-evidence/physics-followup-20261022/` in
+`part-contact-consumer-qualified`, `cabin-contact-final` and
+`published-native-final-regression`. These establish behavioral qualification;
+the active-step performance target remains open.
 
 ## Ownership
 
@@ -41,12 +63,15 @@ widening native output does not recover its original precision.
 Bevy 0.20 and Avian 0.8 are upstream releases. The authorized forks are pinned
 to immutable published commits:
 
-- Avian `e4f073bb8914beb9fb0aa97795ae93d08a478528`: implicit motor integration,
+- Avian `9097ce92e5d236c747a68567368575014c28fff5`: implicit motor integration,
   first-step collision admission, fixed-joint block solving, completed reactions,
   disabled-body membership, native collision-hook proxy synchronization and
-  coupled prismatic frame/limit solving. The separate dense island candidate
-  fails loaded-friction, driving and timing qualification and remains outside
-  the application pin.
+  coupled prismatic frame/limit solving, hard joint/contact velocity relaxation,
+  physical contact-impulse accumulation independent of solver pass count, and
+  swept-CCD joint/custom-filter exclusions. Velocity gradients and constrained
+  effective mass are prepared once per substep. Native plugins retain body,
+  contact, island and joint graph ownership; the application has no parallel
+  contact or joint solver.
 - Bevy shader `a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338`: named asset
   sources map to WESL packages, relative and cross-source imports retain native
   dependency handles, and live source preparation uses registered readers. All

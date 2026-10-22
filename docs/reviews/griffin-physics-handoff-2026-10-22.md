@@ -173,3 +173,57 @@ The sub-1-ms target remains open. The contention-affected flight sample has
 2.123 ms median and 3.201 ms p95 full native step time; touchdown has 2.868 ms
 median. Concurrent applications were active, so these are diagnostic figures,
 not clean acceptance. Sleeping-body samples do not qualify active physics.
+
+## USD authored ramp geometry follow-up
+
+USD independently confirms the obstruction in the saved model `4dc4d17`,
+using the canonical query repair: all four middle tracks intersect their
+matching fixed transitions at 120-degree inward stow. Exact-box SAT gives
+approximately -0.22070535 m signed axis margin; this is not runtime contact
+penetration. Source hashes and six collider snapshots are in the model's
+`twins/astrobotic-griffin-1/contracts/evidence/griffin-ramp-interference-2026-10-22.json`.
+The companion Markdown contract records a provisional unequal-length,
+opposite-toe-sweep study and its limited coverage. These live in
+`/home/rod/Documents/models/lunar-base-model`.
+
+The existing source mechanism and common toe-unfold direction remain
+unqualified. USD owns the detailed Griffin component/assembly repair. Please
+keep the authored obstruction separate from the native landing-speed and
+active-step performance findings; no solver, dependency, contact policy,
+mass or torque change was made by this inspection.
+
+## Native integration checkpoint — optimization
+
+The published Avian revision `9097ce9` prepares hard joint velocity gradients,
+mass factorization and responses once per substep. A matched diagnostic window
+of flight steps 60–1000 gives a 2.756 ms median full native step and 3.416 ms
+p95; joint/contact velocity relaxation alone has a 0.970 ms median. Standard
+eight substeps are retained. Concurrent graphical workloads and Tracy overhead
+make these attribution measurements, not clean performance acceptance.
+The capture `scripts/perf/captures/griffin-native-9097-20261022.tracy` passes
+framing validation and native CSV export. A further ECS borrow-cache prototype
+showed no meaningful improvement in a matched short window and was discarded.
+
+The final published-pin production binary
+`e323b6c0279ee421791507c2a7a237698a6b05aaf4fdcc9cf55295e9d8201ae5`
+passes loaded-slider (7), CCD-filter (6), native drive (24), contact (12),
+drivetrain parity (20), coupled pause (11), paused wheel effort (16), suspension
+travel (3), Summer Lunokhod (102), IMU (267) and FLIP route (25) checks. FLIP
+reaches all three waypoints at tick 1192; its shared Modelica guidance retains
+approach control until arrival. Receipts are in
+`.cache/codex-evidence/physics-followup-20261022/published-native-final-regression/`.
+This does not close Griffin ramp deployment or the sub-1-ms active-step target.
+
+USD also recorded a baseline-physics default-scene witness while refreshing
+the Twin source list for the detached root-section work. Binary SHA256
+`9b28c4be8f9e77e8bd1fe8e5ee6f21db4e83afbe2d3d9153cf0c10c64d1579eb`
+has none of optimization's uncommitted solver changes. The vehicle USD is
+unchanged from `4dc4d17`; the new root component was not mounted in it.
+At simulation time 121.916667 s, `/Griffin1SurfaceOps/FLIP` exited the finite
+world at (153.449657, 1050.063833, -195.252691) m, with velocity
+(20.96518, 66.85105, -13.631392) m/s. The native `physics-body-escaped`
+policy paused its 14 dynamic bodies. Receipt:
+`/home/rod/Documents/luncosim-workspace/usd/.cache/codex-evidence/griffin-root-section-20261022/window.log`,
+event timestamp `2026-10-22T21:24:42.313807Z`. This is a baseline witness,
+not a regression comparison against the repaired solver or landing acceptance.
+USD continues the detached component and static geometry work separately.

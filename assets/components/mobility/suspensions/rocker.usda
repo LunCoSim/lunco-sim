@@ -2,89 +2,58 @@
 (
     defaultPrim = "Suspension"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# The ROCKER-BOGIE suspension's wheel spring — short, soft, well damped.
-#
-# A rocker-bogie carries most of its compliance in the LINKAGE, not in the springs: the
-# rockers and bogies pivot to keep all six wheels loaded over a boulder, so the wheel
-# spring only has to absorb what the linkage cannot. Springing it like an independent
-# suspension fights the linkage and makes the body pitch.
-#
-# A wheel composes it as a second reference arc alongside the wheel itself:
-#
-#   def Cylinder "Wheel_FL" (
-#       prepend references = [
-#           @lunco://components/mobility/wheel.usda@</Wheel>,
-#           @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
-#       ]
-#   )
-#
-# See `standard.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Suspension" (
     prepend apiSchemas = ["PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI"]
     kind = "component"
 )
 {
-    float lunco:suspension:restLength = 0.5         # m — short: the linkage does the travelling
-    float physxVehicleSuspension:springStrength = 12000.0 # N/m
-    float physxVehicleSuspension:springDamperRate = 2500.0    # N·s/m
-
-    # Visual strut trio — the loader stamps the piston and spring by role and
-    # lunco-mobility animates them from live compression. With restLength 0.5 and
-    # Perseverance's 0.2625 m wheel radius, the rocker strut has 0.2375 m of
-    # visible travel; the linkage still supplies the large articulation.
-
+    float lunco:suspension:restLength = 0.5
+    float physxVehicleSuspension:springStrength = 12000.0
+    float physxVehicleSuspension:springDamperRate = 2500.0
+    float physxVehicleSuspension:travelDistance = 0.5
     def Cylinder "SuspensionCasing" (
         prepend apiSchemas = ["LunCoSuspensionVisualAPI"]
-        doc = "Visual housing (outer cylinder) of the suspension strut. Stays fixed to the chassis mount point."
+        documentation = "Visual housing (outer cylinder) of the suspension strut. Stays fixed to the chassis mount point."
     )
     {
         uniform token lunco:suspensionVisual:role = "casing"
         uniform token axis = "Y"
         double radius = 0.04
         double height = 0.12
-        # The wheel prim is the AXLE; the casing is fixed near the top of the
-        # 0.2375 m rest strut.
         double3 xformOp:translate = (0.0, 0.19, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.2, 0.2, 0.2)] # Dark grey casing
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.20000000298023224, 0.20000000298023224)]
         bool physics:collisionEnabled = false
     }
-
     def Cylinder "SuspensionPiston" (
         prepend apiSchemas = ["LunCoSuspensionVisualAPI"]
-        doc = "Visual piston (inner cylinder) of the suspension strut. Translates dynamically to follow the wheel's vertical displacement."
+        documentation = "Visual piston (inner cylinder) of the suspension strut. Translates dynamically to follow the wheel's vertical displacement."
     )
     {
         uniform token lunco:suspensionVisual:role = "piston"
         uniform token axis = "Y"
         double radius = 0.025
         double height = 0.12
-        # At the bottom of the strut (just above the axle), slides up/down.
         double3 xformOp:translate = (0.0, 0.06, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.35, 0.35, 0.37)] # Chrome metal piston
+        color3f[] primvars:displayColor = [(0.3499999940395355, 0.3499999940395355, 0.3700000047683716)]
         bool physics:collisionEnabled = false
     }
-
     def Cylinder "SuspensionSpring" (
         prepend apiSchemas = ["LunCoSuspensionVisualAPI"]
-        doc = "Visual spring coil of the suspension strut. Compresses and stretches dynamically based on suspension travel."
+        documentation = "Visual spring coil of the suspension strut. Compresses and stretches dynamically based on suspension travel."
     )
     {
         uniform token lunco:suspensionVisual:role = "spring"
         uniform token axis = "Y"
         double radius = 0.06
-        # Spans the strut, from the axle up to the mount: rest_length 0.5 −
-        # wheel_radius 0.2625 = 0.2375 m at rest; the mobility system scales this
-        # Y-axis cylinder along with the live compression.
         double height = 0.2375
         double3 xformOp:translate = (0.0, 0.11875, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)] # Red spring coil
+        color3f[] primvars:displayColor = [(0.800000011920929, 0.20000000298023224, 0.20000000298023224)]
         bool physics:collisionEnabled = false
     }
 }

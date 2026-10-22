@@ -30,6 +30,15 @@ contact. This warning does not reject admission. Retained mesh contact needs
 measured rolling, slip and penetration validation; the production
 `wheel_collider_lint` gate covers that warning and the supported alternatives.
 
+Raycast suspensions require `physxVehicleSuspension:travelDistance` alongside the
+spring, damper and `lunco:suspension:restLength`. Travel is maximum compression
+from the uncompressed hub and must lie in `[0, restLength]`. Avian's native custom
+constraint API enforces the stop against the ray-hit support body; do not add a
+wheel collider or clamp the rendered hub to hide overtravel. Test nominal support,
+impact travel, contact loss and coupled pause after changing the suspension.
+Native contact loads are physical impulse divided by the master interval; never
+scale them by substeps or the number of joint/contact passes.
+
 For a detailed tire/rim, hide the wheel proxy with standard `VisibilityAPI`
 and give it one centered child with `purpose=render`. Group visual subparts
 under that child; it inherits the wheel frame and receives the measured roll

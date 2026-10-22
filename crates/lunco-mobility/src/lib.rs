@@ -40,6 +40,7 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 
 mod jointed_tire;
+mod raycast_travel;
 mod sensing;
 mod wheel_spin;
 pub use jointed_tire::{JointedWheelTire, apply_jointed_tire_forces};
@@ -128,6 +129,7 @@ impl Plugin for LunCoMobilityPlugin {
         // Expose physics-backed spatial queries (Raycast, GroundHeight) so the
         // API / MCP / rhai `query()` can sense geometry without depending on avian.
         sensing::register_physics_queries(app);
+        raycast_travel::install(app);
         // Bridge avian collision / trigger-volume events onto the telemetry bus
         // so scripts can react via `on_event` instead of polling distance().
         sensing::register_collision_event_bridge(app);
@@ -334,6 +336,7 @@ fn sync_raycast_assembly_filters(
         With<WheelRaycast>,
     >,
     colliders: Query<(Entity, Option<&ColliderOf>), With<Collider>>,
+    travel_contacts: Query<(), With<raycast_travel::RaycastTravelLimit>>,
     changed_colliders: Query<Entity, Or<(Added<Collider>, Changed<ColliderOf>)>>,
     removed_colliders: RemovedComponents<Collider>,
 ) {
@@ -352,7 +355,15 @@ fn sync_raycast_assembly_filters(
         let mut pending = vec![carrier];
         if let Some(joints) = joints.as_deref() {
             while let Some(body) = pending.pop() {
-                for connected in joints.bodies_attached_to(body) {
+                for edge in joints.joints_of(body) {
+                    if travel_contacts.contains(edge.entity) {
+                        continue;
+                    }
+                    let connected = if edge.body1 == body {
+                        edge.body2
+                    } else {
+                        edge.body1
+                    };
                     if members.insert(connected) {
                         pending.push(connected);
                     }
@@ -1826,6 +1837,7 @@ fn apply_wheel_suspension(
             &Suspension,
             &RayHits,
             &WheelBodyMount,
+            Option<&raycast_travel::RaycastStopLoad>,
         ),
         Without<lunco_core::SimulationObjectPaused>,
     >,
@@ -1835,7 +1847,6 @@ fn apply_wheel_suspension(
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut q_chassis: Query<(Forces, &RigidBody), lunco_physics::Integrable>,
     fixed_dynamic_bodies: Res<DynamicFixedBodies>,
-    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<MobilityRoot>)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut physics_time: Option<ResMut<Time<Physics>>>,
@@ -1857,7 +1868,7 @@ fn apply_wheel_suspension(
         }
     };
     for entity in order {
-        let Ok((_, _, mut wheel, susp, hits, mount)) = q_wheels.get_mut(entity) else {
+        let Ok((_, _, mut wheel, susp, hits, mount, stop)) = q_wheels.get_mut(entity) else {
             continue;
         };
         let parent_entity = mount.body;
@@ -1878,7 +1889,6 @@ fn apply_wheel_suspension(
                 mount.local.rotation.as_dquat() * wheel.heading_rotation,
             );
 
-            let mut current_distance = susp.rest_length;
             // A hit with a DEGENERATE normal is not a contact. avian casts these rays
             // `solid: true`, so a ray whose origin is INSIDE a collider returns
             // distance 0 with a ZERO normal — and distance 0 always sorts ahead of the
@@ -1896,7 +1906,6 @@ fn apply_wheel_suspension(
             if let Some(hit) = contact {
                 let distance = f64::from(hit.distance);
                 if distance < susp.rest_length {
-                    current_distance = distance;
                     // Suspension is compressed: apply spring-damper force.
                     let compression = susp.rest_length - distance;
                     // Damping is measured along the CONTACT NORMAL — the same
@@ -1953,30 +1962,12 @@ fn apply_wheel_suspension(
                             ),
                         );
                     }
-                    wheel.last_normal_force = total_force_mag;
+                    wheel.last_normal_force = total_force_mag + stop.map_or(0.0, |load| load.0);
                 } else {
                     wheel.last_normal_force = 0.0;
                 }
             } else {
                 wheel.last_normal_force = 0.0;
-            }
-
-            // Position the wheel visual on the ground (or fully extended if airborne).
-            //
-            // The visual is always a CHILD of the wheel entity (see
-            // `setup_raycast_wheel` in lunco-usd-sim), so its local Y is relative
-            // to the AXLE mount, not the chassis. We want the visual centre at
-            // `ground + radius`; the ray starts `strut_offset` above the mount and
-            // the ground is `distance` below the ray origin, so in wheel-local
-            // space that is `strut_offset + radius - distance`, i.e. the
-            // COMPRESSION — zero at rest, positive as the strut packs up.
-            if let Some(visual_entity) = wheel.visual_entity {
-                if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
-                    let translation_y = (susp.rest_length - current_distance) as f32;
-                    if visual_tf.translation.y != translation_y {
-                        visual_tf.translation.y = translation_y;
-                    }
-                }
             }
         }
     }
@@ -2690,6 +2681,7 @@ mod wheel_raycast_parallel_tests {
                 },
                 Suspension {
                     rest_length: 0.8,
+                    travel_distance: 0.8,
                     spring_k: 0.0,
                     damping_c: 0.0,
                     local_axis: DVec3::Y,
@@ -2854,6 +2846,8 @@ mod wheel_raycast_parallel_tests {
 pub struct Suspension {
     /// target static length of the strut.
     pub rest_length: f64,
+    /// Maximum compression from the uncompressed wheel mount, m.
+    pub travel_distance: f64,
     /// Stiffness (N/m).
     pub spring_k: f64,
     /// Dampening (Ns/m).
@@ -2866,6 +2860,7 @@ impl Default for Suspension {
     fn default() -> Self {
         Self {
             rest_length: 0.4,
+            travel_distance: 0.4,
             spring_k: 50000.0,
             damping_c: 2000.0,
             local_axis: DVec3::Y,
@@ -3589,130 +3584,6 @@ fn update_suspension_visuals(
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod suspension_visuals_tests {
-    use super::*;
-    use avian3d::dynamics::integrator::VelocityIntegrationData;
-    use avian3d::prelude::forces::AccumulatedLocalAcceleration;
-
-    #[test]
-    fn test_suspension_visuals_are_animated() {
-        let mut app = App::new();
-        let mut time = Time::<()>::default();
-        time.advance_by(std::time::Duration::from_secs_f64(0.1));
-        app.insert_resource(time);
-        app.init_resource::<DynamicFixedBodies>();
-
-        let chassis = app
-            .world_mut()
-            .spawn((
-                RigidBody::Dynamic,
-                Position(DVec3::ZERO),
-                Rotation::default(),
-                LinearVelocity(Vec3::ZERO),
-                AngularVelocity(Vec3::ZERO),
-                ComputedMass::default(),
-                ComputedAngularInertia::default(),
-                ComputedCenterOfMass::default(),
-                VelocityIntegrationData::default(),
-                AccumulatedLocalAcceleration::default(),
-                MobilityRoot,
-                OutputPorts::default(),
-            ))
-            .id();
-
-        let visual = app.world_mut().spawn(Transform::default()).id();
-
-        // Markers are pre-spawned here to test the ANIMATION logic in isolation. In
-        // the real app they are stamped at load by `process_usd_sim_prim_read`
-        // (lunco-usd-sim) from the prim's `lunco:suspensionVisual:role` token —
-        // this test does not exercise that load path.
-        // Rest positions as `suspensions/standard.usda` authors them: the wheel prim
-        // is the AXLE, so the strut rises from it (restLength 0.7 − radius 0.4 =
-        // 0.3 m of strut) and the piston/spring sit ABOVE the prim, not below.
-        let piston = app
-            .world_mut()
-            .spawn((
-                SuspensionPiston { initial_y: 0.1 },
-                Transform::from_translation(Vec3::new(0.0, 0.1, 0.0)),
-            ))
-            .id();
-
-        let spring = app
-            .world_mut()
-            .spawn((
-                SuspensionSpring,
-                Transform::from_translation(Vec3::new(0.0, 0.15, 0.0)),
-            ))
-            .id();
-
-        let wheel = app
-            .world_mut()
-            .spawn((
-                WheelRaycast {
-                    suspension_port: Entity::PLACEHOLDER,
-                    drive_port: Entity::PLACEHOLDER,
-                    heading_port: Entity::PLACEHOLDER,
-                    wheel_radius: 0.4,
-                    visual_entity: Some(visual),
-                    ..default()
-                },
-                lunco_physics::PhysicsOrderKey("test-wheel/suspension".to_owned()),
-                Suspension {
-                    rest_length: 0.7,
-                    spring_k: 1000.0,
-                    damping_c: 100.0,
-                    local_axis: DVec3::Y,
-                },
-                WheelBodyMount {
-                    body: chassis,
-                    local: Transform::IDENTITY,
-                },
-                Transform::default(),
-                RayHits(vec![RayHitData {
-                    entity: chassis,
-                    distance: 0.5,
-                    normal: Vec3::Y,
-                }]),
-                ChildOf(chassis),
-            ))
-            .id();
-
-        app.world_mut().entity_mut(visual).insert(ChildOf(wheel));
-        app.world_mut().entity_mut(piston).insert(ChildOf(wheel));
-        app.world_mut().entity_mut(spring).insert(ChildOf(wheel));
-
-        app.add_systems(
-            Update,
-            (apply_wheel_suspension, update_suspension_visuals).chain(),
-        );
-        app.update(); // Frame 1: animates transforms (markers pre-spawned above)
-
-        // 1. The hub rises by the COMPRESSION, because the prim is the axle: the ray
-        // starts 0.3 m above it and hit at 0.5, so the strut is packed 0.2 m up.
-        // rest_length - distance = 0.7 - 0.5 = 0.2
-        let visual_tf = app.world().get::<Transform>(visual).unwrap();
-        assert!(
-            (visual_tf.translation.y - 0.2f32).abs() < 1e-6,
-            "hub at {} , expected the 0.2 m compression",
-            visual_tf.translation.y
-        );
-
-        // 2. Piston translated to initial_y + delta_y.
-        // delta_y = rest_length - distance = 0.7 - 0.5 = 0.2
-        // initial_y = 0.1, so current Y = 0.1 + 0.2 = 0.3 — it rides with the hub.
-        let piston_tf = app.world().get::<Transform>(piston).unwrap();
-        assert!((piston_tf.translation.y - 0.3f32).abs() < 1e-6);
-
-        // 3. Spring scale Y = (distance - radius) / (rest_length - radius)
-        // = (0.5 - 0.4) / (0.7 - 0.4) = 0.1 / 0.3 = 0.3333333
-        // and it sits midway between the hub (0.2) and the fixed strut top (0.3).
-        let spring_tf = app.world().get::<Transform>(spring).unwrap();
-        assert!((spring_tf.scale.y - 0.3333333f32).abs() < 1e-5);
-        assert!((spring_tf.translation.y - 0.25f32).abs() < 1e-6);
     }
 }
 

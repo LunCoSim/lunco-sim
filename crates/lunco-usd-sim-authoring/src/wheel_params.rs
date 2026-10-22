@@ -63,6 +63,8 @@ use std::collections::{HashMap, HashSet};
 pub struct SuspensionParams {
     /// Natural standoff of the wheel below its mount (raycast resting length), m.
     pub rest_length: f64,
+    /// Maximum compression from the uncompressed wheel mount, m.
+    pub travel_distance: f64,
     /// Spring stiffness, N/m.
     pub spring_k: f64,
     /// Spring damping, N·s/m.
@@ -557,6 +559,7 @@ impl WheelParams {
             return false;
         };
         suspension.rest_length = susp.rest_length;
+        suspension.travel_distance = susp.travel_distance;
         suspension.spring_k = susp.spring_k;
         suspension.damping_c = susp.damping_c;
         true
@@ -580,7 +583,7 @@ impl WheelParams {
     }
 }
 
-/// Read the three suspension attrs off one prim. `None` unless all three are
+/// Read the required suspension attrs off one prim. `None` unless all are
 /// authored — partial authoring is treated as missing (no per-field defaults).
 fn read_suspension_attrs(
     reader: &dyn UsdReadObject,
@@ -594,18 +597,28 @@ fn read_suspension_attrs(
         })
     };
     let rest_length = read("lunco:suspension:restLength", &mut missing);
+    let travel_distance = read("physxVehicleSuspension:travelDistance", &mut missing);
     let spring_k = read("physxVehicleSuspension:springStrength", &mut missing);
     let damping_c = read("physxVehicleSuspension:springDamperRate", &mut missing);
     if !missing.is_empty() {
         return Err(missing);
     }
 
-    let (Some(rest_length), Some(spring_k), Some(damping_c)) = (rest_length, spring_k, damping_c)
+    let (Some(rest_length), Some(travel_distance), Some(spring_k), Some(damping_c)) =
+        (rest_length, travel_distance, spring_k, damping_c)
     else {
         unreachable!("missing suspension values were rejected above")
     };
     let mut invalid = Vec::new();
     validate_suspension_values(&mut invalid, rest_length, spring_k, damping_c);
+    validate_nonnegative(
+        &mut invalid,
+        "physxVehicleSuspension:travelDistance",
+        travel_distance,
+    );
+    if travel_distance > rest_length {
+        invalid.push("physxVehicleSuspension:travelDistance exceeds restLength".into());
+    }
     validate_suspension_schema_hints(
         reader,
         prim,
@@ -622,6 +635,7 @@ fn read_suspension_attrs(
 
     Ok(SuspensionParams {
         rest_length,
+        travel_distance,
         spring_k,
         damping_c,
     })

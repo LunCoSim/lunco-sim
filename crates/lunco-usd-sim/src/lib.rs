@@ -3633,6 +3633,7 @@ fn setup_raycast_wheel(
         body_mount,
         Suspension {
             rest_length: susp.rest_length,
+            travel_distance: susp.travel_distance,
             spring_k: susp.spring_k,
             damping_c: susp.damping_c,
             local_axis: DVec3::Y,

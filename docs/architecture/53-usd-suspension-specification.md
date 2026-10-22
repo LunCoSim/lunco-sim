@@ -14,15 +14,16 @@ The repo has two, and they are not interchangeable. Pick by what the spring carr
 | --- | --- | --- |
 | Use for | **raycast wheels** on a reduced vehicle realization | any **physical suspension member** whose load passes through a rigid-body joint: wheels, landing legs, dampers, deployables |
 | Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `PhysicsPrismaticJoint` with the standard `PhysicsDriveAPI:linear`; the joint owns axis, anchors, limits, and rotational lock, and the drive owns the axial spring-damper |
-| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | standard `drive:linear:physics:{targetPosition,targetVelocity,stiffness,damping,maxForce,type}`; `physics:lowerLimit` / `:upperLimit` own the stroke |
+| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength`, `physxVehicleSuspension:travelDistance` | standard `drive:linear:physics:{targetPosition,targetVelocity,stiffness,damping,maxForce,type}`; `physics:lowerLimit` / `:upperLimit` own the stroke |
 | Ground contact | a **ray** from the attachment finds the ground; no wheel collider carries the load | ordinary rigid-body **contacts** between the foot/pad collider and the ground |
 | Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | Avian's native prismatic joint drive in the existing substep solver |
 | Stroke and reaction read from | the `WheelRaycast` / `Suspension` components | the joint's own cosim ports, `displacement` (m, signed) and `force` (N) — `lunco-cosim`'s `JOINT_DISPLACEMENT_PORT` / `JOINT_FORCE_PORT` |
 
 Both are legitimate realizations of the same authored wheel contract; neither is
 inferred from names or selected by a Rust special case. A raycast wheel has no
-prismatic joint and its suspension force never appears as a joint reaction, so a
-strut's load cannot be read that way. A physical wheel has a rigid carrier and a
+wheel rigid body or authored prismatic joint. Its compliant load and hard-stop
+reaction are combined at the wheel contact; an authored joint force port does not
+represent that reduced suspension. A physical wheel has a rigid carrier and a
 revolute wheel joint, so its load and wheel torque pass through the authored
 rigid-body topology.
 
@@ -216,6 +217,7 @@ We remove duplicate suspension fields (`rest_length`, `spring_k`, `damping_c`) f
 #[derive(Component, Debug, Clone, Reflect)]
 pub struct Suspension {
     pub rest_length: f64,
+    pub travel_distance: f64,
     pub spring_k: f64,
     pub damping_c: f64,
     pub local_axis: DVec3,
@@ -235,7 +237,7 @@ and silently makes the schema optional.
 The loader then resolves a wheel's suspension via `resolve_suspension_params`, a two-step path:
 1. **Canonical (Relationship-based):** Pass 1 (`collect_joint_scan_read`) records every `PhysxVehicleWheelAttachmentAPI` prim's `physxVehicleWheelAttachment:wheel` → `:suspension` binding into a `wheel_attachment_targets` map, keyed by `(stage, wheel path)` — a prim path is unique only within its stage, so the same rover loaded twice repeats `/Rover/Wheel_FL`. When the wheel prim is processed in Pass 2, the resolver follows that binding and reads the suspension attrs off the referenced suspension prim.
 2. **Direct self-composition:** If no attachment targets this wheel, the attrs are read directly off the wheel prim. This is LunCo's compact composition, where the wheel references the suspension file directly and the attrs compose onto the wheel prim itself. Both forms are explicit USD topology; the runtime does not select a compatibility path.
-3. **Strict validation (§4):** If neither path yields all three params, the resolver returns `None` and the raycast-wheel branch refuses to spawn (no silent defaults).
+3. **Strict validation (§4):** If neither path yields all required parameters, the resolver returns `None` and the raycast-wheel branch refuses to spawn (no silent defaults).
 
 The same rule applies to standard `Physics*Joint` projection: a prim that
 declares a joint but has malformed or unresolved body/frame/drive authoring is
@@ -243,7 +245,7 @@ reported as `usd-physics-joint-invalid` and raises the shared physics safety
 hold. It is not silently omitted and therefore cannot become an unconstrained
 mechanism.
 
-**Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd-authoring/schema/core/physxSchema.usda` and pinned by the `native_definitions_supply_units_and_project_inspector_hints` drift test.
+**Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), `physxVehicleSuspension:travelDistance`, and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd-authoring/schema/core/physxSchema.usda` and pinned by the `native_definitions_supply_units_and_project_inspector_hints` drift test.
 
 ### 3.2.1. Generic support and activation transaction
 
@@ -297,6 +299,19 @@ vertically in world space while displaying travel along its mounted strut:
 those two lines can strike different sides of a narrow ramp track.
 * **`update_suspension_visuals`:** Queries `(&WheelRaycast, &Suspension, ...)` to scale the spring mesh and translate the piston along the suspension travel axis.
 
+The authored `physxVehicleSuspension:travelDistance` bounds compression from the
+uncompressed hub. It must be finite, nonnegative and no greater than `restLength`.
+`raycast_travel` installs a unilateral custom XPBD constraint through Avian's
+supported constraint and joint-graph APIs. It joins the carrier to the actual
+ray-hit support body, using contact-normal effective mass and inertia. There is
+no wheel collider or extra wheel mass. The stop reaction participates in the tire
+load budget, and losing contact retires its cached constraint and reaction.
+These transient support edges are excluded from the wheel's own assembly filter.
+
+Hub presentation reads the fresh completed-pose raycast after physics. Compression
+is displayed as solved; a visual clamp must never conceal travel failure. Physics
+admission at zero elapsed time does not publish a force sample.
+
 ### 3.4. Live Tuning & Property Updates (`lunco-scene-commands`)
 * The `SetObjectProperty` live mutation system queries the `Suspension` component directly when setting suspension properties (`spring_k`, `damping_c`, `rest_length`).
 * This enables live CLI suspension tuning to work uniformly across both **joint-based** and **raycast** vehicles.
@@ -308,20 +323,20 @@ A physical member is projected from the standard `PhysicsPrismaticJoint` and
 and force capacity are read once through the composed `StageView` and lowered to
 Avian's native implicit spring-damper motor. The native prismatic joint remains
 responsible for anchors, alignment, rotation lock, limits, and the drive
-reaction. The physics owner solves native joint constraints in stable authored
-order, once per substep with motors enabled, followed by three reverse-order
-position-only sweeps through the joint chain. Those additional sweeps propagate
-anchor and limit corrections through closed, high-mass-ratio linkages; native
-motors are temporarily disabled during them so their spring-damper impulses
-are integrated only once. Their original enabled state is restored afterward.
+reaction. Native fixed, prismatic and revolute hard degrees of freedom also project the
+relative velocity through their constrained effective mass. Contact relaxation
+and these projections alternate sixteen times per substep, leaving the joint
+velocity consistent with its pose and transmitting the load to contact friction.
+The coupled loop runs only for awake dynamic joint endpoints and relaxes only
+contacts in their native islands. Unrelated islands keep their ordinary solver
+passes. Its matrix
+factorization is reused while the Jacobian and inertia are unchanged; preparation
+invalidates it before a new physics frame. The solver owns this numerical loop,
+not vehicle policy or an application pose correction.
 
-The default eight substeps remain unchanged. Avian's native velocity projection
-converts the resulting solver-body deltas into coherent velocity. There are no
-additional contact-specific prismatic solvers or angular velocity overrides.
-All constraints use native joint frames, mass, inertia, compliance, and limits
-in the active BigSpace physics frame, never render `GlobalTransform`.
-`StageView` remains the sole composed-USD reader upstream. The mechanism applies
-to every joint chain and contains no vehicle-specific branch.
+The default eight substeps remain unchanged. Native joint frames, mass, inertia,
+compliance and limits use the active BigSpace physics frame, never render
+`GlobalTransform`. `StageView` remains the sole composed-USD reader upstream.
 
 ---
 
