@@ -77,3 +77,44 @@ The final source revision is `17798372683716093098`; the binary SHA256 remains `
 An earlier wider/inward source (`1816606438305106943`, before final source-ownership and perimeter-collider reconciliation) produced a terminal pilot **FAIL** at tick 2584, 43.066667 simulation seconds. Eight of nine checks passed. The sole failure was ramp peak relative angular rate **4.276409768811721 rad/s** against **0.02 rad/s**; peak relative orientation error was only **0.001426457612820009 rad**, within **0.035 rad**. Other pilot bounds passed (minimum upright Y 0.9963134120821918; maximum hull angular speed 0.0857813692106911 rad/s). Evidence is `wide-gates/griffin_pilot_attitude.log` and `wide-gates/cohort.json` in the same directory. Do not present this earlier rate as a measurement on the final saved geometry. It is additional evidence for investigating the loaded constraint pose/rate discrepancy alongside the isolated slider, not proof of a common solver root cause.
 
 Please retain the existing support-drift, impact and pilot acceptance limits while qualifying the physics repair. The Griffin task continues to leave backend repair with optimization. Whole-model mounted USD lint also reports nine unchanged solar direction-port/IMU gravity wiring findings; the model review records those separately and does not claim clean whole-model lint. This follow-up changes only this report and preserves optimization's dirty implementation files.
+
+## IMU rotation-norm control after main synchronization
+
+The USD worktree fast-forwarded to `a45cbca69f22427fb7a7d5f7652940c306efdb28` and rebuilt the normal production binary (SHA256 `7ac15fa0d9c5aafd0140be663b09b5e12ec1ec55fa2602106be065bdb712a6a3`). Its `body_acceleration` production gate fails 47 of 267 checks, all with the existing diagnostic `accelerometer magnitude must be invariant under body rotation`. The observer compares the norm of the three body-frame specific-force components with the reported proper-acceleration magnitude using the unchanged absolute limit `1.0e-9`. Supported, thrust and freefall phase checks pass.
+
+This result also reproduces with the earlier binary (`6d69f8af0be13fd0582f4dec3ad96ac5f9d52c0e71c42114f8858ecf0409f452`) on optimization's untouched fixture, and on the USD fixture after removing its unused inactive `/SandboxScene/Box` branch. The active `/SandboxScene/Box50` body, mass, force phases and observer limits are unchanged. All three runs have the same ordered 47 failure messages. This establishes a pre-existing rotation/precision contract failure; it does not establish its mechanism or a common cause with the loaded slider.
+
+Evidence under `/home/rod/Documents/luncosim-workspace/usd/.cache/codex-evidence/griffin-validation-20261022/`: `body-acceleration-baseline.log`, `body_acceleration-gate.log`, and `post-ff-gates/body_acceleration-gate.log`. Reproduce with the current normal binary using `luncosim test --api <free-owned-port> --scene assets/scenes/tests/body_acceleration.usda --verdict-channel BODY_ACCELERATION`. Please investigate at the physics/IMU owner without relaxing the rotation-norm limit. Initialization-policy, scene-transition-generation and standalone sensor gates pass on the rebuilt binary.
+
+The separate Griffin interface cleanup now closes the former direction-alias and gravity-port lint errors through Rhai collection-aware policy and double gravity inputs. That preflight repair is not evidence that these physics gates are repaired. No solver, dependency, timestep, substep, friction, mass, spring cap or physics tolerance was changed by the Griffin task.
+
+## Collision-query observation during internal FLIP packaging
+
+The native document query has an inconsistent child bounds result worth retaining when investigating contact geometry. On FLIP document `119546362397782`, generation 151, stage generation 4, `/FLIP/Battery/Body` has geometry bounds min `[-0.842,0.158,-0.68]`, max `[0.842,0.358,0.68]` in canonical-stage metres. Its returned cooked convex hull occupies that allocation (vertex roundoff is about `1e-8` m). However, the same child query's `collision_bounds` reports the untransformed unit Cube at the origin and labels that result `canonical_stage`. Querying the parent `/FLIP/Battery` gives the expected transformed collision bounds. Receipt: `/home/rod/Documents/luncosim-workspace/usd/.cache/codex-evidence/griffin-validation-20261022/battery-final-readback.json`.
+
+This is an observed query/frame discrepancy, not proof that runtime collision uses the wrong shape. The composed fixture was not spawned. The battery gate observes parent aggregate collision bounds and child visible bounds; the separate cooked vertices confirm the allocation. Keep shape, frame, and parent-transform provenance explicit when using these APIs to diagnose the loaded-support issue.
+
+## IMU repair qualification — optimization
+
+The optimization production run reproduced the same 47/267 failures before the
+repair. `lunco-physics::kinematics::finish_interval` validated a native unit f32
+quaternion, widened it, then used it as a unit f64 frame rotation. Native unit
+tolerance does not imply unit length after widening. The measurement boundary
+now normalizes the validated widened quaternion before transforming specific
+force into the body frame; native body state and solver settings are unchanged.
+
+The unchanged `body_acceleration` production scene now passes **267 checks**,
+including the original **1e-9** norm limit, supported/thrust/freefall phases and
+unavailable initial measurements (exit 0, terminal tick 175). Binary SHA256: `65ed1704dfca6220dcaaaff6dfc40439341978fefd7d30b58d6592da9f5ef898`.
+Evidence: `.cache/codex-evidence/physics-followup-20261021/imu-roof-pause-integration/body-acceleration.log`;
+the failing local baseline is `embedded-policy-trace/body-acceleration.log` in
+the same evidence root. This closes the IMU rotation-norm finding; Griffin
+landing, ramp unfolding and the sub-1-ms active-step target remain separate open gates.
+
+USD also integrated the committed measurement repair without the worktree's
+uncommitted solver/dependency changes. Its normal production binary SHA256 is
+`0242a65cff83d1adce15b14a67e3f04aa3d69d760aa87f7e1fc19d048675e4e1`.
+The original acceleration gate passes 267 checks, and sensor,
+initialization-policy, scene-transition-generation, FLIP chassis and integrated
+visual gates pass. Receipt:
+`/home/rod/Documents/luncosim-workspace/usd/.cache/codex-evidence/griffin-materials-20261022/integration-gates.json`.

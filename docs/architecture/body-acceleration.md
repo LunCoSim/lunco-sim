@@ -38,7 +38,11 @@ inputs retain their declared zero initialization alongside `acceleration_valid`.
 
 A supported body has approximately zero net acceleration and one local g of
 specific force. Ideal free fall has the reverse. A body rotating in space
-changes the components, not the magnitude. A real sensor displaced from the
+changes the components, not the magnitude. The native f32 attitude is checked
+at its native precision, then widened and normalized in f64 before the body-frame
+rotation. A native unit-tolerance check alone does not establish a unit f64
+quaternion. This conversion preserves the orientation and the vector norm.
+A real sensor displaced from the
 centre of mass also needs `α × r + ω × (ω × r)` and any sensor error/filter
 model; these belong to its mounted sensor model, not every graph widget.
 Measurements average a native fixed interval: impact peaks depend on sampling
