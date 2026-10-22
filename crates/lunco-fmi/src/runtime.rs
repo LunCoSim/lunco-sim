@@ -73,8 +73,13 @@ pub struct SetFmuPaused {
 fn on_set_fmu_paused(
     trigger: On<SetFmuPaused>,
     mut participants: Query<&mut FmuParticipant>,
+    suspended: Query<(), With<lunco_core::SimulationObjectPaused>>,
 ) -> Result<Ack, String> {
     let request = trigger.event();
+    if !request.paused && suspended.contains(request.target) {
+        warn!("[fmi] rejected resume: participant belongs to a suspended coupled system");
+        return Err("cannot resume one participant of a suspended coupled system".to_owned());
+    }
     let mut participant = participants.get_mut(request.target).map_err(|_| {
         warn!("[fmi] rejected pause: target is not a native FMU participant");
         "pause target is not a native FMU participant".to_owned()
@@ -515,6 +520,7 @@ fn dispatch(
     master: Res<SimTick>,
     channels: Res<Channels>,
     mut models: Query<(Entity, &mut FmuParticipant, &mut SimComponent)>,
+    suspended: Query<(), With<lunco_core::SimulationObjectPaused>>,
     mut progress: ResMut<SimulationProgress>,
     mut faults: ResMut<RuntimeFaults>,
 ) {
@@ -524,7 +530,9 @@ fn dispatch(
     let mut ordered: Vec<_> = models.iter_mut().collect();
     ordered.sort_unstable_by_key(|(entity, _, _)| entity.to_bits());
     for (entity, mut model, mut component) in ordered {
-        let active = !model.paused && matches!(component.status, SimStatus::Running);
+        let active = !suspended.contains(entity)
+            && !model.paused
+            && matches!(component.status, SimStatus::Running);
         if let Err(detail) = model.clock.observe(*master, active) {
             fault(
                 entity,

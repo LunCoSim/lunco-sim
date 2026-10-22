@@ -253,3 +253,15 @@ pub const NON_PHYSICAL_QUERY_LAYERS: u32 = TRIGGER_COLLISION_LAYER | CELESTIAL_C
 pub struct ScriptParams(pub std::collections::HashMap<String, f64>);
 
 use bevy::prelude::Component;
+
+/// Stops a member of a suspended coupled system until that system is retired.
+/// Backend run controls cannot override this component. The co-simulation
+/// owner resolves membership and installs it at a completed exchange boundary.
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component)]
+pub struct SimulationObjectPaused {
+    /// Authored engineering condition or validity boundary identity.
+    pub condition: String,
+    /// Measurements, limits and explanation supplied by the deciding policy.
+    pub detail: String,
+}

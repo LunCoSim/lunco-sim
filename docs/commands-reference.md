@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**270 commands** across **55** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**271 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -35,6 +35,10 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-modelica-core`](#lunco-modelica-core) (1 command)
 - [`lunco-modelica-ui`](#lunco-modelica-ui) (33 commands)
+
+**Co-simulation**
+
+- [`lunco-cosim`](#lunco-cosim) (1 command)
 
 **Vessels, mobility & control**
 
@@ -1065,6 +1069,25 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `doc_id` | `DocumentId` |   |
+
+## Co-simulation
+
+### `lunco-cosim` <a id="lunco-cosim"></a>
+
+#### `PauseSimulationObject`
+
+ Suspend a complete coupled system at a completed communication boundary.
+ Membership follows active dynamic joints, physical ownership and all live
+ simulation connections. Shared port connections therefore share suspension.
+ Supervisors outside that graph remain live to explain or restart the scene.
+
+- *defined in:* `crates/lunco-cosim/src/object_pause.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  Dynamic body from which the coupled-system closure is resolved. |
+| `condition` | `String` |  Authored failure, damage or validity condition identity. |
+| `detail` | `String` |  Measured values, engineering limits and explanation for Recent Events. |
 
 ## Vessels, mobility & control
 
@@ -2552,7 +2575,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  ```json
  {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
- {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
+ {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wesl...>"}}
  ```
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
@@ -2661,7 +2684,7 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `SetShaderSource`
 
  Replace a shader asset's WESL **source in place** from text sent over the
- API, preparing its native file dependencies asynchronously. Overwrites the
+ API, recompiling it live without touching disk or restarting. Overwrites the
  active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wesl"`), so every
  material using them re-specializes its pipeline next frame. Bare engine
  paths resolve to the canonical `lunco://` identity used by [`ReloadShader`].
@@ -4109,7 +4132,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 270 commands from the runtime schema; scanned 1029 .rs files for docs (0 parse failure(s) skipped).
+<!-- 271 commands from the runtime schema; scanned 1029 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

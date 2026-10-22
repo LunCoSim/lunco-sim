@@ -74,6 +74,7 @@ pub fn sync_modelica_outputs(
             Ref<ModelicaModel>,
             Ref<ModelicaVariables>,
             Ref<UsdSourcedCosim>,
+            Has<lunco_core::SimulationObjectPaused>,
             &mut SimComponent,
         ),
         (
@@ -87,7 +88,7 @@ pub fn sync_modelica_outputs(
         ),
     >,
 ) {
-    for (model, variables, source, mut comp) in &mut q {
+    for (model, variables, source, suspended, mut comp) in &mut q {
         let publish_outputs =
             variables.is_changed() || model.is_added() || source.is_added() || comp.is_added();
         let changed = {
@@ -111,7 +112,11 @@ pub fn sync_modelica_outputs(
                 }
             }
             drop(input_span);
-            let status = modelica_status(&model);
+            let status = if suspended {
+                SimStatus::Paused
+            } else {
+                modelica_status(&model)
+            };
             if comp.status != status {
                 comp.status = status;
                 changed = true;

@@ -1,0 +1,58 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0.0, -1.0, 0.0)
+        float physics:gravityMagnitude = 1.6200000047683716
+    }
+    def Cube "A" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.5
+        float physics:mass = 10.0
+        custom double3 xformOp:translate = (0.0, 3.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "B" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.5
+        float physics:mass = 10.0
+        custom double3 xformOp:translate = (1.0, 3.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "Independent" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.5
+        float physics:mass = 10.0
+        custom double3 xformOp:translate = (10.0, 3.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def PhysicsFixedJoint "Joint"
+    {
+        rel physics:body0 = </World/A>
+        rel physics:body1 = </World/B>
+        point3f physics:localPos0 = (1.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        quatf physics:localRot0 = (1.0, 0.0, 0.0, 0.0)
+        quatf physics:localRot1 = (1.0, 0.0, 0.0, 0.0)
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/physics_object_pause.rhai@
+    }
+}

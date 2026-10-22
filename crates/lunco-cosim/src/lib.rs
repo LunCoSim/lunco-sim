@@ -46,12 +46,14 @@ pub mod avian_queries;
 pub mod binding;
 mod failure;
 pub mod joint;
+mod object_pause;
 pub mod ports;
 pub mod systems;
 
 pub use avian::*;
 pub use binding::*;
 pub use joint::*;
+pub use object_pause::PauseSimulationObject;
 pub use ports::*;
 
 use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
@@ -184,6 +186,7 @@ fn reset_scene_state(
 
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
+        object_pause::install(app);
         app.register_deferred_command::<SetPorts>();
         app.register_deferred_command::<SetPortsBatch>();
         app.register_deferred_command::<ReleasePort>();

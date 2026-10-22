@@ -520,6 +520,11 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_initialization_paused": initialization_paused.is_some(),
             "physics_initialization_penetration_m": initialization_paused.map(|paused| paused.penetration_m),
             "physics_object_paused": object_paused,
+            "simulation_object_paused": world.get::<lunco_core::SimulationObjectPaused>(entity).is_some(),
+            "simulation_object_pause_reason": world.get::<lunco_core::SimulationObjectPaused>(entity).map(|reason| api_value!({
+                "condition": reason.condition.as_str(),
+                "detail": reason.detail.as_str(),
+            })),
             "physics_pose_seeded": pose_seeded,
             "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,

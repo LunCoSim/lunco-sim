@@ -1818,14 +1818,17 @@ fn refresh_dynamically_fixed_bodies(
 /// at `ground_y + wheel_radius`, which in wheel-local Y is the compression, so an
 /// unloaded wheel draws exactly at its authored mount.
 fn apply_wheel_suspension(
-    mut q_wheels: Query<(
-        Entity,
-        Option<&lunco_physics::PhysicsOrderKey>,
-        &mut WheelRaycast,
-        &Suspension,
-        &RayHits,
-        &WheelBodyMount,
-    )>,
+    mut q_wheels: Query<
+        (
+            Entity,
+            Option<&lunco_physics::PhysicsOrderKey>,
+            &mut WheelRaycast,
+            &Suspension,
+            &RayHits,
+            &WheelBodyMount,
+        ),
+        Without<lunco_core::SimulationObjectPaused>,
+    >,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
@@ -2013,7 +2016,10 @@ fn sync_raycast_wheel_physics_pose(
             &WheelBodyMount,
             &Suspension,
         ),
-        With<WheelRaycast>,
+        (
+            With<WheelRaycast>,
+            Without<lunco_core::SimulationObjectPaused>,
+        ),
     >,
     q_chassis: Query<(&Position, &Rotation), (With<RigidBody>, Without<WheelRaycast>)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -2167,15 +2173,18 @@ fn cast_wheel_ray_hits_parallel(
 /// from sliding like it's on ice and limits drive force to what the tire can
 /// actually grip.
 fn apply_wheel_drive(
-    q_wheels: Query<(
-        Entity,
-        Option<&lunco_physics::PhysicsOrderKey>,
-        &WheelRaycast,
-        &Suspension,
-        &RayHits,
-        &WheelBodyMount,
-        Option<&WheelHeatPorts>,
-    )>,
+    q_wheels: Query<
+        (
+            Entity,
+            Option<&lunco_physics::PhysicsOrderKey>,
+            &WheelRaycast,
+            &Suspension,
+            &RayHits,
+            &WheelBodyMount,
+            Option<&WheelHeatPorts>,
+        ),
+        Without<lunco_core::SimulationObjectPaused>,
+    >,
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
@@ -2382,7 +2391,10 @@ fn apply_wheel_drive(
 /// no command interpretation, rate limiting, or vehicle-type dispatch; those
 /// belong to the authored controller.
 fn apply_wheel_heading(
-    mut q_wheels: Query<(&mut WheelRaycast, &mut Transform, &WheelBodyMount)>,
+    mut q_wheels: Query<
+        (&mut WheelRaycast, &mut Transform, &WheelBodyMount),
+        Without<lunco_core::SimulationObjectPaused>,
+    >,
     q_ports: Query<&Port>,
     q_chassis: Query<&RigidBody, With<RigidBody>>,
 ) {

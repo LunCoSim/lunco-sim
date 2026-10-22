@@ -558,6 +558,19 @@ readiness and deliberate physics stepping must be owned by the incoming scene.
 
 ## 5. Reading the failure modes
 
+For an authored engineering failure, use `PauseSimulationObject` with a dynamic
+body, a stable condition name and a measured explanation. Its co-simulation
+owner freezes the complete joint/port-connected system, including Modelica and
+object-owned controllers; unrelated systems and external supervisors continue.
+Invoke it at a completed communication boundary. Busy participant rejection is
+terminal and leaves the entire system unchanged. Read
+`QueryPhysicsState.simulation_object_pause_reason` and the sourced
+`simulation-object-paused` event. Use `RestartScene` for the supported recovery
+boundary. A physical damage threshold belongs in Modelica/authored data and its
+reaction in Rhai; do not classify a native solver failure as a crash or loosen
+nominal driving/landing checks to conceal it. See
+[coupled suspension](../../docs/architecture/22-domain-cosim.md#coupled-object-suspension).
+
 | Symptom | Look at |
 |---|---|
 | `origin.is_finite()` panic in `obvhs` | a body reached ±inf; a raycast was issued from it. The *cause* is upstream — find the first `body has non-finite state` diagnostic |

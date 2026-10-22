@@ -66,12 +66,15 @@ pub fn apply_joint_torque_actuators(
     virtual_time: Res<Time<Virtual>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
-    q_actuators: Query<(
-        Entity,
-        &JointTorqueActuator,
-        Option<&RevoluteJoint>,
-        Has<JointDisabled>,
-    )>,
+    q_actuators: Query<
+        (
+            Entity,
+            &JointTorqueActuator,
+            Option<&RevoluteJoint>,
+            Has<JointDisabled>,
+        ),
+        Without<lunco_physics::PhysicsObjectPaused>,
+    >,
     mut q_ports: ParamSet<(
         Query<&lunco_port_core::Port>,
         Query<&mut lunco_port_core::Port>,

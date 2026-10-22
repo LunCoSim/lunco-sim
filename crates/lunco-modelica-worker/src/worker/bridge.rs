@@ -444,6 +444,7 @@ pub fn spawn_modelica_requests(
         Option<&ModelicaVariables>,
         Option<&lunco_core::GlobalEntityId>,
     )>,
+    suspended: Query<(), With<lunco_core::SimulationObjectPaused>>,
     mut lag: ResMut<CosimLag>,
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
@@ -477,6 +478,10 @@ pub fn spawn_modelica_requests(
     });
 
     for (entity, mut model, variables, _) in models {
+        if suspended.contains(entity) {
+            model.paused = true;
+            model.resume_after_compile = false;
+        }
         if variables.is_none() {
             reject_missing_modelica_variables(entity, &mut model, faults.as_deref_mut());
             continue;
@@ -754,7 +759,13 @@ fn include_compile_explanation(diagnostics: &mut [lunco_doc::Diagnostic], error:
 /// and unpauses the simulation.
 pub fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
-    initializing: Query<(), With<lunco_cosim_core::initialization::CoupledInitializationPending>>,
+    inactive: Query<
+        (),
+        Or<(
+            With<lunco_cosim_core::initialization::CoupledInitializationPending>,
+            With<lunco_core::SimulationObjectPaused>,
+        )>,
+    >,
     mut worker_failure: Option<ResMut<lunco_modelica_runtime::ModelicaWorkerFailure>>,
     mut q_models: Query<(
         Entity,
@@ -1433,8 +1444,7 @@ pub fn handle_modelica_responses(
                     } else {
                         0
                     };
-                    model.paused =
-                        initializing.contains(result.entity) || !model.resume_after_compile;
+                    model.paused = inactive.contains(result.entity) || !model.resume_after_compile;
                     model.resume_after_compile = false;
                     // Worker has installed a stepper for this entity.
                     // `spawn_modelica_requests` now admits its next fixed step.

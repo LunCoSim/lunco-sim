@@ -327,6 +327,12 @@ mod readiness_gate_tests {
 }
 
 fn scenario_owner_is_held(world: &World, entity: Entity, held_roots: &[Entity]) -> bool {
+    if world
+        .get::<lunco_core::SimulationObjectPaused>(entity)
+        .is_some()
+    {
+        return true;
+    }
     let mut current = entity;
     loop {
         if held_roots.contains(&current) {
@@ -1323,7 +1329,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 .map(|(entity, model, authority, _, _)| {
                     (
                         entity,
-                        model.paused,
+                        model.paused
+                            || world
+                                .get::<lunco_core::SimulationObjectPaused>(entity)
+                                .is_some(),
                         model.document_id,
                         authority.and_then(|authority| authority.0),
                         model.reload_policy,
@@ -2259,7 +2268,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .map(|(e, m, auth, _, _)| {
                         (
                             e,
-                            m.paused,
+                            m.paused
+                                || world.get::<lunco_core::SimulationObjectPaused>(e).is_some(),
                             m.language,
                             m.document_id,
                             auth.and_then(|a| a.0),

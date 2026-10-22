@@ -1534,7 +1534,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             "t": model.current_time,
             "compiled": model.is_compiled,
             "model_name": model.model_name.clone(),
-            "paused": model.paused,
+            "paused": model.paused || world.get::<lunco_core::SimulationObjectPaused>(entity).is_some(),
             "parameters": project(&model.parameters),
             "inputs": project(&model.inputs),
             "variables": project(&variables.values),

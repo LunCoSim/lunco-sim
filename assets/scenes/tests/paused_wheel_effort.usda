@@ -1,0 +1,97 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+)
+{
+    def Plane "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 0.0, 0.0)
+        custom double3 xformOp:scale = (100.0, 1.0, 100.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        double width = 1.0
+        double length = 1.0
+        uniform token axis = "Y"
+        uniform token lunco:terrain:surfaceRole = "flat-site"
+    }
+    def Xform "Physical" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = { string "drivetrain" = "physical" }
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 1.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom double outputs:position_y = 0.0
+        def Scope "Controller" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/paused_object_controller.rhai@
+        }
+    }
+    def Xform "Raycast" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = { string "drivetrain" = "raycast" }
+    )
+    {
+        custom double3 xformOp:translate = (10.0, 1.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Scope "Controller" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/paused_object_controller.rhai@
+        }
+    }
+    def Cube "Independent" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.5
+        float physics:mass = 10.0
+        custom double3 xformOp:translate = (-10.0, 3.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Scope "Controller" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/paused_object_controller.rhai@
+        }
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/paused_wheel_effort.rhai@
+    }
+    def Scope "RemoteDrive" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/CoupledPauseProbe.mo@
+        custom double inputs:input_value = 1.0
+        double inputs:input_value.connect = </World/Physical.outputs:position_y>
+        custom double outputs:accumulated = 0.0
+    }
+    def Scope "IndependentModel" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/CoupledPauseProbe.mo@
+        custom double inputs:input_value = 1.0
+        custom double outputs:accumulated = 0.0
+    }
+}

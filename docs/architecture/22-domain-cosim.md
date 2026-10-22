@@ -51,6 +51,47 @@ semantics as required by the [FMI unit contract](https://fmi-standard.org/docs/3
 
 ## Physical coupling contracts
 
+### Coupled object suspension
+
+`PauseSimulationObject { target, condition, detail }` is owned by `lunco-cosim`.
+Rhai chooses the engineering condition and reaction; this command applies the
+stop to the complete live coupling graph. Starting from a dynamic body, it
+includes active dynamic joint connections, entities owned by each body, and
+both ends of every `SimConnection`. A shared connected power source therefore
+shares suspension. Static joint anchors terminate mechanical membership.
+Nested rigid bodies start their own ownership boundary, so a detached body is
+not included merely because it remains a USD child.
+
+The owner validates the complete closure before changing it. A Modelica compile
+or in-flight participant step rejects the command with a named boundary error;
+no body or model is partially paused and no worker receipt is discarded.
+At an accepted boundary, native bodies, colliders and constraints are disabled,
+Modelica run intent is cleared, and every member receives the core
+`SimulationObjectPaused` component. Modelica, FMI and the shared script driver
+enforce that component independently of their ordinary run controls. Modelica
+child clocks and continuous state remain at their last accepted observation;
+object-owned controllers stop receiving executable callbacks. Supervisors
+outside the graph remain available to report failure or request `RestartScene`.
+Restart retires the scene-owned members and their suspension state together.
+
+`QueryPhysicsState` exposes `simulation_object_paused` and
+`simulation_object_pause_reason`, including the authored condition and measured
+explanation. One sourced `simulation-object-paused` telemetry event feeds Recent
+Events. Repeating a pause retains the original reason without another event.
+Damage that can continue operating need not invoke this stop: Modelica can
+publish its state through an authored `LunCoEvent`, and Rhai can warn, suspend or
+restart according to mission policy. Numerical failure remains a distinct
+owner diagnostic, never an inferred physical crash.
+
+Production gates: `physics_object_pause` covers rejection before mutation,
+connected body containment, retained pose/reason, idempotence and the event;
+`paused_wheel_effort` covers both wheel realizations, an externally connected
+continuous model, stopped controllers and independent systems that keep running.
+Changing simulation models requires a separately validated state/clock handoff;
+resuming an individual suspended backend is not such a handoff.
+
+### Mechanical exchange
+
 Rust projections create engineering endpoints with
 `Port::with_contract(value, ScalarPortContract)`. This validates the initial
 sample and returns the `Port` plus its `ScalarPortContracts` bundle. Direct
@@ -81,7 +122,9 @@ same explicitly declared joint coordinate frame. Optional heat endpoints require
 coherent watts; published effort, speed and heat samples must pass their endpoint
 bounds and finite-value validation. Wheel frames use the exact
 source-stage lease and wheel prim identity; the measured axis comes from the
-native joint frame and the same typed sign as the torque projection. A missing or disabled joint,
+native joint frame and the same typed sign as the torque projection. The effort
+consumer excludes assemblies carrying `PhysicsObjectPaused`, using the same ECS
+admission boundary as their native bodies and constraints. A missing or otherwise disabled joint,
 a concurrent enabled native motor, malformed mechanics or a retired required
 endpoint raises `cosim-joint-coupling-invalid` and holds physics before integration.
 The native angle-command port is read-only while external effort owns the

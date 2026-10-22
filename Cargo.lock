@@ -8529,6 +8529,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-port-core",
+ "lunco-telemetry-core",
  "lunco-time",
 ]
 

@@ -124,12 +124,15 @@ pub fn apply_jointed_tire_forces(
             &ComputedCenterOfMass,
         )>,
     )>,
-    q_tires: Query<(
-        Entity,
-        Option<&lunco_physics::PhysicsOrderKey>,
-        &JointedWheelTire,
-        Option<&crate::WheelHeatPorts>,
-    )>,
+    q_tires: Query<
+        (
+            Entity,
+            Option<&lunco_physics::PhysicsOrderKey>,
+            &JointedWheelTire,
+            Option<&crate::WheelHeatPorts>,
+        ),
+        Without<lunco_core::SimulationObjectPaused>,
+    >,
     q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,

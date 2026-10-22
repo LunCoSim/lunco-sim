@@ -470,3 +470,10 @@ by both shared drive laws. `drive`/`brake` select direct program control;
 `modelica_waypoint` selects program guidance. Raw session `SetPorts` commands
 require possession and remain inactive without it. Verify mode boundaries with
 `modelica_drive_law` and real travel with the matching drivetrain scene gate.
+
+Engineering failure policy uses `PauseSimulationObject`, not a physics-only
+freeze. The co-simulation owner includes the active mechanical island, owned
+controllers and all connected continuous models. Independent systems and an
+external mission supervisor remain live. Supply the measured condition and
+limit in `detail` for Recent Events; use `RestartScene` for recovery. The
+`paused_wheel_effort` production gate checks this with both wheel realizations.

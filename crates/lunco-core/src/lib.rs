@@ -63,13 +63,13 @@ pub use faults::{
 };
 pub use identity::Provenance;
 pub use labels::{entity_display_name, humanize_identifier};
-pub use markers::NoSelectionBounds;
 pub use markers::{
     CELESTIAL_COLLISION_LAYER, CatalogEntryId, EmbeddedScenarioPath, EmbeddedScenarioSource,
     HorizonShadowTerrain, NON_PHYSICAL_QUERY_LAYERS, PhysicsPoseAuthoritative,
     SOLAR_ANGULAR_DIAMETER_DEG, ScenarioProgramPrim, ScriptParams, SunAngularDiameter,
     TRIGGER_COLLISION_LAYER, TriggerZone, UsdPrimKind,
 };
+pub use markers::{NoSelectionBounds, SimulationObjectPaused};
 pub use math::{
     CoordinateTransform, CoordinateTransformError, DTransform, FramedPose, FramedPosition,
 };
