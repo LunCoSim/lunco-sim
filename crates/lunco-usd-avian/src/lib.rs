@@ -75,7 +75,7 @@ use lunco_usd_avian_reader::{
         ColliderBuildOutcome, ColliderProjectionError, build_collider_from_usd,
         collect_body_colliders_from_usd,
     },
-    joint::{has_rigid_body_ancestor, joint_targets_simulated_wheel, read_joint_spec},
+    joint::{has_rigid_body_ancestor, read_joint_spec},
     read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
 };
 use openusd_schemas::physics::tokens as ptok;
@@ -1096,11 +1096,9 @@ fn project_pending_joint(
     if !is_physics_joint_type(reader, sdf_path) {
         return false;
     }
-    // Wheel joints belong to raycast-wheel realization. Lint-only fixtures are
-    // available to the linter but are never runtime constraints or faults.
-    if !lunco_usd_avian_reader::joint::is_runtime_joint_enabled(reader, sdf_path)
-        || joint_targets_simulated_wheel(reader, sdf_path)
-    {
+    // Lint-only fixtures remain available to the linter without participating
+    // in native topology or runtime faults.
+    if !lunco_usd_avian_reader::joint::is_runtime_joint_enabled(reader, sdf_path) {
         return true;
     }
     if let Some(joint) = read_joint_spec(reader, sdf_path) {
@@ -1639,10 +1637,6 @@ fn on_add_usd_prim(
     {
         return;
     }
-    let wheel_owned = joint_targets_simulated_wheel(&reader, &sdf_path);
-    if wheel_owned {
-        return;
-    }
     // Authoring/lint fixtures remain in the composed stage so the linter can
     // inspect their faults, but they are not runtime constraints.  Apply this
     // admission policy before the invalid-joint fault path: a deliberately
@@ -1923,9 +1917,8 @@ fn build_usd_physics_joints(
             pending.joint_type, pending.body0_path, pending.body1_path,
         );
 
-        // The one seating contract is shared by authored USD joints and
-        // synthesized wheel joints. It runs at the pending-joint admission
-        // boundary, after the body states exist and before the next solver step.
+        // Seating runs at the pending-joint admission boundary, after the body
+        // states exist and before the next solver step.
         // Put the avian joint component ON the joint prim entity itself (it
         // already carries `UsdPrimPath` + the loader-assigned `GlobalEntityId`)
         // rather than spawning a fresh anonymous entity. This makes the joint
@@ -2845,7 +2838,7 @@ mod joint_reader_tests {
     metersPerUnit = 1
 )
 def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
-def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxVehicleWheelAPI"] ) {}
 def PhysicsRevoluteJoint "Hinge" (
     prepend apiSchemas = ["PhysicsDriveAPI:angular", "LunCoJointDampingAPI"]
 )
@@ -3431,12 +3424,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         // isolation where its wheels are would derive four anchors at the origin and
         // call that fine — the fragment cannot answer a question the arc resolves.
         //
-        // It is synthetic rather than the shipped scene because a wheel hinge on a
-        // real rover carries `PhysxVehicleWheelAPI`, and those joints belong to
-        // `lunco-usd-sim`, which builds them from the wheel's own transform and never
-        // consults `localPos0` at all. This test is about the DERIVATION, so it feeds
-        // the derivation the shape it actually serves: mounts on the wheels, hinges
-        // with no anchors, four of them, on one body.
+        // Inline topology isolates anchor derivation from asset composition.
         let mut body = String::from(
             "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n    upAxis = \"Y\"\n    metersPerUnit = 1\n)\n\
              def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n",

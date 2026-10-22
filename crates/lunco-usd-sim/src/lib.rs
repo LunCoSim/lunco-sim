@@ -51,8 +51,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian_contracts::{
-    AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
-    ShouldBeDynamic,
+    AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ShouldBeDynamic,
 };
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
@@ -1966,17 +1965,10 @@ fn collect_joint_scan_read(
             body0,
             body1
         );
-        // A physical wheel's authored revolute joint is the USD identity of
-        // the wheel attachment, but the mobility projector owns the runtime
-        // constraint: it creates the admitted wheel joint with the actuator
-        // motor on the wheel entity's actual carrier mount. Keeping the
-        // authored identity in the generic readiness set would wait forever,
-        // because that synthesized joint intentionally has no USD prim path.
-        if !is_physical_wheel_joint {
-            topology
-                .authored_joints
-                .insert(path.as_str().to_string(), (body0, body1));
-        } else if !body0.is_empty() {
+        topology
+            .authored_joints
+            .insert(path.as_str().to_string(), (body0.clone(), body1.clone()));
+        if is_physical_wheel_joint && !body0.is_empty() {
             topology.physical_wheel_bodies.insert(body1, body0);
         }
         if joint_type == "PhysicsRevoluteJoint" {
@@ -2806,6 +2798,29 @@ fn process_usd_sim_prim_read(
         // from wheel dynamics. Validate it before creating any synthesized ports so an
         // invalid authored body leaves no partial runtime projection behind.
         let is_physical = topology.joint_targets.contains_key(&prim_path.path);
+        let joint_entity = if let Some(joint_path) = topology.joint_targets.get(&prim_path.path) {
+            let Some(joint_entity) = usd_entity_for_path(
+                all_prims,
+                prim_path.stage_handle.id(),
+                joint_path,
+                q_child_of,
+                q_preview_only,
+            ) else {
+                lunco_core::trigger_runtime_error(
+                    commands,
+                    "usd-wheel-joint-identity",
+                    format!(
+                        "{} requires one projected authored hinge {joint_path}",
+                        prim_path.path
+                    ),
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            };
+            Some(joint_entity)
+        } else {
+            None
+        };
         let authored_collider = if is_physical {
             if !reader.has_api_schema(&sdf_path, ptok::PHYSICS_RIGID_BODY_API) {
                 error!(
@@ -2855,8 +2870,7 @@ fn process_usd_sim_prim_read(
 
         // Create the actuator-side ports for drive and heading. Owned by the wheel via
         // `ChildOf` so the single recursive scene-clear reclaims them with the
-        // wheel — synthesized backing entities are never left detached at the root
-        // (the general lifecycle contract; see `setup_physical_wheel`'s joint).
+        // wheel — synthesized backing entities remain in its scene hierarchy.
         let shaft_frame = lunco_engineering_values::CoordinateFrameId::new(format!(
             "lunco:wheel-shaft:{:?}:{}",
             prim_path.stage_handle.id(),
@@ -3099,6 +3113,8 @@ fn process_usd_sim_prim_read(
             setup_physical_wheel(
                 commands,
                 entity,
+                joint_entity
+                    .expect("physical wheel hinge identity was validated before port creation"),
                 prim_path,
                 wheel_order_key.0.clone(),
                 &existing_tf,
@@ -3597,21 +3613,13 @@ fn physical_suspension_visuals(
     visuals
 }
 
-/// Sets up a wheel as a full rigid body bound to its authored carrier by a
-/// revolute joint, mirroring the standard `PhysicsRevoluteJoint` authored in USD.
-///
-/// The joint is spawned **synchronously** from the authored USD attributes
-/// (`physics:axis`, `physics:localPos0/1`) alongside the wheel's rigid-body
-/// init; drive authority comes from the composed motor/gearbox. Doing it lazily — letting
-/// `lunco-usd-avian::build_usd_physics_joints` do it on a later frame —
-/// raced narrow-phase contacts: the wheel's collider would meet the chassis
-/// at the joint anchor before `JointCollisionDisabled` was in place,
-/// crashing the Avian solver with "Head contact has no island".
-/// `lunco-usd-avian` skips wheel-targeted joints (see `on_add_usd_prim`)
-/// so we don't double-build.
+/// Project a physical wheel body and bind its Modelica effort/motion ports to
+/// the authored USD hinge. The standard joint projector owns both joint frames,
+/// limits, native construction, collision filtering and admission.
 fn setup_physical_wheel(
     commands: &mut Commands,
     entity: Entity,
+    joint_entity: Entity,
     prim_path: &UsdPrimPath,
     order_key: String,
     existing_tf: &Transform,
@@ -3648,7 +3656,7 @@ fn setup_physical_wheel(
         scale: existing_tf.scale,
     };
 
-    // The specialized wheel owns the rigid-body/joint realization, but the
+    // The specialized wheel owns the rigid-body realization, but the
     // collision shape remains the one authored on the USD wheel prim. Avian
     // receives this projection from `lunco-usd-avian`; dynamics parameters never
     // become an implicit collision fallback.
@@ -3687,7 +3695,7 @@ fn setup_physical_wheel(
                 // the carrier-local joint pose.
                 mount_local: vehicle_mount.translation,
             },
-            lunco_physics::PhysicsOrderKey(order_key.clone()),
+            lunco_physics::PhysicsOrderKey(order_key),
             body_mount,
         ),
         // Rebuild the vehicle support contract after replacing its raycast
@@ -3721,81 +3729,26 @@ fn setup_physical_wheel(
             continuous_collision,
         ));
 
-    // Spawn the avian joint. Anchors + axis are derived from the wheel's
-    // own transform (which mirrors the USD `physics:localPos0` and
-    // `physics:axis` of the authored joint, by construction). Reading
-    // them straight from the USD joint prim caused `physics:axis` parse
-    // mismatches in earlier iterations; the wheel-derived form has been
-    // verified working for both raycast and joint-based rovers.
     let carrier = body_mount.body;
-    // The wheel body rotates about its axle. Keep the authored suspension strut
-    // on the carrier so its casing, piston, and spring remain visually
-    // connected to the mount instead of spinning with the tire. The transforms
-    // were converted from wheel-local to carrier-local by the caller.
     for (visual, transform) in suspension_visuals {
         commands
             .entity(visual)
             .try_insert((transform, ChildOf(carrier)));
     }
-    // NOTE: `ArticulatedVehicle` (the articulated-root guard) is no longer stamped
-    // here. It is derived declaratively from the USD joint graph in
-    // `process_usd_sim_prims` (a prim that is a joint `physics:body0` target, or
-    // carries `PhysicsArticulationRootAPI`) — see USD_REPLICATION_POLICY.md. That
-    // removes this build-order side-effect (the membership pass used to depend on it).
-    // Wheel mount point in the carrier-local frame. The vehicle-level mount is
-    // authored once on the carrier; the revolute joint uses the wheel's
-    // composed pose relative to that carrier.
-    let mount_local = body_mount.local.translation.as_dvec3();
-    // Axle direction — the same line the drive torque acts about. It is authored
-    // in the wheel/carrier frame and is also the hub→wheel revolute axis.
-    let axle = axle_local;
-    // Hinge the wheel to the authored carrier. Steering, where present, is a
-    // separate authored revolute joint on the carrier and is projected by the
-    // generic USD/Avian joint path; this wheel joint owns only roll torque.
-    let joint_cmd = commands.spawn((
-        // GENERAL LIFECYCLE CONTRACT — every entity the USD build *synthesizes* to back a
-        // scene (avian joints, actuator ports, cosim wires) is parented into the grid
-        // subtree via `ChildOf`, so the ONE hierarchy-recursive `clear_scene_entities`
-        // reclaims it exactly once, in the same flush as its bodies. Authored joints (any
-        // depth of `Physics*Joint` prim in a robot arm / lander / crane) already satisfy
-        // this — they ARE prim entities under the scene. This is the *synthesized* joint,
-        // the only one not authored, so it is the one that must opt in explicitly here.
-        //
-        // A wheel joint links two bodies, so it sits in nobody's TRANSFORM subtree — but
-        // it must die WITH the rover. `ChildOf` puts it in the carrier's despawn subtree;
-        // avian resolves the constraint from the joint's body anchors, never from this
-        // entity's transform, so the parenting is physics-inert. Left detached, the joint
-        // outlived its bodies on a scene swap and was double-removed from avian's island
-        // bookkeeping — a `joint_count` underflow that corrupted the solver. Owning it here
-        // makes that structurally impossible: no orphans, no reaper, no mask.
-        ChildOf(carrier),
-        ScenePhysicsOwned,
-        // Avian writes the solved revolute reaction here. The editor's wheel
-        // gizmo reads this explicit boundary; it must not infer a per-wheel
-        // force from the body's integration accumulator.
-        JointForces::new(),
-        // The solved mechanical network publishes physical shaft torque on the
-        // wheel drive port. The generic co-simulation boundary applies that
-        // scalar across this revolute joint; it never derives torque from a
-        // command or from wheel speed.
-        {
-            let mut coupling = JointTorqueActuator::new(
-                p_drive,
-                p_speed,
-                control_entity,
-                lunco_physics::joint::JointCoordinateSign::Negative,
-            )
-            .expect("newly spawned wheel endpoints are distinct");
-            coupling.brake_torque = params.brake_torque_max;
-            coupling.bearing_damping = params.bearing_damping;
-            coupling.bearing_heat_port = Some(heat_ports.bearing);
-            coupling.brake_heat_port = Some(heat_ports.brake);
-            coupling.rotational_inertia = params.axle_inertia();
-            coupling
-        },
-        Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
-    ));
-    let joint_entity = joint_cmd.id();
+    let mut coupling = JointTorqueActuator::new(
+        p_drive,
+        p_speed,
+        control_entity,
+        lunco_physics::joint::JointCoordinateSign::Negative,
+    )
+    .expect("newly spawned wheel endpoints are distinct");
+    coupling.brake_torque = params.brake_torque_max;
+    coupling.bearing_damping = params.bearing_damping;
+    coupling.bearing_heat_port = Some(heat_ports.bearing);
+    coupling.brake_heat_port = Some(heat_ports.brake);
+    coupling.rotational_inertia = params.axle_inertia();
+    commands.entity(joint_entity).try_insert(coupling);
+
     // A bound USD physics material owns rigid contact, including tangential
     // friction. Install a slip-force layer only for the vehicle-tire realization
     // without such a material, so the same contact is never solved twice.
@@ -3813,22 +3766,6 @@ fn setup_physical_wheel(
             ),
         ));
     }
-
-    // The constraint itself goes through the ONE door every joint in the
-    // workspace uses. `attach_joint` takes the two BODIES, so it — not this call
-    // site — decides WHEN the joint may enter avian's graph (both bodies admitted
-    // to the island graph) and WHAT rides its bundle (`JointCollisionDisabled`).
-    // Inserting a joint component here directly is what "Neither body … is in an
-    // island" was: the wheel and its carrier are spawned by this very pass, so on
-    // a scene swap they are routinely not yet admitted at this exact moment.
-    lunco_usd_avian_joints::attach_joint(
-        commands,
-        joint_entity,
-        order_key,
-        carrier,
-        entity,
-        lunco_usd_avian_joints::wheel_revolute_joint(carrier, entity, mount_local, axle),
-    );
 
     // The wheel's `WheelBodyMount` is the canonical physics ownership boundary.
     // `ChildOf` remains the authored transform/despawn hierarchy; it is not used
@@ -5390,8 +5327,8 @@ def Xform "Rover" {
             "the standard index is read from the attachment, not copied onto the wheel"
         );
         assert!(
-            !topology.authored_joints.contains_key("/Rover/WheelJoint"),
-            "the physical-wheel projector owns the synthesized wheel constraint"
+            topology.authored_joints.contains_key("/Rover/WheelJoint"),
+            "wheel hinges participate in the shared authored-joint admission contract"
         );
         assert_eq!(topology.canonical_generation, Some(stage.generation()));
 

@@ -239,7 +239,7 @@ pub fn draw_wheel_force_viz(
         // Physical-wheel tire forces are applied through the wheel body, while
         // the revolute joint carries the solved reaction. Read that explicit
         // Avian writeback instead of treating the body accumulator as a wheel
-        // force. The synthesized wheel joint owns this optional readback.
+        // force. The authored wheel joint owns this optional readback.
         if let Ok(joint_forces) = q_joint_forces.get(tire.drive_joint) {
             if let Some(dir) = arrow_vector(joint_forces.force(), 1.0 / NEWTONS_PER_METER) {
                 gizmos.arrow(pos, pos + dir, JOINT_FORCE_COLOR);

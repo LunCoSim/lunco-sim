@@ -208,24 +208,6 @@ fn derive_joint_anchor(
         DVec3::ZERO,
     ))
 }
-/// Whether the standard wheel simulation owns the wheel endpoint of this joint.
-///
-/// Wheel revolute joints are built together with their wheel body by
-/// `lunco-usd-sim`; the generic USD joint projector must not claim them. This
-/// is resolved from the authored body relationship and applied wheel schema,
-/// never from a prim name or a joint-name convention.
-pub fn joint_targets_simulated_wheel(
-    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
-    path: &SdfPath,
-) -> bool {
-    let targets = reader.rel_targets(path, "physics:body1");
-    if targets.len() != 1 {
-        return false;
-    }
-    nearest_body_path(reader, &targets[0])
-        .is_some_and(|body| reader.has_api_schema(&body, "PhysxVehicleWheelAPI"))
-}
-
 /// The USD joint base fields shared by every concrete joint reader.
 struct JointBaseRead {
     body0: String,
@@ -244,8 +226,8 @@ struct JointBaseRead {
 /// This reads the USD standard concrete joint type, shared body/frame
 /// relationships, `UsdPhysicsDriveAPI`, and per-DOF `UsdPhysicsLimitAPI` for
 /// the generic-D6 reduction. Returns `None` when
-/// `path` is not a UsdPhysics joint, is missing a body ref, or targets a wheel
-/// (owned by `lunco-usd-sim`). Revolute limits are converted degrees→radians
+/// `path` is not a UsdPhysics joint or has an invalid body reference.
+/// Revolute limits are converted degrees→radians
 /// (the `PendingUsdJoint` contract); prismatic/distance stay in scene units.
 pub fn read_joint_spec(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
@@ -572,11 +554,6 @@ fn read_joint_spec_with_policy(
         return None;
     }
 
-    // Wheel-targeted joints are owned by `lunco-usd-sim` (built alongside the
-    // wheel body); skip them here to avoid double-up/race.
-    if joint_targets_simulated_wheel(view, path) {
-        return None;
-    }
     Some(spec)
 }
 

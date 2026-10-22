@@ -1,13 +1,14 @@
 # Upstream physics integration review
 
 Status: Bevy 0.20 / Avian 0.8 migration in progress, 2026-10-22.
-The regular production Tracy build passes. The corrected native motor path
-passes 20 production checks. High-speed contact acceptance passes 12 checks.
-The Modelica drive gate passes 8 checks and travels 8.86 m. Its authored start
-height is 1.10 m, clearing the wheel support geometry instead of starting 5 cm
-inside the ground. Connection-unit rejection and lint reporting pass 6 checks;
-mechanical-loss and thermal laws pass 51 checks. Analytic wheel timing is recorded below; clean graphical and ramp qualification
-remain pending.
+The application retains the native `e4f073b` pin; the dense island candidate is
+not adopted. The regular production Tracy rebuild passes. Current production
+gates pass isolated tire (4 checks), Lunokhod (102), shared drivetrain parity
+(20), Modelica raycast drive (8), object suspension (11) and coupled wheel
+suspension (16). Three-Twin qualification remains incomplete: Roadster's ramp
+and medium/high-speed steering gates fail, and Griffin's high-energy engine-off
+drop needs physical failure classification rather than a settling assertion.
+Earlier measurements below qualify their recorded artifacts only.
 
 ## Ownership
 
@@ -36,7 +37,9 @@ to immutable published commits:
 - Avian `e4f073bb8914beb9fb0aa97795ae93d08a478528`: implicit motor integration,
   first-step collision admission, fixed-joint block solving, completed reactions,
   disabled-body membership, native collision-hook proxy synchronization and
-  coupled prismatic frame/limit solving. All 84 native unit tests pass.
+  coupled prismatic frame/limit solving. The separate dense island candidate
+  fails loaded-friction, driving and timing qualification and remains outside
+  the application pin.
 - Bevy shader `a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338`: named asset
   sources map to WESL packages, relative and cross-source imports retain native
   dependency handles, and live source preparation uses registered readers. All
@@ -136,17 +139,182 @@ remain open.
 Profile revolution accepts an explicit local direction in both the geometry
 kernel and document operation. Points and normals rotate together in f64; the
 command rejects zero/non-finite directions before document mutation. The native
-axis test and 18-check production Rhai geometry contract pass. The analytic
-cylinder steering comparison remains unsaved and still fails the steering
-verdict; it is not a behavioral adoption decision.
+axis test and 18-check production Rhai geometry contract pass. Tesla's authored contact geometry is now analytic X-axis cylinders, with crowned
+visual meshes excluded from collision. On the retained native pin, the isolated
+tire passes, but the ramp and medium/high-speed steering gates still fail.
 
-The native offset-slider reproduction now passes after coupling its blocked
-degrees of freedom and active unilateral stop. The shared row solver also
-serves fixed joints. Independent limit compliance and free slider motion pass
-native checks. The production isolated-tire gate still passes four checks.
-Griffin's impact gate still fails four of nine checks, including contact and
-travel limits. The cylinder steering gate now turns in the correct direction
-at all three speeds but still fails two curvature checks. The complete
-three-Twin qualification of this pin remains open.
-Roadster steering evidence now includes measured native joint coordinates;
-those show substantial demand/tracking error in the failing cylinder run.
+The native offset-slider reproduction passes blocked-axis and hard-stop checks.
+A loaded-slider impact preserves contact and travel on static ground and a moving
+kinematic platform. Attached-load drive equilibrium passes for linear and rotary
+joints under force, acceleration and spring-damper models. Small-angle hinge
+alignment and velocity-projection lifecycle checks also pass.
+
+The unqualified dense candidate's typed solve-failure bridge is not installed
+in the application. Physical damage detection and numerical/model validity
+boundaries remain separate requirements; neither is established by compilation
+or by a solver-only test.
+
+## Solver architecture reassessment
+
+The dense island checkpoint is not qualified for main. It couples native joint
+frames, unilateral contact normals and implicit drives after the native contact
+velocity/friction passes. Its dense constraint-space matrix is assembled every
+refinement; each active-set change copies and refactorizes a full matrix. The
+worst-case factorization cost is cubic in scalar constraint count, with quadratic
+storage, repeated across eight substeps. Redundant loop and contact rows consume
+work even though the mechanism has far fewer independent degrees of freedom.
+
+The current native friction solve precedes the extra support correction. The
+normal load added through the joint island therefore does not participate in
+that same friction solve. A generic asset-free reproduction places a 4000 kg
+load on a 180 kg contact body on a 0.12 rad slope, with friction coefficient 0.8.
+It slides 0.1785 m in five seconds instead of remaining within the 2 mm check.
+This rejects the contact coupling independently of Twin authoring.
+
+The owned Griffin Tracy capture uses published Avian `a6681b6`, API 4766, Tracy
+8097 and verified 1 ms sampling. The native island system consumes 57.307 seconds
+across 1800 physics ticks (14,400 substeps): 31.84 ms per tick on average. Late
+whole-step history medians reach approximately 72 ms. The scene reports 25
+bodies, 14 dynamic bodies, 109 colliders, 19 joints and 154 contact pairs near the
+end. Native CSV export, capture framing and collector-to-app identity pass. This
+is diagnostic attribution, not clean product performance acceptance; the cohort
+fails its landing-speed verdict. Evidence is in
+`.cache/codex-evidence/physics-followup-20261021/native-coupled-griffin-profile/`.
+
+### Established approaches
+
+- **Unified impulse/TGS solver in Avian:** joints, drives, normal contacts and
+  friction share velocity-space response, warm starting and ordering. This
+  avoids a late support correction, but requires maintaining a new native joint
+  solver. Avian's [replacement issue](https://github.com/avianphysics/avian/issues/440)
+  remains open; its maintainer describes an unfinished impulse implementation
+  and cautions about mixing AVBD with impulse contact response.
+- **Reduced-coordinate articulations with a coupled contact solver:** represent
+  a mechanism by its base pose and actual joint coordinates, eliminating blocked
+  joint degrees of freedom. This directly targets light links carrying heavy
+  chassis loads. [Rapier supports multibody joints and hybrid loop closure](https://rapier.rs/docs/user_guides/rust/joint_constraints/).
+  Its [f64 engine and determinism feature](https://rapier.rs/docs/user_guides/rust/getting_started/)
+  are relevant to the existing precision and replay contracts. Its Bevy plugin
+  [0.37 targets Bevy 0.20](https://docs.rs/crate/bevy_rapier3d/0.37.0/source/Cargo.toml),
+  but uses the f32 engine; an f64 qualification must use `rapier3d-f64` directly.
+  Loop closures, joint-reaction telemetry, runtime detach/rebind and terrain
+  streaming must be qualified before application migration.
+- **MuJoCo CPU:** articulated dynamics plus sparse primal Newton/CG contact
+  optimization, with circular friction cones and incremental factor updates.
+  It is a serious comparison for these small mechanisms and many contacts.
+  Its [computation contract](https://mujoco.readthedocs.io/en/stable/computation/)
+  also explains soft-contact slip and warns that its optional NoSlip post-pass
+  is an ad-hoc correction. A fair comparison must preserve authored compliance
+  and validate terrain/topology lifecycle and Modelica effort coupling.
+- **PhysX articulations:** established reduced-coordinate mechanism handling
+  and [standard USD articulation integration](https://github.com/NVIDIA-Omniverse/PhysX/blob/main/ovphysx/docs/simulation_setup/articulations.md).
+  C++ integration, platform support, precision boundaries and runtime joint
+  removal/rebuild semantics require explicit qualification.
+- **AVBD:** the [SIGGRAPH 2025 method](https://graphics.cs.utah.edu/research/projects/avbd/)
+  addresses hard constraints and high stiffness/mass ratios using small local
+  blocks. Its research results justify consideration, not a claim of production
+  compatibility or a reason to replace one unqualified custom solver with another.
+
+[Catto's solver comparison](https://box2d.org/posts/2024/02/solver2d/) and the
+[Small Steps paper](https://matthias-research.github.io/pages/publications/smallsteps.pdf)
+support substepping and consistent constraint formulation. We already use eight
+substeps; increasing that count does not resolve the measured split friction
+ownership or dense repeated factorization.
+
+The selected direction keeps Avian and must qualify load transfer, slope
+friction, offset stops, steering, impact and topology lifecycle before adopting
+a solver extension. A Schur complement
+can reduce factorization work in a maximal-coordinate solver, but does not by
+itself repair inconsistent friction coupling. No measured alternative has yet
+qualified the complete three-Twin behavior or performance target.
+
+### Vehicle guidance and model audit
+
+The selected direction retains Avian and Bevy ECS. Native joint/island graphs
+own connectivity; projected components own the scene's mechanical identities.
+Preparation must invalidate on admitted topology, mass and frame changes, with
+deterministically ordered commits. Numerical solve data may be compact cached
+arrays, but must not become a second topology or lifecycle authority.
+
+Avian's current [motor example](https://github.com/avianphysics/avian/blob/main/crates/avian3d/examples/joint_motors_3d.rs)
+demonstrates isolated wheel, servo and slider joints. No maintained complete car
+example was found in the current official examples, README or API documentation.
+The [vehicle discussion](https://github.com/avianphysics/avian/discussions/614)
+is unanswered community experimentation, including moving raycast/force work
+into the substep schedule; it does not establish a validated vehicle recipe.
+Several joint examples use 50 or 80 substeps. These do not justify raising the
+application's eight-substep contract. Custom integration markers replace free
+integration, not the contact/joint inertia response.
+
+Physical wheels now bind their Modelica effort/motion ports to the authored
+hinge entity. Standard USD joint reading and admission retain both local frames,
+limits and native solver identity. The separate wheel-hinge constructor and
+wheel exclusion in the joint reader are removed. Raycast wheels retain their
+body mount and tire/contact realization without a native wheel hinge.
+
+The drivetrain comparison's initial root height of 1.0 m placed a 0.4 m tire,
+mounted 0.65 m below its root, 0.05 m below the support plane. Initialization
+correctly paused that assembly. Both variants now start at 1.1 m, preserving
+equal initial geometry. The retained `e4f073b` pin passes all 20 production
+checks with ordinary authored hinge projection. The steering agreement
+criterion has not been relaxed.
+
+Tesla's reference dry mass is 1700 kg, with 128 kg assigned to its four wheels,
+four carriers and two steering knuckles. Its Modelica chassis calculation
+subtracts those masses and parallel-axis inertia contributions. The 24 kg,
+0.34 m wheel's 1.4 kg m² axial inertia is consistent with a solid-cylinder
+estimate of 1.3872 kg m². Using the reference sprung mass of 1572 kg, each
+300,000 N/m suspension gives approximately 4.40 Hz ride frequency, 12.8 mm
+static compression and damping ratio 0.645 at 14,000 N s/m. These are stiff
+study assumptions, not grounds for arbitrary solver-oriented mass inflation.
+The authored analytic-cylinder wheels preserve the X-axis geometry contract.
+On the retained native pin, steering passes the 5 m/s comparison but fails at
+15 and 30 m/s: wheel heading departs from its target while all suspensions sit
+at their upper travel stops. The ramp gate also fails. Geometry cleanup alone
+does not qualify this vehicle.
+
+Omniverse's [vehicle authoring guide](https://docs.omniverse.nvidia.com/kit/docs/omni_physics/110.1/dev_guide/vehicles/vehicles.html)
+uses raycasts or sweeps for suspension/road contact and separates this from
+optional collision and render geometry. Its [USD representation](https://docs.omniverse.nvidia.com/kit/docs/omni_physics/latest/extensions/ux/source/omni.physx.vehicle/docs/usd_representation.html)
+uses the same wheel, tire, suspension and attachment schemas already consumed
+here, allows mesh collision, and permits external per-wheel control. Reuse those
+schemas with Modelica effort/motion coupling rather than adding a duplicate
+wheel API or a built-in drivetrain. Our authored `wheel-mesh-rolling-contact`
+lint warns about mesh rolling fidelity without rejecting standard USD meshes.
+The production `wheel_collider_lint` gate passes five checks over mesh,
+analytic and raycast realizations and a visual-only tread control.
+
+The regular `target/debug/luncosim` cohort and source hashes are retained under
+`.cache/codex-evidence/physics-followup-20261021/native-e4-analytic-wheel-runtime/`;
+wheel warning evidence is in the adjacent `wheel-collider-lint/` directory.
+After incorporating main's source-snapshot and reflected-setting fixes, the
+regular Tracy build passes again. The bounded integration cohort passes wheel
+collider lint (5 checks), coupled wheel suspension (16) and drivetrain parity
+(20), with successful process exits and released owned API ports. Its artifact
+hash and reports are in `integrated-wheel-contract-runtime/` under that evidence
+directory. Other unchanged-input results retain their earlier artifact scope.
+
+Griffin's four leg drives each have 12,000 N force caps and 0.07 m total travel.
+Even the generous full-travel work bound is only 3360 J across all four drives.
+A 6 m/s impact at the authored hull and leg masses (4000 + 4×180 kg) carries
+84,960 J before including the other movable members. Most of that impact
+therefore reaches rigid stops/contact; this
+is a solver stress case, not evidence that the landing hardware absorbs the
+energy realistically. A realistic crush/dissipation law requires authored
+engineering inputs. Six flight latches also duplicate the blocked freedoms of
+their parallel ramp hinges. Removing redundant solve rows is physically sound
+only if latch release preserves the hinge and its state atomically.
+
+The current wheel core still contains brake and bearing laws and heat
+publication. Completing the requested Modelica ownership requires an authored
+cutover of those laws and their static-holding/zero-crossing coupling, followed
+by deletion of the Rust laws and all callers. Moving their arithmetic into an
+explicit sampled torque without qualifying holding and energy would introduce
+chatter or lose static braking. Motors, gearboxes and speed/temperature laws
+already have authored Modelica owners; no new Rust hardware model is planned.
+
+Bevy 0.20's [`Ready`](https://github.com/bevyengine/bevy/pull/25296)
+is emitted after native scene descendants and dependencies spawn. USD structural
+projection and subsequent collider, pose, joint and Modelica preparation have
+separate completion facts. A native scene event can start structural consumers;
+it cannot certify physical admission or replace persistent scene-lease state.

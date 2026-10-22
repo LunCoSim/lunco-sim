@@ -23,6 +23,13 @@ references library components and authors only its own decisions — poses,
 indices, scale, paint. Components own their defaults; **variants choose
 components, they never restate them**.
 
+Use analytic cylinder or raycast contact for ordinary tires, keeping tread
+meshes visual-only. Standard USD mesh wheel collision remains supported, but
+`RunLint` warns with `wheel-mesh-rolling-contact` about possible unstable rolling
+contact. This warning does not reject admission. Retained mesh contact needs
+measured rolling, slip and penetration validation; the production
+`wheel_collider_lint` gate covers that warning and the supported alternatives.
+
 For script-authored assembly edits, the dynamically reloadable
 `assets/scripting/tools/assembly_builder.rhai` library provides semantic
 frame/shape construction, placement, Cube and composed collision alignment/clearance,
@@ -107,6 +114,15 @@ contract without checking its consumer and test.
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
 | Drive law | `mobility/drive_laws/modelica_{skid,ackermann,six_independent}.usda` | Authored Modelica controller and generic drive/heading outputs |
 | Drivetrain realization | `mobility/physical_drivetrain.usda` | the `physical` variant: articulation root + per-wheel revolute joints. The `raycast` variant is EMPTY — a raycast wheel is the absence of a joint. Wheel MOUNTS are never authored here: the wheel prim is the axle in both realizations, so it belongs to the rover, outside the variantSet. |
+
+Physical wheel hinges are ordinary USD joints: the generic reader and admission
+owner retain their prim identity, both local frames, limits and drive fields.
+The wheel projector binds the authored Modelica shaft torque and measured speed
+to that joint; it does not construct a second hinge. A raycast wheel has no
+native wheel hinge and applies its tire/contact result through its body mount.
+Keep exactly one suspension and tangential-contact owner for each realization.
+Motors, reductions, efficiency laws and thermal networks are authored higher
+level components, not wheel-core defaults.
 
 ## Minimal rover
 

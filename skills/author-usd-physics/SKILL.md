@@ -24,6 +24,14 @@ axle, authored body pose and geometry basis are separate. Read the basis through
 rotation. Qualify collider bounds and joint axes before comparing a mesh wheel
 with an analytic cylinder, and verify both initial projection and live edits.
 
+Mesh wheel colliders remain valid USD authoring. `RunLint` reports
+`wheel-mesh-rolling-contact` as a warning for enabled wheel-owned meshes, without
+refusing simulation. Prefer analytic cylinders or raycast contact for ordinary
+tires; detailed tread meshes should normally be visual-only. Qualify retained
+mesh contact through rolling, slip and penetration measurements. The production
+`wheel_collider_lint` scene checks the warning, its non-blocking severity and
+analytic/raycast/visual-only controls.
+
 For assets intended for Omniverse, independently moving rigid bodies nested
 under another body need `!resetXformStack!` and explicit initial world poses.
 Author both joint local frames explicitly: portable UsdPhysics defaults are
@@ -39,6 +47,13 @@ explicit when a reset-stack body leaves its vessel transform subtree; the
 joint actuator stores its authored vehicle command owner.
 Its brake impulse bound uses the admitted fixed timestep, because actuation
 precedes native integration and the previous native delta is zero after a hold.
+
+Physical wheel hinges use the ordinary USD joint reader and retain their authored
+prim entity, both local frames and limits. Mobility binds the Modelica shaft
+ports to that joint. The raycast realization has no wheel hinge; its suspension
+and tire contact feed the same authored torque/speed boundary. Verify both
+realizations with the production drivetrain gate after changing their shared
+projection or coupling.
 
 For a physical landing member, apply `PhysicsDriveAPI:linear` to a
 `PhysicsPrismaticJoint`. Author the drive's `stiffness`, `damping`, `maxForce`,

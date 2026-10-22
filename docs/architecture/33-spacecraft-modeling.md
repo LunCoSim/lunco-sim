@@ -298,10 +298,10 @@ from standard UsdPhysics prims:
 - **Verified live** on `assets/scenes/tests/g7_joints.usda`: both build
   with no "Unsupported" warning; the distance-tethered Weight settles at exactly
   `2.0 m` below its anchor (= `maxDistance`); the ball-jointed arm hangs stable.
-  Also note **all native programmatic joint construction now lives in
-  `lunco-usd-avian-joints`** — the wheel revolute joint moved out of
-  `lunco-usd-sim::setup_physical_wheel` into
-  `lunco_usd_avian_joints::wheel_revolute_joint` (one native admission boundary).
+  Native joint construction and admission live in `lunco-usd-avian-joints`.
+  Physical wheel hinges use the standard USD joint reader, including both
+  authored frames and limits; wheel projection binds the Modelica effort/motion
+  ports to the authored joint entity.
 
 ### G10 — Avian observations and Modelica sensor conversions  **[DONE]**
 Flight software is not a Rust semantic-sensor special case.

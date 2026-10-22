@@ -2,57 +2,17 @@
 (
     defaultPrim = "DrivetrainParity"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# ── Drivetrain parity rig ────────────────────────────────────────────────────
-#
-# The SAME rover asset (`vessels/rovers/skid_rover.usda`) instanced TWICE, side
-# by side on ONE flat ground, differing in EXACTLY ONE opinion: the `drivetrain`
-# variant selection (`raycast` vs `physical`). Everything else — spawn height,
-# ground, friction material, mass, wheel radius, gearing — composes in from the
-# shared asset, so any measured difference between the two is attributable to
-# the drivetrain realization and nothing else.
-#
-# WHY THIS SCENE EXISTS. Raycast and joint wheels are two REALIZATIONS of ONE
-# parameter set. The parity invariant is structural: both realizations read the
-# same authored motor/gearbox reduction and the raycast drive force includes the
-# same authored motor/gearbox/shaft network, so both receive the same solved
-# torque and speed boundary. The operating point is determined by the Modelica
-# equations and wheel/tire load; no realization-specific motor rule is used.
-# omega_max * r = 12 * 0.4 = 4.8 m/s.
-#
-# `scenarios/tests/drivetrain_parity.rhai` (attached below) drives both from ONE tick
-# loop and fails LOUDLY if they diverge again. Run:
-#
-#     target/debug/luncosim test --scene scenes/tests/drivetrain_parity.usda
-#
-# The rovers are 50 m apart in X and drive along -Z (their forward axis: the
-# headlights sit at z = -1.75), so their paths never intersect.
 
 def Xform "DrivetrainParity" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Two instances of the same skid rover — one raycast drivetrain, one joint drivetrain — on identical flat ground, for the drivetrain parity regression test."
+    documentation = "Two instances of the same skid rover — one raycast drivetrain, one joint drivetrain — on identical flat ground, for the drivetrain parity regression test."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-
-    # A test rig, not a spawnable part.
     uniform bool lunco:spawnable = false
-
-    # The shared antenna remains parked because this drivetrain comparison
-    # selects no ground station.
-
-
-    # Parity is only meaningful if the surface is bit-identical under each rover,
-    # so there is a single ground prim rather than two pads, bound to the one
-    # inherited `Friction_1_0`.
-
-    # Flat, level, 500 x 500 m. Level matters: a slope would load the two
-    # drivetrains differently (the raycast body force and the joint motor torque
-    # do not fight gravity through the same path), turning a parity test into a
-    # gradeability test.
     def Plane "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
@@ -61,37 +21,32 @@ def Xform "DrivetrainParity" (
         double width = 1.0
         double length = 1.0
         token axis = "Y"
-        double3 xformOp:translate = (0, 0, 0)
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
         double3 xformOp:scale = (500.0, 1.0, 500.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </DrivetrainParity/PhysicsMaterials/Friction_1_0>
     }
-
     over "Sun"
     {
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
-
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
+        double3 xformOp:translate = (0.0, 30.0, 175.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
-        double3 xformOp:translate = (0.0, 30.0, 175.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
-    # Broadside view: both rovers in frame for the whole run, so a human can SEE
-    # the divergence the numbers report.
     def Camera "ParityCam" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
@@ -100,61 +55,35 @@ def Xform "DrivetrainParity" (
         double3 xformOp:translate = (0.0, 45.0, 190.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 24.0
-        float2 clippingRange = (0.1, 100000.0)
+        float2 clippingRange = (0.10000000149011612, 100000.0)
     }
-
-    # ── The two rovers ───────────────────────────────────────────────────────
-    # Identical `xformOp:translate` in Y and Z; only X (lane) and the variant
-    # selection differ. Do NOT add per-instance mass, wheel, or friction
-    # overrides here — an override on one side silently invalidates the test.
-    # The livery `over "Chassis"` is display-only (the hull shader consumes
-    # displayColor) and does not touch physics.
-
-    # `raycast` is the asset's fallback selection, but it is written out
-    # EXPLICITLY: the test's whole premise is that these two prims differ in
-    # exactly one authored opinion, and an implicit default is not a stated one.
     def Xform "RoverRaycast" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
-        variants = {
-            string drivetrain = "raycast"
-        }
+        variants = { string "drivetrain" = "raycast" }
     )
     {
-        double3 xformOp:translate = (-25.0, 1.0, 50.0)
+        double3 xformOp:translate = (-25.0, 1.1, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.85, 0.35, 0.15)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.3499999940395355, 0.15000000596046448)]
         }
     }
-
     def Xform "RoverPhysical" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
-        variants = {
-            string drivetrain = "physical"
-        }
+        variants = { string "drivetrain" = "physical" }
     )
     {
-        double3 xformOp:translate = (25.0, 1.0, 50.0)
+        double3 xformOp:translate = (25.0, 1.1, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.15, 0.45, 0.85)]
+            color3f[] primvars:displayColor = [(0.15000000596046448, 0.44999998807907104, 0.8500000238418579)]
         }
     }
-
-    # ── The test itself ──────────────────────────────────────────────────────
-    # A non-physical prim owning the harness, referencing both rovers by path
-    # with `find(...)` rather than living on either one — the same shape as
-    # `lander_ops.usda`'s mission Scope. Hosting it on one of the rovers would
-    # make the two instances structurally different, which is the one thing this
-    # scene must not do.
     def Scope "Scenario"
     {
         custom string lunco:scenario = "drivetrain-parity"
-
         def Scope "ParityTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )

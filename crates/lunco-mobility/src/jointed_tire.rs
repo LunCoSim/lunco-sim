@@ -19,13 +19,13 @@ use crate::{TireLateralStiffnessGraph, contact_plane_basis, solve_axle_step, tir
 /// Authored tire parameters and topology for one Avian-backed wheel body.
 ///
 /// This component is a runtime projection of the composed USD wheel/tire and
-/// its synthesized revolute motor.  It contains no alternate coefficients: the
+/// its authored revolute joint. It contains no alternate coefficients: the
 /// same values are fed to [`WheelRaycast`] through `WheelParams` and to this
 /// contact realization.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct JointedWheelTire {
-    /// Synthesized revolute motor entity connecting the wheel to its chassis.
+    /// Authored revolute joint entity connecting the wheel to its chassis.
     pub drive_joint: Entity,
     /// Wheel radius, m.
     pub radius: f64,

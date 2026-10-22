@@ -255,6 +255,24 @@ fn wheel_realization_collision_contract(facts) {
     out
 }
 
+/// USD permits mesh wheel colliders. Their discrete collision envelope can
+/// disturb rolling contact; this is a model-fidelity warning, not a rejection.
+fn mesh_wheel_rolling_contact(facts) {
+    let out = [];
+    for part in facts.vehicle_parts {
+        if part.type != "Mesh" || !part.collision_api
+            || part.collision_state != "enabled" || part.visual_only {
+            continue;
+        }
+        if !schemas_of(facts, part.body).contains("PhysxVehicleWheelAPI") {
+            continue;
+        }
+        out.push(finding("wheel-mesh-rolling-contact", "warn", part.path,
+            "Mesh wheel collision is supported, but its collision approximation may produce faceted or non-circular rolling contact and unstable tire loads. Prefer an analytic Cylinder with the authored axle axis, or a raycast wheel. Keep detailed tread meshes visual-only; validate rolling, slip and penetration when retaining mesh collision."));
+    }
+    out
+}
+
 /// Every non-wheel renderable gprim below a vehicle assembly must have one
 /// collision owner. Purpose/disabled metadata are explicit alternatives; an
 /// unannotated visual shape is a silently dropped part. Wheel realizations have
@@ -374,6 +392,7 @@ fn lint_usd(facts) {
     for f in runtime_joint_contract(facts) { out.push(f); }
     for f in collision_enabled_without_api(facts) { out.push(f); }
     for f in wheel_realization_collision_contract(facts) { out.push(f); }
+    for f in mesh_wheel_rolling_contact(facts) { out.push(f); }
     for f in vehicle_part_collision_contract(facts) { out.push(f); }
     for f in unsupported_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }

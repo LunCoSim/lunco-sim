@@ -496,29 +496,6 @@ pub fn fixed_joint(body0: Entity, body1: Entity) -> JointSpec<FixedJoint> {
     JointSpec::new(FixedJoint::new(body0, body1))
 }
 
-/// Build the wheel hinge and return it to the common admission gate.
-pub fn wheel_revolute_joint(
-    chassis: Entity,
-    wheel: Entity,
-    mount_local: DVec3,
-    axle: DVec3,
-) -> JointSpec<RevoluteJoint> {
-    JointSpec::new(
-        RevoluteJoint::new(chassis, wheel)
-            .with_local_anchor1(mount_local.as_vec3())
-            .with_local_anchor2(Vec3::ZERO)
-            .with_hinge_axis(axle.as_vec3()),
-    )
-    .with_seat(JointSeat::new(
-        JointSeatKind::Revolute,
-        mount_local,
-        DVec3::ZERO,
-        DQuat::IDENTITY,
-        DQuat::IDENTITY,
-        axle,
-    ))
-}
-
 /// Attach a USD-authored fixed joint after its body endpoints have resolved.
 pub fn attach_fixed_joint(
     commands: &mut Commands,

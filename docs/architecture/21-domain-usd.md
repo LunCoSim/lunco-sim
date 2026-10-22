@@ -136,6 +136,14 @@ Initial projection and live resynchronization consume the same geometry reader;
 an accepted edit republishes its validated collider even when radius and width
 are unchanged. Invalid geometry or stage conventions reject projection.
 
+The existing `PhysxVehicleWheelAPI`, tire, suspension and attachment schemas own
+wheel authoring. Mesh collision remains supported under standard USD rules.
+The authored `wheel-mesh-rolling-contact` lint warns about potentially unstable
+rolling contact on enabled mesh colliders owned by wheels; it does not block
+admission. Analytic cylinders and raycast wheels avoid that warning, as do
+explicitly visual-only meshes. Prefer those contact models for ordinary tires;
+retained mesh contact needs measured rolling, slip and penetration validation.
+
 `UsdSimulationProjectionSettings` keeps simulation and ownerless marker work
 separately bounded (32 and 128 per Update by default); zero limits raise a
 runtime fault before consuming queued work. Neither limit changes physics
@@ -936,8 +944,10 @@ anchors, `physics:lowerLimit/upperLimit` or `physics:min/maxDistance`):
 motor at load, so an Omniverse-authored mechanism seeks its setpoint with no
 wire), `physics:targetVelocity`, `physics:maxForce` (motor saturation). A cosim
 wire on the joint's `angle`/`displacement` port overrides the target per tick. The
-native construction and admission boundary is **`lunco-usd-avian-joints`**; the
-programmatic wheel hinge uses its `wheel_revolute_joint` plan.
+native construction and admission boundary is **`lunco-usd-avian-joints`**.
+Physical wheel hinges use the same USD joint reader, authored prim identity,
+frames, limits and admission as other joints. The wheel projector binds its
+Modelica torque/speed actuator to that authored hinge.
 
 The native 3D prismatic solver couples the two blocked translations and three
 blocked rotations. Its moving-axis Jacobian includes the anchor separation;

@@ -181,9 +181,14 @@ fn authored_variant_contract(rc, ph) {
             name);
     }
     let wheel_params = true;
+    let hinges = true;
     for suffix in ["FL", "FR", "RL", "RR"] {
         let ray = "/DrivetrainParity/RoverRaycast/Suspension_" + suffix + "/Wheel_" + suffix;
         let physical = "/DrivetrainParity/RoverPhysical/Suspension_" + suffix + "/Wheel_" + suffix;
+        let hinge = find_path("/DrivetrainParity/RoverPhysical/Wheel_" + suffix + "_Hinge");
+        hinges = hinges && hinge >= 0 && get(hinge, "angle") != ()
+            && get(hinge, "angular_velocity") != ()
+            && find_path("/DrivetrainParity/RoverRaycast/Wheel_" + suffix + "_Hinge") < 0;
         for name in [
             "physxVehicleWheel:radius",
             "physxVehicleWheel:width",
@@ -208,7 +213,7 @@ fn authored_variant_contract(rc, ph) {
             "/DrivetrainParity/RoverPhysical/Suspension_" + suffix,
             "xformOp:translate");
     }
-    root_params && wheel_params && mounts
+    root_params && wheel_params && mounts && hinges
         && raycast.raycast == 4 && raycast.physical == 0
         && physical.raycast == 0 && physical.physical == 4
         && raycast.raycast_radius != () && physical.physical_radius != ()

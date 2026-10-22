@@ -24,13 +24,12 @@ includes physical and raycast wheels, a continuous model connected from outside
 the rover hierarchy, two stopped object controllers, and independent physics,
 continuous state and controller execution. Both processes exit successfully.
 Evidence is under `.cache/codex-evidence/physics-followup-20261021/` in
-`coupled-system-pause-runtime` and `coupled-system-final-pause-runtime`.
+`native-e4-analytic-wheel-runtime`.
 
-These runs use the separately unqualified Avian `a6681b6` candidate and the
-ordinary authored-wheel projection under development. They qualify suspension;
-they do not qualify that solver's driving or impact behavior, nor main's
-different physics pin. The candidate pin and native failure bridge remain
-outside this checkpoint. FMI compilation is covered by the production build;
+These runs use the retained native Avian `e4f073b` pin and ordinary authored
+wheel hinges. They qualify suspension; they do not qualify complete vehicle
+driving or impact behavior. The dense candidate pin and native failure bridge
+remain outside the application. FMI compilation is covered by the production build;
 the new suspension behavior has no external-FMU runtime qualification yet.
 Automatic physical/numerical failure routing, calibrated absorption and damage,
 scoped restart, live topology replacement and model/solver state handoff remain

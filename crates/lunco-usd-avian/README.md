@@ -32,9 +32,10 @@ generic `PhysicsD6Joint` is **reduced** to the primitive matching its free DOFs
 {targetPosition,targetVelocity,maxForce}`) configures the joint motor at load.
 The USD projector owns schema interpretation; `lunco-usd-avian-joints` owns the
 native constructors, collision suppression, seating, solver-island admission,
-and detach ordering. Its `wheel_revolute_joint` path is shared by synthesized
-vehicle hinges. Scalar physics attrs are read **f32-first** (`read_scalar_attribute`)
-— Omniverse authors `float`, and a `::<f64>`-only read silently drops them. Full
+and detach ordering. Physical wheel hinges retain their authored USD prim
+identity and use this same reader and admission path; wheel projection adds the
+Modelica effort/motion coupling. Scalar physics attributes use the shared real
+reader, accepting standard USD float and double authoring. Full
 schema map: [`docs/architecture/21-domain-usd.md`](../../docs/architecture/21-domain-usd.md#physics-joints).
 
 ### 4. Components
