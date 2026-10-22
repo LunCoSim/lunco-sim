@@ -111,6 +111,14 @@ the failing local baseline is `embedded-policy-trace/body-acceleration.log` in
 the same evidence root. This closes the IMU rotation-norm finding; Griffin
 landing, ramp unfolding and the sub-1-ms active-step target remain separate open gates.
 
+USD also integrated the committed measurement repair without the worktree's
+uncommitted solver/dependency changes. Its normal production binary SHA256 is
+`0242a65cff83d1adce15b14a67e3f04aa3d69d760aa87f7e1fc19d048675e4e1`.
+The original acceleration gate passes 267 checks, and sensor,
+initialization-policy, scene-transition-generation, FLIP chassis and integrated
+visual gates pass. Receipt:
+`/home/rod/Documents/luncosim-workspace/usd/.cache/codex-evidence/griffin-materials-20261022/integration-gates.json`.
+
 ## Collision-query repair qualification — optimization
 
 The child-bound discrepancy reproduced independently on the shared Cylinder
@@ -135,6 +143,17 @@ acceptance of FLIP. Source hashes, coherent readback, baseline and passing logs
 are under `.cache/codex-evidence/physics-followup-20261021/collision-child-frame/`.
 Binary SHA256: `685886df6ecbca5cd58ce25ea6f40dae61c46b55f9e24eb647dbea54412355d9`.
 All owned sessions used for this query check have exited.
+
+USD independently qualifies the same committed query repair with its normal
+production binary SHA256
+`9b28c4be8f9e77e8bd1fe8e5ee6f21db4e83afbe2d3d9153cf0c10c64d1579eb`.
+The expanded gate fails exactly the two new ancestor-frame assertions on the
+previous USD binary and passes all 19 checks plus the expected terminal fault
+on the rebuilt binary. Receipts:
+`.cache/codex-evidence/griffin-ramp-mechanism-20261022/collision-query-baseline.log`
+and `collision-query-repaired.log`. Fresh Griffin source-document collider
+and joint snapshots in that directory use the repaired queries. This import
+does not include optimization's uncommitted dependency or solver changes.
 
 ## Loaded-support and mission qualification — optimization
 
@@ -174,23 +193,29 @@ The sub-1-ms target remains open. The contention-affected flight sample has
 median. Concurrent applications were active, so these are diagnostic figures,
 not clean acceptance. Sleeping-body samples do not qualify active physics.
 
-## USD authored ramp geometry follow-up
+## Authored ramp geometry follow-up — USD
 
-USD independently confirms the obstruction in the saved model `4dc4d17`,
-using the canonical query repair: all four middle tracks intersect their
-matching fixed transitions at 120-degree inward stow. Exact-box SAT gives
-approximately -0.22070535 m signed axis margin; this is not runtime contact
-penetration. Source hashes and six collider snapshots are in the model's
-`twins/astrobotic-griffin-1/contracts/evidence/griffin-ramp-interference-2026-10-22.json`.
-The companion Markdown contract records a provisional unequal-length,
-opposite-toe-sweep study and its limited coverage. These live in
-`/home/rod/Documents/models/lunar-base-model`.
+The repaired queries confirm a source-geometry obstruction independently of
+native mission contacts. On model `4dc4d17`, vehicle document
+`119562041633649`, document/projected/stage generation zero, all four straight
+middle tracks intersect their matching fixed transitions in the saved
+120-degree inward stow. Native f64 oriented-box SAT gives a signed axis margin
+of approximately -0.22070535 m. The eight cooked vertices fit each track box
+within 3e-8 m. This SAT margin is not runtime contact penetration. The
+corresponding opposite-side plate pairs are separated. No source edits,
+collision exclusions, force changes or solver changes were used to inspect it.
 
-The existing source mechanism and common toe-unfold direction remain
-unqualified. USD owns the detailed Griffin component/assembly repair. Please
-keep the authored obstruction separate from the native landing-speed and
-active-step performance findings; no solver, dependency, contact policy,
-mass or torque change was made by this inspection.
+The model owns the detailed finding and a provisional unequal-section,
+opposite-toe-sweep study at
+`twins/astrobotic-griffin-1/contracts/griffin-ramp-interference-2026-10-22.md`
+in `/home/rod/Documents/models/lunar-base-model`. Its adjacent evidence JSON
+records source hashes, six collider snapshots and all eight comparisons.
+Current dimensions, hinges and command paths remain unchanged pending a
+complete component/assembly repair. The candidate's sampled box clearances
+are not a qualification of detailed geometry or physical deployment. Treat
+this authored obstruction separately from the open native landing-speed and
+active-step performance gates. USD will repair the Griffin mechanism; the
+optimization worktree retains ownership of native physics defects.
 
 ## Native integration checkpoint — optimization
 

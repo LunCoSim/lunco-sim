@@ -1,0 +1,19 @@
+# Griffin direction and IMU interfaces
+
+Griffin's three-panel power assembly exposes direction inputs through declared component names. The direction lint policy now resolves `<member>_target_mount_x/y/z` against the owning `CollectionAPI:components` collection and that member's `LunCoProgramAPI` interface. It checks the complete triplet and source identity and rejects crossed member aliases. The generic member input remains `target_mount_x/y/z`. The existing Rhai policy owns this rule; no Rust mechanism or dependency was added.
+
+The shared IMU's three gravity inputs and every active authored caller retain the environment source's double precision. The unused inactive `Box` branch was removed from the acceleration fixture; its active `Box50` body and observer are unchanged. Other formatting differences in USD files are serialization by the native document owner. All USD edits used OpenFile, typed document operations, projection readback and SaveDocument.
+
+Validation used the normal production build after a safe fast-forward to `a45cbca69f22427fb7a7d5f7652940c306efdb28`; binary SHA256 `7ac15fa0d9c5aafd0140be663b09b5e12ec1ec55fa2602106be065bdb712a6a3`. The direction-contract production test passes all 14 checks, including declared assembly aliases, crossed-member rejection and mixed-source rejection. Initialization-policy, scene-transition-generation and standalone sensor tests pass.
+
+Before the precision repair below, 47 of 267 acceleration checks rejected rotation-norm invariance at the unchanged `1e-9` limit. The untouched optimization fixture and the cleaned fixture produced identical ordered failures with the earlier binary, and the first rebuilt binary reproduced them. This was handed to optimization in `docs/reviews/griffin-physics-handoff-2026-10-22.md`; no physics acceptance was weakened. Full Griffin landing, impact and 60 FPS qualification remain open.
+
+Local receipts and logs are in `.cache/codex-evidence/griffin-validation-20261022/`, notably `post-ff-gates/sensor-gates.json`, the corresponding gate logs and `body-acceleration-baseline.log`. The canonical interface contract is in `docs/architecture/23-domain-environment.md`.
+
+Read-only packaging inspection also found a child-query frame discrepancy: the unspawned FLIP battery case returns correct transformed `geometry_bounds` and cooked hull vertices, but child `collision_bounds` returns an origin-centered unit Cube while labelling it canonical-stage. Its parent aggregate collision bounds are correct. `battery-final-readback.json` retains document generation 151 and stage generation 4. The observation is appended to optimization's handoff; it does not establish incorrect runtime contact geometry. The Twin gate uses the transformed parent collision envelope and child visible bounds, with cooked vertices retained as separate evidence.
+
+## USD qualification of optimization's precision repair
+
+Optimization commit `7e4d5c7e4c923a7665b212a247f96403aeb874f7` normalizes the validated widened quaternion at the specific-force measurement boundary. USD integrates that repair and its accompanying documentation, with the supporting handoff reports from `d95daf95a` and `7ea4a0c6b`. It changes no native body pose, solver law, dependency, fixed timestep or acceptance limit.
+
+The normal USD production build has SHA256 `0242a65cff83d1adce15b14a67e3f04aa3d69d760aa87f7e1fc19d048675e4e1`. The original acceleration fixture now passes all **267 checks**, including its original `1e-9` rotation-norm limit. Sensor, initialization-policy and scene-transition-generation gates also pass. The focused FLIP chassis and integrated visual cases pass at Twin source revision `16197115111964988431`. Logs and source-pinned receipts are in `.cache/codex-evidence/griffin-materials-20261022/integration-gates.json` and adjacent `*-integration.log` files. Loaded-support, impact, unfolding and full-mission FPS remain open.

@@ -48,6 +48,12 @@ invalidations check all spatial entities; surface invalidations remain
 restricted to linked consumers and existing fields. Consumers
 read `Local*` rather than recomputing from position.
 
+The reusable IMU accepts the environment probe's `gravity_x/y/z` through
+`double inputs:gravity_world_x/y/z`. Referencing vessels and fixtures retain
+those double connection types; a float override would narrow the canonical
+environment sample before the Modelica conversion. Raw rigid-body ports keep
+their separately declared interface types.
+
 `LocalGravity` owns the exact vector and its change provenance. Consumer motion
 updates Avian's persistent acceleration without an
 external-force wake notification, including the final movement sample at sleep
@@ -205,7 +211,13 @@ probe/source or relay through one assembly input. A spawnable component may
 expose the complete unconnected `target_mount_x/y/z` interface; its parent
 composition supplies and validates those wires. The consumer port name is
 always `target_mount_x/y/z`; the source id appears only on the probe output
-wire. Rhai policy `lint_usd.rhai` reports source-named consumer inputs, invalid
+wire. A `CollectionAPI:components` assembly may expose a declared program
+member's triplet as `<member>_target_mount_x/y/z`. The member retains its
+generic inputs and must relay all three axes through its own boundary alias;
+using another member's alias is invalid. Each assembly triplet still needs a
+complete double-valued connection to one probe/source. The alias names a
+declared program member, never an implicit direction target.
+Rhai policy `lint_usd.rhai` reports source-named consumer inputs, invalid
 target identity, missing targets, ambiguous targets, incomplete triplets, and
 precision narrowing before simulation.
 

@@ -53,6 +53,7 @@ fn on_tick(me, ctx) {
     }
 
     let errors = fixture.errors;
+    print("DIRECTION_CONTRACT_PREFLIGHT_ERRORS " + errors);
     let duplicate = errors_for_rule(errors, "direction-target-id-duplicate");
     let invalid_id = errors_for_rule(errors, "direction-target-id-invalid");
     let triplets = errors_for_rule(errors, "direction-input-triplet-invalid");
@@ -83,6 +84,15 @@ fn on_tick(me, ctx) {
         t_true(component.ok == true &&
                errors_for_rule(component.errors, "direction-input-triplet-invalid").len() == 0,
             "a spawnable component's complete unconnected target interface must defer to its parent"),
+        t_true(!has_subject(errors, "direction-input-name-non-generic", "/World/ValidComponentRelays") &&
+               !has_subject(errors, "direction-input-triplet-invalid", "/World/ValidComponentRelays") &&
+               !has_subject(errors, "ambiguous-modelica-boundary", "/World/ValidComponentRelays"),
+            "declared program members must accept their own complete assembly direction aliases"),
+        t_true(has_subject(errors, "direction-input-triplet-invalid", "/World/CrossedComponentRelay/PanelA") &&
+               !has_subject(errors, "direction-input-triplet-invalid", "/World/CrossedComponentRelay/PanelB"),
+            "a member must reject a direction axis relayed through another member's boundary"),
+        t_true(has_subject(errors, "direction-input-triplet-invalid", "/World/InvalidRelayTriplet"),
+            "assembly direction aliases must still reject mixed provider triplets"),
     ], "DIRECTION TARGET CONTRACT", "DIRECTION_TARGET_CONTRACT");
 }
 

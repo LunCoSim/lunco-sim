@@ -933,8 +933,9 @@ fn direction_source_contract(facts) {
 fn direction_prim_input_findings(facts, prim, root_path) {
     let out = [];
     for frame in direction_input_frames(prim) {
-        if frame == "target" {
-            if facts.stage.root_spawnable == true && direction_spawnable_target_interface(prim) {
+        if frame == "target" || direction_component_relay(facts, prim.path, frame) != () {
+            if frame == "target" && facts.stage.root_spawnable == true
+                && direction_spawnable_target_interface(prim) {
                 continue;
             }
             for issue in direction_frame_findings(facts, prim, frame, root_path) {
@@ -945,6 +946,34 @@ fn direction_prim_input_findings(facts, prim, root_path) {
         }
     }
     out
+}
+
+// A components collection exposes member inputs under the member's name.
+// This is an assembly boundary alias, not a source-specific sensor interface.
+// Resolve it against the declared program member rather than accepting an
+// arbitrary prefix or treating an unrelated sibling's input as the same frame.
+fn direction_component_relay(facts, owner, frame) {
+    let suffix = "_target";
+    if !frame.ends_with(suffix) || frame.len() <= suffix.len() { return (); }
+    let member = owner + "/" + frame.sub_string(0, frame.len() - suffix.len());
+    let declared = false;
+    for collection in facts.collections {
+        if collection.path == owner && collection.name == "components"
+            && collection.error == () && collection.members != ()
+            && collection.members.contains(member) {
+            declared = true;
+        }
+    }
+    if !declared { return (); }
+    for candidate in facts.prims {
+        if candidate.path == member && candidate.schemas.contains("LunCoProgramAPI")
+            && candidate.attributes.contains("inputs:target_mount_x")
+            && candidate.attributes.contains("inputs:target_mount_y")
+            && candidate.attributes.contains("inputs:target_mount_z") {
+            return member;
+        }
+    }
+    ()
 }
 
 fn direction_spawnable_target_interface(prim) {
@@ -1061,7 +1090,7 @@ fn inspect_direction_axis_contract(facts, prim, frame, axis) {
         result.valid = false;
     }
     let source = connection.sources[0].path;
-    let edge = inspect_direction_axis(facts, frame, axis, source);
+    let edge = inspect_direction_axis(facts, prim, frame, axis, source);
     if !edge.valid { result.valid = false; return result; }
     result.kind = edge.kind;
     result.provider = edge.provider;
@@ -1086,16 +1115,19 @@ fn merge_direction_axis_contract(result, edge) {
     result
 }
 
-fn inspect_direction_axis(facts, frame, axis, path) {
+fn inspect_direction_axis(facts, prim, frame, axis, path) {
     let direct = direction_output_parts(path);
     if direct != () && direct.axis == axis {
         let provider = path.sub_string(0, path.len() - direct.suffix.len());
         return #{ valid: direction_provider_exists(facts, provider), kind: "probe", provider: provider, target_id: direct.id };
     }
     let relay = direction_input_source_parts(path);
-    if relay != () && relay.axis == axis && relay.frame == frame {
+    if relay != () && relay.axis == axis {
         let provider = path.sub_string(0, path.len() - relay.suffix.len());
-        return #{ valid: true, kind: "relay", provider: provider, target_id: () };
+        if relay.frame == frame || (frame == "target"
+            && direction_component_relay(facts, provider, relay.frame) == prim.path) {
+            return #{ valid: true, kind: "relay", provider: provider, target_id: () };
+        }
     }
     #{ valid: false, kind: (), provider: (), target_id: () }
 }
