@@ -8,7 +8,7 @@
 def Xform "World"
 {
     def Xform "StationProbe" (
-        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+        prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
     )
     {
         double outputs:station_mount_x = 0.0
@@ -16,7 +16,7 @@ def Xform "World"
         double outputs:station_mount_z = 0.0
     }
     def Xform "MissingProbe" (
-        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+        prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
     )
     {
         double outputs:absent_mount_x = 0.0
@@ -24,7 +24,7 @@ def Xform "World"
         double outputs:absent_mount_z = 0.0
     }
     def Xform "DuplicateProbe" (
-        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+        prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
     )
     {
         double outputs:dup_mount_x = 0.0
@@ -32,7 +32,7 @@ def Xform "World"
         double outputs:dup_mount_z = 0.0
     }
     def Xform "TripletProbeA" (
-        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+        prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
     )
     {
         double outputs:incomplete_mount_x = 0.0
@@ -43,7 +43,7 @@ def Xform "World"
         double outputs:mismatch_a_mount_z = 0.0
     }
     def Xform "TripletProbeB" (
-        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+        prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
     )
     {
         double outputs:mismatch_b_mount_x = 0.0
@@ -51,7 +51,7 @@ def Xform "World"
         double outputs:mismatch_b_mount_z = 0.0
     }
     def Xform "PrecisionProbe" (
-        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+        prepend apiSchemas = ["LunCoEnvironmentProbeAPI"]
     )
     {
         float outputs:precision_mount_x = 0.0
@@ -118,51 +118,167 @@ def Xform "World"
         double inputs:sun_mount_z.connect = </World/StationProbe.outputs:station_mount_z>
     }
     def Xform "ValidTarget" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "station"
     }
     def Xform "DuplicateTargetA" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "dup"
     }
     def Xform "DuplicateTargetB" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "dup"
     }
     def Xform "InvalidTarget" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "Bad-ID"
     }
     def Xform "IncompleteTarget" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "incomplete"
     }
     def Xform "MismatchedTargetA" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "mismatch_a"
     }
     def Xform "MismatchedTargetB" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "mismatch_b"
     }
     def Xform "PrecisionTarget" (
-        prepend apiSchemas = "LunCoDirectionTargetAPI"
+        prepend apiSchemas = ["LunCoDirectionTargetAPI"]
     )
     {
         uniform token lunco:directionTarget:id = "precision"
+    }
+    def Scope "ValidComponentRelays" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        custom double inputs:PanelA_target_mount_x = 0.0
+        double inputs:PanelA_target_mount_x.connect = </World/StationProbe.outputs:station_mount_x>
+        custom double inputs:PanelA_target_mount_y = 0.0
+        double inputs:PanelA_target_mount_y.connect = </World/StationProbe.outputs:station_mount_y>
+        custom double inputs:PanelA_target_mount_z = 0.0
+        double inputs:PanelA_target_mount_z.connect = </World/StationProbe.outputs:station_mount_z>
+        custom double inputs:PanelB_target_mount_x = 0.0
+        double inputs:PanelB_target_mount_x.connect = </World/TripletProbeA.outputs:mismatch_a_mount_x>
+        custom double inputs:PanelB_target_mount_y = 0.0
+        double inputs:PanelB_target_mount_y.connect = </World/TripletProbeA.outputs:mismatch_a_mount_y>
+        custom double inputs:PanelB_target_mount_z = 0.0
+        double inputs:PanelB_target_mount_z.connect = </World/TripletProbeA.outputs:mismatch_a_mount_z>
+        rel collection:components:includes = [</World/ValidComponentRelays/PanelA>, </World/ValidComponentRelays/PanelB>]
+        def Scope "PanelA" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+            custom double inputs:target_mount_x = 0.0
+            double inputs:target_mount_x.connect = </World/ValidComponentRelays.inputs:PanelA_target_mount_x>
+            custom double inputs:target_mount_y = 0.0
+            double inputs:target_mount_y.connect = </World/ValidComponentRelays.inputs:PanelA_target_mount_y>
+            custom double inputs:target_mount_z = 0.0
+            double inputs:target_mount_z.connect = </World/ValidComponentRelays.inputs:PanelA_target_mount_z>
+        }
+        def Scope "PanelB" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+            custom double inputs:target_mount_x = 0.0
+            double inputs:target_mount_x.connect = </World/ValidComponentRelays.inputs:PanelB_target_mount_x>
+            custom double inputs:target_mount_y = 0.0
+            double inputs:target_mount_y.connect = </World/ValidComponentRelays.inputs:PanelB_target_mount_y>
+            custom double inputs:target_mount_z = 0.0
+            double inputs:target_mount_z.connect = </World/ValidComponentRelays.inputs:PanelB_target_mount_z>
+        }
+    }
+    def Scope "CrossedComponentRelay" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        custom double inputs:PanelA_target_mount_x = 0.0
+        double inputs:PanelA_target_mount_x.connect = </World/StationProbe.outputs:station_mount_x>
+        custom double inputs:PanelA_target_mount_y = 0.0
+        double inputs:PanelA_target_mount_y.connect = </World/StationProbe.outputs:station_mount_y>
+        custom double inputs:PanelA_target_mount_z = 0.0
+        double inputs:PanelA_target_mount_z.connect = </World/StationProbe.outputs:station_mount_z>
+        custom double inputs:PanelB_target_mount_x = 0.0
+        double inputs:PanelB_target_mount_x.connect = </World/TripletProbeA.outputs:mismatch_a_mount_x>
+        custom double inputs:PanelB_target_mount_y = 0.0
+        double inputs:PanelB_target_mount_y.connect = </World/TripletProbeA.outputs:mismatch_a_mount_y>
+        custom double inputs:PanelB_target_mount_z = 0.0
+        double inputs:PanelB_target_mount_z.connect = </World/TripletProbeA.outputs:mismatch_a_mount_z>
+        rel collection:components:includes = [</World/CrossedComponentRelay/PanelA>, </World/CrossedComponentRelay/PanelB>]
+        def Scope "PanelA" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+            custom double inputs:target_mount_x = 0.0
+            double inputs:target_mount_x.connect = </World/CrossedComponentRelay.inputs:PanelA_target_mount_x>
+            custom double inputs:target_mount_y = 0.0
+            double inputs:target_mount_y.connect = </World/CrossedComponentRelay.inputs:PanelA_target_mount_y>
+            custom double inputs:target_mount_z = 0.0
+            double inputs:target_mount_z.connect = </World/CrossedComponentRelay.inputs:PanelB_target_mount_z>
+        }
+        def Scope "PanelB" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+            custom double inputs:target_mount_x = 0.0
+            double inputs:target_mount_x.connect = </World/CrossedComponentRelay.inputs:PanelB_target_mount_x>
+            custom double inputs:target_mount_y = 0.0
+            double inputs:target_mount_y.connect = </World/CrossedComponentRelay.inputs:PanelB_target_mount_y>
+            custom double inputs:target_mount_z = 0.0
+            double inputs:target_mount_z.connect = </World/CrossedComponentRelay.inputs:PanelB_target_mount_z>
+        }
+    }
+    def Scope "InvalidRelayTriplet" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        custom double inputs:PanelA_target_mount_x = 0.0
+        double inputs:PanelA_target_mount_x.connect = </World/StationProbe.outputs:station_mount_x>
+        custom double inputs:PanelA_target_mount_y = 0.0
+        double inputs:PanelA_target_mount_y.connect = </World/StationProbe.outputs:station_mount_y>
+        custom double inputs:PanelA_target_mount_z = 0.0
+        double inputs:PanelA_target_mount_z.connect = </World/MissingProbe.outputs:absent_mount_z>
+        rel collection:components:includes = </World/InvalidRelayTriplet/PanelA>
+        def Scope "PanelA" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+            custom double inputs:target_mount_x = 0.0
+            double inputs:target_mount_x.connect = </World/InvalidRelayTriplet.inputs:PanelA_target_mount_x>
+            custom double inputs:target_mount_y = 0.0
+            double inputs:target_mount_y.connect = </World/InvalidRelayTriplet.inputs:PanelA_target_mount_y>
+            custom double inputs:target_mount_z = 0.0
+            double inputs:target_mount_z.connect = </World/InvalidRelayTriplet.inputs:PanelA_target_mount_z>
+        }
     }
 }
