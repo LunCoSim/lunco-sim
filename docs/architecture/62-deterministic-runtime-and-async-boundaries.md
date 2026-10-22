@@ -1138,6 +1138,15 @@ that invokes Rhai callbacks outside their owning cycle. A future reusable task
 deadline, if needed by production behavior, must name its clock and define
 cancellation and failure semantics in the task tree.
 
+A task callback exception terminates that task assignment. The Rhai owner
+suppresses further callbacks in that pass, latches the root's failure, and emits
+one `TASK_FAILED` event carrying the diagnostic string. Selectors and retry
+decorators cannot consume an exception as an ordinary authored predicate result.
+The scenario retains its lifecycle and event hooks so its policy can react;
+assigning a new `this.task` explicitly admits another task. The production
+`task_callback_failure.rhai` observer covers action/predicate exceptions,
+selector and retry boundaries, diagnostic payloads and explicit replacement.
+
 ## 6. Co-simulation and dependency closure
 
 Every active Modelica participant synchronizes at its declared communication

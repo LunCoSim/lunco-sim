@@ -652,6 +652,11 @@ Progress is observable on the bus: `TASK_COMPLETE`/`TASK_FAILED` for the native
 task root and `OBJECTIVE_COMPLETE`/`PLAN_COMPLETE` when mission policy emits
 those application events.
 
+Callback exceptions latch task failure and emit `TASK_FAILED` once with the
+diagnostic string as its payload. Further callbacks stop for that pass; a
+selector or retry decorator cannot mask an exception. React in `on_event` and
+assign a new `this.task` explicitly when policy permits another attempt.
+
 `requires_event` mission objectives consume the native runtime's bounded
 `name`/`source` identity projection. Full typed payloads belong only to a
 matching user `on_event` hook; do not recreate a persistent Rhai event buffer or

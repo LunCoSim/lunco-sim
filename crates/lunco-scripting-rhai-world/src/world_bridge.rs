@@ -4810,8 +4810,8 @@ struct RhaiTaskCtx {
     me: i64,
     now: f64,
     events: Vec<(ImmutableString, i64)>,
-    /// First closure error this tick. Leaves keep `Running`; the error surfaces
-    /// once as the hook diagnostic.
+    /// First closure error. The owner latches task failure and publishes the
+    /// diagnostic after restoring the scenario's scope and state.
     error: Option<(String, rhai::Position)>,
 }
 
@@ -4873,6 +4873,9 @@ impl lunco_scripting_rhai_core::task_tree::TaskCtx for RhaiTaskCtx {
         &mut self,
         f: &FnPtr,
     ) -> Result<(), lunco_scripting_rhai_core::task_tree::TaskCallbackError> {
+        if self.error.is_some() {
+            return Err(lunco_scripting_rhai_core::task_tree::TaskCallbackError);
+        }
         match self.call_fn(f) {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -4885,6 +4888,9 @@ impl lunco_scripting_rhai_core::task_tree::TaskCtx for RhaiTaskCtx {
         &mut self,
         f: &FnPtr,
     ) -> Result<bool, lunco_scripting_rhai_core::task_tree::TaskCallbackError> {
+        if self.error.is_some() {
+            return Err(lunco_scripting_rhai_core::task_tree::TaskCallbackError);
+        }
         match self.call_fn(f) {
             Ok(d) => d.as_bool().map_err(|t| {
                 error!("[rhai] task predicate returned `{t}`, expected bool");
@@ -5004,6 +5010,13 @@ fn tick_native_task(
     let task_error = ctx.error;
     st.scope = ctx.scope;
     st.this = ctx.this;
+    // A callback exception cannot be consumed by a selector or retry decorator.
+    // Reassigning the authored task is the explicit boundary for another attempt.
+    let status = if task_error.is_some() {
+        lunco_scripting_rhai_core::task_tree::Status::Failure
+    } else {
+        status
+    };
     match status {
         lunco_scripting_rhai_core::task_tree::Status::Running => {}
         lunco_scripting_rhai_core::task_tree::Status::Success => {
@@ -5013,7 +5026,14 @@ fn tick_native_task(
         lunco_scripting_rhai_core::task_tree::Status::Failure => {
             ct.done = true;
             warn!("[rhai] task tree ended in Failure for gid {self_gid}");
-            bridge_core::emit("TASK_FAILED", TelemetryValue::I64(0));
+            bridge_core::emit(
+                "TASK_FAILED",
+                task_error
+                    .as_ref()
+                    .map_or(TelemetryValue::I64(0), |(message, _)| {
+                        TelemetryValue::String(message.clone())
+                    }),
+            );
         }
     }
     task_error

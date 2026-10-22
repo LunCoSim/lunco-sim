@@ -39,8 +39,22 @@ production landing-preflight observer passes four positive/negative checks on
 PID 68464/API 4836. The subsequent capture has unchanged source hashes,
 successful normal geometry/spring and mass preflights, no task errors, and clear
 runtime diagnostics. Its first preflight task call takes 134.60 ms. This does
-not qualify the full landing or mission. Generic callback errors still need a
-terminal task boundary instead of implicit retry.
+not qualify the full landing or mission. Callback exceptions now terminate the
+task assignment, suppress further callbacks in that pass and emit one
+`TASK_FAILED` with the diagnostic string. Explicit task replacement permits
+recovery; selectors and retry decorators cannot consume the exception.
+
+The regular production rebuild for that task boundary is SHA-256
+`e8e31e99d67dc208056c5fc43c328dced0d8295028549f0af53823f173434e03`.
+The new authored `task_callback_failure` gate passes eight checks in both the
+windowed API host (PID 77233/API 4853) and production scene-test host
+(PID 79219/API 4856, tick 25). Its USD fixture was created and read back through
+`NewDocument`, `AttachProgram`, `SaveAsDocument` and `QueryUsdPrim`, and is part
+of normal scene-test discovery. The existing `scripting_task_contract` gate
+passes all 42 checks on PID 77304/API 4852. Logs and artifact/source receipts
+are in the same evidence directory under `task-callback-*` and
+`task-contract-regression.log`. These behavior checks do not qualify that
+artifact's performance.
 
 Griffin's earlier 37.37 s admission and later 24.69 s admission are different
 cache/source cohorts. The initial coupled solver construction takes 12.33 s

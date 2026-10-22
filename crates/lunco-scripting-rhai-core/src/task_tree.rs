@@ -2,15 +2,14 @@
 //!
 //! The prelude's task constructors (`seq`/`par_all`/`par_race`/`repeat`/
 //! `forever`/`once`/`wait`/…) build PURE DATA maps — policy, inspectable,
-//! snapshot-safe. This module is the mechanism that used to be ~100 lines of
-//! rhai `__tick*` recursion: [`compile_node`] turns the map tree into a
+//! snapshot-safe. [`compile_node`] turns the map tree into a
 //! [`lunco_behavior`] tree once per assignment, and the world-bridge ticks it
 //! natively every frame. One tick engine serves authored task programs; the
 //! Rhai side keeps only the constructors and policy.
 //!
 //! Leaves call back into script closures via [`TaskCtx`] — dyn-erased so the
 //! tree type is `'static` and can live in [`CompiledTask`] beside the script
-//! state. Leaf semantics mirror the retired rhai engine exactly:
+//! state. Leaf semantics are explicit:
 //! - `act` runs every tick while the leaf is live (`once` completes on the
 //!   first tick, so its action runs once);
 //! - explicit leaf kinds select exactly one contract: `once`, `step`, `act_for`,
@@ -20,11 +19,10 @@
 //! - dwell is entry-stamped and cleared on [`Node::reset`] so `repeat`/`forever`
 //!   re-dwell; event matching uses name + optional source, with a string source
 //!   path re-resolved via `find_path()` each tick until it matches;
-//! - a closure error is surfaced as a diagnostic and the leaf stays `Running`
-//!   (the retired engine aborted the whole tick and retried next frame).
+//! - a closure error fails the leaf; the world-bound owner latches failure of
+//!   the complete task, emits its diagnostic and requires an explicit new task.
 //!
-//! Composites come straight from the kernel, which also unlocks nodes the rhai
-//! engine never had: `sel` (Selector fallback), `retry`, `invert`,
+//! Composites come straight from the kernel: `sel` (Selector), `retry`, `invert`,
 //! `force_ok`/`force_fail`, `reactive_seq`/`reactive_sel`, and the `check`
 //! leaf (predicate → Success/Failure) that makes Selector/Retry meaningful
 //! from scripts.
@@ -150,9 +148,8 @@ pub struct TaskCallbackError;
 
 /// A compiled task tree plus its completion latch. The kernel's `Sequence`
 /// resets itself on terminal (so it re-runs under `Repeat`), which means the
-/// ROOT would restart every tick after finishing — `done` latches the first
-/// terminal status, mirroring the retired engine's `__task_done` + single
-/// `TASK_COMPLETE` emit.
+/// root would restart every tick after finishing. `done` latches its first
+/// terminal status until the script explicitly assigns a new task specification.
 pub struct CompiledTask {
     /// Identity marker also stamped into the source map as `__bt`, so a script
     /// re-assigning `this.task` (fresh map, no marker) triggers a recompile.
@@ -218,21 +215,21 @@ impl Node<dyn TaskCtx> for Leaf {
     fn tick(&mut self, ctx: &mut (dyn TaskCtx + 'static)) -> Status {
         if let Some(act) = &self.act {
             if ctx.call_action(act).is_err() {
-                return Status::Running; // error surfaced by ctx; retry next tick
+                return Status::Failure;
             }
         }
         if let Some(check) = &self.check {
             return match ctx.call_pred(check) {
                 Ok(true) => Status::Success,
                 Ok(false) => Status::Failure,
-                Err(TaskCallbackError) => Status::Running,
+                Err(TaskCallbackError) => Status::Failure,
             };
         }
         if let Some(done) = &self.done {
             return match ctx.call_pred(done) {
                 Ok(true) => Status::Success,
                 Ok(false) => Status::Running,
-                Err(TaskCallbackError) => Status::Running,
+                Err(TaskCallbackError) => Status::Failure,
             };
         }
         if let Some(secs) = self.secs {
