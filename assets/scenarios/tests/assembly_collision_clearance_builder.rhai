@@ -46,6 +46,27 @@ fn shape_bounds_match(doc, parent) {
     true
 }
 
+fn cooked_cube_frame_matches(doc,path,translation,angle_deg) {
+    let record=query("QueryUsdPrim",#{doc_id:doc,path:path,collision_geometry:true});
+    if !query_ok(record) || record.collision_geometry==() {return false;}
+    let shape=record.collision_geometry;
+    if shape.shape!="convex_hull" || shape.frame!="canonical_stage"
+        || shape.vertices==() || shape.vertices.len()!=8 || shape.local_to_stage==() {return false;}
+    let pose=shape.local_to_stage;
+    if pose.translation_m==() || pose.rotation_wxyz==() {return false;}
+    let origin=vec3_from(pose.translation_m);let r=pose.rotation_wxyz;
+    let q=quat_from([r[1],r[2],r[3],r[0]]);let inverse=quat_inverse(q);
+    if vlen(origin-vec3_from(translation))>1.0e-12
+        || vlen(qrot(q,vec3(1.0,0.0,0.0))-qrot(quat_from_euler_xyz_deg(vec3(0.0,0.0,angle_deg)),vec3(1.0,0.0,0.0)))>1.0e-12 {return false;}
+    let lo=[1.0e30,1.0e30,1.0e30];let hi=[-1.0e30,-1.0e30,-1.0e30];
+    for vertex in shape.vertices {
+        let p=vec3_array(qrot(inverse,vec3_from(vertex)-origin));
+        for axis in 0..3 {lo[axis]=min(lo[axis],p[axis]);hi[axis]=max(hi[axis],p[axis]);}
+    }
+    for axis in 0..3 {if abs(lo[axis]+1.0)>1.0e-12 || abs(hi[axis]-1.0)>1.0e-12 {return false;}}
+    true
+}
+
 fn finish(me, checks) {
     if !me.done {
         me.done = true;
@@ -143,6 +164,10 @@ fn on_tick(me, ctx) {
                 "single and batch child collision bounds retain ancestor translation"),
             t_true(this.rotated_child_bounds_ok == true,
                 "child and parent collision bounds agree through ancestor rotation"),
+            t_true(this.cooked_cube_frame_ok == true,
+                "world hull vertices expose their native translated cooking frame"),
+            t_true(this.rotated_cooked_cube_frame_ok == true,
+                "native cooking-frame inversion recovers a rotated hull's local dimensions"),
             t_true(this.center_alignment_ok == true,
                 "collision-envelope centre alignment returns the expected local placement"),
             t_true(this.edge_alignment_ok == true,
@@ -200,6 +225,8 @@ fn on_tick(me, ctx) {
         && (blocker_record.collision_bounds.half_extents[0] - 2.0).abs() <= 0.001;
     this.child_bounds_ok = shape_bounds_match(this.doc, MOVING);
     this.rotated_child_bounds_ok = shape_bounds_match(this.doc, ROTATED);
+    this.cooked_cube_frame_ok=cooked_cube_frame_matches(this.doc,BLOCKER+"/Left",[-1.0,0.0,0.0],0.0);
+    this.rotated_cooked_cube_frame_ok=cooked_cube_frame_matches(this.doc,ROTATED+"/Shape",[0.0,-4.0,0.0],15.0);
 
     let center_alignment = assembly_builder::align_collision_centers_plan(
         this.doc, "@root@", MOVING, BLOCKER, "X", 0.0,

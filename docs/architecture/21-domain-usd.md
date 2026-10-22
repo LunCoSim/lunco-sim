@@ -50,6 +50,10 @@ descendant reset stacks. Selecting a collider child or its single-shape parent
 therefore yields the same stage-space collision bounds. The
 `assembly_collision_clearance_builder` production gate checks this through
 both single and batch queries, including translated and rotated ancestors;
+world-space cooked hull/mesh vertices also carry the f64 rigid
+`local_to_stage` pose of their scaled cooking frame. Inverting that pose
+recovers section-local dimensions without treating a rotated stage AABB as
+a local box or borrowing the renderer's f32 transform;
 `lunco-usd-bevy-core` owns the generic runtime projection mechanisms and
 domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
