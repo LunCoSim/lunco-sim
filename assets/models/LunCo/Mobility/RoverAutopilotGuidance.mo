@@ -35,7 +35,6 @@ model RoverAutopilotGuidance
 
   output Real throttle_cmd "Forward throttle command";
   output Real steer_cmd "Damped normalized steer command";
-  output Real brake_cmd "Arrival brake command";
   output Real target_distance_m(unit = "m") "Horizontal target distance";
   output Real heading_error_rad(unit = "rad")
     "Signed right-positive heading error";
@@ -59,7 +58,7 @@ model RoverAutopilotGuidance
   Real wheel_steer;
   Real travel_direction;
   Real arrival_gate;
-  Real wheel_approach;
+  Real travel_approach;
 
 equation
   enabled_gate = max(0.0, min(1.0, enabled));
@@ -91,7 +90,7 @@ equation
   approach_gate = max(0.0, min(1.0,
     (distance_safe - max(1.0e-3, radius)) /
       max(1.0e-3, 2.0 * max(1.0e-3, radius))));
-  steer_gate = (1.0 - turn_only_gate) * approach_gate + turn_only_gate;
+  steer_gate = (1.0 - turn_only_gate) * arrival_gate + turn_only_gate;
 
   // Avian's positive Y rate corresponds to a left turn in the rover's
   // local -Z/+X convention. Adding it to the right-positive heading error is
@@ -106,7 +105,7 @@ equation
   // Tapering outside it can balance a slope before the waypoint is reached.
   arrival_gate = max(0.0, min(1.0,
     (distance_safe - max(1.0e-3, radius) + 0.05) / 0.05));
-  wheel_approach = arrival_gate * (0.35 + 0.65 * approach_gate);
+  travel_approach = arrival_gate * (0.35 + 0.65 * approach_gate);
   steer_cmd = enabled_gate * (
     turn_in_place * steer_gate * max(-1.0, min(1.0, raw_steer))
     + (1.0 - turn_in_place) * arrival_gate *
@@ -114,9 +113,7 @@ equation
 
   throttle_cmd = enabled_gate * (1.0 - turn_only_gate) * speed * (
     turn_in_place * front_gate *
-      (0.25 + 0.75 * max(0.0, dot_heading)) * approach_gate
-    + (1.0 - turn_in_place) * travel_direction * wheel_approach);
-  brake_cmd = enabled_gate * (1.0 - turn_only_gate) * (
-    turn_in_place * (1.0 - approach_gate)
-    + (1.0 - turn_in_place) * (1.0 - arrival_gate));
+      (0.25 + 0.75 * max(0.0, dot_heading)) * travel_approach
+    + (1.0 - turn_in_place) * travel_direction * travel_approach);
+
 end RoverAutopilotGuidance;
