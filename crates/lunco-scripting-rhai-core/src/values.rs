@@ -96,6 +96,9 @@ fn dyn_i64(v: &Dynamic) -> Result<i64, String> {
 
 /// A rhai [`Dynamic`] as `u64`; inputs must be integral and in range.
 fn dyn_u64(v: &Dynamic) -> Result<u64, String> {
+    if let Some(value) = v.clone().try_cast::<u64>() {
+        return Ok(value);
+    }
     if let Ok(value) = v.as_int() {
         return u64::try_from(value).map_err(|_| "expected a non-negative integer".to_string());
     }
@@ -300,5 +303,14 @@ mod tests {
         let mut unsigned = u32::default();
         assert!(apply_dynamic(&mut unsigned, &Dynamic::from_int(-1)).is_err());
         assert_eq!(unsigned, 0);
+        // Reflected usize settings read as native unsigned values. Writing
+        // the saved value back must retain its integer type and full range.
+        let mut iterations = 0_usize;
+        apply_dynamic(&mut iterations, &Dynamic::from(8192_u64)).unwrap();
+        assert_eq!(iterations, 8192);
+        let mut wide = 0_u64;
+        apply_dynamic(&mut wide, &Dynamic::from(u64::MAX)).unwrap();
+        assert_eq!(wide, u64::MAX);
+        assert!(apply_dynamic(&mut unsigned, &Dynamic::from(u64::MAX)).is_err());
     }
 }

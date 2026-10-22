@@ -237,6 +237,9 @@ pub fn build_from_reflect<B: ValueBuilder>(
         if let Some(v) = any.downcast_ref::<u64>() {
             return Some(b.uint(*v));
         }
+        if let Some(v) = any.downcast_ref::<usize>() {
+            return Some(b.uint(*v as u64));
+        }
         if let Some(v) = any.downcast_ref::<bool>() {
             return Some(b.bool(*v));
         }
@@ -2006,6 +2009,10 @@ mod tests {
         assert_eq!(
             build_from_reflect(&ApiValueBuilder, &u64::MAX),
             Some(HookValue::UInt(u64::MAX))
+        );
+        assert_eq!(
+            build_from_reflect(&ApiValueBuilder, &usize::MAX),
+            Some(HookValue::UInt(usize::MAX as u64))
         );
     }
 

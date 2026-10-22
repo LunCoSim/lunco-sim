@@ -280,6 +280,11 @@ generation and makes the cache refresh deterministic.
 | `sim_tick()` | read | current FixedUpdate tick |
 | `emit(name, value)` | event | fire a `TelemetryEvent` on the shared bus |
 
+Reflected `usize` settings retain unsigned integer values at the native value
+boundary. A saved value can be passed directly back to `set_setting`, including
+from a scenario stop hook; no string parsing or floating-point conversion is
+needed. Reflected unsigned writes preserve range checks for narrower fields.
+
 Everything else is **policy in rhai** — see the prelude
 `assets/scripting/prelude/` (one file per topic): vector math, `distance`/`arrived`,
 `steer_to`/`nav_to` (closed-loop steering), task-tree mission constructors,
