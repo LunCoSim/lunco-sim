@@ -15,6 +15,37 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
+fn shape_bounds_match(doc, parent) {
+    let path = parent + "/Shape";
+    let single = query("QueryUsdPrim", #{doc_id: doc, path: path,
+        attrs: [], collision_bounds: true, geometry_bounds: true});
+    let batch = query("QueryUsdPrims", #{doc_id: doc, paths: [parent, path],
+        attrs: [], collision_bounds: true, geometry_bounds: true});
+    if !query_ok(single) || !query_ok(batch) || batch.records.len() != 2
+        || single.collision_bounds == () || single.geometry_bounds == () {
+        return false;
+    }
+    let collision = single.collision_bounds;
+    let geometry = single.geometry_bounds;
+    let aggregate = batch.records[0].collision_bounds;
+    let child = batch.records[1].collision_bounds;
+    if aggregate == () || child == () || collision.frame != "canonical_stage"
+        || geometry.frame != "canonical_stage" || child.frame != "canonical_stage" {
+        return false;
+    }
+    for axis in 0..3 {
+        if (collision.min[axis] - geometry.min[axis]).abs() > 1.0e-12
+            || (collision.max[axis] - geometry.max[axis]).abs() > 1.0e-12
+            || (collision.min[axis] - aggregate.min[axis]).abs() > 1.0e-12
+            || (collision.max[axis] - aggregate.max[axis]).abs() > 1.0e-12
+            || (collision.min[axis] - child.min[axis]).abs() > 1.0e-12
+            || (collision.max[axis] - child.max[axis]).abs() > 1.0e-12 {
+            return false;
+        }
+    }
+    true
+}
+
 fn finish(me, checks) {
     if !me.done {
         me.done = true;
@@ -108,6 +139,10 @@ fn on_tick(me, ctx) {
                 "shared query exposes the composed Cylinder bounds"),
             t_true(this.compound_bounds_ok == true,
                 "shared query aggregates the compound blocker bounds"),
+            t_true(this.child_bounds_ok == true,
+                "single and batch child collision bounds retain ancestor translation"),
+            t_true(this.rotated_child_bounds_ok == true,
+                "child and parent collision bounds agree through ancestor rotation"),
             t_true(this.center_alignment_ok == true,
                 "collision-envelope centre alignment returns the expected local placement"),
             t_true(this.edge_alignment_ok == true,
@@ -163,6 +198,8 @@ fn on_tick(me, ctx) {
     this.compound_bounds_ok = blocker_record.collision_bounds.frame == "canonical_stage"
         && blocker_record.collision_bounds.center[0].abs() <= 0.001
         && (blocker_record.collision_bounds.half_extents[0] - 2.0).abs() <= 0.001;
+    this.child_bounds_ok = shape_bounds_match(this.doc, MOVING);
+    this.rotated_child_bounds_ok = shape_bounds_match(this.doc, ROTATED);
 
     let center_alignment = assembly_builder::align_collision_centers_plan(
         this.doc, "@root@", MOVING, BLOCKER, "X", 0.0,

@@ -43,6 +43,13 @@ participant projection and implies `simulation`;
 owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
 curve-sweep substrate;
 `lunco-usd-bevy-stage` owns prepared/composed stage data and canonical readers;
+its f64 world-transform reader is the common transform owner for authored
+positions, cooked collision placement and geometry envelopes. The scene
+collision-envelope walk starts in canonical stage coordinates and honors
+descendant reset stacks. Selecting a collider child or its single-shape parent
+therefore yields the same stage-space collision bounds. The
+`assembly_collision_clearance_builder` production gate checks this through
+both single and batch queries, including translated and rotated ancestors;
 `lunco-usd-bevy-core` owns the generic runtime projection mechanisms and
 domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
