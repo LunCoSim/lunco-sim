@@ -144,6 +144,11 @@ the simulation. During preparation the built-in Rhai visibility policy
 temporarily shows an authored surface before possession, then returns to its
 authored `possessed` or `always` mode when the holds clear.
 
+Use the optional typed `pause` fact (`condition`, `detail`) for a coupled
+subject's retained stop condition. Keep the wording in Rhai and qualify the
+paused HUD after its model clock has stopped; a model's transient failure output
+is not the retained pause owner.
+
 For recording, verify the required surface in an encoded trial with live data.
 The readiness owner tracks whether its retained tree has consumed an exposure
 snapshot; it must not wait for equality with a later global publication revision.

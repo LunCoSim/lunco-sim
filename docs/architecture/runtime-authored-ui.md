@@ -72,6 +72,15 @@ The generic exposure namespace is the contract. Do not create a special
 telemetry, physics, scripts, and derived capabilities all publish through the
 same registry.
 
+Runtime surface facts expose the subject's retained `SimulationObjectPaused` as
+`pause: #{condition, detail}`, or unit when that subject is running. This is a
+typed snapshot of the existing co-simulation owner state, installed with the
+ordinary runtime-properties hook and invalidated when the marker changes. The
+active Twin's Rhai policy chooses failure wording from this retained condition;
+it must not infer a paused state from a transient model output. Scene teardown
+retires the subject and its prepared exposure lease. The Roadster overload gate
+checks coupled pause and its windowed HUD consumer.
+
 Runtime surface facts include the ordered owner/reason pairs from
 `SimulationProgress`. The active Twin's Rhai properties policy chooses the
 visible status wording, while the typed producer remains domain-neutral.

@@ -326,6 +326,7 @@ fn runtime_ui_facts(
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    q_paused: &Query<&lunco_core::SimulationObjectPaused>,
     q_inputs: &Query<&InputPorts>,
     q_parents: &Query<&ChildOf>,
     q_vel: &Query<&LinearVelocity>,
@@ -520,6 +521,16 @@ fn runtime_ui_facts(
         ("rotation", rotation),
         ("telemetry", HookValue::Array(telemetry)),
         ("simulation_progress", simulation_progress_facts(progress)),
+        (
+            "pause",
+            root.and_then(|entity| q_paused.get(entity).ok())
+                .map_or(HookValue::Unit, |pause| {
+                    HookValue::map([
+                        ("condition", HookValue::str(pause.condition.clone())),
+                        ("detail", HookValue::str(pause.detail.clone())),
+                    ])
+                }),
+        ),
         (
             "participants",
             HookValue::Array(participants.into_iter().map(|(_, facts)| facts).collect()),
@@ -1577,6 +1588,7 @@ type DrivenExposureChanges = Or<(
     Changed<WheelRaycast>,
     Changed<ComputedCenterOfMass>,
     Changed<SimComponent>,
+    Changed<lunco_core::SimulationObjectPaused>,
     Changed<InputPorts>,
 )>;
 
@@ -1720,6 +1732,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
     sim: Query<'w, 's, (Entity, &'static SimComponent)>,
+    object_pause: Query<'w, 's, &'static lunco_core::SimulationObjectPaused>,
     inputs: Query<'w, 's, &'static InputPorts>,
     channels: Query<
         'w,
@@ -1811,6 +1824,7 @@ pub(crate) fn publish_exposure(
                 &queries.catalog_id,
                 &queries.gid,
                 &queries.sim,
+                &queries.object_pause,
                 &runtime.signals,
                 &queries.channels,
                 &queries.parents,
@@ -2406,6 +2420,7 @@ fn queue_runtime_surfaces(
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    q_paused: &Query<&lunco_core::SimulationObjectPaused>,
     signals: &SignalRegistry,
     q_channels: &Query<(
         Entity,
@@ -2469,6 +2484,7 @@ fn queue_runtime_surfaces(
             q_catalog_id,
             q_gid,
             q_sim,
+            q_paused,
             q_inputs,
             q_parents,
             q_grids,
@@ -2503,6 +2519,7 @@ fn queue_runtime_surface(
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    q_paused: &Query<&lunco_core::SimulationObjectPaused>,
     q_inputs: &Query<&InputPorts>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
@@ -2533,6 +2550,7 @@ fn queue_runtime_surface(
             q_catalog_id,
             q_gid,
             q_sim,
+            q_paused,
             q_inputs,
             q_parents,
             q_vel,
