@@ -39,12 +39,21 @@ pub fn dispatch_modelica_compile_requests(
             false
         }
     });
-    for request in requests {
-        commands.queue(move |world: &mut World| dispatch_one(world, request));
+    if !requests.is_empty() {
+        commands.queue(move |world: &mut World| {
+            let mut sampling = None;
+            for request in requests {
+                dispatch_one(world, request, &mut sampling);
+            }
+        });
     }
 }
 
-fn dispatch_one(world: &mut World, request: CompileRequested) {
+fn dispatch_one(
+    world: &mut World,
+    request: CompileRequested,
+    sampling: &mut Option<Result<(), String>>,
+) {
     let doc = request.source.document;
     let workspace = world
         .get_resource::<lunco_workspace::WorkspaceResource>()
@@ -190,9 +199,105 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             return;
         }
     };
+    let generation = document.generation_owned();
+
+    let existing = target_entity.and_then(|entity| {
+        world.get::<ModelicaModel>(entity).map(|model| {
+            (
+                model.session_id,
+                model.inputs.clone(),
+                model.communication_period_secs,
+                model.is_compiled,
+                model.is_compiling,
+                model.compiled_generation,
+                model.resume_after_compile,
+            )
+        })
+    });
+    let communication_period = existing
+        .as_ref()
+        .map(|(_, _, period, _, _, _, _)| *period)
+        .unwrap_or(lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS);
+    if let Err(error) =
+        lunco_modelica_runtime::validate_communication_period_secs(communication_period)
+    {
+        fail_request(world, doc, target_entity, &model_name, &error);
+        return;
+    }
+    if !request.force
+        && existing.as_ref().is_some_and(
+            |(_, _, _, is_compiled, is_compiling, compiled_generation, _)| {
+                *is_compiled && !*is_compiling && *compiled_generation == generation
+            },
+        )
+    {
+        return;
+    }
+
+    let connected_inputs = if target_entity.is_some_and(|entity| {
+        world
+            .get::<lunco_cosim_core::UsdSourcedCosim>(entity)
+            .is_some()
+    }) {
+        let entity = target_entity.expect("selected USD participant");
+        // Physical providers sample the same admitted coordinate for this ordered
+        // batch; initialization never advances their clocks or applies actuators.
+        let sampled = sampling.get_or_insert_with(|| {
+            world
+                .try_run_schedule(lunco_cosim_core::schedule::InitializationSampling)
+                .map_err(|error| format!("initial sampling schedule unavailable: {error}"))
+        });
+        let admission = sampled
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|()| lunco_cosim_core::initialization::initialization_inputs(world, entity));
+        match admission {
+            Ok(Some(inputs)) => inputs,
+            Ok(None) => {
+                if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                    model.is_compiling = true;
+                    model.last_error = None;
+                }
+                world.init_resource::<PendingCompileAdmissions>();
+                world
+                    .resource_mut::<PendingCompileAdmissions>()
+                    .0
+                    .push(request);
+                return;
+            }
+            Err(error) => {
+                fail_request(world, doc, Some(entity), &model_name, &error);
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Pending inputs return before copying source text or walking dependencies.
+    let Some(documents) = world.get_resource::<ModelicaDocuments>() else {
+        fail_request(
+            world,
+            doc,
+            target_entity,
+            &model_name,
+            "Modelica document registry retired during initial sampling",
+        );
+        return;
+    };
+    let Some(host) = documents.host(doc) else {
+        fail_request(
+            world,
+            doc,
+            target_entity,
+            &model_name,
+            "Modelica document retired during initial sampling",
+        );
+        return;
+    };
+    let document = host.document();
     let source = lunco_modelica_source_roots::compile_overlay_source(document);
     let source_uri = document.origin().session_uri();
-    let generation = document.generation_owned();
     let generated =
         lunco_modelica_runtime::generated_source::is_generated_origin(document.origin());
 
@@ -283,72 +388,6 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
             );
             return;
         }
-    }
-
-    let existing = target_entity.and_then(|entity| {
-        world.get::<ModelicaModel>(entity).map(|model| {
-            (
-                model.session_id,
-                model.inputs.clone(),
-                model.communication_period_secs,
-                model.is_compiled,
-                model.is_compiling,
-                model.compiled_generation,
-                model.resume_after_compile,
-            )
-        })
-    });
-    let connected_inputs = if target_entity.is_some_and(|entity| {
-        world
-            .get::<lunco_cosim_core::UsdSourcedCosim>(entity)
-            .is_some()
-    }) {
-        let entity = target_entity.expect("selected USD participant");
-        let admission = world
-            .try_run_schedule(lunco_cosim_core::schedule::InitializationSampling)
-            .map_err(|error| format!("initial sampling schedule unavailable: {error}"))
-            .and_then(|()| lunco_cosim_core::initialization::initialization_inputs(world, entity));
-        match admission {
-            Ok(Some(inputs)) => inputs,
-            Ok(None) => {
-                if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
-                    model.is_compiling = true;
-                    model.last_error = None;
-                }
-                world.init_resource::<PendingCompileAdmissions>();
-                world
-                    .resource_mut::<PendingCompileAdmissions>()
-                    .0
-                    .push(request);
-                return;
-            }
-            Err(error) => {
-                fail_request(world, doc, Some(entity), &model_name, &error);
-                return;
-            }
-        }
-    } else {
-        Vec::new()
-    };
-
-    let communication_period = existing
-        .as_ref()
-        .map(|(_, _, period, _, _, _, _)| *period)
-        .unwrap_or(lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS);
-    if let Err(error) =
-        lunco_modelica_runtime::validate_communication_period_secs(communication_period)
-    {
-        fail_request(world, doc, target_entity, &model_name, &error);
-        return;
-    }
-    if !request.force
-        && existing.as_ref().is_some_and(
-            |(_, _, _, is_compiled, is_compiling, compiled_generation, _)| {
-                *is_compiled && !*is_compiling && *compiled_generation == generation
-            },
-        )
-    {
-        return;
     }
 
     // Retain explicit runtime values. Omitted inputs are initialized by the
@@ -574,6 +613,77 @@ mod tests {
     use lunco_doc::PathlessOrigin;
 
     #[test]
+    fn pending_compile_batch_samples_once_and_releases_retired_requests() {
+        #[derive(Resource, Default)]
+        struct SamplingCount(usize);
+
+        let mut documents = ModelicaDocuments::default();
+        let doc = documents.allocate(
+            "model Plant Real x; equation der(x)=1; end Plant;".into(),
+            PathlessOrigin::untitled("Plant"),
+        );
+        documents
+            .host_mut(doc)
+            .unwrap()
+            .document_mut()
+            .refresh_ast_now();
+        let mut app = App::new();
+        app.insert_resource(documents)
+            .init_resource::<SamplingCount>()
+            .add_message::<CompileRequested>()
+            .add_message::<ModelicaNotice>()
+            .add_systems(Update, dispatch_modelica_compile_requests)
+            .add_systems(
+                lunco_cosim_core::schedule::InitializationSampling,
+                |mut count: ResMut<SamplingCount>| count.0 += 1,
+            );
+        let mut entities = Vec::new();
+        for _ in 0..2 {
+            let entity = app
+                .world_mut()
+                .spawn((
+                    ModelicaModel {
+                        document: doc,
+                        ..Default::default()
+                    },
+                    lunco_cosim_core::UsdSourcedCosim,
+                ))
+                .id();
+            entities.push(entity);
+            app.world_mut().write_message(CompileRequested {
+                source: lunco_workspace::PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+                entity: Some(entity),
+                class: Some("Plant".into()),
+                force: false,
+                resume_after_compile: true,
+            });
+        }
+        for count in 1..=2 {
+            app.world_mut().run_schedule(Update);
+            assert_eq!(app.world().resource::<SamplingCount>().0, count);
+            assert_eq!(
+                app.world().resource::<PendingCompileAdmissions>().0.len(),
+                2
+            );
+        }
+        app.world_mut().despawn(entities[0]);
+        app.world_mut().run_schedule(Update);
+        assert_eq!(app.world().resource::<SamplingCount>().0, 3);
+        assert_eq!(
+            app.world().resource::<PendingCompileAdmissions>().0.len(),
+            1
+        );
+        assert!(
+            app.world()
+                .resource::<Messages<ModelicaNotice>>()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn generated_compile_source_set_is_independent_of_editor_documents() {
         for generated in [true, false] {
             let mut documents = ModelicaDocuments::default();
@@ -622,6 +732,7 @@ mod tests {
                     force: false,
                     resume_after_compile: true,
                 },
+                &mut None,
             );
             let ModelicaCommand::Compile {
                 source: compiled,
@@ -763,6 +874,7 @@ mod tests {
                 force: true,
                 resume_after_compile: true,
             },
+            &mut None,
         );
         assert!(rx.try_recv().is_err());
         assert!(world.resource::<Messages<ModelicaNotice>>().is_empty());
@@ -780,6 +892,7 @@ mod tests {
                 force: true,
                 resume_after_compile: true,
             },
+            &mut None,
         );
         assert!(rx.try_recv().is_err());
         assert_eq!(
@@ -808,6 +921,7 @@ mod tests {
                 force: true,
                 resume_after_compile: true,
             },
+            &mut None,
         );
         assert_eq!(
             world.resource::<Messages<ModelicaNotice>>().len(),

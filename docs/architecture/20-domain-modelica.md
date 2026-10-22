@@ -1400,6 +1400,16 @@ The existing Modelica worker compiles and solves the composite while paused;
 preparation neither advances simulation time nor blocks the live World on parsing
 or solver construction.
 
+Compile admission retains pending requests in source-document/entity/class order.
+`lunco-modelica-worker` runs `InitializationSampling` once for that ordered batch,
+on its first eligible USD participant. Each target still reads its own complete
+input transaction through `initialization_inputs`; the shared pass only refreshes
+read-only physical providers at the same initial coordinate. Missing input samples
+retain the request before source copying, parameter extraction or dependency
+traversal. Every later batch revalidates the source lease, live participant,
+document and input observations. A failed sampling schedule rejects eligible
+requests visibly; a retired request publishes nothing.
+
 The hook takes typed member/class/binding/probe facts and returns a typed map with
 `source`. The application policy registry installs `initialize` from
 `synth_acausal_network.rhai`, sharing its instance declaration emitter with acausal

@@ -1541,6 +1541,13 @@ actual sample. A compiling Modelica participant can share an entity with ready
 native pose/control ports. Initialization reads the registered owner; only the
 Modelica backend withholds model outputs until its session has compiled. Missing
 samples remain pending and producer errors remain terminal.
+Attribute deferred compile dispatch separately from worker construction.
+Pending compile batches sample physical providers once in their stable request
+order and return before source copying and dependency traversal when inputs are
+unavailable. Compare `system_commands` for `dispatch_modelica_compile_requests`
+and `InitializationSampling` counts when diagnosing startup frame costs; retain
+the production `modelica_initialization_network` and inconsistent-initial-equation
+negative verdicts when changing this boundary.
 Check that participant surfaces publish before connection rebuilding and that
 the wiring transaction commits before initialization. Compare admitted inputs
 with authored connections when a missing-input failure varies between runs.

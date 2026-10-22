@@ -1,5 +1,66 @@
 # High-quality realtime performance handover
 
+## Three-Twin checkpoint — 2026-10-23
+
+The sub-second loading, sub-millisecond physics and sub-10 ms graphics targets
+remain open. The regular `cargo build -p lunco-luncosim --features tracy -j 4`
+artifact for the compile-admission change is SHA-256
+`ed2ebf7a2eba3b5a1f11132f88c572ec74d0e3bb4ba2077417b9565c0816b365`.
+Normal target/profile settings, High quality, 1280 × 720, native substeps and
+physical parameters are retained. No dependency source changes are involved.
+
+The current diagnostic windows deduplicate retained histories by their owner
+sample counters and omit samples preceding the first post-admission observation.
+These are Tracy runs with a concurrent foreign USD app, not clean acceptance.
+Physics admission requires the exact mounted default scene, committed epoch,
+clear readiness and initialized Modelica topology. Visual streaming is separate;
+Summer's admission screenshot still shows queued projection, so the first
+column is not a fully loaded visual-scene measurement.
+
+| Twin | Physics admission | Physics p50 / p95 | Application frame p50 / p95 |
+| --- | ---: | ---: | ---: |
+| Tesla | 2.91 s | 1.12 / 1.56 ms | 16.53 / 21.14 ms |
+| Summer | 3.30 s | 1.21 / 1.68 ms | 28.86 / 54.99 ms |
+| Griffin | 24.69 s | 3.03 / 3.70 ms | 23.89 / 42.73 ms |
+
+`lunco-modelica-worker` now admits pending compile inputs before copying source
+text or traversing dependencies, and samples physical providers once per ordered
+compile batch. The four focused compile lifecycle tests pass. The production
+`modelica_initialization_network` gate passes 44 checks; its inconsistent-system
+negative gate reports the expected terminal `modelica-initialization-failed`
+fault. The startup-fault process-boundary check also passes.
+
+The intervening Griffin capture is rejected: a growing full-Twin SysML report
+exceeded Rhai's aggregate string budget. Its mission retried the failed task,
+spending 42.72 s in 51 failed calls during the 75-second capture despite clear
+`RuntimeDiagnostics`. Lunar model commits `4d12b52` and `a0b104e` select only
+the four landing requirements through the existing selected-source API. The
+production landing-preflight observer passes four positive/negative checks on
+PID 68464/API 4836. The subsequent capture has unchanged source hashes,
+successful normal geometry/spring and mass preflights, no task errors, and clear
+runtime diagnostics. Its first preflight task call takes 134.60 ms. This does
+not qualify the full landing or mission. Generic callback errors still need a
+terminal task boundary instead of implicit retry.
+
+Griffin's earlier 37.37 s admission and later 24.69 s admission are different
+cache/source cohorts. The initial coupled solver construction takes 12.33 s
+with 10,990 native compilations; warmed construction still takes 5.81 s.
+Neither total loading reduction is attributed solely to compile admission.
+The one-shot initializer currently constructs an adaptive live solver; trace
+its required initialization work and supported Rumoca execution policies before
+adding another cache or changing solver selection. The latest Griffin window
+also retains 5.93 s of simulation demand, so native physics time alone does not
+prove real-time coupled execution.
+
+Evidence is under `.cache/codex-evidence/performance-20261023/`, principally
+`compile-admission/`, `griffin-preflight-gate/`, `selected-preflight/`, and
+`current-diagnostic-summary.json`. Captures use
+`scripts/perf/captures/default-*-20261023.tracy`. All seven captures pass native
+file framing and successful 0.14.1 CPU CSV export; Tesla also has a GPU export.
+Owned app/collector PIDs, ports, source hashes, diagnostics and screenshots are
+retained in the receipts. All owned sessions have exited and released their
+ports. A clean uninstrumented three-Twin acceptance cohort remains required.
+
 ## Native physics migration — 2026-10-21
 
 Bevy 0.20 and Avian 0.8 use the immutable, published dependency revisions in
