@@ -144,6 +144,11 @@ the simulation. During preparation the built-in Rhai visibility policy
 temporarily shows an authored surface before possession, then returns to its
 authored `possessed` or `always` mode when the holds clear.
 
+For recording, verify the required surface in an encoded trial with live data.
+The readiness owner tracks whether its retained tree has consumed an exposure
+snapshot; it must not wait for equality with a later global publication revision.
+Camera, layout and render extraction remain required before capture admission.
+
 Command and one-shot REPL timing is also generic presentation data. Read the
 `application-cadence` exposure for command and REPL sequence/interval/rate
 values; do not attach a HUD timer to `Time<Virtual>`, count API requests as

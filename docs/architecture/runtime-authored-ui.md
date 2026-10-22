@@ -387,6 +387,12 @@ through the status bus. Unknown, hidden, duplicate, or malformed selections
 produce an explicit readiness error; capture selection is not stored in the
 reusable manifest.
 
+Initial recording readiness requires a mounted tree that has consumed a real
+exposure snapshot, camera targeting, nonzero layout and render extraction.
+Later global exposure revisions do not invalidate that initial projection:
+live producers may publish after the UI update phase. Property updates keep
+using the revision fast path independently of the presentation lifecycle.
+
 Bindings are deliberately explicit. A target property must first be declared
 by the template; otherwise the bridge ignores it. If `bindings` is omitted, the
 bridge tries every exposure property against a template property with the same
