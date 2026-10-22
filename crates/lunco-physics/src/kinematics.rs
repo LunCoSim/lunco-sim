@@ -273,6 +273,7 @@ fn finish_interval(
         sample.specific_force_body = sample
             .specific_force_world
             .filter(|_| rotation.0.is_finite() && rotation.0.is_normalized())
-            .map(|force| rotation.0.as_dquat().inverse() * force);
+            // Native unit tolerance is f32; the widened frame rotation must be unit in f64.
+            .map(|force| rotation.0.as_dquat().normalize().inverse() * force);
     }
 }

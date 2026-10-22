@@ -93,3 +93,20 @@ The separate Griffin interface cleanup now closes the former direction-alias and
 The native document query has an inconsistent child bounds result worth retaining when investigating contact geometry. On FLIP document `119546362397782`, generation 151, stage generation 4, `/FLIP/Battery/Body` has geometry bounds min `[-0.842,0.158,-0.68]`, max `[0.842,0.358,0.68]` in canonical-stage metres. Its returned cooked convex hull occupies that allocation (vertex roundoff is about `1e-8` m). However, the same child query's `collision_bounds` reports the untransformed unit Cube at the origin and labels that result `canonical_stage`. Querying the parent `/FLIP/Battery` gives the expected transformed collision bounds. Receipt: `/home/rod/Documents/luncosim-workspace/usd/.cache/codex-evidence/griffin-validation-20261022/battery-final-readback.json`.
 
 This is an observed query/frame discrepancy, not proof that runtime collision uses the wrong shape. The composed fixture was not spawned. The battery gate observes parent aggregate collision bounds and child visible bounds; the separate cooked vertices confirm the allocation. Keep shape, frame, and parent-transform provenance explicit when using these APIs to diagnose the loaded-support issue.
+
+## IMU repair qualification — optimization
+
+The optimization production run reproduced the same 47/267 failures before the
+repair. `lunco-physics::kinematics::finish_interval` validated a native unit f32
+quaternion, widened it, then used it as a unit f64 frame rotation. Native unit
+tolerance does not imply unit length after widening. The measurement boundary
+now normalizes the validated widened quaternion before transforming specific
+force into the body frame; native body state and solver settings are unchanged.
+
+The unchanged `body_acceleration` production scene now passes **267 checks**,
+including the original **1e-9** norm limit, supported/thrust/freefall phases and
+unavailable initial measurements (exit 0, terminal tick 175). Binary SHA256: `65ed1704dfca6220dcaaaff6dfc40439341978fefd7d30b58d6592da9f5ef898`.
+Evidence: `.cache/codex-evidence/physics-followup-20261021/imu-roof-pause-integration/body-acceleration.log`;
+the failing local baseline is `embedded-policy-trace/body-acceleration.log` in
+the same evidence root. This closes the IMU rotation-norm finding; Griffin
+landing, ramp unfolding and the sub-1-ms active-step target remain separate open gates.

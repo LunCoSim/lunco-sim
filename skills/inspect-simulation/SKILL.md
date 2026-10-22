@@ -90,7 +90,9 @@ Use the owning body's `acceleration_magnitude` for net `|Δv/Δt|`, and
 Both are m/s². The latter reads one local g while supported and near zero in
 ideal free fall. Check `acceleration_valid` / `specific_force_valid` before
 interpreting a value. They use completed native physics intervals, including
-contacts and joints; their vector components are optional analysis detail.
+contacts and joints; their vector components are optional analysis detail. A
+body-frame rotation must preserve the norm: validate the native attitude and
+normalize its widened f64 quaternion at the measurement boundary.
 The real telemetry curves are `linear_acceleration` and `specific_force` under
 the exact body owner. Do not derive them from graphics frames, subtract 9.81
 from a scalar magnitude, or add gravity-removal logic to each plot widget.
