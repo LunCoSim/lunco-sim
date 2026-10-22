@@ -110,3 +110,66 @@ Evidence: `.cache/codex-evidence/physics-followup-20261021/imu-roof-pause-integr
 the failing local baseline is `embedded-policy-trace/body-acceleration.log` in
 the same evidence root. This closes the IMU rotation-norm finding; Griffin
 landing, ramp unfolding and the sub-1-ms active-step target remain separate open gates.
+
+## Collision-query repair qualification — optimization
+
+The child-bound discrepancy reproduced independently on the shared Cylinder
+fixture: the child reported collision bounds around X=0 while its geometry
+bounds and single-shape parent correctly reported X=3. The collision-envelope
+reader began with the selected prim's local transform instead of its composed
+stage transform. It now uses the shared f64 USD world-transform reader and
+honors descendant reset stacks. The duplicate geometry transform walker was
+removed; geometry and cooked-collider placement use that same stage owner.
+No runtime collider geometry or solver setting was changed by this repair.
+
+The regular production build passes the expanded
+`assembly_collision_clearance_builder` gate: 19 checks, including single/batch
+child bounds through translated and rotated ancestors, followed by the expected
+non-crashing `usd-avian-collider-invalid` negative fixture (exit 0, tick 2).
+The same observer failed exactly the two added checks on the previous binary.
+The reported FLIP source was also queried directly: `/FLIP/Battery/Body` now
+agrees with both its geometry bounds and its parent, with min
+`[-0.842, 0.158, -0.68]` and max `[0.842, 0.358, 0.68]` metres in canonical
+stage coordinates. This is static query qualification, not physical or visual
+acceptance of FLIP. Source hashes, coherent readback, baseline and passing logs
+are under `.cache/codex-evidence/physics-followup-20261021/collision-child-frame/`.
+Binary SHA256: `685886df6ecbca5cd58ce25ea6f40dae61c46b55f9e24eb647dbea54412355d9`.
+All owned sessions used for this query check have exited.
+
+## Loaded-support and mission qualification — optimization
+
+The native Avian branch `fix-joint-velocity-projection`, published at
+`9097ce92e5d236c747a68567368575014c28fff5`, couples hard Fixed, Prismatic and
+Revolute joint velocities with native contact relaxation. It also corrects
+physical contact-impulse accumulation and applies native joint/custom collision
+exclusions during swept CCD. The isolated loaded-slider fixture passes all
+seven checks, including the original drift/relative-rate limits and supported
+weight reactions. Eight substeps and the authored mechanical parameters remain
+unchanged. The broader production cohort and its exact source receipts are in
+`prepared-velocity-integration/` under the same evidence root.
+
+The Griffin cohort at source revision `3062506949441219699` still fails the
+landing gate: peak ground speed is **0.0679792 m/s**, above **0.05 m/s**.
+Peak angular speed **0.00744409 rad/s** and sixty-second horizontal drift
+**0.0144244 m** pass their existing **0.01 rad/s** and **0.35 m** limits.
+Finite state, upright attitude and four-leg contact also pass. These are a
+different authored source cohort from the original USD baseline; they are not
+an identical-input performance or solver A/B comparison.
+
+Ramp unfolding remains blocked. At tick 2665, both middle hinges target zero
+but measure approximately 1.7933 rad with enabled 5000 N·m drives. Native
+contacts identify both middle tracks against their fixed transition plates,
+with approximately 0.0173 m penetration. Root and toe flight latches are still
+installed, as required by the current sequence. Joint coordinates include the
+authored -90-degree child-frame offset; a scalar angle cannot be interpreted
+as the physical section angle without that frame. A subsequent diagnostic
+reverse command also produces toe/root/plate collisions; it does not establish
+a collision-free alternate path. Contact snapshots and coherent hinge/drive
+reads are in `prepared-velocity-performance/`. The mechanism geometry and
+deployment path need qualification; disabling contacts or increasing drive
+force would not establish a valid repair.
+
+The sub-1-ms target remains open. The contention-affected flight sample has
+2.123 ms median and 3.201 ms p95 full native step time; touchdown has 2.868 ms
+median. Concurrent applications were active, so these are diagnostic figures,
+not clean acceptance. Sleeping-body samples do not qualify active physics.

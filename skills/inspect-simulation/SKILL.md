@@ -229,6 +229,11 @@ do not fill a null bound with a guessed box. `topology.projection` reports the
 document/live-stage generation, while `topology.binding` reports the existing
 visual-sync and physics markers for the selected runtime entity.
 
+`collision_bounds` and `geometry_bounds` use canonical stage coordinates for
+both a selected shape and an aggregate parent. Ancestor transforms and USD
+reset stacks apply before accumulation. A local shape bound must not be
+compared directly with those stage-space envelopes.
+
 ## Example (curl)
 
 ```bash

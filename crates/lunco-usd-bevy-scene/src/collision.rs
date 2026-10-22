@@ -25,7 +25,7 @@ use crate::{
 pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 
 /// Axis-aligned bounding box of a composed USD asset's collision geometry, in
-/// the asset root's reference frame.
+/// canonical stage coordinates.
 ///
 /// Walks the composed USD stage from `root_prim` and, for every active gprim
 /// that applies the standard `UsdPhysicsCollisionAPI` and whose
@@ -151,7 +151,8 @@ pub fn collision_aabb(
 ) -> Result<Option<ObjectAabb>, CollisionAabbError> {
     let root = SdfPath::new(root_prim)
         .map_err(|_| CollisionAabbError::InvalidRootPath(root_prim.to_owned()))?;
-    let root_tf = collision_local_matrix(reader, &root)?;
+    let root_tf = lunco_usd_bevy_stage::world_transform_matrix_d_at(reader, &root, 0.0)
+        .map_err(|error| CollisionAabbError::MalformedTransform { prim: error.prim })?;
     let mut candidates = vec![(root.clone(), root_tf)];
     gather_collision_aabb_candidates(reader, &root, root_tf, &mut candidates)?;
     let candidates = candidates
@@ -240,7 +241,8 @@ pub fn prim_geometry_aabb(
     ) {
         return Ok(None);
     }
-    let transform = geometry_world_matrix_d(reader, &path)?;
+    let transform = lunco_usd_bevy_stage::world_transform_matrix_d_at(reader, &path, 0.0)
+        .map_err(|error| CollisionAabbError::MalformedTransform { prim: error.prim })?;
     let (corners, _) = local_shape_corners(reader, &path, &type_name, false)?;
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
     for corner in corners {
@@ -282,41 +284,8 @@ fn collision_local_matrix(
     }
 }
 
-/// Fold local transforms from the stage root to one shape.
-/// Compose the USD prim's local transforms into canonical stage coordinates
-/// without narrowing authored double-precision matrices.
-pub fn geometry_world_matrix_d(
-    reader: &StageView<'_>,
-    path: &SdfPath,
-) -> Result<DMat4, CollisionAabbError> {
-    if !UsdReadObject::has_prim(reader, path) {
-        return Err(CollisionAabbError::InvalidRootPath(
-            path.as_str().to_owned(),
-        ));
-    }
-    let mut chain = Vec::new();
-    let mut current = Some(path.clone());
-    while let Some(prim) = current {
-        if prim.is_abs_root() {
-            break;
-        }
-        chain.push(prim.clone());
-        current = prim.parent();
-    }
-    let mut transform = DMat4::IDENTITY;
-    for prim in chain.iter().rev() {
-        let local = lunco_usd_bevy_stage::local_transform_matrix_d_at(reader, prim, 0.0)
-            .map_err(|_| CollisionAabbError::MalformedTransform {
-                prim: prim.as_str().to_owned(),
-            })?
-            .unwrap_or(DMat4::IDENTITY);
-        transform *= local;
-    }
-    Ok(transform)
-}
-
-/// DFS helper for [`collision_aabb`]. Transforms are composed in the root
-/// frame, crossing nested rigid-body and wheel ownership boundaries.
+/// DFS helper for [`collision_aabb`]. Transforms are composed in canonical
+/// stage coordinates, crossing nested rigid-body and wheel ownership boundaries.
 fn gather_collision_aabb_candidates(
     reader: &StageView<'_>,
     path: &SdfPath,
@@ -333,7 +302,14 @@ fn gather_collision_aabb_candidates(
             continue;
         }
         let local = collision_local_matrix(reader, &child)?;
-        let child_world = world_tf * local;
+        let child_world = if reader
+            .resets_xform_stack(&child)
+            .map_err(|error| CollisionAabbError::MalformedTransform { prim: error.prim })?
+        {
+            local
+        } else {
+            world_tf * local
+        };
         out.push((child.clone(), child_world));
         gather_collision_aabb_candidates(reader, &child, child_world, out)?;
     }

@@ -94,9 +94,7 @@ use lunco_usd_avian_reader::collider::{
     AuthoredColliderGeometry, ColliderGeometryPart, authored_collider_geometry_from_usd,
 };
 use lunco_usd_bevy_scene::UsdSceneRoot;
-use lunco_usd_bevy_scene::collision::{
-    ObjectAabb, collision_aabb, geometry_world_matrix_d, prim_geometry_aabb,
-};
+use lunco_usd_bevy_scene::collision::{ObjectAabb, collision_aabb, prim_geometry_aabb};
 use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_dquat};
 use lunco_usd_bevy_stage::read::{UsdRead, UsdReadSource};
 use lunco_usd_bevy_stage::view::StageView;
@@ -375,9 +373,10 @@ fn collider_transform_in_stage(
     view: &StageView<'_>,
     prim: &SdfPath,
 ) -> Result<(DMat4, Vec3), String> {
-    let transform = geometry_world_matrix_d(view, prim).map_err(|error| {
-        format!("QueryUsdPrim: invalid collider transform at `{prim}`: {error}")
-    })?;
+    let transform =
+        lunco_usd_bevy_stage::world_transform_matrix_d_at(view, prim, 0.0).map_err(|error| {
+            format!("QueryUsdPrim: invalid collider transform at `{prim}`: {error}")
+        })?;
     let (scale, mut rotation, translation) = transform.to_scale_rotation_translation();
     let type_name = view.type_name(prim).unwrap_or_default();
     if matches!(
