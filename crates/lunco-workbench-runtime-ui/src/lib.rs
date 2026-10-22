@@ -893,6 +893,9 @@ pub struct RuntimeUiSurface {
     presentation_visible: bool,
     presentation_generation: u64,
     placement: RuntimeUiPlacement,
+    /// The retained tree has consumed a real exposure snapshot. Its initial
+    /// readiness must not race later global exposure revisions in PostUpdate.
+    has_projected_exposure: bool,
     applied_revision: u64,
     applied_placement: Option<ResolvedRuntimeUiPlacement>,
 }
@@ -953,6 +956,7 @@ impl RuntimeUiSurface {
             presentation_visible: false,
             presentation_generation: 0,
             placement: (&definition.placement).into(),
+            has_projected_exposure: false,
             applied_revision: 0,
             applied_placement: None,
         })
@@ -1225,6 +1229,7 @@ fn report_runtime_ui_readiness(
     let mut required = 0usize;
     let mut ready = 0usize;
     let mut current_generation = 0u64;
+    let mut pending_details = Vec::new();
     for (
         mut surface,
         visibility,
@@ -1261,12 +1266,20 @@ fn report_runtime_ui_readiness(
         let initial_presentation_ready = surface.mounted
             && surface.applied_placement.is_some()
             && properties.is_some()
-            && surface.applied_revision == exposures.revision
+            && surface.has_projected_exposure
             && target_ready
             && layout_ready;
         surface.presentation_ready |= initial_presentation_ready;
         let surface_ready =
             surface.presentation_ready && matches!(*visibility, Visibility::Visible);
+        if !surface_ready {
+            pending_details.push(format!(
+                "{}: mounted={} placement={} properties={} projected={} target={} layout={}",
+                surface.layout_id, surface.mounted, surface.applied_placement.is_some(),
+                properties.is_some(), surface.has_projected_exposure,
+                target_ready, layout_ready,
+            ));
+        }
         presentation_generation.start_if_visible(&mut surface, surface_ready);
         if surface_ready {
             ready += 1;
@@ -1283,7 +1296,7 @@ fn report_runtime_ui_readiness(
         bus.remove_progress(lunco_status_core::status_bus::RUNTIME_UI_SOURCE);
     } else {
         let message = if ready < required {
-            format!("mounting recorded UI surfaces {ready}/{required}")
+            format!("mounting recorded UI surfaces {ready}/{required}: {}", pending_details.join("; "))
         } else {
             "waiting for recorded UI render extraction".to_string()
         };
@@ -2077,6 +2090,7 @@ fn apply_runtime_ui_exposures(
         if properties_changed {
             commands.queue(move |world: &mut World| compile_runtime_ui_context(world, entity));
         }
+        surface.has_projected_exposure = true;
         surface.applied_revision = exposures.revision;
     }
 }
@@ -3183,6 +3197,7 @@ mod tests {
                         width: 200.0,
                         height: 100.0,
                     },
+                    has_projected_exposure: false,
                     applied_revision: 0,
                     applied_placement: Some(ResolvedRuntimeUiPlacement {
                         rect: egui::Rect::from_min_size(
@@ -3198,22 +3213,22 @@ mod tests {
             .observe(emit_runtime_ui_surface_drag);
         let button = app.world_mut().spawn(ChildOf(root)).id();
 
-        app.world_mut().trigger(Pointer::new(
-            PointerId::Mouse,
-            Location {
-                target: NormalizedRenderTarget::None {
-                    width: 0,
-                    height: 0,
+        app.world_mut().trigger(PointerDrag {
+            entity: button,
+            pointer: Pointer::new(
+                PointerId::Mouse,
+                Location {
+                    target: NormalizedRenderTarget::None {
+                        width: 0,
+                        height: 0,
+                    },
+                    position: Vec2::ZERO,
                 },
-                position: Vec2::ZERO,
-            },
-            Drag {
-                button: PointerButton::Primary,
-                distance: Vec2::new(12.0, 18.0),
-                delta: Vec2::new(12.0, 18.0),
-            },
-            button,
-        ));
+            ),
+            button: PointerButton::Primary,
+            distance: Vec2::new(12.0, 18.0),
+            delta: Vec2::new(12.0, 18.0),
+        });
         app.update();
 
         assert_eq!(
@@ -3273,6 +3288,7 @@ mod tests {
                     presentation_visible: false,
                     presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
+                    has_projected_exposure: false,
                     applied_revision: 0,
                     applied_placement: None,
                 },
@@ -3382,6 +3398,7 @@ mod tests {
                     presentation_visible: false,
                     presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
+                    has_projected_exposure: true,
                     applied_revision: initial_revision,
                     applied_placement: None,
                 },
@@ -3429,6 +3446,7 @@ mod tests {
             presentation_visible: false,
             presentation_generation: 0,
             placement: RuntimeUiPlacement::Viewport,
+            has_projected_exposure: true,
             applied_revision: 17,
             applied_placement: None,
         };
@@ -3494,6 +3512,7 @@ mod tests {
                     presentation_visible: false,
                     presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
+                    has_projected_exposure: true,
                     applied_revision: revision,
                     applied_placement: None,
                 },
@@ -3559,6 +3578,7 @@ mod tests {
                     presentation_visible: false,
                     presentation_generation: 0,
                     placement: RuntimeUiPlacement::Viewport,
+                    has_projected_exposure: true,
                     applied_revision: revision,
                     applied_placement: None,
                 },

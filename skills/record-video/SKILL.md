@@ -68,6 +68,15 @@ sequencing uses frame index, independent of machine speed. Full design:
 
 ## Scripted episodes (rhai)
 
+An unattended episode should replace an interactive scene's possession startup
+with an observer-only `on_start` that holds simulation before its first tick.
+If operator takeover must be excluded, use an isolated asset composition with
+`control.authority.claim` returning false. Merely releasing control once does
+not stop a later scene click from acquiring the vehicle. The shared default
+policy permits normal interaction. Keep shot order and control inputs in the
+native Rhai task tree; remote scene load and launch do not require a second
+simulation/control loop.
+
 Multi-shot episodes run on the shot sequencer — `shot_begin`/`shot_frame`/
 `shot_end` from `prelude/recording.rhai`, sequenced by `lib/shots.rhai`. Shot
 timing uses the recorder's `frame_index`. Declare `// @timing presentation`

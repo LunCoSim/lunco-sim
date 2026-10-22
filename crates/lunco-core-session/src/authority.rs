@@ -9,6 +9,52 @@ use bevy::prelude::*;
 use lunco_command_contracts::SessionId;
 use std::fmt;
 
+/// Optional admission policy for every control claim, including a free target.
+/// Unlike the takeover policy this can protect an unattended experiment before
+/// any operator owns its endpoint. It can only tighten the existing authority
+/// floor; absence preserves normal interactive acquisition.
+pub const CONTROL_CLAIM_HOOK: &str = "control.authority.claim";
+
+lunco_hooks::declare_hook! {
+    id: CONTROL_CLAIM_HOOK,
+    owner: "lunco-core-session",
+    description: "Further restrict a control claim before any ownership or camera transaction commits.",
+    signature: [ctx: Map],
+    output: Bool,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
+fn claim_policy_allows(registry: &SessionRegistry, session: SessionId, target: u64) -> bool {
+    use lunco_hooks::HookValue;
+    let facts = HookValue::map([
+        ("claimant", HookValue::UInt(session.0)),
+        ("target", HookValue::UInt(target)),
+        (
+            "current_owner",
+            registry
+                .owner_of(target)
+                .map_or(HookValue::Unit, |owner| HookValue::UInt(owner.0)),
+        ),
+    ]);
+    match lunco_hooks::invoke_unclassified(CONTROL_CLAIM_HOOK, &[facts]) {
+        None => true,
+        Some(Ok(HookValue::Bool(allowed))) => allowed,
+        Some(Ok(value)) => {
+            warn!(
+                ?value,
+                "control claim policy returned a non-boolean; claim refused"
+            );
+            false
+        }
+        Some(Err(error)) => {
+            warn!(%error, "control claim policy failed; claim refused");
+            false
+        }
+    }
+}
+
 /// The result of a control-authority transition.
 ///
 /// The event carries stable global ids so backend adapters can react without
@@ -27,6 +73,8 @@ pub struct ControlAuthorityChanged {
 /// Why a session could not claim or release an endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlAuthorityError {
+    /// The optional claim-admission policy reserved this endpoint.
+    ClaimDenied { target: u64 },
     /// The endpoint is owned by another session and the authored takeover
     /// policy did not approve the transition.
     NotAllowed {
@@ -40,6 +88,10 @@ pub enum ControlAuthorityError {
 impl fmt::Display for ControlAuthorityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ClaimDenied { target } => write!(
+                f,
+                "control claim for {target} rejected by {CONTROL_CLAIM_HOOK} policy"
+            ),
             Self::NotAllowed { target, owner } => {
                 write!(f, "control authority transition for {target} refused")?;
                 if let Some(owner) = owner {
@@ -66,6 +118,9 @@ pub fn claim_control(
             target,
             owner: registry.owner_of(target),
         });
+    }
+    if !claim_policy_allows(registry, session, target) {
+        return Err(ControlAuthorityError::ClaimDenied { target });
     }
 
     let mut released = registry
