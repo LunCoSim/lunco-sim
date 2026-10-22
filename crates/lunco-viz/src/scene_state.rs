@@ -176,11 +176,12 @@ mod tests {
                 },
             );
             let plot_id = egui::Id::new("scene plot interaction");
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 egui_plot::Plot::new("scene plot")
                     .id(plot_id)
                     .show(ui, |_| {});
             });
+            output.textures_delta.clear();
             assert!(egui_plot::PlotMemory::load(&ctx, plot_id).is_some());
             lunco_core::run_scene_teardown(app.world_mut());
             assert!(app.world().get_entity(retiring_entity).is_err());

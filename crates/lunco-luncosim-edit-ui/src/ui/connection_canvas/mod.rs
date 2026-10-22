@@ -1106,7 +1106,10 @@ impl Panel for UsdCanvasPanel {
                 state
             };
             if !state.built { toolbar::source_picker(ui, &mut views.show_scene); ui.label("The loaded USD scene is being projected."); return; }
-            if let Some(show_scene) = toolbar::render(ui, ctx, state, show_scene) {
+            let show_controls = ctx.resource::<lunco_theme::DiagramPresentationSettings>()
+                .is_none_or(|settings| settings.show_controls);
+            let requested_source = if show_controls { toolbar::render(ui, ctx, state, show_scene) } else { None };
+            if let Some(show_scene) = requested_source {
                 views.show_scene = show_scene;
                 return;
             }
@@ -1125,6 +1128,7 @@ impl Panel for UsdCanvasPanel {
             // Snapshot origins + sinks BEFORE `ui` mutates the scene, so deleted
             // nodes/edges can still be resolved for their write-back op.
             state.canvas.read_only = show_scene;
+            state.canvas.show_controls = show_controls;
             state.canvas.movable_layout = true;
             let node_origin: HashMap<NodeId, String> = if show_scene { HashMap::new() } else { state
                 .canvas
@@ -1141,7 +1145,7 @@ impl Panel for UsdCanvasPanel {
             let full = ui.available_rect_before_wrap();
             let gap = ui.spacing().item_spacing.x;
             let side_width = ui.spacing().interact_size.x * 12.0;
-            let show_details = state.details_open && full.width() > side_width * 2.2;
+            let show_details = show_controls && state.details_open && full.width() > side_width * 2.2;
             let graph_rect = if show_details { egui::Rect::from_min_max(full.min, egui::pos2(full.max.x - side_width - gap, full.max.y)) } else { full };
             // Consume a pending frame-to-fit now that the real widget size is
             // known (the producer can only guess it).
@@ -1164,7 +1168,7 @@ impl Panel for UsdCanvasPanel {
                 let side = egui::Rect::from_min_max(egui::pos2(graph_rect.max.x + gap, full.min.y), full.max);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(side), |ui| inspection::render(ui, ctx, state));
             }
-            if state.details_open && !show_details {
+            if show_controls && state.details_open && !show_details {
                 let mut open = state.details_open;
                 egui::Window::new("Connection details").open(&mut open).default_width(side_width).show(ui.ctx(), |ui| inspection::render(ui, ctx, state));
                 state.details_open = open;
@@ -1173,7 +1177,7 @@ impl Panel for UsdCanvasPanel {
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
             groups::frames(ui, ctx, state, graph_rect);
             drop_assets::drop_ui(ui, &response, state, ctx);
-            inspection::connection_guidance(ui, &response, state);
+            if show_controls { inspection::connection_guidance(ui, &response, state); }
             response.context_menu(|ui| inspection::context_menu(ui, ctx, state));
             if events.is_empty() {
                 return;

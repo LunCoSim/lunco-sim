@@ -211,7 +211,7 @@ The fields are:
 | `namespace` | Exact key in `EngineExposures`; use a capability name, not a widget name. |
 | `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values. `css: true` explicitly projects a binding into a CSS custom property; prose stays in template text. |
 | `actions` | Maps a unique HUI callback name to a built-in semantic action or a Twin-authored action identifier. Built-ins are handled by the host; other identifiers become the typed `runtime.ui.action` event for Rhai policy. |
-| `visible_in_perspective` | Optional workbench perspective restriction. |
+| `visible_in_perspective` | Optional workbench perspective id or array of 1–32 distinct nonempty ids. The same filter gates interactive rendering and capture readiness; omission means unrestricted. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
 | `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |

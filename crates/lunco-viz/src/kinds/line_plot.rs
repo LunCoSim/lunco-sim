@@ -33,7 +33,8 @@ use crate::signal::{
 };
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
-use lunco_core::GlobalEntityId;
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{Command, GlobalEntityId, on_command, register_commands};
 use lunco_workbench_core::PanelCtx;
 
 /// A line-plot toolbar edit requested by the panel's read-only paint pass.
@@ -72,6 +73,10 @@ pub struct LinePlotStyle {
     pub x_label: Option<String>,
     #[serde(default)]
     pub y_label: Option<String>,
+    /// Values kept visible during automatic scaling; data may expand beyond
+    /// this interval. Prevents a steady signal magnifying floating-point noise.
+    #[serde(default)]
+    pub y_reference_range: Option<[f64; 2]>,
     /// Plot the Y axis on a log10 scale. Values ≤ 0 are dropped (gaps,
     /// not clamped). Persists with the plot like the other style.
     #[serde(default)]
@@ -79,6 +84,42 @@ pub struct LinePlotStyle {
     /// Curve thickness in logical display pixels; independent of UI zoom.
     #[serde(default = "default_line_width")]
     pub line_width: f32,
+    /// Plot ticks, titles, legend and hover text in logical pixels. None
+    /// inherits the theme without changing surrounding UI controls.
+    #[serde(default)]
+    pub text_size: Option<f32>,
+    /// Show signal pickers and editing buttons. The plot context menu remains
+    /// available when these controls are hidden for a presentation.
+    #[serde(default = "default_show_controls")]
+    pub show_controls: bool,
+    /// Curve identity can be omitted when the axes already explain one series.
+    #[serde(default = "default_show_controls")]
+    pub show_legend: bool,
+    /// Sparse major guides instead of a dense engineering grid.
+    #[serde(default)]
+    pub simplified_grid: bool,
+    /// Title and horizontal quantity/unit labels inside the plot frame.
+    #[serde(default)]
+    pub compact_layout: bool,
+    /// Show the latest measured value when exactly one trace is displayed.
+    #[serde(default)]
+    pub show_latest_value: bool,
+    /// Human-readable explanation above the plot, independent of signal names.
+    #[serde(default)]
+    pub caption: Option<String>,
+    /// Scroll with new time samples while retaining the current visible span.
+    #[serde(default)]
+    pub follow_latest: bool,
+    /// Optional initial/requested time span. Following retains later user zoom.
+    #[serde(default)]
+    pub time_window_s: Option<f64>,
+    /// Explicit window requests are repeatable after the user zooms the view.
+    #[serde(default)]
+    pub time_window_revision: u64,
+}
+
+fn default_show_controls() -> bool {
+    true
 }
 
 fn default_line_width() -> f32 {
@@ -92,8 +133,19 @@ impl Default for LinePlotStyle {
             x_persisted_signal: None,
             x_label: None,
             y_label: None,
+            y_reference_range: None,
             log_y: false,
             line_width: default_line_width(),
+            text_size: None,
+            show_controls: true,
+            show_legend: true,
+            simplified_grid: false,
+            compact_layout: false,
+            show_latest_value: false,
+            caption: None,
+            follow_latest: false,
+            time_window_s: None,
+            time_window_revision: 0,
         }
     }
 }
@@ -107,7 +159,7 @@ impl LinePlotStyle {
     /// only changes on a user edit, so steady-state frames cost a
     /// `Value` equality check instead of two serde deserializations
     /// per plot per frame (toolbar + body both call this).
-    fn load_cached(ctx: &egui::Context, config: &VisualizationConfig) -> Self {
+    pub fn load_cached(ctx: &egui::Context, config: &VisualizationConfig) -> Self {
         let id = egui::Id::new(("line_plot_style", config.id.raw()));
         if let Some(cached) =
             ctx.data(|d| d.get_temp::<std::sync::Arc<(serde_json::Value, LinePlotStyle)>>(id))
@@ -583,7 +635,12 @@ impl LinePlot {
         // any signal data arrives. Returns the mutation the user
         // requested, which we apply after releasing the read borrow
         // on the registry.
-        let edit = render_toolbar(ctx, config, actions);
+        let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
+        let edit = if style.show_controls {
+            render_toolbar(ctx, config, actions)
+        } else {
+            None
+        };
         if let Some(edit) = edit {
             // Queue the registry mutation for after the egui pass —
             // render holds only read access to the world.
@@ -594,7 +651,6 @@ impl LinePlot {
             return;
         }
 
-        let style = LinePlotStyle::load_cached(ctx.ui.ctx(), config);
         let registry = match ctx.wb.resource::<SignalRegistry>() {
             Some(r) => r,
             None => {
@@ -655,6 +711,9 @@ impl LinePlot {
         // decimation depth (and thus the cache key) depends on it.
         // Taken after the toolbar so it matches the space `plot.show`
         // gets below.
+        if !style.compact_layout {
+            crate::multi_series_plot::render_plot_caption(ctx.ui, style.caption.as_deref(), style.text_size);
+        }
         let remaining = ctx.ui.available_size_before_wrap();
 
         // Resolve the X-axis source once. For classic time-series we
@@ -798,13 +857,22 @@ impl LinePlot {
                 };
                 Some(crate::plot_fmt::hover_label(name, point, log_y))
             });
-        if let Some(label) = x_label {
+        if let Some(label) = x_label.filter(|_| !style.compact_layout) {
             plot = plot.x_axis_label(label);
         }
-        if let Some(label) = y_label {
+        if let Some(label) = y_label.filter(|_| !style.compact_layout) {
             plot = plot.y_axis_label(label);
         }
-        if y_bindings.len() > 1 {
+        if let Some([low, high]) = style.y_reference_range {
+            if log_y {
+                if low > 0.0 {
+                    plot = plot.include_y(low.log10()).include_y(high.log10());
+                }
+            } else {
+                plot = plot.include_y(low).include_y(high);
+            }
+        }
+        if style.show_legend && y_bindings.len() > 1 {
             plot = plot.legend(
                 Legend::default()
                     .position(Corner::RightTop)
@@ -819,20 +887,310 @@ impl LinePlot {
             plot = plot.reset();
         }
 
-        plot.show(ctx.ui, |plot_ui| {
-            for (series, label, color) in &mut series_to_plot {
-                crate::multi_series_plot::add_cached_line(
+        if style.compact_layout { plot = plot.show_axes(false); }
+        if style.simplified_grid || style.compact_layout {
+            plot = crate::multi_series_plot::simplify_grid(plot);
+        }
+        let latest_value = (style.show_latest_value && series_to_plot.len()==1)
+            .then(|| series_to_plot[0].0.1.last().map(|point| if log_y {10_f64.powf(point.y)} else {point.y}))
+            .flatten();
+        let endpoints = series_to_plot
+            .iter()
+            .map(|(series, _, _)| series.2)
+            .filter(|bounds| bounds.is_finite_x())
+            .fold(None::<[f64; 2]>, |span, bounds| {
+                let bounds = [bounds.min()[0], bounds.max()[0]];
+                Some(span.map_or(bounds, |span| {
+                    [span[0].min(bounds[0]), span[1].max(bounds[1])]
+                }))
+            });
+        let egui_ctx = ctx.ui.ctx().clone();
+        let response = crate::multi_series_plot::with_plot_text(ctx.ui, style.text_size, |ui| {
+            plot.show(ui, |plot_ui| {
+                for (series, label, color) in &mut series_to_plot {
+                    crate::multi_series_plot::add_cached_line(
+                        plot_ui,
+                        Line::new(std::mem::take(label), PlotPoints::from(series.1.as_slice()))
+                            .color(*color)
+                            .width(style.line_width),
+                        series.2,
+                        style.x_signal.is_none(),
+                    );
+                }
+                crate::multi_series_plot::follow_latest_x(
                     plot_ui,
-                    Line::new(std::mem::take(label), PlotPoints::from(series.1.as_slice()))
-                        .color(*color)
-                        .width(style.line_width),
-                    series.2,
-                    style.x_signal.is_none(),
+                    &egui_ctx,
+                    egui::Id::new(("line_plot", config.id.raw())),
+                    endpoints,
+                    style.follow_latest && style.x_signal.is_none(),
+                    style.time_window_s,
+                    style.time_window_revision,
                 );
-            }
+            })
+        });
+        if style.compact_layout {
+            crate::multi_series_plot::render_compact_labels(ctx.ui, &response.transform,
+                style.x_label.as_deref(), style.y_label.as_deref(), style.caption.as_deref(), style.text_size, style.log_y, latest_value);
+        }
+        response.response.context_menu(|ui| {
+            render_appearance_menu(
+                ui,
+                ctx.wb,
+                config.id.raw(),
+                &style,
+                response.transform.bounds().width(),
+            );
         });
     }
 }
+
+/// One settings surface for live plots and experiment overlays, including
+/// presentation views whose editing toolbar is hidden.
+pub fn render_appearance_menu(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    plot: u64,
+    style: &LinePlotStyle,
+    current_time_span_s: f64,
+) {
+    ui.label("Plot appearance");
+    let mut controls = style.show_controls;
+    let mut x_label = style.x_label.clone().unwrap_or_default();
+    let mut y_label = style.y_label.clone().unwrap_or_default();
+    let mut request = ConfigureLinePlot {
+        plot,
+        ..Default::default()
+    };
+    if ui
+        .checkbox(&mut controls, "Show editing controls")
+        .changed()
+    {
+        request.show_controls = Some(controls);
+    }
+    let mut legend = style.show_legend;
+    if ui.checkbox(&mut legend, "Show curve legend").changed() {
+        request.show_legend = Some(legend);
+    }
+    let mut grid = style.simplified_grid;
+    if ui.checkbox(&mut grid, "Simplified grid").changed() {
+        request.simplified_grid = Some(grid);
+    }
+    let mut latest = style.show_latest_value;
+    if ui.checkbox(&mut latest, "Show latest single-trace value").changed() {
+        request.show_latest_value = Some(latest);
+    }
+    let mut inside = style.compact_layout;
+    if ui.checkbox(&mut inside, "Compact title and horizontal axis labels").changed() {
+        request.compact_layout = Some(inside);
+    }
+    let mut caption = style.caption.clone().unwrap_or_default();
+    ui.label("Title above graph");
+    if ui.text_edit_singleline(&mut caption).changed() {
+        request.caption = Some(caption);
+    }
+    ui.label("X axis title (include units)");
+    if ui.text_edit_singleline(&mut x_label).changed() {
+        request.x_label = Some(x_label);
+    }
+    ui.label("Y axis title (include units)");
+    if ui.text_edit_singleline(&mut y_label).changed() {
+        request.y_label = Some(y_label);
+    }
+    let mut use_range = style.y_reference_range.is_some();
+    if ui
+        .checkbox(&mut use_range, "Keep a reference Y range visible")
+        .changed()
+    {
+        request.y_reference_range = Some(if use_range { vec![0.0, 1.0] } else { vec![] });
+    }
+    if let Some(mut range) = style.y_reference_range {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            changed |= ui
+                .add(egui::DragValue::new(&mut range[0]).prefix("Min "))
+                .changed();
+            changed |= ui
+                .add(egui::DragValue::new(&mut range[1]).prefix("Max "))
+                .changed();
+        });
+        if changed && range[0] < range[1] {
+            request.y_reference_range = Some(range.to_vec());
+        }
+    }
+    let mut width = style.line_width;
+    if ui
+        .add(
+            egui::DragValue::new(&mut width)
+                .range(0.5..=8.0)
+                .prefix("Line width ")
+                .suffix(" px"),
+        )
+        .changed()
+    {
+        request.line_width = Some(width);
+    }
+    let mut custom_text = style.text_size.is_some();
+    if ui
+        .checkbox(&mut custom_text, "Custom plot text size")
+        .changed()
+    {
+        request.text_size = Some(if custom_text { 24.0 } else { 0.0 });
+    }
+    if let Some(mut size) = style.text_size {
+        if ui
+            .add(
+                egui::DragValue::new(&mut size)
+                    .range(8.0..=64.0)
+                    .prefix("Text size ")
+                    .suffix(" px"),
+            )
+            .changed()
+        {
+            request.text_size = Some(size);
+        }
+    }
+    ui.separator();
+    let mut follow = style.follow_latest;
+    if ui.checkbox(&mut follow, "Follow latest data").on_hover_text("Keep the current time span and scroll as new samples arrive. Off restores fit-all history.").changed() {
+                request.follow_latest = Some(follow);
+            }
+    let mut window = current_time_span_s;
+    if ui.add_enabled(follow, egui::DragValue::new(&mut window).range(0.0..=86400.0).prefix("Time window ").suffix(" s"))
+                .on_hover_text("Positive seconds sets a new visible span; zero follows with the current span. Later zoom changes are retained.").changed() {
+                request.time_window_s = Some(window);
+            }
+    if request.show_legend.is_some()
+        || request.simplified_grid.is_some()
+        || request.compact_layout.is_some()
+        || request.show_latest_value.is_some()
+        || request.caption.is_some()
+        || request.show_controls.is_some()
+        || request.x_label.is_some()
+        || request.y_label.is_some()
+        || request.y_reference_range.is_some()
+        || request.line_width.is_some()
+        || request.follow_latest.is_some()
+        || request.time_window_s.is_some()
+        || request.text_size.is_some()
+    {
+        ctx.trigger(request);
+    }
+}
+
+/// Configure a native plot through the same persisted style used by its UI.
+/// Omitted fields retain their values; an empty title restores automatic labels.
+#[Command(default)]
+pub struct ConfigureLinePlot {
+    pub plot: u64,
+    pub x_label: Option<String>,
+    pub y_label: Option<String>,
+    /// Empty clears the reference range; otherwise exactly two increasing,
+    /// finite values in the plotted signal's units. Autoscaling can expand it.
+    pub y_reference_range: Option<Vec<f64>>,
+    pub line_width: Option<f32>,
+    /// 8–64 logical pixels for plot text only; zero restores the theme.
+    pub text_size: Option<f32>,
+    pub show_controls: Option<bool>,
+    pub show_legend: Option<bool>,
+    pub simplified_grid: Option<bool>,
+    pub compact_layout: Option<bool>,
+    pub show_latest_value: Option<bool>,
+    /// Empty clears the explanatory caption.
+    pub caption: Option<String>,
+    pub follow_latest: Option<bool>,
+    /// Positive seconds sets the requested window; zero restores current-window
+    /// following. Omission leaves the setting unchanged.
+    pub time_window_s: Option<f64>,
+}
+
+fn configure_line_plot(
+    registry: &mut VisualizationRegistry,
+    request: &ConfigureLinePlot,
+) -> Result<(), String> {
+    if request
+        .text_size
+        .is_some_and(|size| !size.is_finite() || (size != 0.0 && !(8.0..=64.0).contains(&size)))
+    {
+        return Err("plot text size must be zero (theme) or between 8 and 64 pixels".into());
+    }
+    if let Some(range) = &request.y_reference_range {
+        if !range.is_empty()
+            && (range.len() != 2 || !range.iter().all(|v| v.is_finite()) || range[0] >= range[1])
+        {
+            return Err("reference Y range must be empty or two increasing finite values".into());
+        }
+    }
+    if request
+        .line_width
+        .is_some_and(|w| !w.is_finite() || !(0.5..=8.0).contains(&w))
+    {
+        return Err("line width must be finite and between 0.5 and 8 pixels".into());
+    }
+    if request
+        .time_window_s
+        .is_some_and(|window| !window.is_finite() || window < 0.0)
+    {
+        return Err(
+            "time window must be finite and nonnegative; zero uses the current window".into(),
+        );
+    }
+    let config = registry
+        .get_mut(lunco_viz_core::VizId(request.plot))
+        .ok_or_else(|| format!("plot {} does not exist", request.plot))?;
+    if config.kind != LINE_PLOT_KIND {
+        return Err("visualization is not a line plot".into());
+    }
+    let mut style = LinePlotStyle::load(config);
+    if let Some(label) = &request.x_label {
+        style.x_label = (!label.trim().is_empty()).then(|| label.clone());
+    }
+    if let Some(label) = &request.y_label {
+        style.y_label = (!label.trim().is_empty()).then(|| label.clone());
+    }
+    if let Some(range) = &request.y_reference_range {
+        style.y_reference_range = if range.is_empty() {
+            None
+        } else {
+            Some([range[0], range[1]])
+        };
+    }
+    if let Some(width) = request.line_width {
+        style.line_width = width;
+    }
+    if let Some(size) = request.text_size {
+        style.text_size = (size > 0.0).then_some(size);
+    }
+    if let Some(controls) = request.show_controls {
+        style.show_controls = controls;
+    }
+    if let Some(legend) = request.show_legend { style.show_legend = legend; }
+    if let Some(grid) = request.simplified_grid { style.simplified_grid = grid; }
+    if let Some(latest) = request.show_latest_value { style.show_latest_value = latest; }
+    if let Some(inside) = request.compact_layout { style.compact_layout = inside; }
+    if let Some(caption) = &request.caption {
+        style.caption = (!caption.trim().is_empty()).then(|| caption.clone());
+    }
+    if let Some(follow) = request.follow_latest {
+        style.follow_latest = follow;
+    }
+    if let Some(window) = request.time_window_s {
+        style.time_window_s = (window > 0.0).then_some(window);
+        style.time_window_revision = style.time_window_revision.wrapping_add(1);
+    }
+    style.save(config);
+    Ok(())
+}
+
+#[on_command(ConfigureLinePlot)]
+fn on_configure_line_plot(
+    trigger: On<ConfigureLinePlot>,
+    mut registry: ResMut<VisualizationRegistry>,
+) -> Result<Ack, String> {
+    configure_line_plot(&mut registry, trigger.event())?;
+    Ok(Ack::new(OpId::new()))
+}
+
+register_commands!(on_configure_line_plot);
 
 // ── Per-plot toolbar + editing ──────────────────────────────────────
 
@@ -1147,15 +1505,158 @@ mod tests {
             x_persisted_signal: None,
             x_label: Some("phi [rad]".into()),
             y_label: Some("w [rad/s]".into()),
+            y_reference_range: Some([-10.0, 10.0]),
             log_y: true,
             line_width: 4.0,
+            text_size: Some(24.0),
+            show_controls: false,
+            show_legend: false,
+            simplified_grid: true,
+            compact_layout: true,
+            show_latest_value: true,
+            caption: Some("Two identical valve pulses".into()),
+            follow_latest: true,
+            time_window_s: Some(5.0),
+            time_window_revision: 0,
         };
         style.save(&mut cfg);
         let roundtrip = LinePlotStyle::load(&cfg);
         assert_eq!(roundtrip.x_signal.map(|s| s.path), Some("phi".into()));
         assert_eq!(roundtrip.x_label.as_deref(), Some("phi [rad]"));
         assert_eq!(roundtrip.y_label.as_deref(), Some("w [rad/s]"));
+        assert_eq!(roundtrip.y_reference_range, Some([-10.0, 10.0]));
         assert!(roundtrip.log_y);
         assert_eq!(roundtrip.line_width, 4.0);
+        assert_eq!(roundtrip.text_size, Some(24.0));
+        assert!(!roundtrip.show_controls);
+        assert!(!roundtrip.show_legend);
+        assert!(roundtrip.simplified_grid);
+        assert!(roundtrip.compact_layout);
+        assert!(roundtrip.show_latest_value);
+        assert_eq!(roundtrip.caption.as_deref(), Some("Two identical valve pulses"));
+        assert!(roundtrip.follow_latest);
+        assert_eq!(roundtrip.time_window_s, Some(5.0));
+    }
+
+    #[test]
+    fn presentation_style_edits_preserve_signal_bindings_and_validate_atomically() {
+        use lunco_viz_core::VizId;
+        let mut registry = VisualizationRegistry::default();
+        registry.insert(VisualizationConfig {
+            id: VizId(42),
+            title: "Tank temperature".into(),
+            kind: LINE_PLOT_KIND,
+            view: crate::view::ViewTarget::Panel2D,
+            inputs: vec![SignalBinding::live(
+                SignalRef::new(Entity::PLACEHOLDER, "temperature"),
+                "y",
+            )],
+            style: serde_json::json!({"log_y": true}),
+        });
+        assert!(LinePlotStyle::load(registry.get(VizId(42)).unwrap()).show_controls);
+        configure_line_plot(
+            &mut registry,
+            &ConfigureLinePlot {
+                plot: 42,
+                x_label: Some("Time [s]".into()),
+                y_label: Some("Temperature [K]".into()),
+                y_reference_range: Some(vec![190.0, 310.0]),
+                line_width: Some(4.0),
+                text_size: Some(24.0),
+                show_controls: Some(false),
+                show_legend: Some(false),
+                simplified_grid: Some(true),
+                compact_layout: Some(true),
+                show_latest_value: Some(true),
+                caption: Some("Two identical valve pulses".into()),
+                follow_latest: Some(true),
+                time_window_s: Some(5.0),
+            },
+        )
+        .unwrap();
+        let config = registry.get(VizId(42)).unwrap();
+        let before = config.style.clone();
+        assert_eq!(config.inputs[0].source.path.as_str(), "temperature");
+        let style = LinePlotStyle::load(config);
+        assert!(style.log_y);
+        assert!(!style.show_controls);
+        assert!(!style.show_legend);
+        assert!(style.simplified_grid);
+        assert!(style.compact_layout);
+        assert!(style.show_latest_value);
+        assert_eq!(style.caption.as_deref(), Some("Two identical valve pulses"));
+        assert_eq!(style.text_size, Some(24.0));
+        assert!(style.follow_latest);
+        assert_eq!(style.time_window_s, Some(5.0));
+        assert_eq!(style.y_label.as_deref(), Some("Temperature [K]"));
+        assert_eq!(style.y_reference_range, Some([190.0, 310.0]));
+        for range in [
+            vec![0.0],
+            vec![2.0, 1.0],
+            vec![1.0, f64::NAN],
+            vec![1.0, 2.0, 3.0],
+        ] {
+            assert!(
+                configure_line_plot(
+                    &mut registry,
+                    &ConfigureLinePlot {
+                        plot: 42,
+                        y_label: Some("must not apply".into()),
+                        y_reference_range: Some(range),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(registry.get(VizId(42)).unwrap().style, before);
+        }
+        for width in [f32::NAN, f32::INFINITY, 0.0, 9.0] {
+            assert!(
+                configure_line_plot(
+                    &mut registry,
+                    &ConfigureLinePlot {
+                        plot: 42,
+                        y_label: Some("must not apply".into()),
+                        line_width: Some(width),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(registry.get(VizId(42)).unwrap().style, before);
+        }
+        for window in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(
+                configure_line_plot(
+                    &mut registry,
+                    &ConfigureLinePlot {
+                        plot: 42,
+                        y_label: Some("must not apply".into()),
+                        time_window_s: Some(window),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(registry.get(VizId(42)).unwrap().style, before);
+        }
+        configure_line_plot(
+            &mut registry,
+            &ConfigureLinePlot {
+                plot: 42,
+                y_label: Some(" ".into()),
+                y_reference_range: Some(vec![]),
+                time_window_s: Some(0.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let style = LinePlotStyle::load(registry.get(VizId(42)).unwrap());
+        assert!(style.y_label.is_none());
+        assert!(style.y_reference_range.is_none());
+        assert!(style.follow_latest);
+        assert!(style.time_window_s.is_none());
+        assert_eq!(style.line_width, 4.0);
+        assert_eq!(style.x_label.as_deref(), Some("Time [s]"));
     }
 }

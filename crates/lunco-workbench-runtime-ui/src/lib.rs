@@ -210,6 +210,38 @@ pub struct RuntimeUiManifest {
     pub surfaces: Vec<RuntimeUiSurfaceDefinition>,
 }
 
+/// One authored perspective or a bounded set, using the same field and gate
+/// for interactive rendering and capture readiness. Omission means unrestricted.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum RuntimeUiPerspectiveFilter {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl RuntimeUiPerspectiveFilter {
+    fn validates(&self) -> Result<(), String> {
+        let values: &[String] = match self { Self::One(value) => std::slice::from_ref(value), Self::Many(values) => values };
+        if values.is_empty() || values.len() > 32 {
+            return Err("visible_in_perspective must contain 1–32 perspective ids".into());
+        }
+        let mut seen = HashSet::new();
+        for value in values {
+            require_non_empty("visible_in_perspective", value)?;
+            if !seen.insert(value) { return Err("visible_in_perspective repeats an id".into()); }
+        }
+        Ok(())
+    }
+
+    fn allows(&self, layout: Option<&WorkbenchSnapshot>) -> bool {
+        let Some(active) = layout.and_then(WorkbenchSnapshot::active_perspective) else { return false; };
+        match self {
+            Self::One(value) => active.as_str() == value,
+            Self::Many(values) => values.iter().any(|value| active.as_str() == value),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeUiSurfaceDefinition {
@@ -232,7 +264,7 @@ pub struct RuntimeUiSurfaceDefinition {
     #[serde(default)]
     pub dropdowns: Vec<RuntimeUiDropdownDefinition>,
     #[serde(default)]
-    pub visible_in_perspective: Option<String>,
+    pub visible_in_perspective: Option<RuntimeUiPerspectiveFilter>,
     #[serde(default)]
     pub gate: Option<String>,
     /// Optional boolean Twin setting that controls whether this surface mounts.
@@ -390,7 +422,7 @@ impl RuntimeUiManifest {
                 ));
             }
             if let Some(perspective) = &surface.visible_in_perspective {
-                require_non_empty("visible_in_perspective", perspective)?;
+                perspective.validates()?;
             }
             if let Some(gate) = &surface.gate {
                 require_non_empty("surface gate", gate)?;
@@ -837,7 +869,7 @@ pub struct RuntimeUiSurface {
     stylesheet: Handle<StyleSheet>,
     bindings: HashMap<String, RuntimeUiBindingDefinition>,
     collections: Vec<RuntimeUiCollection>,
-    visible_in_perspective: Option<String>,
+    visible_in_perspective: Option<RuntimeUiPerspectiveFilter>,
     gate: Option<String>,
     setting: Option<String>,
     setting_default: bool,
@@ -1709,14 +1741,7 @@ fn runtime_ui_is_allowed(
 ) -> bool {
     let perspective_visible = surface
         .visible_in_perspective
-        .as_deref()
-        .is_none_or(|required| {
-            layout.is_some_and(|layout| {
-                layout
-                    .active_perspective()
-                    .is_some_and(|active| active.as_str() == required)
-            })
-        });
+        .as_ref().is_none_or(|required| required.allows(layout));
     let gate_visible = surface
         .gate
         .as_deref()
@@ -1898,14 +1923,7 @@ fn apply_runtime_ui_exposures(
         let exposure = exposures.surfaces.get(&surface.namespace);
         let perspective_visible = surface
             .visible_in_perspective
-            .as_ref()
-            .is_none_or(|required| {
-                layout.as_ref().is_some_and(|layout| {
-                    layout
-                        .active_perspective()
-                        .is_some_and(|active| active.as_str() == required)
-                })
-            });
+            .as_ref().is_none_or(|required| required.allows(layout.as_deref()));
         let gate_visible = surface
             .gate
             .as_deref()
@@ -2760,6 +2778,26 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn perspective_filter_accepts_one_or_many_and_rejects_ambiguous_lists() {
+        use super::*;
+        let mut layout = WorkbenchSnapshot::default();
+        layout.replace(Some(lunco_workbench_core::PerspectiveId::new("twin/report-analysis")),
+            None, vec![], vec![], vec![], vec![], vec![]);
+        for json in [r#""twin/report-analysis""#, r#"["sandbox_view","twin/report-analysis"]"#] {
+            let filter: RuntimeUiPerspectiveFilter = serde_json::from_str(json).unwrap();
+            assert!(filter.validates().is_ok());
+            assert!(filter.allows(Some(&layout)));
+            assert!(!filter.allows(None));
+        }
+        let other: RuntimeUiPerspectiveFilter = serde_json::from_str(r#""sandbox_view""#).unwrap();
+        assert!(!other.allows(Some(&layout)));
+        for json in [r#"[]"#, r#"["", "sandbox_view"]"#, r#"["sandbox_view","sandbox_view"]"#] {
+            let filter: RuntimeUiPerspectiveFilter = serde_json::from_str(json).unwrap();
+            assert!(filter.validates().is_err());
+        }
+    }
+
     #[test]
     fn hui_rebuild_preserves_retained_runtime_styles_only() {
         use super::*;

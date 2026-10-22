@@ -178,6 +178,37 @@ for area sampling, explicit optical proxies and production scene gates.
 | **`luncosim`** | `$LUNCOSIM_BIN --api 4101` | Ground-physics simulator; an explicit `--scene` launch opens **View**, while Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. |
 | **`luncosim-server`** | `$LUNCOSIM_SERVER_BIN --api 4101` | Headless LunCoSim host; use the GUI `luncosim` command for the workbench. |
 
+For a presentation plot, `NewPlotPanel.signals` selects the requested variables.
+Live bindings use the active/pinned document's simulator, or an explicit
+`target_gid` for a scene participant. A batch-only document has no implicit live
+source; it must never borrow the first car or other model in the scene.
+`AddSignalToPlot` uses the same source rule and updates experiment picks too.
+Use `SetPlotSignals` for an exact replacement, including retirement of old live
+bindings and historical picks. An empty selection stays empty; the graph does
+not automatically substitute other variables. An explicit `SetPlotSignals` request seeds the canonical plot through its domain
+owner before its first paint; arbitrary unknown plot IDs are rejected.
+`ConfigureLinePlot` applies one persisted style
+to both: explicit quantity/unit axis labels, line width, plot-only `text_size`, reference Y bounds and
+`show_controls=false`. For one explanatory trace, `show_legend=false` avoids
+repeating raw variable names; use `simplified_grid=true` for sparse major guides
+and `caption` for the quantity title. `compact_layout=true` places title and
+horizontal units at the native plot edges, with numeric ticks inside too, reclaiming the outer axis margins.
+Use short labels and keep the explanatory narrative separate. Keep source context
+explicit when historical bench results accompany a different live scene. Read back the actual experiment/series selection and
+inspect the image before recording; labels never convert units or samples.
+Use `follow_latest=true` to scroll with new samples while keeping the current
+horizontal window. `time_window_s=5` sets an initial five-second span; subsequent
+user zoom is retained, and zero uses the current span. Turning follow off
+restores fit-all. These are viewing controls, independent of telemetry retention.
+For clean Modelica and connection diagrams, use the shared
+`DiagramPresentationSettings.show_controls` setting; it hides editing and zoom
+chrome without changing topology, models or live values.
+`DiagramPresentationSettings.use_authored_colors=true` keeps deliberate dark
+model icons from being inverted by the library's default theme adaptation.
+`FitCanvas` addresses the visible diagram host after moving it into a smaller
+floating panel. Embedded scopes use a `PlotNode` record, bare or qualified as
+`LunCoAnnotations.PlotNode`; arbitrary record names are not plot annotations.
+
 **In `luncosim`, switch to the Modelica view before plotting/screenshotting.**
 The compile/run/experiment *commands and query providers work regardless* (they're
 headless-safe), but the diagram/plot panels only paint when their perspective is
@@ -1238,3 +1269,9 @@ owner, fence pre-rename admission and reload affected disk roots on the existing
 worker after the automatic class/save transaction. Exercise
 `scripts/api/test_asset_resource_renames.py` for open/closed directory moves,
 file rename/save/close/reopen, retired declarations and a missing resource.
+
+`show_latest_value:true` adds the last measured value for a single displayed
+trace, with the Y unit, in the upper-right of the compact chart. The title stays
+centered on the same row. It uses the actual series endpoint; multiple traces
+omit that readout to avoid assigning one number to several quantities. For live
+presentation, combine it with `follow_latest:true,time_window_s:5`.

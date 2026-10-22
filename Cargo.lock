@@ -11882,6 +11882,7 @@ dependencies = [
  "lunco-api",
  "lunco-api-core",
  "lunco-canvas",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-settings",
  "lunco-signal",

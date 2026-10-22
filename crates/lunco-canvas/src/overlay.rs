@@ -40,6 +40,8 @@ pub struct OverlayCtx<'a> {
 
 /// Floating UI layer. See module docs.
 pub trait Overlay: Send + Sync {
+    /// Interactive chrome may be hidden independently of informative overlays.
+    fn is_control(&self) -> bool { false }
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut OverlayCtx);
     fn name(&self) -> &'static str;
 }
@@ -93,6 +95,7 @@ impl Default for NavBarOverlay {
 }
 
 impl Overlay for NavBarOverlay {
+    fn is_control(&self) -> bool { true }
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut OverlayCtx) {
         let canvas_rect = egui::Rect::from_min_max(
             egui::pos2(ctx.canvas_screen_rect.min.x, ctx.canvas_screen_rect.min.y),

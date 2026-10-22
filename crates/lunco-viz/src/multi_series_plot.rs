@@ -366,6 +366,24 @@ pub struct MultiSeriesPlotOptions {
     pub reset_bounds: bool,
     /// Optional shared unit label for the Y axis.
     pub y_axis_label: Option<String>,
+    /// Authored X-axis quantity and units.
+    pub x_axis_label: Option<String>,
+    /// Curve thickness in logical pixels, shared by experiment and live series.
+    pub line_width: f32,
+    /// Plot-only typography; surrounding panels keep their own theme sizes.
+    pub text_size: Option<f32>,
+    pub show_legend: bool,
+    pub simplified_grid: bool,
+    pub compact_layout: bool,
+    pub show_latest_value: bool,
+    pub caption: Option<String>,
+    /// Physical Y values retained in automatic bounds without clipping data.
+    pub y_reference_range: Option<[f64; 2]>,
+    /// Keep the current X span and advance its right edge with the data.
+    pub follow_latest: bool,
+    /// Optional span applied when following is enabled or this value changes.
+    pub time_window_s: Option<f64>,
+    pub time_window_revision: u64,
     /// Optional X coordinate at which to paint a scrub cursor.
     pub scrub_time: Option<f64>,
     /// Cursor colour.
@@ -379,9 +397,197 @@ impl Default for MultiSeriesPlotOptions {
             log_y: false,
             reset_bounds: false,
             y_axis_label: None,
+            x_axis_label: None,
+            line_width: 1.5,
+            text_size: None,
+            show_legend: true,
+            simplified_grid: false,
+            compact_layout: false,
+            show_latest_value: false,
+            caption: None,
+            y_reference_range: None,
+            follow_latest: false,
+            time_window_s: None,
+            time_window_revision: 0,
             scrub_time: None,
             scrub_color: egui::Color32::WHITE,
         }
+    }
+}
+
+/// Follow data endpoints without fitting the growing history. A requested
+/// window seeds the view once; subsequent user zoom keeps its chosen width.
+/// The caller passes only the bounds of series actually shown in this plot.
+pub fn follow_latest_x(
+    ui: &mut PlotUi,
+    ctx: &egui::Context,
+    id: egui::Id,
+    data: Option<[f64; 2]>,
+    enabled: bool,
+    requested_window_s: Option<f64>,
+    request_revision: u64,
+) {
+    // Keep a requested initial window pending until there is data to follow.
+    // Otherwise an empty first frame consumes the configuration change and
+    // the first sample inherits egui's default bounds instead of that window.
+    if enabled && data.is_none() {
+        return;
+    }
+    let previous = crate::scene_state::scene_data(ctx, |state| {
+        let key = id.with("follow_latest_configuration");
+        let previous = state.get_temp::<(bool, Option<f64>, u64)>(key);
+        state.insert_temp(key, (enabled, requested_window_s, request_revision));
+        previous
+    });
+    let mut auto = ui.auto_bounds();
+    if !enabled {
+        if previous.is_some_and(|value| value.0) {
+            auto.x = true;
+            ui.set_auto_bounds(auto);
+        }
+        return;
+    }
+    let Some([first, latest]) = data else { return };
+    // Toggling the mode keeps the current view, even if an earlier numeric
+    // request is still stored. Only a new requested span seeds fresh bounds.
+    let window_changed =
+        previous.map(|value| (value.1, value.2)) != Some((requested_window_s, request_revision));
+    let width = if window_changed {
+        requested_window_s.unwrap_or(ui.plot_bounds().width())
+    } else {
+        ui.plot_bounds().width()
+    };
+    let Some([start, end]) = following_bounds(first, latest, width) else {
+        return;
+    };
+    auto.x = false;
+    ui.set_auto_bounds(auto);
+    ui.set_plot_bounds_x(start..=end);
+}
+
+fn following_bounds(first: f64, latest: f64, width: f64) -> Option<[f64; 2]> {
+    if !first.is_finite()
+        || !latest.is_finite()
+        || latest < first
+        || !width.is_finite()
+        || width <= 0.0
+    {
+        return None;
+    }
+    let end = latest.max(first + width);
+    (end.is_finite()).then_some([end - width, end])
+}
+
+pub struct MultiSeriesPlotResponse {
+    pub clicked_x: Option<f64>,
+    pub response: egui::Response,
+    pub time_span_s: f64,
+}
+
+/// Scope typography to the graph. All plot text roles (ticks, axis titles,
+/// legend and hover values) grow together without scaling the application UI.
+pub(crate) fn with_plot_text<R>(
+    ui: &mut egui::Ui,
+    size: Option<f32>,
+    draw: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.scope(|ui| {
+        if let Some(size) = size.filter(|size| size.is_finite() && (8.0..=64.0).contains(size)) {
+            for font in ui.style_mut().text_styles.values_mut() {
+                font.size = size;
+            }
+        }
+        draw(ui)
+    })
+    .inner
+}
+
+/// Major guides follow a 1/2/5 spacing with about five intervals per axis.
+/// The native plot still owns tick placement, bounds and unit mapping.
+pub(crate) fn simplify_grid(plot: Plot<'_>) -> Plot<'_> {
+    plot.x_grid_spacer(major_grid_marks)
+        .y_grid_spacer(major_grid_marks)
+        .grid_color(egui::Color32::from_white_alpha(36))
+        .grid_fade(0.0)
+}
+
+fn major_grid_marks(input: egui_plot::GridInput) -> Vec<egui_plot::GridMark> {
+    let (low, high) = input.bounds;
+    let raw = (high - low) / 5.0;
+    if !low.is_finite() || !high.is_finite() || !raw.is_finite() || raw <= 0.0 {
+        return Vec::new();
+    }
+    let scale = 10_f64.powf(raw.log10().floor());
+    if !scale.is_finite() || scale <= 0.0 { return Vec::new(); }
+    let fraction = raw / scale;
+    let multiple = if fraction <= 1.0 { 1.0 } else if fraction <= 2.0 { 2.0 }
+        else if fraction <= 5.0 { 5.0 } else { 10.0 };
+    let step = scale * multiple;
+    let first = (low / step).ceil() * step;
+    (0..=12).map(|i| first + f64::from(i) * step)
+        .take_while(|value| value.is_finite() && *value <= high)
+        .map(|value| egui_plot::GridMark { value, step_size: step }).collect()
+}
+
+/// Compact axis typography uses the same native transform and major grid marks.
+/// Hiding outer axis widgets reclaims their margins; values and units remain
+/// bound to the plot's actual bounds, including zoom, following and log-Y.
+pub(crate) fn render_compact_labels(
+    ui: &egui::Ui, transform: &PlotTransform, x: Option<&str>, y: Option<&str>,
+    title: Option<&str>, size: Option<f32>, log_y: bool, latest_value: Option<f64>,
+) {
+    let frame = transform.frame();
+    let mut font = egui::TextStyle::Body.resolve(ui.style());
+    if let Some(size) = size { font.size = size; }
+    let painter = ui.painter().with_clip_rect(*frame);
+    let color = ui.visuals().strong_text_color();
+    let mut occupied = Vec::new();
+    let mut label = |text: &str, pos: egui::Pos2, anchor: egui::Align2, required: bool| {
+        let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), color);
+        let rect = anchor.anchor_rect(egui::Rect::from_min_size(pos, galley.size()));
+        if !required && (!frame.shrink(3.0).contains_rect(rect)
+            || occupied.iter().any(|other: &egui::Rect| other.expand(6.0).intersects(rect))) { return; }
+        painter.galley(rect.min, galley, color);
+        occupied.push(rect);
+    };
+    if let Some(y) = y {
+        label(y, frame.left_top() + egui::vec2(10.0,8.0), egui::Align2::LEFT_TOP, true);
+    }
+    if let Some(title) = title {
+        label(title, frame.center_top() + egui::vec2(0.0,8.0), egui::Align2::CENTER_TOP, true);
+    }
+    if let Some(value) = latest_value.filter(|value| value.is_finite()) {
+        let value = format!("{value:.1} {}",y.unwrap_or_default());
+        label(&value,frame.right_top()+egui::vec2(-10.0,8.0),egui::Align2::RIGHT_TOP,true);
+    }
+    if let Some(x) = x {
+        label(x, frame.right_bottom() - egui::vec2(10.0,8.0), egui::Align2::RIGHT_BOTTOM, true);
+    }
+    let bounds = transform.bounds();
+    let marks = |axis: usize| major_grid_marks(egui_plot::GridInput {
+        bounds: (bounds.min()[axis],bounds.max()[axis]),base_step_size:0.0,
+    });
+    let format_tick = |mark: egui_plot::GridMark| {
+        let decimals = (-mark.step_size.log10().floor()).clamp(0.0,12.0) as usize;
+        egui::emath::format_with_decimals_in_range(mark.value,decimals..=decimals)
+    };
+    for mark in marks(1) {
+        let value = if log_y { crate::plot_fmt::log_y_tick(mark.value) } else { format_tick(mark) };
+        let pos = transform.position_from_point(&PlotPoint::new(bounds.min()[0],mark.value));
+        label(&value,egui::pos2(frame.left()+10.0,pos.y),egui::Align2::LEFT_CENTER,false);
+    }
+    for mark in marks(0) {
+        let pos = transform.position_from_point(&PlotPoint::new(mark.value,bounds.min()[1]));
+        label(&format_tick(mark),egui::pos2(pos.x,frame.bottom()-8.0),egui::Align2::CENTER_BOTTOM,false);
+    }
+}
+
+pub(crate) fn render_plot_caption(ui: &mut egui::Ui, caption: Option<&str>, size: Option<f32>) {
+    if let Some(caption) = caption {
+        with_plot_text(ui, size, |ui| {
+            ui.label(egui::RichText::new(caption).strong());
+            ui.add_space(6.0);
+        });
     }
 }
 
@@ -395,7 +601,7 @@ pub fn render_multi_series_plot(
     series: &[MultiSeriesLine],
     overlays: &[MultiSeriesOverlay],
     options: &MultiSeriesPlotOptions,
-) -> Option<f64> {
+) -> MultiSeriesPlotResponse {
     type SharedPlotCache = Arc<Mutex<MultiSeriesPlotCache>>;
     let cache_id = options.id.with("multi_series_plot_points");
     let cache: SharedPlotCache = crate::scene_state::scene_data(ui.ctx(), |data| {
@@ -415,7 +621,6 @@ pub fn render_multi_series_plot(
     plot_cache.items.truncate(item_count);
 
     let mut plot = Plot::new(options.id)
-        .legend(Legend::default())
         .allow_drag(false)
         .label_formatter(|pos| {
             let (name, point) = match pos {
@@ -428,14 +633,30 @@ pub fn render_multi_series_plot(
             };
             Some(crate::plot_fmt::hover_label(name, point, options.log_y))
         });
+    if options.show_legend { plot = plot.legend(Legend::default()); }
+    if options.simplified_grid || options.compact_layout { plot = simplify_grid(plot); }
+    if options.compact_layout { plot = plot.show_axes(false); }
+    if !options.compact_layout { render_plot_caption(ui, options.caption.as_deref(), options.text_size); }
     if options.reset_bounds {
         plot = plot.reset();
     }
     if options.log_y {
         plot = plot.y_axis_formatter(|mark, _range| crate::plot_fmt::log_y_tick(mark.value));
     }
-    if let Some(label) = options.y_axis_label.as_deref() {
+    if let Some(label) = options.y_axis_label.as_deref().filter(|_| !options.compact_layout) {
         plot = plot.y_axis_label(label.to_owned());
+    }
+    if let Some(label) = options.x_axis_label.as_deref().filter(|_| !options.compact_layout) {
+        plot = plot.x_axis_label(label.to_owned());
+    }
+    if let Some(range) = options.y_reference_range {
+        for value in range {
+            if !options.log_y {
+                plot = plot.include_y(value);
+            } else if value > 0.0 {
+                plot = plot.include_y(value.log10());
+            }
+        }
     }
 
     let egui_ctx = ui.ctx().clone();
@@ -452,12 +673,13 @@ pub fn render_multi_series_plot(
                 options.log_y,
                 pixel_width,
             )?;
-            let style = match line.style {
+            // With one trace there is no run identity to encode as a dash.
+            let style = if item_count == 1 { LineStyle::Solid } else { match line.style {
                 MultiSeriesStyle::Solid => LineStyle::Solid,
                 MultiSeriesStyle::Dashed => LineStyle::dashed_dense(),
                 MultiSeriesStyle::Dotted => LineStyle::dotted_dense(),
                 MultiSeriesStyle::DashDot => LineStyle::dashed_loose(),
-            };
+            }};
             Some((line.label.clone(), line.color, style, points))
         })
         .collect();
@@ -478,35 +700,223 @@ pub fn render_multi_series_plot(
         .collect();
     drop(plot_cache);
     let mut clicked_x = None;
-    plot.show(ui, |plot_ui| {
-        for (label, color, style, points) in &plotted_series {
-            add_cached_line(
+    let endpoints = series
+        .iter()
+        .map(|line| &line.points)
+        .chain(overlays.iter().map(|line| &line.points))
+        .filter_map(|points| Some([points.first()?[0], points.last()?[0]]))
+        .fold(None::<[f64; 2]>, |span, bounds| {
+            Some(span.map_or(bounds, |span| {
+                [span[0].min(bounds[0]), span[1].max(bounds[1])]
+            }))
+        });
+    let response = with_plot_text(ui, options.text_size, |ui| {
+        plot.show(ui, |plot_ui| {
+            for (label, color, style, points) in &plotted_series {
+                add_cached_line(
+                    plot_ui,
+                    Line::new(label.clone(), PlotPoints::from(points.points.as_slice()))
+                        .color(*color)
+                        .width(options.line_width)
+                        .style(*style),
+                    points.bounds,
+                    true,
+                );
+            }
+            for (label, color, points) in &plotted_overlays {
+                add_cached_line(
+                    plot_ui,
+                    Line::new(label.clone(), PlotPoints::from(points.points.as_slice()))
+                        .color(*color)
+                        .width(options.line_width),
+                    points.bounds,
+                    true,
+                );
+            }
+            follow_latest_x(
                 plot_ui,
-                Line::new(label.clone(), PlotPoints::from(points.points.as_slice()))
-                    .color(*color)
-                    .style(*style),
-                points.bounds,
-                true,
+                &egui_ctx,
+                options.id,
+                endpoints,
+                options.follow_latest,
+                options.time_window_s,
+                options.time_window_revision,
             );
-        }
-        for (label, color, points) in &plotted_overlays {
-            add_cached_line(
-                plot_ui,
-                Line::new(label.clone(), PlotPoints::from(points.points.as_slice())).color(*color),
-                points.bounds,
-                true,
-            );
-        }
-        if let Some(time) = options.scrub_time {
-            plot_ui.vline(
-                VLine::new("scrub", time)
-                    .color(options.scrub_color)
-                    .width(1.5),
-            );
-        }
-        if plot_ui.response().clicked() {
-            clicked_x = plot_ui.pointer_coordinate().map(|point| point.x);
-        }
+            if let Some(time) = options.scrub_time {
+                plot_ui.vline(
+                    VLine::new("scrub", time)
+                        .color(options.scrub_color)
+                        .width(1.5),
+                );
+            }
+            if plot_ui.response().clicked() {
+                clicked_x = plot_ui.pointer_coordinate().map(|point| point.x);
+            }
+        })
     });
-    clicked_x
+    if options.compact_layout {
+        render_compact_labels(ui, &response.transform,
+            options.x_axis_label.as_deref(), options.y_axis_label.as_deref(), options.caption.as_deref(), options.text_size, options.log_y,
+            (options.show_latest_value && item_count==1).then(|| series.first()
+                .and_then(|line|line.points.last()).or_else(||overlays.first().and_then(|line|line.points.last()))
+                .map(|point| point[1])).flatten());
+    }
+    MultiSeriesPlotResponse {
+        clicked_x,
+        time_span_s: response.transform.bounds().width(),
+        response: response.response,
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::{follow_latest_x, following_bounds};
+    use egui_plot::{Line, Plot, PlotBounds, PlotMemory};
+
+    fn frame(
+        ctx: &egui::Context,
+        data: Option<[f64; 2]>,
+        follow: bool,
+        window: Option<f64>,
+    ) -> (egui::Id, PlotBounds) {
+        frame_with_revision(ctx, data, follow, window, 0)
+    }
+
+    fn frame_with_revision(
+        ctx: &egui::Context,
+        data: Option<[f64; 2]>,
+        follow: bool,
+        window: Option<f64>,
+        revision: u64,
+    ) -> (egui::Id, PlotBounds) {
+        let mut result = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let id = egui::Id::new("follow-test");
+                let response = Plot::new("follow-test").id(id).show(ui, |plot_ui| {
+                    if let Some([first, last]) = data {
+                        plot_ui.line(Line::new("data", vec![[first, 0.0], [last, 1.0]]));
+                    }
+                    follow_latest_x(
+                        plot_ui,
+                        ctx,
+                        egui::Id::new("follow-test"),
+                        data,
+                        follow,
+                        window,
+                        revision,
+                    );
+                });
+                result = Some((id, *response.transform.bounds()));
+            },
+        );
+        output.textures_delta.clear();
+        result.unwrap()
+    }
+
+    fn assert_x(bounds: PlotBounds, expected: [f64; 2]) {
+        assert!((bounds.min()[0] - expected[0]).abs() < 1e-9, "{bounds:?}");
+        assert!((bounds.max()[0] - expected[1]).abs() < 1e-9, "{bounds:?}");
+    }
+
+    #[test]
+    fn following_waits_for_data_keeps_user_zoom_and_restores_auto_fit() {
+        let ctx = egui::Context::default();
+        frame(&ctx, None, true, Some(5.0));
+        assert_x(frame(&ctx, Some([0.0, 1.0]), true, Some(5.0)).1, [0.0, 5.0]);
+        let (id, bounds) = frame(&ctx, Some([0.0, 8.0]), true, Some(5.0));
+        assert_x(bounds, [3.0, 8.0]);
+
+        // The same plot memory is changed by egui's user zoom interaction.
+        let mut memory = PlotMemory::load(&ctx, id).unwrap();
+        let mut zoomed = *memory.bounds();
+        zoomed.set_x(&PlotBounds::from_min_max([6.0, 0.0], [8.0, 1.0]));
+        memory.set_bounds(zoomed);
+        memory.store(&ctx, id);
+        assert_x(
+            frame(&ctx, Some([0.0, 10.0]), true, Some(5.0)).1,
+            [8.0, 10.0],
+        );
+        // Clearing the numeric request retains the current, zoomed span.
+        assert_x(frame(&ctx, Some([0.0, 12.0]), true, None).1, [10.0, 12.0]);
+        let (_, fitted) = frame(&ctx, Some([0.0, 12.0]), false, None);
+        assert!(fitted.min()[0] <= 0.0 && fitted.max()[0] >= 12.0);
+        let (id, _) = frame(&ctx, Some([0.0, 12.0]), true, Some(5.0));
+        frame(&ctx, Some([0.0, 12.0]), false, Some(5.0));
+        let mut memory = PlotMemory::load(&ctx, id).unwrap();
+        memory.auto_bounds.x = false;
+        let mut zoomed = *memory.bounds();
+        zoomed.set_x(&PlotBounds::from_min_max([10.0, 0.0], [12.0, 1.0]));
+        memory.set_bounds(zoomed);
+        memory.store(&ctx, id);
+        assert_x(
+            frame(&ctx, Some([0.0, 14.0]), true, Some(5.0)).1,
+            [12.0, 14.0],
+        );
+        // An explicit repeat of the saved five-second request must work even
+        // after the view was zoomed to two seconds.
+        assert_x(
+            frame_with_revision(&ctx, Some([0.0, 16.0]), true, Some(5.0), 1).1,
+            [11.0, 16.0],
+        );
+    }
+    #[test]
+    fn compact_labels_are_horizontal_inside_the_native_plot_frame() {
+        let ctx = egui::Context::default();
+        let mut frame = None;
+        let mut transform = None;
+        let mut output = ctx.run_ui(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(880.0, 400.0))),
+            ..Default::default()
+        }, |ui| {
+            let response = Plot::new("compact-labels").show_axes(false).show(ui, |plot| {
+                plot.line(Line::new("native samples", vec![[0.0,20.0],[5.0,-107.0]]));
+            });
+            frame = Some(*response.transform.frame());
+            transform = Some(response.transform.clone());
+            super::render_compact_labels(ui, &response.transform, Some("Time (s)"),
+                Some("°C"), Some("Air temperature"), Some(28.0), false, Some(-107.4));
+        });
+        output.textures_delta.clear();
+        let frame = frame.unwrap();
+        for label in ["°C", "Time (s)", "Air temperature", "-107.4 °C"] {
+            let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text), _ => None,
+            }).unwrap();
+            assert_eq!(text.angle, 0.0);
+            assert!(frame.contains_rect(text.visual_bounding_rect()), "{label} must stay inside the native frame");
+        }
+        let transform = transform.unwrap();
+        for (label, axis, value) in [("2", 0, 2.0), ("-50", 1, -50.0)] {
+            let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text), _ => None,
+            }).expect("readable native tick must be painted");
+            let center = text.pos + text.galley.size() * 0.5;
+            let expected = transform.position_from_point(&egui_plot::PlotPoint::new(value,value));
+            assert!((center[axis]-expected[axis]).abs()<0.01);
+            assert!(frame.contains_rect(text.visual_bounding_rect()));
+        }
+    }
+
+    #[test]
+    fn simplified_grid_has_only_readable_major_marks() {
+        let marks = super::major_grid_marks(egui_plot::GridInput { bounds: (-140.0, 30.0), base_step_size: 1.0 });
+        assert_eq!(marks.iter().map(|m| m.value).collect::<Vec<_>>(), vec![-100.0, -50.0, 0.0]);
+        assert!(super::major_grid_marks(egui_plot::GridInput { bounds: (0.0, f64::INFINITY), base_step_size: 1.0 }).is_empty());
+    }
+    #[test]
+    fn following_preserves_span_before_and_after_the_window_fills() {
+        assert_eq!(following_bounds(0.0, 1.0, 5.0), Some([0.0, 5.0]));
+        assert_eq!(following_bounds(0.0, 8.0, 5.0), Some([3.0, 8.0]));
+        assert_eq!(following_bounds(100.0, 108.0, 2.0), Some([106.0, 108.0]));
+        assert_eq!(following_bounds(0.0, 8.0, 0.0), None);
+        assert_eq!(following_bounds(0.0, f64::NAN, 5.0), None);
+    }
 }

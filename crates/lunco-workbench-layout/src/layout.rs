@@ -10,7 +10,7 @@ use bevy::prelude::{Resource, World};
 use egui_dock::{DockState, NodeIndex};
 use lunco_workbench_core::{
     InstancePanel, Panel, PanelId, PanelRenderTarget, PanelSlot, Perspective, PerspectiveId,
-    PerspectiveLayoutPlan, TabId,
+    PerspectiveFloatingPanel, PerspectiveLayoutPlan, TabId,
 };
 use lunco_workbench_state::{PerspectiveDockSnapshot, WorkspaceStateLayoutProvider};
 use std::collections::HashMap;
@@ -61,6 +61,9 @@ pub struct WorkbenchLayout {
     /// coexist in the same tree.
     pub dock: DockState<TabId>,
 
+    /// Registered panels rendered in borderless, viewport-anchored hosts.
+    pub floating_panels: Vec<PerspectiveFloatingPanel>,
+
     /// Per-perspective snapshots of the live dock + slot intent, so
     /// switching back to a perspective restores *its own* open tabs and
     /// split layout instead of a fresh preset (or the tabs another
@@ -79,6 +82,7 @@ pub struct WorkbenchLayout {
 #[derive(Clone)]
 pub struct PerspectiveDockSlot {
     pub dock: DockState<TabId>,
+    pub floating_panels: Vec<PerspectiveFloatingPanel>,
     pub side_browser: Vec<PanelId>,
     pub side_browser_bottom: Vec<PanelId>,
     pub center: Vec<PanelId>,
@@ -108,6 +112,7 @@ impl Default for WorkbenchLayout {
             right_inspector_bottom: Vec::new(),
             bottom: Vec::new(),
             dock: DockState::new(Vec::new()),
+            floating_panels: Vec::new(),
             dock_cache: HashMap::new(),
         }
     }
@@ -162,7 +167,8 @@ impl WorkbenchLayout {
     }
 
     fn has_slot_intent(&self, id: PanelId) -> bool {
-        self.side_browser.contains(&id)
+        self.floating_panels.iter().any(|p| p.tab == TabId::Singleton(id))
+            || self.side_browser.contains(&id)
             || self.side_browser_bottom.contains(&id)
             || self.center.contains(&id)
             || self.right_inspector.contains(&id)
@@ -190,6 +196,17 @@ impl WorkbenchLayout {
     /// Existing dock placement is preserved; a missing authored center is
     /// recreated beside surviving semantic regions through egui_dock.
     pub fn open_instance(&mut self, kind: PanelId, instance: u64) {
+        let tab = TabId::Instance { kind, instance };
+        let floating = self.active_perspective.as_ref()
+            .and_then(|id| self.perspectives.iter().find(|p| p.id() == *id))
+            .and_then(|p| p.layout().floating_panels.into_iter().find(|p| p.tab == tab));
+        if let Some(floating) = floating {
+            if !self.floating_panels.iter().any(|p| p.tab == tab) {
+                self.floating_panels.push(floating);
+            }
+            while let Some(path) = self.dock.find_tab(&tab) { self.dock.remove_tab(path); }
+            return;
+        }
         let slot = self
             .active_perspective
             .as_ref()
@@ -474,6 +491,7 @@ impl WorkbenchLayout {
     /// Retire a multi-instance tab from the live and cached perspectives.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
+        self.floating_panels.retain(|p| p.tab != tab);
         let remove = |dock: &mut DockState<TabId>| {
             while let Some(path) = dock.find_tab(&tab) {
                 dock.remove_tab(path);
@@ -481,6 +499,7 @@ impl WorkbenchLayout {
         };
         remove(&mut self.dock);
         for slot in self.dock_cache.values_mut() {
+            slot.floating_panels.retain(|p| p.tab != tab);
             remove(&mut slot.dock);
         }
     }
@@ -489,6 +508,7 @@ impl WorkbenchLayout {
     /// dock tree. Only this shell method knows how semantic slots map to
     /// `egui_dock` nodes.
     pub fn apply_perspective_plan(&mut self, id: PerspectiveId, plan: PerspectiveLayoutPlan) {
+        self.floating_panels = plan.floating_panels;
         self.activity_bar = plan.activity_bar;
         self.center_has_initial_instances = plan
             .instance_tabs
@@ -509,6 +529,9 @@ impl WorkbenchLayout {
             .iter()
             .filter_map(|(panel_id, panel)| {
                 if self.has_slot_intent(*panel_id) {
+                    return None;
+                }
+                if self.floating_panels.iter().any(|p| p.tab == TabId::Singleton(*panel_id)) {
                     return None;
                 }
                 panel
@@ -561,6 +584,7 @@ impl WorkbenchLayout {
         {
             self.active_perspective = None;
             self.dock = DockState::new(Vec::new());
+            self.floating_panels.clear();
             self.side_browser.clear();
             self.side_browser_bottom.clear();
             self.center.clear();
@@ -658,6 +682,7 @@ impl WorkbenchLayout {
             id,
             PerspectiveDockSlot {
                 dock: self.dock.clone(),
+                floating_panels: self.floating_panels.clone(),
                 side_browser: self.side_browser.clone(),
                 side_browser_bottom: self.side_browser_bottom.clone(),
                 center: self.center.clone(),
@@ -677,6 +702,7 @@ impl WorkbenchLayout {
     fn restore_perspective(&mut self, slot: PerspectiveDockSlot) {
         let PerspectiveDockSlot {
             dock,
+            floating_panels,
             side_browser,
             side_browser_bottom,
             center,
@@ -687,6 +713,7 @@ impl WorkbenchLayout {
             bottom,
         } = slot;
         self.dock = dock;
+        self.floating_panels = floating_panels;
         self.side_browser = side_browser;
         self.side_browser_bottom = side_browser_bottom;
         self.center = center;
@@ -1172,6 +1199,10 @@ impl WorkbenchLayout {
         let dock = self.reconcile_dock(snap.dock.clone(), id_map)?;
         Some(PerspectiveDockSlot {
             dock,
+            // Anchored geometry belongs to the current authored plan rather
+            // than a stale physical-window position in persisted dock JSON.
+            floating_panels: self.perspectives.iter().find(|p| p.id() == *perspective)
+                .map(|p| p.layout().floating_panels).unwrap_or_default(),
             side_browser: snap.side_browser.clone(),
             side_browser_bottom: snap.side_browser_bottom.clone(),
             center: snap.center.clone(),
@@ -1251,6 +1282,13 @@ impl WorkbenchLayout {
     /// Returns true if the panel was inserted.
     pub fn insert_panel_into_dock(&mut self, id: PanelId, slot: PanelSlot) -> bool {
         let tab = TabId::Singleton(id);
+        if self.floating_panels.iter().any(|p| p.tab == tab) { return false; }
+        if let Some(panel) = self.active_perspective.as_ref()
+            .and_then(|id| self.perspectives.iter().find(|p| p.id() == *id))
+            .and_then(|p| p.layout().floating_panels.into_iter().find(|p| p.tab == tab)) {
+            self.floating_panels.push(panel);
+            return true;
+        }
         // Already there? No-op.
         if self.dock.iter_all_tabs().any(|(_, t)| *t == tab) {
             return false;
@@ -1319,6 +1357,7 @@ impl WorkbenchLayout {
     /// activating Experiments before screenshotting it).
     pub fn focus_singleton(&mut self, id: PanelId) -> bool {
         let tab = TabId::Singleton(id);
+        if self.floating_panels.iter().any(|p| p.tab == tab) { return true; }
         if let Some(pos) = self.dock.find_tab(&tab) {
             self.dock.set_focused_node_and_surface(pos.node_path());
             // A stale path here means the tab is present but unreachable — report
@@ -1338,7 +1377,8 @@ impl WorkbenchLayout {
     /// scratch. Companion to [`insert_panel_into_dock`].
     pub fn remove_panel_from_dock(&mut self, id: PanelId) -> bool {
         let tab = TabId::Singleton(id);
-        let mut removed = false;
+        let mut removed = self.floating_panels.iter().any(|p| p.tab == tab);
+        self.floating_panels.retain(|p| p.tab != tab);
         let main = self.dock.main_surface_mut();
         // Collect node indices to mutate.
         let mut hits: Vec<(NodeIndex, usize)> = Vec::new();
@@ -1431,6 +1471,7 @@ impl WorkbenchLayout {
                     for tab in &leaf.tabs {
                         if let TabId::Instance { kind, instance } = tab {
                             if self.instance_panels.contains_key(kind)
+                                && !self.floating_panels.iter().any(|p| p.tab == *tab)
                                 && !initial
                                     .iter()
                                     .any(|tab| tab.kind == *kind && tab.instance == *instance)
@@ -1776,6 +1817,39 @@ mod tests {
     }
 
     struct TestInstancePanel(PanelId, bool);
+
+    #[test]
+    fn floating_instance_has_one_host_and_retires_with_its_perspective() {
+        use lunco_workbench_core::PanelCorner;
+        let kind = PanelId("plot");
+        let tab = TabId::instance(kind, 7);
+        let id = PerspectiveId::new("presentation");
+        let other = PerspectiveId::new("other");
+        let mut layout = WorkbenchLayout::default();
+        layout.register_instance_panel(TestInstancePanel(kind, false));
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.floating_panels.push(PerspectiveFloatingPanel {
+            tab, corner: PanelCorner::BottomLeft, width: 880, height: 400, inset: 24,
+        });
+        layout.register_perspective(TestPerspective { id: id.clone(), plan });
+        layout.register_perspective(TestPerspective { id: other.clone(), plan: PerspectiveLayoutPlan::new() });
+        layout.open_instance(kind, 7);
+        layout.open_instance(kind, 7);
+        layout.rebuild_dock();
+        assert_eq!(layout.floating_panels.len(), 1);
+        assert!(layout.dock.find_tab(&tab).is_none());
+        layout.activate_perspective(other.clone());
+        assert!(layout.floating_panels.is_empty());
+        layout.activate_perspective(id.clone());
+        assert_eq!(layout.floating_panels.len(), 1);
+        layout.close_instance(kind, 7);
+        assert!(layout.floating_panels.is_empty());
+        layout.open_instance(kind, 7);
+        assert_eq!(layout.floating_panels.len(), 1);
+        layout.replace_authored_perspectives(&[id], Vec::new());
+        assert!(layout.floating_panels.is_empty());
+        assert!(layout.dock_cache.values().all(|s| s.floating_panels.is_empty()));
+    }
 
     impl InstancePanel for TestInstancePanel {
         fn requires_instance_remap(&self) -> bool {

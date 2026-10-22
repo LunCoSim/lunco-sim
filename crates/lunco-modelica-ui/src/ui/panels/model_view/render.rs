@@ -218,7 +218,11 @@ impl InstancePanel for ModelViewPanel {
             .map(|s| s.view_mode)
             .unwrap_or_default();
 
-        let new_view_mode = render_unified_toolbar(doc, view_mode, ui, ctx);
+        let show_controls = ctx.resource::<lunco_theme::DiagramPresentationSettings>()
+            .is_none_or(|settings| settings.show_controls);
+        let new_view_mode = if show_controls || view_mode != ModelViewMode::Canvas {
+            render_unified_toolbar(doc, view_mode, ui, ctx)
+        } else { view_mode };
         if new_view_mode != view_mode {
             if view_mode == ModelViewMode::Text {
                 let pending = ctx
@@ -913,7 +917,7 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             lunco_modelica_icon_ui::IconOrientation::default(),
             Some(&sub),
             None,
-            Some(&theme.modelica_icons),
+            Some(&lunco_theme::diagram_icon_palette(ui.ctx())),
             &icon.graphics,
         );
         return;

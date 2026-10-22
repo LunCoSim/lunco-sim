@@ -3110,7 +3110,7 @@ mod tests {
                 .typography
                 .apply_to_style(style)
         });
-        let output = egui_context.run_ui(input, |ui| {
+        let mut output = egui_context.run_ui(input, |ui| {
             let available = ui.available_rect_before_wrap();
             row_left = available.left();
             label_width = (available.width() * 0.55).max(72.0).min(available.width());
@@ -3127,6 +3127,7 @@ mod tests {
             );
         });
 
+        output.textures_delta.clear();
         let label_x = output
             .shapes
             .iter()

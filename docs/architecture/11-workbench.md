@@ -446,6 +446,18 @@ choose scene-dependent presentation. Definitions contain:
 - Optional `instances`: `{ kind, instance, slot }` records, with slots `left`,
   `center`, `right`, `right_bottom`, or `bottom`. The domain owns the instance
   identity; the shell does not allocate a document or visualization for it.
+- Optional `floating`: borderless scene overlays over the same registered
+  renderers. Each record selects either `panel` or `kind` + `instance`, a
+  `corner` (`top_left`, `top_right`, `bottom_left`, `bottom_right`), and integer
+  `width`, `height`, `inset` in logical pixels (defaults 720, 360, 24). Width is
+  bounded to 128–8192, height to 96–8192, inset to 0–512; the host clamps the
+  rectangle to the available viewport on resize. A panel cannot also be docked.
+  The same panel context, measured rectangles, pointer gate and visible-tab
+  snapshot apply. Explicit instance close retires its floating host from live
+  and cached layouts. Twin retirement removes the host with its perspective.
+  These deliberate overlays survive clean offline capture; shell chrome does
+  not. They have no title, tab strip, close button or resize handle. Use another
+  perspective or Reset Layout to recover operator access.
 - Optional `visible` (true), `restore` (true), `scene_visible` (false),
   `activity_bar` (false), and integer `revision` (0).
 
@@ -453,7 +465,7 @@ The owner rejects unknown capabilities, repeated identities, invalid types and
 unsupported slots before applying that scope's plan. A rejected Twin plan
 publishes a diagnostic and admits no custom definitions; application tasks
 remain available. The limit is 32 definitions per scope and 32 panels or
-initial instances per definition/slot.
+initial instances per definition/slot, and 16 floating hosts per definition.
 
 Evaluation uses bounded background work over immutable facts when capabilities,
 policy registration, active document, Twin, admitted scene generation or mounted payload change.
@@ -479,6 +491,15 @@ shared scripting lifecycle. Script policies choose presentation; Rust owns
 validation, activation constraints, docking and retirement.
 
 ### Registered but hidden perspectives
+
+Diagram presentation uses the theme-owned `DiagramPresentationSettings` section
+(`diagram_presentation`, default `show_controls = true`). Settings → Appearance
+and reflected Rhai `set_setting("DiagramPresentationSettings.show_controls", false)`
+share that owner. Modelica hosts hide their unified toolbar and connection-view
+legend controls; connection-canvas hosts hide their toolbar, guidance and detail
+panels. The shared Canvas skips overlays marked as controls, including navigation
+buttons. Informative overlays, diagnostics, model geometry, wires and live values
+remain. Restoring controls does not reload or edit the model.
 
 Registration controls whether a perspective can be activated by the typed API
 or a guided tutorial. `Perspective::show_in_switcher()` controls only whether

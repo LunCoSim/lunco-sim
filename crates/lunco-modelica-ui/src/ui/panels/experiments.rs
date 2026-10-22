@@ -1517,6 +1517,11 @@ fn render_experiments_plot_inner(
     viz_id: VizId,
     extras: &[MultiSeriesOverlay],
 ) -> ExpPlotSummary {
+    let style = ctx
+        .resource::<lunco_viz::VisualizationRegistry>()
+        .and_then(|registry| registry.get(viz_id))
+        .map(|config| lunco_viz::kinds::line_plot::LinePlotStyle::load_cached(ui.ctx(), config))
+        .unwrap_or_default();
     // Scope to the experiments-pinned (or active) doc — same
     // semantics as the Experiments table above. When no doc is
     // resolved yet (boot, welcome screen, no model open) we still
@@ -1752,6 +1757,7 @@ fn render_experiments_plot_inner(
             .map(|st| st.log_y)
             .unwrap_or(false);
         let mut log_y_toggle: Option<bool> = None;
+        if style.show_controls {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
@@ -1980,6 +1986,7 @@ fn render_experiments_plot_inner(
                 }
             });
         });
+        }
         if let Some(v) = toggle_var {
             states.toggle_var(viz_id, v);
         }
@@ -2090,11 +2097,27 @@ fn render_experiments_plot_inner(
             id: egui::Id::new(("graphs_experiments_plot", viz_id.0)),
             log_y,
             reset_bounds: fit_requested,
-            y_axis_label,
+            y_axis_label: style.y_label.clone().or(y_axis_label),
+            x_axis_label: Some(style.x_label.clone().unwrap_or_else(|| "Time (s)".into())),
+            line_width: style.line_width,
+            text_size: style.text_size,
+            show_legend: style.show_legend,
+            simplified_grid: style.simplified_grid,
+            compact_layout: style.compact_layout,
+            show_latest_value: style.show_latest_value,
+            caption: style.caption.clone(),
+            y_reference_range: style.y_reference_range,
+            follow_latest: style.follow_latest,
+            time_window_s: style.time_window_s,
+            time_window_revision: style.time_window_revision,
             scrub_time,
             scrub_color: col_accent,
         };
-        if let Some(x) = render_multi_series_plot(ui, &series, overlays, &options) {
+        let plot_response = render_multi_series_plot(ui, &series, overlays, &options);
+        plot_response.response.context_menu(|ui| {
+            lunco_viz::kinds::line_plot::render_appearance_menu(ui, ctx, viz_id.0, &style, plot_response.time_span_s);
+        });
+        if let Some(x) = plot_response.clicked_x {
             new_scrub = Some(Some(x));
         }
 

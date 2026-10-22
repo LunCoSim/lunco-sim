@@ -108,6 +108,14 @@ pub fn active(ctx: &egui::Context) -> Arc<Theme> {
         .unwrap_or_else(|| Arc::new(Theme::dark()))
 }
 
+/// Diagram paint policy over the same active theme transport. An authored dark
+/// card must not be inverted a second time when its presentation opts out.
+pub fn diagram_icon_palette(ctx: &egui::Context) -> ModelicaIconPalette {
+    let authored = ctx.data(|data| data.get_temp::<bool>(egui::Id::new("lunco_theme.diagram_authored_colors")))
+        .unwrap_or(false);
+    if authored { ModelicaIconPalette::identity() } else { active(ctx).modelica_icons.clone() }
+}
+
 /// Supported theme modes.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize,
@@ -1297,6 +1305,9 @@ pub mod fonts;
 /// the context is live. Modelica icons use math / Greek / arrow glyphs that
 /// egui's default font does not cover, so DejaVu is appended in the
 /// `Proportional` / `Monospace` font families.
+pub mod presentation;
+pub use presentation::DiagramPresentationSettings;
+
 pub struct ThemePlugin;
 
 /// Ordering boundary for applying `Theme.typography` to egui styles.
@@ -1309,6 +1320,9 @@ pub struct ThemeApplySet;
 impl Plugin for ThemePlugin {
     fn build(&self, app: &mut App) {
         lunco_settings::ensure_download_settings(app);
+        use lunco_settings::AppSettingsExt;
+        app.register_settings_section::<DiagramPresentationSettings>();
+        app.register_type::<DiagramPresentationSettings>();
         app.init_resource::<Theme>()
             .init_resource::<fonts::FontsInstalled>()
             .add_systems(
@@ -1339,7 +1353,7 @@ impl Plugin for ThemePlugin {
 ///
 /// Change-driven: the clone only happens when `Theme` actually changes (or on the first
 /// frames, until the context exists).
-fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>) {
+fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>, diagrams: Res<DiagramPresentationSettings>) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     // `is_changed()` covers insertion, so the first successful frame always publishes.
     // The `get_temp` check re-publishes if egui evicted the entry.
@@ -1347,6 +1361,10 @@ fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>
     if theme.is_changed() || !present {
         store_active(ctx, &theme);
         ctx.all_styles_mut(|style| theme.typography.apply_to_style(style));
+    }
+    let key = egui::Id::new("lunco_theme.diagram_authored_colors");
+    if diagrams.is_changed() || ctx.data(|data| data.get_temp::<bool>(key)).is_none() {
+        ctx.data_mut(|data| data.insert_temp(key, diagrams.use_authored_colors));
     }
 }
 

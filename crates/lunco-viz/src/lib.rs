@@ -147,6 +147,7 @@ impl Plugin for LuncoVizPlugin {
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(telemetry_browser::InspectTelemetryCatalogProvider);
         telemetry_browser::register_all_commands(app);
+        kinds::line_plot::register_all_commands(app);
     }
 }
 

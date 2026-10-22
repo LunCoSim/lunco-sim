@@ -77,6 +77,27 @@ placeholder panel or crash the simulation.
 
 The owner prefixes local ids with `twin/`: select this task using
 `ActivatePerspective { id: "twin/power-study" }`, or **View → Perspectives**.
+
+For a graph over the scene, place that exact instance in `floating` instead of
+`instances`. An empty center keeps the scene full size without a viewport tab
+header:
+
+```rhai
+let kind=plot.kind; let instance=plot.instance;
+let host=#{kind:kind, instance:instance, corner:"bottom_left",
+           width:880, height:400, inset:24};
+#{ id:"power-overlay", title:"Power over scene", interaction:"editor",
+   description:"Read the actual native power trace beside the running vehicle.",
+   restore:false, scene_visible:true,
+   floating:[host] }
+```
+
+This reuses the native panel, including real samples, axes, zoom and its context
+menu. It does not duplicate a plot or draw a second chart. Configure graph-only
+typography and hidden controls through `ConfigureLinePlot`; the floating host
+does not change application UI scale. Singleton diagrams use `panel` instead
+of `kind` and `instance`. Return to the ordinary graph/model perspective for
+editing, or choose **View → Reset Layout** to restore authored placement.
 To make it the authored starting task, set this existing field in `twin.toml`:
 
 ```toml

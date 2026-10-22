@@ -32,7 +32,7 @@ pub use panel::{
 };
 pub use perspective::{
     ExplicitPerspectiveChoice, Perspective, PerspectiveAdmission, PerspectiveId,
-    PerspectiveInstanceTab, PerspectiveLayoutPlan, PerspectiveSlotPlan,
+    PanelCorner, PerspectiveFloatingPanel, PerspectiveInstanceTab, PerspectiveLayoutPlan, PerspectiveSlotPlan,
 };
 pub use registration::{WorkbenchPanelAppExt, WorkbenchPanelRegistry};
 pub use snapshot::WorkbenchSnapshot;

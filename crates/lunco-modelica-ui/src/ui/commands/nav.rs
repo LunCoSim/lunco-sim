@@ -77,6 +77,15 @@ pub(crate) fn visible_tab_for_doc(
     world: &World,
     doc: DocumentId,
 ) -> Option<crate::model_tabs_types::TabId> {
+    let layout = world.get_resource::<lunco_workbench_core::WorkbenchSnapshot>();
+    if layout.is_some_and(|layout| layout.is_panel_visible(
+        crate::ui::panels::canvas_diagram::CANVAS_DIAGRAM_PANEL_ID,
+    )) {
+        if let Some(tab) = world.get_resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
+            .and_then(|state| state.singleton_tab_for(doc)) {
+            return Some(tab);
+        }
+    }
     let active_instance = world
         .get_resource::<lunco_workbench_core::WorkbenchSnapshot>()
         .and_then(|layout| layout.active_tab_instance());

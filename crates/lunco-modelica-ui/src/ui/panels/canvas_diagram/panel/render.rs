@@ -23,6 +23,8 @@ pub(crate) fn render_diagram_canvas(
     mark("resolve_doc_context", &mut phase_t, &mut state.phase_log);
 
     let active_doc = doc_id;
+    let show_controls = ctx.resource::<lunco_theme::DiagramPresentationSettings>()
+        .is_none_or(|settings| settings.show_controls);
     let tab_read_only = active_doc
         .map(|d| crate::ui::context::read_only_for(ctx, d))
         .unwrap_or(false);
@@ -42,6 +44,7 @@ pub(crate) fn render_diagram_canvas(
     let (response, events) = {
         let docstate = state.get_mut_for_render(render_tab_id, active_doc);
         docstate.canvas.read_only = tab_read_only;
+        docstate.canvas.show_controls = show_controls;
         docstate.canvas.snap = snap_settings;
         docstate.canvas.ui(ui)
     };
@@ -53,7 +56,7 @@ pub(crate) fn render_diagram_canvas(
 
     // The legend is derived from the same typed edge payloads that the canvas
     // just rendered and owns the canonical per-tab net visibility state.
-    {
+    if show_controls {
         let docstate = state.get_mut_for_render(render_tab_id, active_doc);
         super::super::legend::render(
             ui,

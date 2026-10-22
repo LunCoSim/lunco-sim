@@ -32,6 +32,9 @@ pub(super) fn render_layout(
             .get_resource::<OfflineRecordingPresentation>()
             .is_some_and(|p| p.retain_workbench_chrome)
     {
+        // Presentation panels are deliberate scene overlays, just like a HUD;
+        // they survive clean capture without restoring any shell chrome.
+        render_floating_panels(ctx, layout, world, theme, ctx.content_rect());
         return;
     }
 
@@ -982,6 +985,7 @@ pub(super) fn render_layout(
     // perspective (which re-attaches them via `rebuild_dock`).
     let has_dock_tabs =
         layout.has_central_content() && layout.dock.iter_all_tabs().next().is_some();
+    let presentation_bounds = viewport_ui.available_rect_before_wrap();
     let translucent_tab_content = world
         .resource::<WorkbenchAppearanceSettings>()
         .translucent_tab_content;
@@ -1230,6 +1234,8 @@ pub(super) fn render_layout(
         // here anymore.
     }
 
+    render_floating_panels(ctx, layout, world, theme, presentation_bounds);
+
     // ── Empty-viewport placeholder ──────────────────────────────────
     // Drawn last so it sits on top of the (empty) 3D framebuffer. Only
     // when a domain crate set a message (e.g. USD command domain: "no scene
@@ -1324,5 +1330,65 @@ pub(super) fn render_layout(
                 panel_ctx.take_intents().apply(world);
             }
         }
+    }
+}
+
+fn floating_rect(bounds: egui::Rect, panel: &lunco_workbench_core::PerspectiveFloatingPanel) -> egui::Rect {
+    use lunco_workbench_core::PanelCorner;
+    let inset = (panel.inset as f32).min(bounds.width().min(bounds.height()).max(0.0) * 0.1);
+    let bounds = bounds.shrink(inset);
+    let size = egui::vec2(panel.width as f32, panel.height as f32).min(bounds.size());
+    let x = match panel.corner {
+        PanelCorner::TopLeft | PanelCorner::BottomLeft => bounds.left(),
+        PanelCorner::TopRight | PanelCorner::BottomRight => bounds.right() - size.x,
+    };
+    let y = match panel.corner {
+        PanelCorner::TopLeft | PanelCorner::TopRight => bounds.top(),
+        PanelCorner::BottomLeft | PanelCorner::BottomRight => bounds.bottom() - size.y,
+    };
+    egui::Rect::from_min_size(egui::pos2(x, y), size)
+}
+
+fn render_floating_panels(
+    ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World,
+    theme: &lunco_theme::Theme, bounds: egui::Rect,
+) {
+    if !bounds.is_finite() || bounds.width() < 32.0 || bounds.height() < 32.0 { return; }
+    let floating = layout.floating_panels.clone();
+    let surface = panel_content_surface_style(theme, false);
+    let mut viewer = PanelTabViewer { panels: &mut layout.panels,
+        instance_panels: &mut layout.instance_panels, world, surface };
+    for panel in floating {
+        let mut tab = panel.tab;
+        let rect = floating_rect(bounds, &panel);
+        egui::Window::new(tab.debug_id())
+            .id(egui::Id::new(("workbench_floating_panel", tab.debug_id())))
+            .title_bar(false).collapsible(false).resizable(false).movable(false)
+            .fixed_rect(rect)
+            .frame(egui::Frame::NONE.fill(theme.tokens.overlay_backdrop)
+                .inner_margin(8))
+            .show(ctx, |ui| {
+                ui.set_min_size((rect.size() - egui::vec2(16.0, 16.0)).max(egui::Vec2::ZERO));
+                viewer.ui(ui, &mut tab);
+            });
+    }
+}
+
+#[cfg(test)]
+mod floating_tests {
+    use super::*;
+    use lunco_workbench_core::{PanelCorner, PerspectiveFloatingPanel};
+
+    #[test]
+    fn floating_plot_is_inset_at_bottom_left_and_clamped_on_resize() {
+        let panel = PerspectiveFloatingPanel { tab: TabId::instance(PanelId("plot"), 7),
+            corner: PanelCorner::BottomLeft, width: 880, height: 400, inset: 24 };
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(1920.0, 1020.0));
+        let rect = floating_rect(screen, &panel);
+        assert_eq!(rect.left(), 24.0);
+        assert_eq!(rect.bottom(), 1026.0);
+        assert_eq!(rect.size(), egui::vec2(880.0, 400.0));
+        let small = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+        assert!(small.contains_rect(floating_rect(small, &panel)));
     }
 }

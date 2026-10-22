@@ -71,7 +71,7 @@ pub(super) fn canvas_theme_from_ctx(ctx: &egui::Context) -> CanvasThemeSnapshot 
 pub(super) fn modelica_icon_palette_from_ctx(
     ctx: &egui::Context,
 ) -> lunco_theme::ModelicaIconPalette {
-    lunco_theme::active(ctx).modelica_icons.clone()
+    lunco_theme::diagram_icon_palette(ctx)
 }
 
 /// Render an authored connection color, or the theme's neutral wire token.
@@ -81,6 +81,6 @@ pub(super) fn connection_color_from_ctx(
 ) -> egui::Color32 {
     let theme = lunco_theme::active(ctx);
     authored
-        .map(|color| theme.modelica_icons.remap(color))
+        .map(|color| lunco_theme::diagram_icon_palette(ctx).remap(color))
         .unwrap_or(theme.schematic.wire_unknown)
 }

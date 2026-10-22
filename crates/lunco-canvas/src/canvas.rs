@@ -89,6 +89,8 @@ pub struct Canvas {
     /// This is transient presentation state: hiding edges never removes
     /// or changes the scene topology.
     pub show_edges: bool,
+    /// Show interactive navigation overlays. Informative overlays still render.
+    pub show_controls: bool,
 
     /// Input events are transient and bounded by the number of pointer/key
     /// signals egui can report in one frame. Retain the buffer and keep the
@@ -122,6 +124,7 @@ impl Canvas {
             movable_layout: false,
             snap: None,
             show_edges: true,
+            show_controls: true,
             input_events: SmallVec::new(),
         }
     }
@@ -503,6 +506,7 @@ impl Canvas {
         }
 
         for overlay in &mut self.overlays {
+            if !self.show_controls && overlay.is_control() { continue; }
             let mut ctx = crate::overlay::OverlayCtx {
                 scene: &self.scene,
                 selection: &self.selection,

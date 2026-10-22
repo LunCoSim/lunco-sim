@@ -1,6 +1,6 @@
 //! Renderer-independent perspective contracts.
 
-use crate::{PanelId, PanelSlot};
+use crate::{PanelId, PanelSlot, TabId};
 use std::sync::Arc;
 
 /// Stable perspective identifier.
@@ -74,6 +74,27 @@ pub struct PerspectiveInstanceTab {
     pub slot: PanelSlot,
 }
 
+/// Viewport corner for a presentation panel. Placement is authored intent;
+/// the concrete shell clamps it to the available viewport on every resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// A registered panel hosted over the scene without a dock tab or title bar.
+/// Dimensions and inset are logical pixels, independent of capture resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PerspectiveFloatingPanel {
+    pub tab: TabId,
+    pub corner: PanelCorner,
+    pub width: u32,
+    pub height: u32,
+    pub inset: u32,
+}
+
 /// Renderer-independent result of applying a perspective.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PerspectiveLayoutPlan {
@@ -89,6 +110,8 @@ pub struct PerspectiveLayoutPlan {
     pub bottom: PerspectiveSlotPlan,
     /// Initial instance tabs to open after singleton layout construction.
     pub instance_tabs: Vec<PerspectiveInstanceTab>,
+    /// Borderless presentation hosts, exclusive with dock placement.
+    pub floating_panels: Vec<PerspectiveFloatingPanel>,
     /// Initially selected center tab, if any.
     pub active_center_tab: Option<usize>,
 }
@@ -103,6 +126,7 @@ impl PerspectiveLayoutPlan {
             right_inspector: PerspectiveSlotPlan::new(),
             bottom: PerspectiveSlotPlan::new(),
             instance_tabs: Vec::new(),
+            floating_panels: Vec::new(),
             active_center_tab: None,
         }
     }

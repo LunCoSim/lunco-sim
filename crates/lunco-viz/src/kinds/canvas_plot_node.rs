@@ -1064,8 +1064,8 @@ mod tests {
         // Two egui passes with nobody registering (node deleted /
         // culled) — the double-buffered interest ages out and the
         // producer stops publishing the signal.
-        let _ = ctx.run_ui(Default::default(), |_| {});
-        let _ = ctx.run_ui(Default::default(), |_| {});
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
         assert!(fetch_signal_snapshot(&ctx).samples.is_empty());
     }

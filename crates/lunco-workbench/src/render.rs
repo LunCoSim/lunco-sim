@@ -2427,6 +2427,15 @@ pub(crate) fn register_workbench_appearance_settings_menu(world: &mut World) {
         if settings != original {
             ctx.set_resource(settings);
         }
+        if let Some(mut diagrams) = ctx.resource::<lunco_theme::DiagramPresentationSettings>().cloned() {
+            let controls_changed = ui.checkbox(&mut diagrams.show_controls, "Diagram editing and navigation controls")
+                .on_hover_text("Hide toolbars, connection-view controls and zoom buttons for a presentation; model contents and live values stay visible.").changed();
+            let colors_changed = ui.checkbox(&mut diagrams.use_authored_colors, "Preserve authored diagram colors")
+                .on_hover_text("Use the model's own icon and connection colors, including authored dark backgrounds.").changed();
+            if controls_changed || colors_changed {
+                ctx.set_resource(diagrams);
+            }
+        }
     });
 }
 

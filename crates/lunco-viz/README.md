@@ -79,6 +79,46 @@ text or modify samples, history decimation, axes, or physical state. Omitted
 widths use 1.5 pixels. The toolbar emits `LinePlotEditRequested`; its observer
 owns the registry update consumed by the native `egui_plot::Line` renderer.
 
+Right-click a plot for appearance settings: axis titles (including units),
+editing-control visibility, and a reference Y range. The range stays visible
+during autoscaling but does not clip measurements outside it. This prevents
+nearly constant signals magnifying numerical noise. Automation uses the same
+persisted style through `ConfigureLinePlot`, for example:
+
+```json
+{"plot":1,"x_label":"Time [s]","y_label":"°C","line_width":4.0,"text_size":28,"show_controls":false,"show_legend":false,"simplified_grid":true,"caption":"Air temperature","compact_layout":true,"y_reference_range":[-140,30]}
+```
+
+`show_legend:false` removes redundant curve names when the axes explain a single
+trace. `simplified_grid:true` keeps sparse major guides; `caption` adds a concise
+title above the native chart. With `compact_layout:true`, the title moves inside
+the upper center of the native plot frame, Y units sit horizontally at the upper-left,
+and the X quantity/units sit at the lower-right. Numeric ticks also move inside, using the same native plot transform and major
+grid marks. Labels that collide with corner titles or other values are omitted;
+no outer axis rows are reserved. These text anchors do not enter data bounds or
+autoscaling. Keep titles short and use a separate explanatory caption for provenance.
+Empty caption removes it. Both renderers
+use the same settings, also exposed in the context menu. Keep provenance in a separate contextual caption when a bench experiment sits
+beside a different live scene.
+
+Omitted fields preserve the style and signal bindings. An empty axis title
+restores automatic labelling; an empty `y_reference_range` removes the reference
+interval. Invalid widths or ranges reject the whole edit. Restore hidden
+controls from the plot context menu.
+
+`text_size` sets axis numbers, axis titles, legends and hover values together,
+in logical pixels (8–64). The change is scoped to the plot; application chrome
+and editing controls retain their theme sizes. Omission preserves the setting;
+zero restores the theme. The context menu exposes the same customization.
+
+`follow_latest: true` preserves the current horizontal time span and advances
+it with the latest displayed sample. `time_window_s: 5` seeds a five-second
+window; later user zoom changes are retained. Zero clears that requested span
+and follows with the current window. Turning follow off restores fit-all
+history. Both live and experiment plots use the same controls and renderer
+policy. Following is inactive for a phase-space X signal. This only changes the
+view; recording and telemetry retention are independent.
+
 Persisted bindings are reconciled from stable `GlobalEntityId` identity only
 when the visualization registry or an identity publication changes. Unchanged
 scenes do not rebuild entity lookup maps or rewrite plot bindings; missing
@@ -253,3 +293,15 @@ specific domain.
 then retains samples through the shared `SignalRegistry` rate, deadband and
 channel admission. Visualization panels consume that registry. Do not install
 another per-frame Modelica publisher beside the telemetry owner.
+
+Experiment and mixed live/experiment graphs consume the same persisted
+`LinePlotStyle`: axis titles, line width, editing-control visibility and
+reference Y bounds remain effective when a completed experiment is present.
+`NewPlotPanel.signals` initializes both live bindings and experiment-variable
+selection in the current document scope.
+
+`show_latest_value:true` adds the last measured value for a single displayed
+trace, with the Y unit, in the upper-right of the compact chart. The title stays
+centered on the same row. It uses the actual series endpoint; multiple traces
+omit that readout to avoid assigning one number to several quantities. For live
+presentation, combine it with `follow_latest:true,time_window_s:5`.

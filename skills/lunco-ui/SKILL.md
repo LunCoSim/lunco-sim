@@ -237,6 +237,12 @@ for the return schema, namespace, lifecycle and production acceptance. Policy
 updates preserve visited user layouts; explicit Reset Layout uses the new plan.
 `PerspectiveAdmission` fences workspace restoration while definitions prepare.
 Activation of the current task preserves its dock; Reset Layout is explicit.
+For a title-free measurement/diagram overlay, author `floating` in that same
+policy: select either `panel` or `kind` + `instance`, `corner`, logical-pixel
+`width`/`height`/`inset`. Keep it exclusive with dock placement. The shared
+host reuses the registered panel, publishes its rect and pointer ownership,
+and survives clean recording. Empty `center` leaves full-size scene background
+without a viewport tab header. Do not create a film-specific graph renderer.
 Reopening an initial instance uses its authored slot through the existing
 `egui_dock` owner, including when closing its last tab removed that leaf.
 
@@ -622,6 +628,13 @@ workbench/egui presentation control, backed by the per-tab
 without changing authored topology. Keep the legend and this dynamic graph
 control in the canvas panel; HUI/Rhai does not provide the dynamic list and
 graph-state contract it would require.
+
+For demonstrations, set `DiagramPresentationSettings.show_controls` to false
+through Rhai or Settings → Appearance. This shared, persisted preference removes
+diagram editing/navigation chrome from Modelica and connection views while
+preserving wires, live values and diagnostics. Do not clear topology or remove
+the navigation overlay object to obtain a clean view. Restore the same setting
+after filming if the operator is returning to editing.
 
 Canvas-owned diagram overlays must stay inside the owning leaf: direct painting
 uses the canvas clip rectangle, while an `egui::Area` uses `constrain_to` with

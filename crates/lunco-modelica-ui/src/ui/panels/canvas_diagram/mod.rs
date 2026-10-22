@@ -599,6 +599,13 @@ impl CanvasDiagramState {
             .find_map(|(tab_id, d)| (*d == doc).then_some(*tab_id))
     }
 
+    /// The existing document-scoped renderer's selected state. Canvas commands
+    /// targeting the visible singleton must address this same projection,
+    /// rather than an unrelated primary model tab on the same document.
+    pub(crate) fn singleton_tab_for(&self, doc: lunco_doc::DocumentId) -> Option<CanvasKey> {
+        self.first_tab_for(doc)
+    }
+
     /// Drop *every* per-tab entry whose doc is `doc` when the
     /// document is removed from the registry. Also clears any
     /// pending parse→project handoff handle for the doc — without
