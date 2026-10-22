@@ -32,6 +32,11 @@ mesh contact through rolling, slip and penetration measurements. The production
 `wheel_collider_lint` scene checks the warning, its non-blocking severity and
 analytic/raycast/visual-only controls.
 
+A separate wheel visual uses one centered `purpose=render` child and a hidden
+proxy through standard `VisibilityAPI`; see `build-vehicle`. Its geometry rest
+basis does not define the mechanical axle. `wheel_render_root` verifies the
+shared projection and rejects overlapping or ambiguous render roots in lint.
+
 For assets intended for Omniverse, independently moving rigid bodies nested
 under another body need `!resetXformStack!` and explicit initial world poses.
 Author both joint local frames explicitly: portable UsdPhysics defaults are
@@ -649,7 +654,8 @@ colliders, bodies and joint edges are all gone.
 it does not apply `PhysicsCollisionAPI` by itself. Ordinary vehicle geometry
 must carry both. `LunCoTerrainAPI` is the owner-level projector exception.
 Raycast `PhysxVehicleWheelAPI` wheels are query-only and must not carry
-`PhysicsRigidBodyAPI` or `PhysicsCollisionAPI`; physical wheels are the other
+`PhysicsRigidBodyAPI` or enabled collision. Explicitly disabled collision
+metadata can override an inherited collider. Physical wheels are the other
 standard realization and must author both APIs on their collision geometry.
 The `collision-enabled-without-api`, `raycast-wheel-collision-contract`, and
 `physical-wheel-collision-contract` rules are errors, not runtime fallbacks.

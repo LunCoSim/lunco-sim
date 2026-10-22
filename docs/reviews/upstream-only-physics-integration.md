@@ -284,6 +284,25 @@ lint warns about mesh rolling fidelity without rejecting standard USD meshes.
 The production `wheel_collider_lint` gate passes five checks over mesh,
 analytic and raycast realizations and a visual-only tread control.
 
+Wheel render ownership uses standard USD purpose and visibility: one centered
+`purpose=render` child receives measured axle roll while its collision proxy is
+hidden. Both realizations bind that authored child after direct-child structural
+admission; mesh orientation does not define the mechanical axle. The shared
+authoring reader rejects overlapping visible geometry, multiple render roots,
+off-center roots and reset transform stacks, with Rhai exposing
+`wheel-visual-contract`. The production `wheel_render_root` gate passes ten
+checks including X-axis raycast roll and malformed source fixtures through
+`ValidateAsset`. Explicitly disabled collider metadata remains valid on a
+query-only wheel; enabled or malformed collision still fails lint.
+The bounded production cohort passes 51 checks across render ownership (10),
+mesh warning (5), coupled wheel pause (16) and drivetrain parity (20). Loading
+the invalid source directly exits with `usd-wheel-visual-invalid` before
+simulation, without a panic. Tesla's rendered analytic-wheel gate passes 13
+checks and two inspected views show one crowned tire surface; its cabin mesh
+hull remains intact. The existing free-wheel torque/bearing mechanism test
+also passes after updating its native Avian fixture types. Evidence is under
+`.cache/codex-evidence/physics-followup-20261021/wheel-render-root/`.
+
 The regular `target/debug/luncosim` cohort and source hashes are retained under
 `.cache/codex-evidence/physics-followup-20261021/native-e4-analytic-wheel-runtime/`;
 wheel warning evidence is in the adjacent `wheel-collider-lint/` directory.

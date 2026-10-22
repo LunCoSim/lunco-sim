@@ -132,6 +132,17 @@ projector prepares native collision geometry and its basis together, then
 applies that basis once inside the authored body frame. Rendering narrows the
 same basis explicitly for its visual child. `PhysicalWheel` retains independent
 mechanical and geometry bases so client roll is `roll_about_axle * geometry_basis`.
+An explicit child with standard `purpose=render` is the wheel's render root.
+Its rest rotation and geometry basis affect presentation only; both wheel
+realizations roll about the authored mechanical axle. Hide the collision
+proxy through `VisibilityAPI` when a separate render root is present. The root
+must retain the wheel-local stack and be centered on the axle; put offset
+submeshes below it. Multiple render roots and overlapping visible proxy
+geometry are rejected by `wheel-visual-contract` and the runtime reader.
+Wheel setup waits for the scene owner's direct-child admission marker before
+resolving that root, without coupling simulation to asynchronous mesh baking.
+Render-root topology changes require a full scene reload. Wheel parameter
+resynchronization retains the admitted entity binding and rereads its rest basis.
 Initial projection and live resynchronization consume the same geometry reader;
 an accepted edit republishes its validated collider even when radius and width
 are unchanged. Invalid geometry or stage conventions reject projection.

@@ -288,6 +288,7 @@ The USD rules include `nested-body-no-joint` (error), `joint-target-not-a-body` 
 `collision-enabled-without-api` (error for ordinary geometry; wheel realizations
 use their dedicated contract rules),
 `raycast-wheel-collision-contract` (error),
+`wheel-visual-contract` (error for overlapping, ambiguous or incorrectly framed wheel render roots),
 `physical-wheel-collision-contract` (error),
 `vehicle-part-collision-contract` (error),
 `dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn),

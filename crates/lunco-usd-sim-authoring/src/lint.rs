@@ -27,7 +27,7 @@ pub fn append_gear_drive_facts(reader: &StageView<'_>, facts: &mut H) {
     ));
 }
 
-/// Add the canonical PhysX wheel-attachment topology to the authored lint facts.
+/// Add canonical wheel attachment and render-root validation to lint facts.
 ///
 /// The runtime wheel projector and this producer both consume
 /// [`crate::wheel_params::collect_wheel_attachment_topology`]. The policy only
@@ -38,20 +38,21 @@ pub fn append_wheel_attachment_facts(reader: &StageView<'_>, facts: &mut H) {
         return;
     };
     let topology = crate::wheel_params::collect_wheel_attachment_topology(reader);
-    let mut wheels: Vec<String> = reader
+    let mut wheels: Vec<openusd::sdf::Path> = reader
         .prim_paths()
         .into_iter()
         .filter(|path| reader.has_api_schema(path, "PhysxVehicleWheelAPI"))
-        .map(|path| path.to_string())
         .collect();
     wheels.sort();
 
     let wheel_attachments = wheels
         .into_iter()
         .map(|path| {
-            let binding = topology.binding_for(&path);
+            let binding = topology.binding_for(path.as_str());
+            let visual_error = crate::wheel_render_root(reader, &path).err();
             H::map([
-                ("path", H::str(path)),
+                ("visual_error", visual_error.map(H::str).unwrap_or(H::Unit)),
+                ("path", H::str(path.to_string())),
                 ("valid", H::Bool(binding.is_some())),
                 (
                     "suspension",

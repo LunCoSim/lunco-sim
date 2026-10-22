@@ -13,6 +13,26 @@ use lunco_usd_sim_core::PhysicalWheel;
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
 
+/// Mesh rest orientation for the selected wheel render root. The mechanical
+/// axle and body pose do not come from this presentation basis.
+pub(crate) fn visual_basis(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    wheel: &SdfPath,
+) -> Result<Quat, String> {
+    let render_root = lunco_usd_sim_authoring::wheel_render_root(reader, wheel)?;
+    let path = render_root.as_ref().unwrap_or(wheel);
+    let geometry = read_geometry_orientation(reader, path)
+        .ok_or_else(|| format!("{path}: invalid geometry orientation or stage convention"))?;
+    let rest = if render_root.is_some() {
+        lunco_usd_bevy_stage::local_transform_at(reader, path, 0.0)
+            .map_err(|error| error.to_string())?
+            .map_or(Quat::IDENTITY, |pose| pose.rotation)
+    } else {
+        Quat::IDENTITY
+    };
+    Ok(rest * geometry.as_quat())
+}
+
 /// Resolve a wheel's attachment suspension prim via the standard attachment
 /// topology. The map belongs to one composed stage, so its keys are stage-local
 /// paths; independent instances retain independent topology maps.
@@ -111,8 +131,7 @@ struct WheelUpdate {
     physical: bool,
     params: WheelParams,
     collider: Option<Collider>,
-    visual_base_rotation: Quat,
-    geometry_basis: Quat,
+    visual_basis: Quat,
     native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
 }
 
@@ -188,24 +207,8 @@ pub(crate) fn resync_wheels_for_stage(
                     }
                     // Use the same authored pose/axis readers as the mesh owner.
                     // Keep this rest pose separate from the animated transform.
-                    let geometry_basis = match read_geometry_orientation(&view, &sp) {
-                        Some(basis) => basis.as_quat(),
-                        None => {
-                            failures.push((
-                                Some(*entity),
-                                path.clone(),
-                                "invalid geometry orientation or stage convention".to_owned(),
-                            ));
-                            continue;
-                        }
-                    };
-                    let visual_base_rotation = (|| -> Result<Quat, String> {
-                        let pose = lunco_usd_bevy_stage::read_transform_from_usd(&view, &sp)
-                            .map_err(|error| error.to_string())?;
-                        Ok(pose.rotation * geometry_basis)
-                    })();
-                    let visual_base_rotation = match visual_base_rotation {
-                        Ok(rotation) => rotation,
+                    let geometry_basis = match visual_basis(&view, &sp) {
+                        Ok(basis) => basis,
                         Err(detail) => {
                             failures.push((Some(*entity), path.clone(), detail));
                             continue;
@@ -250,8 +253,7 @@ pub(crate) fn resync_wheels_for_stage(
                         physical: *physical,
                         params,
                         collider,
-                        visual_base_rotation,
-                        geometry_basis,
+                        visual_basis: geometry_basis,
                         native_material,
                     });
                 }
@@ -286,7 +288,7 @@ pub(crate) fn resync_wheels_for_stage(
         if !u.physical {
             if let Some(mut wheel) = world.get_mut::<WheelRaycast>(u.entity) {
                 u.params.apply_to_raycast(&mut wheel);
-                wheel.visual_base_rotation = u.visual_base_rotation;
+                wheel.visual_base_rotation = u.visual_basis;
             }
             if let Some(mut susp) = world.get_mut::<Suspension>(u.entity) {
                 u.params.apply_to_suspension(&mut susp);
@@ -318,12 +320,12 @@ pub(crate) fn resync_wheels_for_stage(
             pw.wheel_radius = u.params.radius as f32;
             pw.wheel_width = u.params.width as f32;
             pw.axis_rot = axis_rot;
-            pw.geometry_basis = u.geometry_basis;
+            pw.geometry_basis = u.visual_basis;
         }
         if let Some(visual) = visual_entity
             && let Some(mut transform) = world.get_mut::<bevy::prelude::Transform>(visual)
         {
-            transform.rotation = u.geometry_basis;
+            transform.rotation = u.visual_basis;
         }
         if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(u.entity) {
             mass.0 = u.params.mass as f32;

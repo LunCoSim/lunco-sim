@@ -120,7 +120,7 @@
 //       report them instead of allowing the runtime refusal to be discovered
 //       only in logs.
 //
-//   facts.wheel_attachments[]  #{ path, valid, suspension, tire, index }
+//   facts.wheel_attachments[]  #{ path, valid, suspension, tire, index, visual_error }
 //       standard PhysX wheel-attachment bindings resolved by the same topology
 //       reader as runtime wheel admission. `valid = false` means no unique
 //       direct/relationship-form binding exists.
@@ -235,7 +235,7 @@ fn raycast_wheel_collision_finding(part) {
             "raycast-wheel-collision-contract",
             "error",
             part.path,
-            "raycast wheel applies PhysicsCollisionAPI or a collision setting; remove the collision authoring because raycast wheels are query-only.",
+            "raycast wheel has enabled or malformed collision authoring; disable or remove its collider because raycast wheels are query-only.",
         );
     }
     ()
@@ -785,6 +785,9 @@ fn invalid_gear_drive(facts) {
 fn invalid_wheel_attachment_topology(facts) {
     let out = [];
     for wheel in facts.wheel_attachments {
+        if wheel.visual_error != () {
+            out.push(finding("wheel-visual-contract", "error", wheel.path, wheel.visual_error));
+        }
         if wheel.valid { continue; }
         let m = "has no unique PhysxVehicleWheelAttachmentAPI binding — the runtime refuses to spawn this wheel. Author exactly one direct or relationship-form attachment with a wheel, suspension, tire and non-negative index.";
         out.push(finding("invalid-wheel-attachment-topology", "error", wheel.path, m));

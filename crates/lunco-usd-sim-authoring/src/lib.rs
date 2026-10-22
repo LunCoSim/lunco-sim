@@ -7,12 +7,14 @@
 
 mod lint;
 pub mod wheel_params;
+mod wheel_visual;
 
 pub use lint::{append_gear_drive_facts, append_wheel_attachment_facts};
 pub use wheel_params::{
     SuspensionParams, WheelAttachmentBinding, WheelAttachmentTopology, WheelParams,
     collect_wheel_attachment_topology, collect_wheel_attachment_topology_from_paths,
 };
+pub use wheel_visual::wheel_render_root;
 
 /// The normalized SI angular drive values of one PhysX gear joint.
 #[derive(Clone, Copy, Debug, PartialEq)]

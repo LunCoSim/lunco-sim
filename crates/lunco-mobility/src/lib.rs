@@ -1635,8 +1635,8 @@ pub struct WheelRaycast {
     pub wheel_width: f64,
     /// Entity for the visual mesh to be transformed.
     pub visual_entity: Option<Entity>,
-    /// Rest orientation of the canonical Y-axial mesh, projected from USD.
-    /// Includes the authored primitive axis and local rotation exactly once.
+    /// Render-root rest rotation composed with its geometry basis from USD.
+    /// Independent of the mechanical axle; mesh geometry has no primitive basis.
     /// This is a render-boundary quaternion; physics state remains f64.
     pub visual_base_rotation: Quat,
     /// Resultant normal force from the last physics tick, used for friction calculations.
@@ -1735,7 +1735,7 @@ impl WheelRaycast {
     /// continuous across the 2π wrap (a 2π quaternion is identity).
     #[inline]
     pub fn spin_quat(&self) -> Quat {
-        let axle = self.visual_base_rotation * Vec3::Y;
+        let axle = self.axle_axis.as_vec3();
         Quat::from_axis_angle(axle, -(self.spin_angle as f32))
     }
 
@@ -2656,7 +2656,7 @@ mod wheel_raycast_parallel_tests {
         app.add_systems(FixedPostUpdate, sync_raycast_wheel_physics_pose);
 
         let chassis_position = DVec3::new(12.0, 4.0, -8.0);
-        let chassis_rotation = DQuat::from_rotation_z(0.35);
+        let chassis_rotation = Quat::from_rotation_z(0.35);
         let chassis = app
             .world_mut()
             .spawn((
@@ -2682,7 +2682,7 @@ mod wheel_raycast_parallel_tests {
                     ..default()
                 },
                 Position(DVec3::ZERO),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
                 RayCaster::new(DVec3::ZERO, Dir3::NEG_Y),
                 WheelBodyMount {
                     body: chassis,
@@ -2700,7 +2700,7 @@ mod wheel_raycast_parallel_tests {
 
         let (expected_position, expected_rotation) = wheel_hub_pose(
             GridPos(chassis_position),
-            GridRot(chassis_rotation),
+            GridRot(chassis_rotation.as_dquat()),
             authored_mount.translation.as_dvec3(),
             authored_mount.rotation.as_dquat() * fixed_heading,
         );
@@ -2718,7 +2718,7 @@ mod wheel_raycast_parallel_tests {
         );
         assert_eq!(
             app.world().get::<Rotation>(wheel).unwrap().0,
-            expected_rotation.0
+            expected_rotation.0.as_quat()
         );
         assert_eq!(
             app.world().get::<Transform>(wheel).unwrap().rotation,
@@ -2727,7 +2727,7 @@ mod wheel_raycast_parallel_tests {
 
         let (_, render_rotation) = wheel_hub_pose(
             GridPos(chassis_position),
-            GridRot(chassis_rotation),
+            GridRot(chassis_rotation.as_dquat()),
             authored_mount.translation.as_dvec3(),
             authored_mount.rotation.as_dquat() * render_sample.as_dquat(),
         );
@@ -2782,7 +2782,7 @@ mod wheel_raycast_parallel_tests {
         app.world_mut().spawn((
             RigidBody::Static,
             Position(DVec3::new(0.0, -0.5, 0.0)),
-            Rotation(DQuat::IDENTITY),
+            Rotation(Quat::IDENTITY),
             Transform::from_xyz(0.0, -0.5, 0.0),
             Collider::cuboid(10.0, 1.0, 10.0),
         ));
@@ -2791,7 +2791,7 @@ mod wheel_raycast_parallel_tests {
             .spawn((
                 WheelRaycast::default(),
                 Position(DVec3::new(0.0, 2.0, 0.0)),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
                 Transform::from_xyz(0.0, 2.0, 0.0),
                 RayCaster::new(DVec3::ZERO, Dir3::NEG_Y)
                     .with_max_distance(5.0)
@@ -2802,7 +2802,7 @@ mod wheel_raycast_parallel_tests {
             .world_mut()
             .spawn((
                 Position(DVec3::new(2.0, 2.0, 0.0)),
-                Rotation(DQuat::IDENTITY),
+                Rotation(Quat::IDENTITY),
                 Transform::from_xyz(2.0, 2.0, 0.0),
                 RayCaster::new(DVec3::ZERO, Dir3::NEG_Y)
                     .with_max_distance(5.0)
@@ -3612,8 +3612,8 @@ mod suspension_visuals_tests {
                 RigidBody::Dynamic,
                 Position(DVec3::ZERO),
                 Rotation::default(),
-                LinearVelocity(DVec3::ZERO),
-                AngularVelocity(DVec3::ZERO),
+                LinearVelocity(Vec3::ZERO),
+                AngularVelocity(Vec3::ZERO),
                 ComputedMass::default(),
                 ComputedAngularInertia::default(),
                 ComputedCenterOfMass::default(),
@@ -3675,7 +3675,7 @@ mod suspension_visuals_tests {
                 RayHits(vec![RayHitData {
                     entity: chassis,
                     distance: 0.5,
-                    normal: DVec3::Y,
+                    normal: Vec3::Y,
                 }]),
                 ChildOf(chassis),
             ))

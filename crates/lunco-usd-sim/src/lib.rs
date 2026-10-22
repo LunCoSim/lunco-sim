@@ -1238,7 +1238,10 @@ fn process_usd_sim_prims(
     grid_components: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_child_of: Query<&ChildOf>,
-    q_preview_only: Query<(), With<UsdPreviewOnly>>,
+    scene_projection: (
+        Query<(), With<UsdPreviewOnly>>,
+        Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
+    ),
     primary_roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
     stage_identity: UsdStageIdentityParams,
@@ -1251,6 +1254,7 @@ fn process_usd_sim_prims(
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
     let (mut pending, settings) = projection_work;
+    let (q_preview_only, q_structure_pending) = scene_projection;
     let JointTopologyPreparationParams {
         index: mut topology_index,
         tasks: mut topology_tasks,
@@ -1673,6 +1677,14 @@ fn process_usd_sim_prims(
             processed += 1;
             continue;
         }
+        // A wheel's authored render root is a direct structural child. The
+        // bounded scene projector admits those children after their parent.
+        if lunco_usd_bevy_stage::UsdRead::has_api_schema(&reader, &sdf_path, VEHICLE_WHEEL_API)
+            && q_structure_pending.contains(entity)
+        {
+            pending.0.queue(entity);
+            continue;
+        }
         let _span = bevy::log::info_span!(
             "usd_sim_prim_projection",
             prim_path = %prim_path.path
@@ -1698,6 +1710,7 @@ fn process_usd_sim_prims(
             &q_spatial,
             &mut commands,
             &mut authored_diagnostics,
+            &mut runtime_faults,
         );
         processed += 1;
     }
@@ -2151,6 +2164,7 @@ fn process_usd_sim_prim_read(
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     commands: &mut Commands,
     diagnostics: &mut Vec<lunco_core::RuntimeDiagnostic>,
+    runtime_faults: &mut lunco_core::RuntimeFaults,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
 
@@ -2793,6 +2807,71 @@ fn process_usd_sim_prim_read(
                 return;
             }
         };
+        let render_path = match lunco_usd_sim_authoring::wheel_render_root(reader, &sdf_path) {
+            Ok(path) => path,
+            Err(detail) => {
+                runtime_faults.raise(
+                    "usd-wheel-visual-invalid",
+                    Some(entity),
+                    &prim_path.path,
+                    &detail,
+                );
+                lunco_core::trigger_runtime_error(
+                    commands,
+                    "usd-wheel-visual-invalid",
+                    format!("{}: {detail}", prim_path.path),
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
+        let render_root = if let Some(path) = render_path {
+            let Some(visual) = usd_entity_for_path(
+                all_prims,
+                prim_path.stage_handle.id(),
+                path.as_str(),
+                q_child_of,
+                q_preview_only,
+            ) else {
+                runtime_faults.raise(
+                    "usd-wheel-visual-identity",
+                    Some(entity),
+                    &prim_path.path,
+                    format!("missing authored render root {path}"),
+                );
+                lunco_core::trigger_runtime_error(
+                    commands,
+                    "usd-wheel-visual-identity",
+                    format!(
+                        "{} requires its authored render root {path}",
+                        prim_path.path
+                    ),
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            };
+            Some(visual)
+        } else {
+            None
+        };
+        let visual_basis = match wheel_runtime::visual_basis(reader, &sdf_path) {
+            Ok(basis) => basis,
+            Err(detail) => {
+                runtime_faults.raise(
+                    "usd-wheel-visual-invalid",
+                    Some(entity),
+                    &prim_path.path,
+                    &detail,
+                );
+                lunco_core::trigger_runtime_error(
+                    commands,
+                    "usd-wheel-visual-invalid",
+                    format!("{}: {detail}", prim_path.path),
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
         // A physical wheel is a separate body only in the physical realization. Its
         // collision shape is an authored USD geometry prim, not a collider synthesized
         // from wheel dynamics. Validate it before creating any synthesized ports so an
@@ -3123,6 +3202,8 @@ fn process_usd_sim_prim_read(
                 maybe_shader_mat,
                 mesh_pending,
                 shader_bound,
+                render_root,
+                visual_basis,
                 physical_suspension_visuals(
                     reader,
                     prim_path,
@@ -3177,6 +3258,8 @@ fn process_usd_sim_prim_read(
                 maybe_shader_mat,
                 mesh_pending,
                 shader_bound,
+                render_root,
+                visual_basis,
                 &params,
                 &suspension,
                 body_mount,
@@ -3437,9 +3520,8 @@ fn spawn_wheel_visual(
 
 /// Sets up a raycast wheel with entity splitting for correct raycasting.
 ///
-/// Raycast wheels need two entities:
-/// 1. **Physics entity**: identity rotation (for correct downward raycasting), NO mesh
-/// 2. **Visual child entity**: 90° Z rotation + mesh (for correct rendering)
+/// The probe retains its mechanical frame; an authored render root or a
+/// generated primitive mesh child owns suspension displacement and axle roll.
 fn setup_raycast_wheel(
     commands: &mut Commands,
     entity: Entity,
@@ -3451,6 +3533,8 @@ fn setup_raycast_wheel(
     maybe_shader_mat: Option<&ShaderLook>,
     mesh_pending: bool,
     shader_bound: bool,
+    render_root: Option<Entity>,
+    visual_basis: Quat,
     params: &WheelParams,
     susp: &SuspensionParams,
     body_mount: lunco_mobility::WheelBodyMount,
@@ -3462,29 +3546,28 @@ fn setup_raycast_wheel(
 
     let mut wheel = params.to_wheel_raycast(p_drive, p_speed, p_heading, Some(entity));
 
-    // --- Wheel Entity Splitting (always) ---
-    // The physics entity needs identity rotation so `RayCaster::NEG_Y`
-    // casts straight down. The visual mesh is moved to a child entity
-    // so `apply_wheel_suspension` can reposition it to ground-level
-    // each frame — its `q_visual` query filters out `WheelRaycast`,
-    // so it can only operate on a separate visual entity.
-    let wheel_rotation = existing_tf.rotation;
+    // The probe pose and the visual roll have separate owners. An authored
+    // render root is centered on this axle; primitive geometry uses its mesh child.
+    let wheel_rotation = visual_basis;
     wheel.visual_base_rotation = wheel_rotation;
-    let visual_id = spawn_wheel_visual(
-        commands,
-        entity,
-        prim_path,
-        Transform {
-            translation: Vec3::ZERO,
-            rotation: wheel_rotation,
-            scale: existing_tf.scale,
-        },
-        maybe_mesh,
-        maybe_mat,
-        maybe_shader_mat,
-        mesh_pending,
-        shader_bound,
-    );
+    let visual_id = match render_root {
+        Some(visual) => Some(visual),
+        None => spawn_wheel_visual(
+            commands,
+            entity,
+            prim_path,
+            Transform {
+                translation: Vec3::ZERO,
+                rotation: wheel_rotation,
+                scale: existing_tf.scale,
+            },
+            maybe_mesh,
+            maybe_mat,
+            maybe_shader_mat,
+            mesh_pending,
+            shader_bound,
+        ),
+    };
     wheel.visual_entity = visual_id;
 
     // Physics entity: identity rotation, position preserved
@@ -3628,6 +3711,8 @@ fn setup_physical_wheel(
     maybe_shader_mat: Option<&ShaderLook>,
     mesh_pending: bool,
     shader_bound: bool,
+    render_root: Option<Entity>,
+    visual_basis: Quat,
     suspension_visuals: Vec<(Entity, Transform)>,
     params: &WheelParams,
     body_mount: lunco_mobility::WheelBodyMount,
@@ -3663,17 +3748,20 @@ fn setup_physical_wheel(
     let collider = authored_geometry.collider;
     // Visual mesh child id, captured so the client-proxy animator
     // (`animate_proxy_physical_wheels`) can author its rotation directly.
-    let visual_id = spawn_wheel_visual(
-        commands,
-        entity,
-        prim_path,
-        Transform::from_rotation(visual_axis_rot),
-        maybe_mesh,
-        maybe_mat,
-        maybe_shader_mat,
-        mesh_pending,
-        shader_bound,
-    );
+    let visual_id = match render_root {
+        Some(visual) => Some(visual),
+        None => spawn_wheel_visual(
+            commands,
+            entity,
+            prim_path,
+            Transform::from_rotation(visual_basis),
+            maybe_mesh,
+            maybe_mat,
+            maybe_shader_mat,
+            mesh_pending,
+            shader_bound,
+        ),
+    };
 
     commands
         .entity(entity)
@@ -3688,7 +3776,7 @@ fn setup_physical_wheel(
                 wheel_radius: radius,
                 wheel_width: params.width as f32,
                 axis_rot: wheel_axis_rot,
-                geometry_basis: visual_axis_rot,
+                geometry_basis: visual_basis,
                 spin_angle: 0.0,
                 // Authored wheel offset in the vehicle frame. The physical wheel is
                 // nested under its suspension carrier, so this is separate from

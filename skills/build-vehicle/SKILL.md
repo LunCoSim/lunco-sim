@@ -30,6 +30,17 @@ contact. This warning does not reject admission. Retained mesh contact needs
 measured rolling, slip and penetration validation; the production
 `wheel_collider_lint` gate covers that warning and the supported alternatives.
 
+For a detailed tire/rim, hide the wheel proxy with standard `VisibilityAPI`
+and give it one centered child with `purpose=render`. Group visual subparts
+under that child; it inherits the wheel frame and receives the measured roll
+about the authored axle in both physical and raycast realizations. Do not
+encode the axle in a mesh orientation or display both proxy and render mesh.
+`wheel-visual-contract` reports overlap, multiple roots, off-center roots and
+reset transform stacks. `wheel_render_root` exercises binding, roll and
+negative document-lint fixtures through the production API.
+Reload the full scene after changing render-root topology; parameter edits
+resynchronize the admitted binding and its authored rest basis in place.
+
 For script-authored assembly edits, the dynamically reloadable
 `assets/scripting/tools/assembly_builder.rhai` library provides semantic
 frame/shape construction, placement, Cube and composed collision alignment/clearance,

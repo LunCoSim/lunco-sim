@@ -153,6 +153,12 @@ attached to the settled replacement fixture through `RunScenarioAsset`. Require
 the visible-guide, ancestor-edit, malformed-type rejection, and native-read
 failure checks, including unknown visibility in inspection.
 
+Wheel projection may bind one centered `purpose=render` child while its proxy
+is hidden through `VisibilityAPI`. It waits for direct-child structural
+admission, then binds the existing entity; mesh baking remains asynchronous.
+The wheel's mechanical axle controls roll independently of that render root's
+rest rotation. See `build-vehicle` and the production `wheel_render_root` gate.
+
 The scene transaction closes from asset and structural-projection outcomes.
 Document-source publication uses the shared `DocumentStageInputs` weak reader
 index and its document-owned lease, not a one-time asset-settings callback.

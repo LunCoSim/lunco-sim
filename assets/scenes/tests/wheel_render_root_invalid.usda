@@ -1,0 +1,60 @@
+#usda 1.0
+(
+    defaultPrim = "WheelRenderRoot"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "WheelRenderRoot" (
+    prepend references = @lunco://scenes/tests/wheel_render_root.usda@</WheelRenderRoot>
+)
+{
+    over "RoverPhysical"
+    {
+        over "Suspension_FL"
+        {
+            over "Wheel_FL"
+            {
+                uniform token proxyVisibility = "visible"
+            }
+        }
+    }
+    over "RoverRaycast"
+    {
+        over "Suspension_FL"
+        {
+            over "Wheel_FL"
+            {
+                def Xform "SecondRender"
+                {
+                    uniform token purpose = "render"
+                }
+            }
+        }
+        over "Suspension_FR"
+        {
+            over "Wheel_FR" (
+                prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI", "LunCoCatalogAPI", "LunCoWheelAPI", "PhysxVehicleTireAPI", "PhysicsMaterialAPI", "LunCoTireAPI", "MaterialBindingAPI", "PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI", "VisibilityAPI"]
+            )
+            {
+                uniform token purpose = "proxy"
+                custom token proxyVisibility = "invisible"
+                def Xform "OffsetRender"
+                {
+                    uniform token purpose = "render"
+                    custom double3 xformOp:translate = (0.1, 0.0, 0.0)
+                    uniform token[] xformOpOrder = ["xformOp:translate"]
+                }
+            }
+        }
+        over "Suspension_RR"
+        {
+            over "Wheel_RR" (
+                prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI", "LunCoCatalogAPI", "LunCoWheelAPI", "PhysxVehicleTireAPI", "PhysicsMaterialAPI", "LunCoTireAPI", "MaterialBindingAPI", "PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI", "VisibilityAPI", "PhysicsCollisionAPI"]
+            )
+            {
+                custom bool physics:collisionEnabled = false
+            }
+        }
+    }
+}

@@ -146,8 +146,8 @@ impl lunco_core::SceneResource for GroundColliderPending {}
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct PhysicalWheel {
-    /// The visual mesh child (the entity whose local rotation we author on a
-    /// client proxy). `None` if the wheel prim carried no mesh.
+    /// Authored render root or generated primitive mesh child whose local
+    /// rotation is authored on a client proxy. `None` without either form.
     pub visual_entity: Option<Entity>,
     /// Rolling radius (m); the proxy roll rate is `ω = v_long / r`.
     pub wheel_radius: f32,
@@ -157,8 +157,8 @@ pub struct PhysicalWheel {
     /// Mechanical axle basis. The roll axle is `axis_rot · Y`, independently
     /// of whether authored geometry is a mesh or an analytic primitive.
     pub axis_rot: Quat,
-    /// Rendering basis from generated geometry to the canonical prim frame.
-    /// Identity for meshes whose vertices already express that frame.
+    /// Render-root rest rotation composed with its generated geometry basis.
+    /// Mesh vertices already express their canonical prim frame.
     pub geometry_basis: Quat,
     /// Integrated roll angle (rad), wrapped to `[0, 2π)`. Client display state;
     /// unused on the host (the body carries the real rotation there).

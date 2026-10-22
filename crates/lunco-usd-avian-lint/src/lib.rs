@@ -418,7 +418,10 @@ fn vehicle_part_facts(
             }
         } else if wheel_projector && rigid_body_api {
             "raycast-rigid-body"
-        } else if wheel_projector && (collision_api || collision_attribute_authored) {
+        } else if wheel_projector
+            && (collision_api || collision_attribute_authored)
+            && collision_state != "disabled"
+        {
             "raycast-collider"
         } else if wheel_projector {
             "projector"

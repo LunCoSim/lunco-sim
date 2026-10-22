@@ -37,7 +37,7 @@ use crate::{Suspension, WheelBodyMount, WheelRaycast};
 ///   traction, locks the tire into a skid while the chassis keeps moving.
 ///
 /// The integrated angle is composed with the steer yaw to drive the mesh:
-/// `R = steer · rollₓ(−θ) · cylinder_base`.
+/// `R = steer · roll_about_authored_axle(−θ) · visual_rest`.
 pub(crate) fn update_wheel_spin(
     mut q_wheels: Query<(
         Entity,
@@ -383,8 +383,8 @@ mod tests {
                 Position(DVec3::ZERO),
                 Rotation::default(),
                 ComputedCenterOfMass::default(),
-                LinearVelocity(DVec3::ZERO),
-                AngularVelocity(ang),
+                LinearVelocity(Vec3::ZERO),
+                AngularVelocity(ang.as_vec3()),
                 OutputPorts::default(),
             ))
             .id();
@@ -436,7 +436,7 @@ mod tests {
             RayHits(vec![RayHitData {
                 entity: chassis,
                 distance: 0.5,
-                normal: DVec3::Y,
+                normal: Vec3::Y,
             }]),
             ChildOf(chassis),
         ));
@@ -488,8 +488,8 @@ mod tests {
                 Position(DVec3::ZERO),
                 Rotation::default(),
                 ComputedCenterOfMass::default(),
-                LinearVelocity(DVec3::ZERO),
-                AngularVelocity(DVec3::ZERO),
+                LinearVelocity(Vec3::ZERO),
+                AngularVelocity(Vec3::ZERO),
                 OutputPorts::default(),
             ))
             .id();
@@ -568,40 +568,10 @@ mod tests {
             (w - expected).abs() < 0.05,
             "free wheel must follow the torque/bearing integration law: {w} vs {expected}"
         );
-        // The running system must retain a Z axle, rather than replacing
-        // the authored mesh pose with the old fixed X-axle orientation.
+        // The running system retains the authored Z axle and mesh rest pose.
         let rotation = app.world().get::<Transform>(visual).unwrap().rotation;
         assert!((rotation * Vec3::Y).abs_diff_eq(Vec3::Z, 1e-5));
         assert!(rotation.angle_between(Quat::from_rotation_arc(Vec3::Y, Vec3::Z)) > 0.01);
-        // Exercise all authored axle choices with an additional local rotation
-        // and steering. Zero spin must reproduce the rest pose; subsequent
-        // spin must turn the tread while leaving the cap normal on its axle.
-        app.world_mut()
-            .get_mut::<lunco_port_core::Port>(port)
-            .unwrap()
-            .value = 0.0;
-        for axle in [Vec3::X, Vec3::Y, Vec3::Z] {
-            let base = Quat::from_rotation_y(0.37) * Quat::from_rotation_arc(Vec3::Y, axle);
-            let heading = bevy::math::DQuat::from_rotation_y(0.2);
-            {
-                let mut state = app.world_mut().get_mut::<WheelRaycast>(wheel).unwrap();
-                state.visual_base_rotation = base;
-                state.heading_rotation = heading;
-                state.spin_angle = 0.0;
-                state.spin_velocity = 0.0;
-            }
-            app.world_mut().run_schedule(FixedUpdate);
-            let rest = app.world().get::<Transform>(visual).unwrap().rotation;
-            assert!(rest.abs_diff_eq(heading.as_quat() * base, 1e-5));
-            app.world_mut()
-                .get_mut::<WheelRaycast>(wheel)
-                .unwrap()
-                .spin_angle = 0.7;
-            app.world_mut().run_schedule(FixedUpdate);
-            let spun = app.world().get::<Transform>(visual).unwrap().rotation;
-            assert!((spun * Vec3::Y).abs_diff_eq(rest * Vec3::Y, 1e-5));
-            assert!((spun * Vec3::X).distance(rest * Vec3::X) > 0.5);
-        }
     }
 
     #[test]
