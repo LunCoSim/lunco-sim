@@ -63,6 +63,10 @@ The shared headless and graphical compositions install those native plugins.
 Application integration owns authored SI conversion, validated admission,
 BigSpace frame transport, ordered multi-body gear relations, and typed telemetry.
 Contact provenance and impulses come from native `ContactGraph` pairs.
+Native 3D slider alignment, orientation and active travel stops are solved
+together. Inspect measured `displacement` and contact penetration when checking
+a loaded suspension; drive targets and body center height are not substitutes
+for those observations. Keep hard-stop enforcement in Avian.
 The `native_force_drives`, joint, differential, and continuous-contact production
 scenes qualify behavior; compilation alone does not qualify physics.
 

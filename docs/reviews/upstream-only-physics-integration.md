@@ -33,10 +33,10 @@ widening native output does not recover its original precision.
 Bevy 0.20 and Avian 0.8 are upstream releases. The authorized forks are pinned
 to immutable published commits:
 
-- Avian `11dfbb5bb89d9763aeb645385ff77a40427f936b`: implicit motor integration,
+- Avian `e4f073bb8914beb9fb0aa97795ae93d08a478528`: implicit motor integration,
   first-step collision admission, fixed-joint block solving, completed reactions,
-  disabled-body membership and native collision-hook proxy synchronization. All
-  82 native unit tests pass.
+  disabled-body membership, native collision-hook proxy synchronization and
+  coupled prismatic frame/limit solving. All 84 native unit tests pass.
 - Bevy shader `a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338`: named asset
   sources map to WESL packages, relative and cross-source imports retain native
   dependency handles, and live source preparation uses registered readers. All
@@ -139,3 +139,14 @@ command rejects zero/non-finite directions before document mutation. The native
 axis test and 18-check production Rhai geometry contract pass. The analytic
 cylinder steering comparison remains unsaved and still fails the steering
 verdict; it is not a behavioral adoption decision.
+
+The native offset-slider reproduction now passes after coupling its blocked
+degrees of freedom and active unilateral stop. The shared row solver also
+serves fixed joints. Independent limit compliance and free slider motion pass
+native checks. The production isolated-tire gate still passes four checks.
+Griffin's impact gate still fails four of nine checks, including contact and
+travel limits. The cylinder steering gate now turns in the correct direction
+at all three speeds but still fails two curvature checks. The complete
+three-Twin qualification of this pin remains open.
+Roadster steering evidence now includes measured native joint coordinates;
+those show substantial demand/tracking error in the failing cylinder run.

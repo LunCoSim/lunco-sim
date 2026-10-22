@@ -920,7 +920,7 @@ vehicle-type rule in Rust.
 
 All USD-authored Avian joints are translated by **`lunco-usd-avian`** from standard `UsdPhysics`
 joint prims (`physics:body0/1` rels, `physics:axis` token, `physics:localPos0/1`
-anchors, `physics:limitLower/Upper` or `physics:min/maxDistance`):
+anchors, `physics:lowerLimit/upperLimit` or `physics:min/maxDistance`):
 
 | USD prim | Avian joint | Notes |
 |---|---|---|
@@ -938,6 +938,12 @@ wire), `physics:targetVelocity`, `physics:maxForce` (motor saturation). A cosim
 wire on the joint's `angle`/`displacement` port overrides the target per tick. The
 native construction and admission boundary is **`lunco-usd-avian-joints`**; the
 programmatic wheel hinge uses its `wheel_revolute_joint` plan.
+
+The native 3D prismatic solver couples the two blocked translations and three
+blocked rotations. Its moving-axis Jacobian includes the anchor separation;
+an active unilateral row enforces the lower or upper travel stop with the
+joint's independent limit compliance. Fixed joints share the same native row
+solver. Application code must not add a second alignment or hard-stop pass.
 
 ### Collision filtering — which pairs never touch
 
