@@ -192,3 +192,27 @@ The sub-1-ms target remains open. The contention-affected flight sample has
 2.123 ms median and 3.201 ms p95 full native step time; touchdown has 2.868 ms
 median. Concurrent applications were active, so these are diagnostic figures,
 not clean acceptance. Sleeping-body samples do not qualify active physics.
+
+## Authored ramp geometry follow-up — USD
+
+The repaired queries confirm a source-geometry obstruction independently of
+native mission contacts. On model `4dc4d17`, vehicle document
+`119562041633649`, document/projected/stage generation zero, all four straight
+middle tracks intersect their matching fixed transitions in the saved
+120-degree inward stow. Native f64 oriented-box SAT gives a signed axis margin
+of approximately -0.22070535 m. The eight cooked vertices fit each track box
+within 3e-8 m. This SAT margin is not runtime contact penetration. The
+corresponding opposite-side plate pairs are separated. No source edits,
+collision exclusions, force changes or solver changes were used to inspect it.
+
+The model owns the detailed finding and a provisional unequal-section,
+opposite-toe-sweep study at
+`twins/astrobotic-griffin-1/contracts/griffin-ramp-interference-2026-10-22.md`
+in `/home/rod/Documents/models/lunar-base-model`. Its adjacent evidence JSON
+records source hashes, six collider snapshots and all eight comparisons.
+Current dimensions, hinges and command paths remain unchanged pending a
+complete component/assembly repair. The candidate's sampled box clearances
+are not a qualification of detailed geometry or physical deployment. Treat
+this authored obstruction separately from the open native landing-speed and
+active-step performance gates. USD will repair the Griffin mechanism; the
+optimization worktree retains ownership of native physics defects.
