@@ -52,3 +52,28 @@ The current sixty-metre engine-off fixture reaches about 14 m/s and roughly 500 
 The current `assets/models/LunCo/Mobility/RoverAutopilotGuidance.mo` skid/turn-in-place branch multiplies throttle by `approach_gate = clamp((distance-radius)/(2*radius),0,1)`. It tends to zero outside the arrival boundary, unlike the wheel branch's arrival envelope. Griffin's latest mission reaches the later route stage but stalls at distance 1.6764 m with throttle approximately 0.03148 (terminal tick 6881). This may be a shared guidance issue as well as the open support physics issue; it has not been isolated or repaired by the Griffin task. Do not describe the complete mission as currently passing.
 
 The optimization worktree's existing dirty implementation and assets were preserved. This handoff adds only this report. Black diagnostic camera captures are not visual qualification; numerical fixture receipts and terminal verdicts are the evidence above.
+
+
+## Integrated packaging follow-up — 22 October 2026
+
+The user requested a larger Griffin, more inward stowed ramps and correction of landing-gear/panel interference. Model commit `57b853580fbd1540c80a400a3f5a9a5bbf08c4e8` reconstructs a 4.50 m bus, compact FLIP and 120-degree root stow. Absolute dimensions and travel remain explicit reconstruction estimates. The geometry, collision profiles, body stations, hinge targets and fixed-latch anchors were reconciled through the production document API; no solver dependency, timestep, substep, friction, mass, spring cap or numerical acceptance tolerance was changed.
+
+The final selected cohort passes sixteen cases: nine assembly/geometry cases, solar layout, five FLIP component cases and RCS runtime. Static native geometry inspection clears the stowed rover/ramps and panel/legs. These passes do not establish loaded touchdown, unfolding or full-mission performance. The portable model receipt is `twins/astrobotic-griffin-1/contracts/evidence/griffin-packaging-2026-10-22.json`, with 154 source hashes and the exact acceptance boundaries.
+
+The final `GriffinPropulsionRequirements::Verify_GriffinPilotAttitude` run is **inconclusive**. Descent was armed at tick 1 with matching propagated assembly/guidance mass 5389.999761581421 kg. No pilot-trial samples or terminal authored verdict were emitted before the external harness terminated the process at 240 wall-clock seconds. A native clock observation during the run recorded tick 5534, admitted elapsed 92.23333333333333 simulation seconds, fixed dt 1/60 s and eight substeps. The observer was still awaiting settled touchdown. This is not a measured failure of its own 150-second simulation-time touchdown limit; the external fuse prevented a terminal verdict.
+
+Reproduction from the USD checkout, using a free owned API port and a wall-clock allowance sufficient to reach the authored terminal verdict:
+
+```sh
+LUNCOSIM_EPHEMERAL_SETTINGS=1 LUNCO_ASSET_ROOT=/home/rod/Documents/luncosim-workspace/usd/assets \
+  ./target/debug/luncosim test --api <free-owned-port> \
+  --scene /home/rod/Documents/models/lunar-base-model/twins/astrobotic-griffin-1/tests/griffin_pilot_attitude.usda \
+  --verification GriffinPropulsionRequirements::Verify_GriffinPilotAttitude \
+  --source-revision 17798372683716093098
+```
+
+The final source revision is `17798372683716093098`; the binary SHA256 remains `6d69f8af0be13fd0582f4dec3ad96ac5f9d52c0e71c42114f8858ecf0409f452`. Final local logs and cohort receipts are under `/home/rod/Documents/luncosim-workspace/usd/.cache/codex-evidence/griffin-inward-stow-20261022/accepted-gates-{assembly,runtime,rcs}/`. The pilot log is `accepted-gates-runtime/griffin_pilot_attitude.log`. Both owned ports 4391 and 4393 were released after the checks.
+
+An earlier wider/inward source (`1816606438305106943`, before final source-ownership and perimeter-collider reconciliation) produced a terminal pilot **FAIL** at tick 2584, 43.066667 simulation seconds. Eight of nine checks passed. The sole failure was ramp peak relative angular rate **4.276409768811721 rad/s** against **0.02 rad/s**; peak relative orientation error was only **0.001426457612820009 rad**, within **0.035 rad**. Other pilot bounds passed (minimum upright Y 0.9963134120821918; maximum hull angular speed 0.0857813692106911 rad/s). Evidence is `wide-gates/griffin_pilot_attitude.log` and `wide-gates/cohort.json` in the same directory. Do not present this earlier rate as a measurement on the final saved geometry. It is additional evidence for investigating the loaded constraint pose/rate discrepancy alongside the isolated slider, not proof of a common solver root cause.
+
+Please retain the existing support-drift, impact and pilot acceptance limits while qualifying the physics repair. The Griffin task continues to leave backend repair with optimization. Whole-model mounted USD lint also reports nine unchanged solar direction-port/IMU gravity wiring findings; the model review records those separately and does not claim clean whole-model lint. This follow-up changes only this report and preserves optimization's dirty implementation files.
