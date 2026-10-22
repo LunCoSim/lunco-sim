@@ -41,6 +41,11 @@ source = "control_authority.rhai"
 entry = "may_take_control"
 
 [[policies]]
+hook = "control.authority.claim"
+source = "control_claim.rhai"
+entry = "allow_control_claim"
+
+[[policies]]
 hook = "readiness.action"
 source = "readiness.rhai"
 entry = "readiness_action"

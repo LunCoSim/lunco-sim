@@ -30,6 +30,7 @@ use lunco_camera_core::{
     AdaptiveNearPlane, CameraUpdateSet, FreeFlightCamera, OrbitCamera, SpringArmCamera,
     SurfaceRelativeMode,
 };
+use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_control_core::{
     AcquireControl, ControlLink, IntentAnalogState, ReleaseControlSource, UserIntent,
 };
@@ -60,14 +61,14 @@ fn commit_possession_authority(
     commands: &mut Commands,
     authority: &mut PossessionAuthority,
     target: Entity,
-) -> Option<()> {
+) -> Result<(), Reject> {
     let origin = authority.guard.0.unwrap_or(authority.session.0);
     let target_gid = authority.q_owned.get(target).ok().map(|gid| gid.get());
     // Clients keep the host's table as the authority and only use the shared
     // table as the authority and only use the shared predicate for optimistic
     // local binding.
     if matches!(*authority.role, lunco_core_session::NetworkRole::Client) {
-        return Some(());
+        return Ok(());
     }
 
     let change = if let Some(gid) = target_gid {
@@ -80,14 +81,14 @@ fn commit_possession_authority(
             Ok(change) => change,
             Err(error) => {
                 warn!("[auth] session {origin} claim for entity {gid} refused: {error}");
-                return None;
+                return Err(Reject::InvalidOp(error.to_string()));
             }
         }
     } else {
         lunco_core_session::release_control(&mut authority.registry, origin)
     };
     commands.trigger(change);
-    Some(())
+    Ok(())
 }
 
 /// Scene-owned USD prims are the identity boundary for vessel claims. Clear
@@ -546,11 +547,13 @@ fn on_possess_command(
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut possession_authority: PossessionAuthority,
     local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
-) {
+) -> Result<Ack, Reject> {
     let cmd = trigger.event();
     if !is_vessel_control_endpoint(cmd.target, &q_input_ports, &q_parents, &q_preview_only) {
         warn!(target = ?cmd.target, "[possess] refused: target exposes no writable input ports");
-        return;
+        return Err(Reject::InvalidOp(
+            "target exposes no writable input ports".into(),
+        ));
     }
     // A wire-applied possession records the remote session on the host but
     // never binds that session to this process's local camera or controller.
@@ -559,10 +562,9 @@ fn on_possess_command(
             *possession_authority.role,
             lunco_core_session::NetworkRole::Client
         ) {
-            let _ =
-                commit_possession_authority(&mut commands, &mut possession_authority, cmd.target);
+            commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)?;
         }
-        return;
+        return Ok(Ack::new(OpId::new()));
     }
     // A headless/direct-control possession deliberately has no camera owner.
     // Return before avatar resolution so `bind_camera = false` never performs
@@ -575,21 +577,18 @@ fn on_possess_command(
                     "[possess] refused: {}",
                     controller_avatar_state_error(Some(requested))
                 );
-                return;
+                return Err(Reject::InvalidOp(controller_avatar_state_error(Some(
+                    requested,
+                ))));
             }
-            if commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
-                .is_none()
-            {
-                return;
-            }
+            commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)?;
             commands
                 .entity(requested)
                 .try_insert(ControlLink { target: cmd.target });
         } else {
-            let _ =
-                commit_possession_authority(&mut commands, &mut possession_authority, cmd.target);
+            commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)?;
         }
-        return;
+        return Ok(Ack::new(OpId::new()));
     }
 
     let avatar_ent = match lunco_embodiment_core::roles::resolve_requested_or_local(
@@ -599,17 +598,15 @@ fn on_possess_command(
         Ok(entity) => entity,
         Err(message) => {
             warn!(target = ?cmd.target, "[possess] refused: {message}");
-            return;
+            return Err(Reject::InvalidOp(message));
         }
     };
     if !possession_avatars.controller.contains(avatar_ent) {
         let message = controller_avatar_state_error(cmd.source);
         warn!(target = ?cmd.target, "[possess] refused: {message}");
-        return;
+        return Err(Reject::InvalidOp(message));
     }
-    if commit_possession_authority(&mut commands, &mut possession_authority, cmd.target).is_none() {
-        return;
-    }
+    commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)?;
     commands
         .entity(avatar_ent)
         .try_insert(ControlLink { target: cmd.target });
@@ -619,6 +616,7 @@ fn on_possess_command(
             target: cmd.target,
         });
     }
+    Ok(Ack::new(OpId::new()))
 }
 
 /// Presentation reads the same live authority port as the vehicle model.
@@ -806,7 +804,9 @@ mod tests {
     #[test]
     fn possession_binds_controller_during_camera_handoff() {
         let mut app = App::new();
-        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<lunco_core_session::NetworkRole>()
             .init_resource::<lunco_core_session::SessionRegistry>()
             .init_resource::<lunco_core_session::SessionRbac>()
@@ -847,7 +847,9 @@ mod tests {
     #[test]
     fn possession_validation_precedes_authority_claim() {
         let mut app = App::new();
-        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<lunco_core_session::NetworkRole>()
             .init_resource::<lunco_core_session::SessionRegistry>()
             .init_resource::<lunco_core_session::SessionRbac>()
@@ -882,7 +884,9 @@ mod tests {
     #[test]
     fn possession_handoff_keeps_one_claim_and_releases_the_old_target() {
         let mut app = App::new();
-        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<lunco_core_session::NetworkRole>()
             .init_resource::<lunco_core_session::SessionRegistry>()
             .init_resource::<lunco_core_session::SessionRbac>()

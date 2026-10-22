@@ -137,22 +137,30 @@ fn on_claim_control(
     mut registry: ResMut<SessionRegistry>,
     q_identity: Query<&lunco_core::GlobalEntityId, With<lunco_port_core::InputPorts>>,
     mut commands: Commands,
-) {
+) -> Result<Ack, Reject> {
     // A client sends the command to the host and learns the authoritative
     // result through the ownership snapshot. The host applies the reflected
     // command under SyncApplyGuard; standalone applies it locally.
     if matches!(*role, NetworkRole::Client) && !guard.is_from_sync() {
-        return;
+        return Ok(Ack::new(OpId::new()));
     }
     let origin = guard.0.unwrap_or(local.0);
     let target = trigger.event().target;
     let Ok(gid) = q_identity.get(target) else {
         warn!(target = ?target, "[control] claim refused: target has no writable input endpoint");
-        return;
+        return Err(Reject::InvalidOp(
+            "target has no writable input endpoint".into(),
+        ));
     };
     match claim_control(&mut registry, &rbac, origin, gid.get()) {
-        Ok(change) => commands.trigger(change),
-        Err(error) => warn!(target = ?target, origin = ?origin, "[control] claim refused: {error}"),
+        Ok(change) => {
+            commands.trigger(change);
+            Ok(Ack::new(OpId::new()))
+        }
+        Err(error) => {
+            warn!(target = ?target, origin = ?origin, "[control] claim refused: {error}");
+            Err(Reject::InvalidOp(error.to_string()))
+        }
     }
 }
 

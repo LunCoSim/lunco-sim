@@ -498,6 +498,18 @@ claim succeeds, then applies the held command on the next fixed tick. This
 handoff applies to any entity with the shared control surface, without vehicle
 or autopilot type checks.
 
+Every `claim_control` transaction also consults `control.authority.claim`, after
+the ownership/takeover floor and before releasing any previous owner. It receives
+`claimant`, `target` and nullable `current_owner`. The default policy permits
+normal claims; an isolated recording deployment can deny claims to keep a native
+scenario in charge, including when an operator clicks an initially unowned car.
+Denial leaves both ownership and the caller's camera/control binding unchanged.
+`AcquireControl` and `ClaimControl` return a terminal command rejection and a
+warning for a denied claim, rather than acknowledging an unapplied takeover.
+An absent hook preserves normal behavior; a fault or non-boolean fails closed.
+This is claim admission, not a second port writer or simulation clock. It does
+not change the camera/analysis commands or a scenario's authored `SetPorts`.
+
 The default P binding resolves to `UserIntent::Pause`. The avatar hotkey
 consumes that intent and toggles `SetTimeTransport`, so pausing and resuming
 follow the persisted semantic input map rather than reading a raw key in the
