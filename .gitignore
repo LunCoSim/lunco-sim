@@ -58,5 +58,10 @@ assets/icons/linux/
 assets/icons/macos/png/
 assets/icons/windows/png/
 __pycache__/
+# Generated profiling data stays local; profiling tool sources remain tracked.
 *.tracy
+*.profraw
+*.profdata
+perf.data
+perf.data.*
 scripts/perf/captures/

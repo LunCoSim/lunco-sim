@@ -1,5 +1,8 @@
 # Native input performance drivers
 
+Keep generated profiling data in ignored `scripts/perf/captures/`, `.cache/`,
+or `target/perf/`. Commit reusable tool sources and documentation only.
+
 Launch the production `LUNCOSIM_BIN` from this checkout on a verified free API
 port. For diagnostics, build with `--features tracy`, choose a free `TRACY_PORT`,
 and start `../tracy/capture/build/tracy-capture` before launching the app. A
@@ -105,3 +108,35 @@ the selected preview with its exact viewport/selection state;
 the shared `ProductionSession.capture_screenshot` waits for fresh publication.
 It does not establish the startup latency milestone, which additionally requires
 all startup producers' initial admission passes to complete.
+
+## Saved CPU samples
+
+The native CSV exporter reports instrumented zones. `tracy_samples.cpp` exports
+sampled CPU stacks through Tracy's own reader and symbol tables. Build its
+server library from the same Tracy release as the capture; the versioned CSV
+executable alone does not establish the version of its adjacent static library.
+The Bevy 0.20 client uses Tracy 0.14.1. Use an unmodified matching tool checkout:
+
+```sh
+cmake -S ../tracy-0.14.1/csvexport -B ../tracy-0.14.1/csvexport/build \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+cmake --build ../tracy-0.14.1/csvexport/build --target TracyServer -j4
+bash scripts/perf/build_tracy_samples.sh ../tracy-0.14.1
+target/perf/tracy-samples "$CAPTURE" "$OWNED_PID" 0 "$BEGIN_NS" "$END_NS" \
+  > .cache/constructor-samples.csv
+```
+
+Arguments require the recorded process PID, an OS thread ID (`0` selects all
+threads), and a half-open capture-relative nanosecond interval. The exporter
+rejects mismatched ownership, unreadable/version-mismatched captures and empty
+sample selections. Check its terminal exit before using the CSV. Its stderr
+receipt includes the actual sampling period and selected sample count.
+
+`csv_thread` is Tracy's compressed thread ID used by the native zone CSV;
+`tid` is the OS thread ID. Select the constructor's thread as well as its time
+interval. Each stack contributes `samples` once, repeated on its frame rows;
+group by `(tid, callstack)` before counting samples. For inclusive function
+counts, count each function once per stack. Unknown symbols and absent frame
+metadata remain explicit; source locations may still identify their owner.
+These CPU samples attribute diagnostic work, not wall time or product FPS.

@@ -64,6 +64,13 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   can report success despite a truncated file.
   Native unwrapped CSV rows are grouped by source location; sort by
   `ns_since_start` before reconstructing chronological phases or transitions.
+  For sampled CPU stacks within a slow zone, use the read-only
+  [`scripts/perf/tracy_samples.cpp`](../../scripts/perf/tracy_samples.cpp) tool
+  and its [build/interpretation instructions](../../scripts/perf/README.md#saved-cpu-samples).
+  Match the capture's Tracy release when building its server library, verify
+  the owned PID, and select the zone's exact thread and time interval. Raw data
+  stays in ignored `scripts/perf/captures/`, `.cache/` or `target/perf/`; commit
+  reusable tool sources and documentation only.
 - Compare Builder and View with the same scene, camera, rendering-quality
   settings, physics substeps, shadow settings, and terrain assets. A Builder-
   only cost usually means an editor observer, rebuild, projection, or UI path,
