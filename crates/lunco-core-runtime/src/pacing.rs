@@ -507,6 +507,8 @@ pub enum SimulationProgressOwner {
     TerrainPreparation,
     /// Resident collision support required by the active physical assemblies.
     TerrainColliderAdmission,
+    /// Body-demanded planetary globe/collar collision support.
+    GlobeColliderAdmission,
     /// USD document source preparation and revision admission.
     DocumentPreparation,
     /// Modelica source/interface preparation.

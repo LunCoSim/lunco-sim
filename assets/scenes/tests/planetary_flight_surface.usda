@@ -1,0 +1,95 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    custom double lunco:anchor:lat = 26.13
+    custom double lunco:anchor:lon = 3.63
+    custom double lunco:anchor:height = 0.0
+    custom int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
+    def Xform "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+    def Plane "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        uniform token lunco:terrain:surfaceRole = "flat-site"
+        double width = 1.0
+        double length = 1.0
+        uniform token axis = "Y"
+        bool physics:collisionEnabled = true
+        custom double3 xformOp:translate = (0.0, -500.0, 0.0)
+        custom double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Sphere "Flight" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "PhysxRigidBodyAPI"]
+    )
+    {
+        double radius = 1.0
+        custom double3 xformOp:translate = (0.0, 1200.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 100.0
+        bool physics:collisionEnabled = true
+        custom bool physxRigidBody:enableCCD = true
+    }
+    def Sphere "Companion" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "PhysxRigidBodyAPI"]
+    )
+    {
+        double radius = 1.0
+        custom double3 xformOp:translate = (3.0, 1200.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 100.0
+        bool physics:collisionEnabled = true
+        custom bool physxRigidBody:enableCCD = true
+    }
+    def Sphere "GlobeDrop" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "PhysxRigidBodyAPI"]
+    )
+    {
+        double radius = 1.0
+        custom double3 xformOp:translate = (4000.0, 100.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 100.0
+        bool physics:collisionEnabled = true
+        custom bool physxRigidBody:enableCCD = true
+    }
+    def Sphere "CollarDrop" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "PhysxRigidBodyAPI"]
+    )
+    {
+        double radius = 1.0
+        custom double3 xformOp:translate = (101.0, -400.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 100.0
+        bool physics:collisionEnabled = true
+        custom bool physxRigidBody:enableCCD = true
+    }
+    def PhysicsFixedJoint "Attachment"
+    {
+        point3f physics:localPos0 = (1.5, 0.0, 0.0)
+        point3f physics:localPos1 = (-1.5, 0.0, 0.0)
+        bool physics:collisionEnabled = false
+        rel physics:body0 = </World/Flight>
+        rel physics:body1 = </World/Companion>
+    }
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/planetary_flight_surface.rhai@
+    }
+}

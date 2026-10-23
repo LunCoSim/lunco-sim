@@ -328,6 +328,40 @@ terrain contract; the globe LOD clips that authored footprint through
 `GlobeHandoff`. No cell-size increase, depth bias, or camera-relative offset can
 resolve two coincident render surfaces honestly.
 
+### Planetary flight and physical surface coverage
+
+Cell recentering is representation transport, not a physical escape. BigSpace
+splits a Grid-direct entity into `CellCoord` and a small `Transform` remainder;
+the native bridge retains the f64 `Position`, velocity, joints and contact
+ownership across that split. A real frame change instead uses the shared
+atomic grid migration path. Do not create a new physics world for every cell.
+
+A projected `SiteAnchor` marks its active site grid with
+`lunco_physics::UnboundedPhysicsDomain`. `WorldBounds` must not turn the union
+of currently resident static terrain into a flight ceiling or a horizontal
+flight fence. Ordinary bounded scenes retain finite-world escape checks;
+non-finite state and the shared backend admission contract apply in both
+domains. Removing the site anchor withdraws its domain declaration.
+
+`lunco-celestial-spatial::globe_collision` owns planetary contact residency.
+Seeded dynamic bodies demand a closed, balanced cube-sphere cover through
+their `GravityBody` association, current surface projection and velocity
+lookahead. The camera does not select physical coverage. Collision geometry
+comes from `lunco-terrain-globe::GlobeSurfaceGeometry` in f64; only its rendering
+adapter narrows vertices for the GPU. The exact DEM crop remains owned by its
+terrain collider ring, and the shared `GlobeHandoff` supplies the physical and
+visible cutout, datum and collar. The celestial picking sphere stays pick-only.
+
+Collider cooking runs asynchronously with a bounded admission budget. Results
+publish in source-key order; replacement native AABBs must be live before old
+cover retires. Near contact, `globe-collision-ready` and the typed
+`GlobeColliderAdmission` progress owner keep physics at the preparation boundary
+until support exists. Scene teardown retires generated entities, tasks and that
+progress lease. Invalid settings or native geometry raise structured faults.
+The authored `planetary_flight_surface` scene covers cell-crossing attached
+flight, a fast off-crop drop and contact at a below-datum terrain/globe seam;
+`escape_containment` retains the bounded-scene negative case.
+
 ### One body-fixed surface and globe grid
 
 Each body has one authoritative body-fixed grid, exposed as
@@ -335,6 +369,10 @@ Each body has one authoritative body-fixed grid, exposed as
 physics, and surface cameras. There is no second globe frame or render-only
 body hierarchy. This keeps every visible and physical child attached to the
 same BigSpace frame.
+Visual globe LOD reads the explicit `SceneViewport.active_camera` binding for
+both window and image outputs. It does not select a camera implicitly or infer
+presentation ownership from `RenderTarget::Window`; offscreen scene captures
+must include the same planetary surface.
 
 From a lunar surface, Earth stays near one sky position because the Moon is
 tidally locked; the center moves mainly through lunar libration. At 100,000×,

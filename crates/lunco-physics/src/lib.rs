@@ -50,7 +50,10 @@ pub use avian_backend::{
     avian_backend_point_is_valid, avian_backend_pose_is_valid, avian_backend_rotation_is_valid,
     avian_backend_vector_is_valid,
 };
-pub use escape::{EscapeDiagnosticPlugin, PhysicsObjectPaused, WorldBounds, pause_physics_members};
+pub use escape::{
+    EscapeDiagnosticPlugin, PhysicsObjectPaused, UnboundedPhysicsDomain, WorldBounds,
+    pause_physics_members,
+};
 pub use order::{
     PhysicsOrderError, PhysicsOrderKey, ordered_physics_entities, report_invalid_physics_order,
 };
@@ -1172,6 +1175,7 @@ impl Plugin for PhysicsGatePlugin {
         app.register_type::<avian3d::prelude::SleepThreshold>()
             .register_type::<PhysicsInitializationPolicy>()
             .register_type::<PhysicsObjectPaused>()
+            .register_type::<UnboundedPhysicsDomain>()
             .register_type::<PhysicsOrderKey>()
             .register_type::<PhysicsInitializationPending>()
             .register_type::<PhysicsInitializationInvalid>()

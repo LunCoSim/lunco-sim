@@ -119,6 +119,15 @@ When a camera, body, rover, trajectory, or line jitters:
 13. For a mounted scene, verify the scene root is a nested `Grid`, top-level
     terrain and vehicle roots are siblings with their own `CellCoord`, and
     descendants are not incorrectly promoted to additional grids.
+14. For flight leaving a resident terrain patch, distinguish cell recentering
+    from `physics-body-escaped`. A site grid carries `UnboundedPhysicsDomain`;
+    resident static AABBs describe prepared contacts, not the valid flight
+    domain. Verify native pose continuity through the cell split and preserve
+    non-finite/backend safety diagnostics.
+15. For off-crop landing, verify body-demanded planetary collision coverage and
+    its `globe-collision-ready` preparation lease independently of camera LOD.
+    Below-datum terrain must join the same physical/render `GlobeHandoff`;
+    enabling the mean-radius celestial picking sphere would obstruct it.
 
 Do not add a guard that corrects an invalid pose after the fact. Fix the
 producer, frame declaration, or ownership boundary that made the invalid state

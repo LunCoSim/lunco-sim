@@ -680,6 +680,13 @@ Terrain collider ownership is mode-specific: `lunco:assetMode="mesh"` waits for
 the USD-to-Avian mesh bridge, while `"dem"` and `"layered"` use the native
 `SurfaceOracle` collider from `lunco-terrain-surface`. Do not author or project a
 second mesh collider over DEM-backed terrain.
+Planetary contact outside that crop is owned by the celestial runtime's
+body-demanded globe cover. It consumes the same f64 cutout/collar geometry and
+surface datum as rendering; the celestial picking sphere is not a ground
+collider. A valid site scene's flight domain is unbounded, independently of its
+resident terrain footprint. Diagnose `globe-collision-ready` through readiness
+before a drop, and use the authored `planetary_flight_surface` gate to exercise
+cell-crossing flight plus fast contact outside and at the local crop boundary.
 
 Initial poses are admitted against the live terrain after the USD pose bridge has
 seeded every body. Convex colliders use their actual support geometry; composite

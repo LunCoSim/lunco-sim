@@ -10,6 +10,58 @@ use lunco_terrain_core::{
     square_boundary_sample_coordinate,
 };
 
+/// Canonical f64 surface geometry shared by physical collision and rendering.
+/// Only `into_render_mesh` narrows positions and normals for Bevy's GPU ABI.
+#[derive(Clone, Debug, Default)]
+pub struct GlobeSurfaceGeometry {
+    /// Surface vertices relative to the tile or collar's native frame, metres.
+    pub positions: Vec<DVec3>,
+    /// Unit surface normals in the same native frame.
+    pub normals: Vec<DVec3>,
+    /// Unit body-fixed radial directions used by globe imagery.
+    pub directions: Vec<DVec3>,
+    /// Outward-wound triangle indices into the vertex arrays.
+    pub indices: Vec<u32>,
+    /// Optional GPU texture coordinates; these are not physical positions.
+    pub render_uvs: Vec<[f32; 2]>,
+}
+
+impl GlobeSurfaceGeometry {
+    /// Convert native geometry at the explicit Bevy/GPU f32 boundary.
+    pub fn into_render_mesh(self) -> Mesh {
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            bevy::asset::RenderAssetUsages::default(),
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            self.positions
+                .into_iter()
+                .map(|v| v.as_vec3().to_array())
+                .collect::<Vec<_>>(),
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_NORMAL,
+            self.normals
+                .into_iter()
+                .map(|v| v.as_vec3().to_array())
+                .collect::<Vec<_>>(),
+        );
+        mesh.insert_attribute(
+            ATTRIBUTE_GLOBE_DIRECTION,
+            self.directions
+                .into_iter()
+                .map(|v| v.as_vec3().to_array())
+                .collect::<Vec<_>>(),
+        );
+        if !self.render_uvs.is_empty() {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.render_uvs);
+        }
+        mesh.insert_indices(Indices::U32(self.indices));
+        mesh
+    }
+}
+
 /// The exact local DEM footprint in the body's tangent-plane coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlobeHandoff {
@@ -85,17 +137,17 @@ impl GlobeCutout {
 
 pub const MIN_GLOBE_CUTOUT_EDGE_SEGMENTS: usize = 32;
 
-/// Build the one local collar mesh that joins a finite tangent-plane surface
-/// to its globe. The inner ring follows the measured DEM postings exactly;
-/// the outer ring follows the same sampled sphere boundary used to cut globe
-/// tiles. Radial interpolation is independent of globe LOD.
-pub fn create_rectangular_handoff_collar_mesh(
+/// Build native DEM/collar/globe geometry in one local tangent frame.
+/// The inner ring follows measured postings exactly; the outer ring follows
+/// the same sampled sphere boundary used to cut globe tiles. Radial
+/// interpolation is independent of globe LOD.
+pub fn create_rectangular_handoff_collar_geometry(
     handoff: GlobeHandoff,
     source: &dyn HeightSource,
     boundary_grid_resolution: usize,
     outer_edge_segments: usize,
     radial_segments: usize,
-) -> Result<Mesh, &'static str> {
+) -> Result<GlobeSurfaceGeometry, &'static str> {
     if !handoff.radius_m.is_finite()
         || handoff.radius_m <= 0.0
         || !handoff.site_radius_m.is_finite()
@@ -239,19 +291,14 @@ pub fn create_rectangular_handoff_collar_mesh(
             {
                 return Err("collar mesh contains non-finite geometry");
             }
-            let position = position.as_vec3().to_array();
-            let normal = normal.as_vec3().to_array();
-            let direction = direction.as_vec3().to_array();
             let uv = [
                 ((x + handoff.half_extent) / (2.0 * handoff.half_extent)) as f32,
                 ((z_south + handoff.half_extent) / (2.0 * handoff.half_extent)) as f32,
             ];
-            if !position
-                .iter()
-                .chain(&normal)
-                .chain(&direction)
-                .chain(&uv)
-                .all(|value| value.is_finite())
+            if !position.as_vec3().is_finite()
+                || !normal.as_vec3().is_finite()
+                || !direction.as_vec3().is_finite()
+                || !uv.iter().all(|value| value.is_finite())
             {
                 return Err("collar geometry exceeds the rendering precision range");
             }
@@ -273,16 +320,13 @@ pub fn create_rectangular_handoff_collar_mesh(
         );
     }
 
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        bevy::asset::RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(ATTRIBUTE_GLOBE_DIRECTION, directions);
-    mesh.insert_indices(Indices::U32(indices));
-    Ok(mesh)
+    Ok(GlobeSurfaceGeometry {
+        positions,
+        normals,
+        directions,
+        indices,
+        render_uvs: uvs,
+    })
 }
 
 fn collar_ring_resolution(
@@ -407,6 +451,32 @@ pub fn create_quadsphere_tile_mesh(
     tile_center: DVec3,
     cutout: Option<GlobeCutout>,
 ) -> Mesh {
+    create_quadsphere_tile_geometry(
+        _body_ent,
+        face,
+        level,
+        i,
+        j,
+        radius,
+        res,
+        tile_center,
+        cutout,
+    )
+    .into_render_mesh()
+}
+
+/// Generate canonical sphere/cutout triangles before the GPU precision boundary.
+pub fn create_quadsphere_tile_geometry(
+    _body_ent: Entity,
+    face: u8,
+    level: u32,
+    i: i32,
+    j: i32,
+    radius: f64,
+    res: u32,
+    tile_center: DVec3,
+    cutout: Option<GlobeCutout>,
+) -> GlobeSurfaceGeometry {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut indices = Vec::new();
@@ -512,25 +582,13 @@ pub fn create_quadsphere_tile_mesh(
         indices = clipped_indices;
     }
 
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        bevy::asset::RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    // Author the spherical parameter itself, not an approximation of its
-    // equirectangular projection. The fragment shader derives UV from this
-    // direction, so texture identity cannot change with quadtree level or the
-    // diagonal chosen to triangulate a coarse quad.
-    mesh.insert_attribute(
-        ATTRIBUTE_GLOBE_DIRECTION,
-        directions
-            .into_iter()
-            .map(|direction| direction.as_vec3().to_array())
-            .collect::<Vec<_>>(),
-    );
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
+    GlobeSurfaceGeometry {
+        positions,
+        normals,
+        directions,
+        indices,
+        render_uvs: Vec::new(),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -539,12 +597,8 @@ struct ClipVertex {
     chart: Option<[f64; 2]>,
 }
 
-fn radial_sphere_vertex(direction: DVec3, radius: f64, tile_center: DVec3) -> ([f32; 3], [f32; 3]) {
-    let position = direction * radius;
-    (
-        (position - tile_center).as_vec3().to_array(),
-        direction.as_vec3().to_array(),
-    )
+fn radial_sphere_vertex(direction: DVec3, radius: f64, tile_center: DVec3) -> (DVec3, DVec3) {
+    (direction * radius - tile_center, direction)
 }
 
 /// Evaluate the shared datum-aligned sphere in the local tangent chart. The
@@ -969,6 +1023,36 @@ mod tests {
     }
 
     #[test]
+    fn native_globe_vertices_keep_lunar_radius_precision_before_gpu_conversion() {
+        let radius = 1_737_400.123_456_789;
+        let body = Entity::from_bits(1);
+        let center = cube_to_sphere(0, 0.25, 0.25) * radius;
+        let geometry = create_quadsphere_tile_geometry(body, 0, 2, 2, 2, radius, 16, center, None);
+        assert!(!geometry.indices.is_empty());
+        for vertex in &geometry.positions {
+            assert!(((center + vertex).length() - radius).abs() < 1.0e-8);
+        }
+        for triangle in geometry.indices.chunks_exact(3) {
+            let [a, b, c] = [0, 1, 2].map(|i| geometry.positions[triangle[i] as usize]);
+            assert!((b - a).cross(c - a).dot(center + a) > 0.0);
+        }
+        let native = geometry.positions.clone();
+        let mesh = geometry.into_render_mesh();
+        let Some(VertexAttributeValues::Float32x3(rendered)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("GPU positions must use Bevy's f32 ABI")
+        };
+        assert_eq!(native.len(), rendered.len());
+        assert!(
+            native
+                .iter()
+                .zip(rendered)
+                .any(|(p, q)| { p.distance(Vec3::from_array(*q).as_dvec3()) > 0.001 })
+        );
+    }
+
+    #[test]
     fn asymmetric_collar_widths_map_to_matching_cutout_sides() {
         let widths = [10.0, 20.0, 30.0, 40.0];
         let mesh = handoff_mesh_bounds(100.0, widths);
@@ -1050,14 +1134,15 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let mesh = create_rectangular_handoff_collar_mesh(
+        let mesh = create_rectangular_handoff_collar_geometry(
             handoff,
             &source,
             resolution,
             handoff.edge_segments,
             radial_segments,
         )
-        .expect("valid finite crop collar");
+        .expect("valid finite crop collar")
+        .into_render_mesh();
         let VertexAttributeValues::Float32x3(positions) = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .expect("collar positions")
@@ -1165,9 +1250,15 @@ mod tests {
     fn collar_inner_corner_normal_preserves_both_measured_edge_slopes() {
         let handoff = handoff();
         let resolution = 5;
-        let mesh =
-            create_rectangular_handoff_collar_mesh(handoff, &SlopedEdgeToSphere, resolution, 32, 4)
-                .expect("valid finite crop collar");
+        let mesh = create_rectangular_handoff_collar_geometry(
+            handoff,
+            &SlopedEdgeToSphere,
+            resolution,
+            32,
+            4,
+        )
+        .expect("valid finite crop collar")
+        .into_render_mesh();
         let VertexAttributeValues::Float32x3(normals) = mesh
             .attribute(Mesh::ATTRIBUTE_NORMAL)
             .expect("collar normals")
@@ -1201,7 +1292,9 @@ mod tests {
     #[test]
     fn collar_mesh_rejects_invalid_dimensions_and_non_finite_source_geometry() {
         let handoff = handoff();
-        assert!(create_rectangular_handoff_collar_mesh(handoff, &EdgeToSphere, 1, 32, 4).is_err());
+        assert!(
+            create_rectangular_handoff_collar_geometry(handoff, &EdgeToSphere, 1, 32, 4).is_err()
+        );
         for (inner, outer, radial) in [
             (5, usize::MAX, 4),
             (5, 32, usize::MAX),
@@ -1209,7 +1302,7 @@ mod tests {
             (5, 32, u32::MAX as usize),
         ] {
             assert_eq!(
-                create_rectangular_handoff_collar_mesh(
+                create_rectangular_handoff_collar_geometry(
                     handoff,
                     &EdgeToSphere,
                     inner,
@@ -1222,7 +1315,9 @@ mod tests {
         }
         let mut invalid = handoff;
         invalid.collar_widths[2] = f64::NAN;
-        assert!(create_rectangular_handoff_collar_mesh(invalid, &EdgeToSphere, 5, 32, 4).is_err());
+        assert!(
+            create_rectangular_handoff_collar_geometry(invalid, &EdgeToSphere, 5, 32, 4).is_err()
+        );
     }
 
     #[test]
@@ -1454,14 +1549,15 @@ mod tests {
         assert_eq!(*counts.last().unwrap(), 4 * geometry.edge_segments);
         assert!(counts.windows(2).all(|pair| pair[1] <= pair[0]));
         assert!(counts.iter().sum::<usize>() < counts[0] * (radial_segments + 1) / 4);
-        let mesh = create_rectangular_handoff_collar_mesh(
+        let mesh = create_rectangular_handoff_collar_geometry(
             geometry,
             &source,
             129,
             geometry.edge_segments,
             16,
         )
-        .unwrap();
+        .unwrap()
+        .into_render_mesh();
         let VertexAttributeValues::Float32x3(positions) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
         else {
@@ -1489,7 +1585,9 @@ mod tests {
             assert!(actual.distance(expected) < 0.005);
         }
         geometry.collar_widths[0] = f64::NAN;
-        assert!(create_rectangular_handoff_collar_mesh(geometry, &source, 129, 32, 16).is_err());
+        assert!(
+            create_rectangular_handoff_collar_geometry(geometry, &source, 129, 32, 16).is_err()
+        );
     }
 
     #[test]

@@ -31,9 +31,9 @@ use lunco_terrain_globe::quad_sphere::{
     balance_cube_sphere_lod, cube_to_sphere, subdivide_face, tile_center_uv,
 };
 use lunco_terrain_globe::{
-    GlobeCutout, GlobeHandoff as GlobeHandoffGeometry, MIN_GLOBE_CUTOUT_EDGE_SEGMENTS, TerrainTile,
-    TileCoord, create_quadsphere_tile_mesh, create_rectangular_handoff_collar_mesh,
-    handoff_cutout_bounds,
+    GlobeCutout, GlobeHandoff as GlobeHandoffGeometry, GlobeSurfaceGeometry,
+    MIN_GLOBE_CUTOUT_EDGE_SEGMENTS, TerrainTile, TileCoord, create_quadsphere_tile_mesh,
+    create_rectangular_handoff_collar_geometry, handoff_cutout_bounds,
 };
 use lunco_terrain_surface::SurfaceOracle;
 use lunco_viewport_core::SceneViewport;
@@ -42,7 +42,7 @@ use lunco_viewport_core::SceneViewport;
 /// cube-sphere tiles.
 #[derive(Component)]
 pub struct GlobeLod {
-    /// Canonical body radius (m); a site handoff may supply a render-only datum radius.
+    /// Canonical body reference radius (m); a site supplies its surface datum separately.
     pub radius_m: f64,
     /// Body-fixed physical grid for sites, terrain, cameras, and vehicles.
     ///
@@ -236,7 +236,7 @@ fn boundary_perimeter_index(side: usize, index: usize, resolution: usize) -> Opt
     Some(along_perimeter % perimeter_len)
 }
 
-/// The active crop's datum-aligned render shell in its orthographic tangent chart.
+/// The active crop's datum-aligned surface in its orthographic tangent chart.
 #[derive(Clone, Copy)]
 struct MeanSphereSource {
     radius_m: f64,
@@ -257,8 +257,9 @@ impl HeightSource for MeanSphereSource {
     }
 }
 
-/// A finite local source joined to a render-only sphere at this crop's border
-/// datum. Canonical celestial and physics radii remain unchanged.
+/// A finite local source joined to the sphere at this crop's border datum.
+/// The celestial reference radius remains unchanged; this defines contact and
+/// visible surface geometry rather than a second astronomical body.
 #[derive(Clone)]
 struct BoundaryBlendSource {
     site: SiteSurfaceSource,
@@ -508,24 +509,25 @@ pub(crate) struct GlobeHandoffInputKey {
     surface_key: u64,
 }
 
-/// The one continuous site/globe ownership record for a body.
+/// The continuous physical/visual site-to-globe surface for one body.
 ///
-/// Inside the exact DEM square, the local terrain remains authoritative. The
-/// render shell uses the crop's border datum; canonical body state is unchanged.
+/// Inside the exact DEM square, local terrain owns contact. The collar and
+/// exterior globe use the crop's border datum; canonical body state is unchanged.
 #[derive(Component, Clone)]
 pub(crate) struct GlobeHandoff {
     pub dir: DVec3,
     pub east: DVec3,
     pub north: DVec3,
     pub half_extent: f64,
-    /// Render-only shell radius, equal to canonical body radius plus crop datum.
+    /// Surface radius, equal to canonical body radius plus the crop datum.
     pub radius_m: f64,
     pub site_radius_m: f64,
-    /// Widest side of the render-only geometric stitch.
+    /// Widest side of the shared geometric stitch.
     pub collar_m: f64,
     collar_widths: [f64; 4],
     edge_segments: usize,
     collar_mesh: Arc<Mesh>,
+    collar_geometry: Arc<GlobeSurfaceGeometry>,
     terrain_source: Option<Entity>,
     source_key: u64,
     input_key: Option<GlobeHandoffInputKey>,
@@ -632,13 +634,14 @@ impl GlobeHandoff {
             collar_widths,
             edge_segments,
         };
-        let collar_mesh = Arc::new(create_rectangular_handoff_collar_mesh(
+        let collar_geometry = Arc::new(create_rectangular_handoff_collar_geometry(
             geometry,
             &source,
             oracle.grid().res,
             edge_segments,
             collar_radial_segments(collar_m, posting_m)?,
         )?);
+        let collar_mesh = Arc::new((*collar_geometry).clone().into_render_mesh());
         Ok(Self {
             dir,
             east,
@@ -650,6 +653,7 @@ impl GlobeHandoff {
             collar_widths,
             edge_segments,
             collar_mesh,
+            collar_geometry,
             terrain_source: None,
             source_key: oracle.surface_key()
                 ^ border_datum.to_bits().rotate_left(13)
@@ -714,13 +718,14 @@ impl GlobeHandoff {
             collar_widths,
             edge_segments,
         };
-        let collar_mesh = Arc::new(create_rectangular_handoff_collar_mesh(
+        let collar_geometry = Arc::new(create_rectangular_handoff_collar_geometry(
             geometry,
             &source,
             33,
             edge_segments,
             8,
         )?);
+        let collar_mesh = Arc::new((*collar_geometry).clone().into_render_mesh());
         Ok(Self {
             dir,
             east,
@@ -732,13 +737,14 @@ impl GlobeHandoff {
             collar_widths,
             edge_segments,
             collar_mesh,
+            collar_geometry,
             terrain_source: None,
             source_key: render_radius_m.to_bits() ^ half_extent.to_bits().rotate_left(17),
             input_key: None,
         })
     }
 
-    fn cutout(&self) -> GlobeCutout {
+    pub(crate) fn cutout(&self) -> GlobeCutout {
         GlobeCutout {
             dir: self.dir,
             east: self.east,
@@ -747,6 +753,10 @@ impl GlobeHandoff {
             bounds: handoff_cutout_bounds(self.half_extent, self.collar_widths),
             edge_segments: self.edge_segments,
         }
+    }
+
+    pub(crate) fn collar_geometry(&self) -> Arc<GlobeSurfaceGeometry> {
+        self.collar_geometry.clone()
     }
 
     fn collar_mesh(&self) -> &Mesh {
@@ -1315,7 +1325,7 @@ pub(crate) fn update_globe_lod(
     // `With<SceneCamera>`, NOT `With<Camera3d>`: "which entity is the scene camera?"
     // is a render-FREE question, and asking it with `Camera3d` was what made this
     // crate link bevy_core_pipeline → wgpu. See `lunco_render::camera`.
-    cameras: Query<(Entity, &bevy::camera::RenderTarget), With<SceneCamera>>,
+    cameras: Query<(), With<SceneCamera>>,
     q_parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -1323,14 +1333,14 @@ pub(crate) fn update_globe_lod(
     visibility: Query<&Visibility>,
     mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles, Option<&GlobeHandoff>)>,
 ) {
-    // ONLY the explicitly bound window camera may steer the LOD. The binding is
-    // intentionally allowed to be absent while a scene is projecting; an empty
-    // cover during that lifecycle interval is correct and must not panic the app.
-    let Some(camera_entity) = viewport.active_camera.filter(|entity| {
-        cameras
-            .get(*entity)
-            .is_ok_and(|(_, target)| matches!(target, bevy::camera::RenderTarget::Window(_)))
-    }) else {
+    // The presentation owner binds the camera for both window and image
+    // outputs. A render target's storage kind cannot remove planetary ground
+    // from an explicitly bound scene view. No camera is an intentional state
+    // while scene projection is pending.
+    let Some(camera_entity) = viewport
+        .active_camera
+        .filter(|entity| cameras.contains(*entity))
+    else {
         return;
     };
 
@@ -1598,7 +1608,7 @@ pub(crate) fn update_globe_lod(
                     0,
                     0,
                     0,
-                    camera_body_local,
+                    &[camera_body_local],
                     render_radius_m,
                     lod.max_lod,
                     lod.lod_distance_factor,

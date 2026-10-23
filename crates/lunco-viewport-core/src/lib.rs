@@ -16,11 +16,12 @@ pub struct PanelRect {
     pub size: UVec2,
 }
 
-/// The main window's 3D viewport: its explicit camera binding, visibility,
-/// and optional physical-pixel sub-rect.
+/// The main presentation's 3D viewport: its explicit camera binding,
+/// visibility, and optional physical-pixel sub-rect. A host may present it in a
+/// window or an offscreen image; secondary previews do not select this binding.
 #[derive(Resource, Debug, Clone)]
 pub struct SceneViewport {
-    /// The camera bound to the main window. `None` is an intentional no-camera
+    /// The camera bound to the main scene output. `None` is an intentional no-camera
     /// state and is never replaced by an implicit camera choice.
     pub active_camera: Option<Entity>,
     /// Whether the 3D scene is visible at all.

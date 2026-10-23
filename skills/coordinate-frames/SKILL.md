@@ -98,6 +98,16 @@ Collider insertion preserves constructor geometry; `GlobalTransform` cannot
 choose physical scale. Rootless collider propagation runs in native fixed
 preparation before scale cooking and mass reduction, so the first solver step
 and later scale edits consume the current geometry and COM together.
+For planetary flight, a projected `SiteAnchor` declares an
+`UnboundedPhysicsDomain` on the active grid: resident terrain bounds must not
+become a flight ceiling. BigSpace already recenters Grid-direct entities;
+verify the bridge preserves native pose, velocity and joints across that split.
+Use atomic grid migration only for actual frame changes. The body-demanded
+globe contact cover is independent of camera residency and shares the f64
+globe/collar geometry and datum with rendering. Before off-crop contact,
+`globe-collision-ready` must clear with native support admitted. Never enable
+the celestial picking sphere as terrain or add a second ground clamp. Run the
+authored `planetary_flight_surface` and bounded `escape_containment` gates.
 For a line joining two frames, convert both endpoints into one semantic frame
 before generating cell-local geometry. For authored motion directly beneath a
 BigSpace `Grid`, use standard USD `double3 xformOp:translate` samples and split

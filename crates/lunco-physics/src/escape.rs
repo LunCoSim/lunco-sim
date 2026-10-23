@@ -1,96 +1,22 @@
-//! "This body left the world" — a one-shot diagnostic for bodies that fall out
-//! of the simulation.
+//! Native body escape facts and required Rhai containment policy.
 //!
-//! # Why this exists
+//! A bounded active frame derives its finite motion domain from the union of
+//! static collider AABBs plus scene-scale margins. Frames marked
+//! [`UnboundedPhysicsDomain`] use [`WorldBounds::None`]: streamed planetary
+//! contact geometry is residency, not a flight fence. A frame with no static
+//! geometry also has no finite bound. Positions use the solver's active f64
+//! frame, independently of camera and BigSpace cell representation.
 //!
-//! Two separate failures were diagnosed this session by EYEBALLING RENDERED
-//! FRAMES: a rigid body sitting at `y = -1510`, and another at `elev = -737`.
-//! Nothing in the engine said a word. A body that tunnels through a heightfield
-//! that had not finished baking (the exact window [`PhysicsHolds`] exists to
-//! protect) does not crash, does not warn, and does not stop — it simply
-//! accelerates away for the rest of the run while the scene above it looks
-//! plausible. The cost of finding that by eye is hours; the cost of logging it
-//! is one comparison per dynamic body per tick.
+//! Non-finite position or velocity is invalid in every domain. The required
+//! `physics.body_escape` Rhai hook receives typed escape facts and chooses
+//! containment. The application default pauses the dynamic joint-connected
+//! object, including its joints and colliders, while independent physics
+//! continues. Missing/invalid policy results hold physics closed.
 //!
-//! # Choosing a bound that works for BOTH lunar surface and orbital scenes
-//!
-//! This engine runs lunar-surface work AND orbital work, so the obvious bound is
-//! wrong. `y < -100` flags nothing in a heliocentric scene (where the bridge's
-//! own round-trip test exercises positions at `1.5e11` m) and false-positives on
-//! any scene whose origin is not the ground. A large absolute radius has the
-//! opposite failure: it is the only bound that cannot false-positive on an
-//! orbital scene, and it would NOT have caught either motivating failure —
-//! `y = -1510` is utterly unremarkable at astronomical scale. A bound that
-//! cannot see the bug it was written for is not worth having.
-//!
-//! So the bound is **derived from the scene**, not assumed: the union AABB of
-//! every STATIC collider is what "the world" physically is. Terrain, ground
-//! planes and fixed structures are static; they are the things a body can fall
-//! through and the things that define where the simulation has floor. A dynamic
-//! body far outside that volume has, by construction, nothing left to land on.
-//!
-//! This gives the right answer in both regimes for the same reason:
-//!
-//! - **Lunar surface**: the terrain collider spans the site, so the union AABB
-//!   is site-sized (hundreds of metres to kilometres). `y = -1510` beneath a
-//!   site whose terrain bottoms out near zero is far outside it → flagged.
-//! - **Orbital**: there are no static colliders at all, so there is no union
-//!   AABB, and the diagnostic **disables itself** ([`WorldBounds::None`]). It
-//!   cannot false-positive on a scene it has no opinion about. Silence here is
-//!   deliberate and correct: absent a floor, "below the world" is meaningless.
-//!
-//! # Margins
-//!
-//! The AABB is expanded before it is used, because legitimate motion leaves the
-//! static volume all the time:
-//!
-//! - **Laterally and downward** by [`ESCAPE_MARGIN_FRACTION`] of the AABB's
-//!   largest extent, floored at [`ESCAPE_MARGIN_MIN`]. A rover driving off the
-//!   edge of a loaded terrain tile is a paging problem, not an escape, and the
-//!   floor keeps a small scene (a test rig with a 2 m ground plane) from
-//!   flagging a body that hopped a metre sideways.
-//! - **Upward: bounded for local worlds.** The ceiling is derived from the
-//!   static extent, with [`ESCAPE_VERTICAL_FACTOR`] scene-scale slack. Orbital
-//!   scenes have no static colliders and therefore remain `None`.
-//!
-//! Non-finite positions and velocities (NaN/±inf) are detected regardless of
-//! world bounds and use the same required Rhai containment policy. The default
-//! stops only the affected dynamic object; an unavailable or invalid policy
-//! still fails closed with a physics hold.
-//!
-//! # Known limitations (stated, not hidden)
-//!
-//! - A scene whose only floor is a DYNAMIC or KINEMATIC body (a moving platform
-//!   with nothing static beneath it) contributes no bounds, so escapes off it go
-//!   unreported. Static geometry is the discriminator; there is no cheap
-//!   substitute.
-//! - The bounds track the static set as it pages in, so a body already outside
-//!   the bounds when new terrain loads AROUND it will be reported once and not
-//!   re-evaluated. Once-per-entity is a deliberate anti-spam choice
-//!   (see below), and a false positive costs one log line.
-//! - Bounds are in avian's `Position` frame (the BigSpace root frame), the same
-//!   frame the solver works in, so no coordinate conversion is involved and the
-//!   logged numbers are directly comparable to anything else avian prints.
-//!
-//! # Cost
-//!
-//! One `DVec3` comparison per body whose `Position` was written this tick
-//! (awake dynamics; statics and sleepers are change-tick-filtered out of the
-//! query), and a [`HashSet`] insert on the first (and only) report per entity.
-//! The bounds themselves are recomputed only when a static collider's AABB
-//! actually changes, which after terrain settles is never. Nothing allocates
-//! per frame.
-//!
-//! An escaped or non-finite state invokes the required `physics.body_escape`
-//! Rhai policy. The application default disables only its dynamic
-//! joint-connected object, including joints and colliders, and leaves the rest
-//! of physics running.
-//! Missing or invalid policy results fail closed with a physics hold. The same
-//! policy receives non-finite position or velocity as `non_finite_state`, so
-//! the default also isolates that object without holding unrelated physics.
-//! Every first report emits the shared `TelemetryEvent` named
-//! `physics-body-escaped`; the logger and workbench Recent Events consume this
-//! one observation without log parsing or UI-specific dependencies.
+//! Each body's first report publishes `physics-body-escaped` telemetry for the
+//! logger and Recent Events. Bounds rebuild only when static geometry or the
+//! active domain changes. A moving platform without static geometry supplies
+//! no finite bound; absence of a floor does not imply an arbitrary world limit.
 
 use lunco_core::AppSceneExt;
 
@@ -138,6 +64,14 @@ pub const ESCAPE_VERTICAL_FACTOR: f64 = 10.0;
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct PhysicsObjectPaused;
+
+/// An active physics frame whose motion domain is not bounded by resident
+/// static geometry. Planetary/site frames use this contract: streamed terrain
+/// describes available contact, not the limits of valid flight. Invalid native
+/// states remain subject to containment in every domain.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct UnboundedPhysicsDomain;
 
 /// Disable a validated articulated body set without changing its authored pose.
 ///
@@ -345,13 +279,12 @@ fn pause_dynamic_object(
     island.len()
 }
 
-/// The volume the simulation has static geometry in, expanded by the margins
-/// described in the module docs — or [`WorldBounds::None`] when the scene has no
-/// static colliders at all, in which case the diagnostic is inert.
-///
+/// Static-volume-derived bounds for a bounded active frame, expanded by the
+/// escape margins. Unbounded frames and scenes without static geometry use
+/// [`WorldBounds::None`]; non-finite state remains invalid in either case.
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
 pub enum WorldBounds {
-    /// No static geometry ⇒ no opinion ⇒ no reports.
+    /// No finite motion bound. Non-finite state still reports.
     #[default]
     None,
     /// Inclusive bounds in avian's `Position` frame.
@@ -378,7 +311,8 @@ impl WorldBounds {
 #[derive(Resource, Debug, Default)]
 pub struct ReportedEscapes(EntityHashSet);
 
-/// Recompute [`WorldBounds`] from the union of every static collider's AABB.
+/// Recompute finite bounds from static AABBs, or withdraw them for an
+/// [`UnboundedPhysicsDomain`]. Active-domain changes also invalidate the union.
 ///
 /// Change-driven, filtered to STATIC bodies' colliders: avian rewrites
 /// `ColliderAabb` for every awake body's colliders each step, so a bare
@@ -394,6 +328,9 @@ fn update_world_bounds(
     q_static: Query<(&ColliderAabb, &ColliderOf)>,
     q_bodies: Query<&RigidBody>,
     mut bounds: ResMut<WorldBounds>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    unbounded_frames: Query<(), With<UnboundedPhysicsDomain>>,
+    mut previous_domain: Local<Option<bool>>,
 ) {
     // DRAIN, don't peek: `is_empty()` leaves the events queued for their whole
     // retention window, so every removal re-fired this full static union for
@@ -401,6 +338,17 @@ fn update_world_bounds(
     // the `||` below would let a static change short-circuit the drain and leak
     // the events back into the next frames.
     let removed_any = q_removed.read().count() > 0;
+    let unbounded = active_frame
+        .as_deref()
+        .is_some_and(|frame| unbounded_frames.contains(frame.0));
+    let domain_changed = *previous_domain != Some(unbounded);
+    *previous_domain = Some(unbounded);
+    if unbounded {
+        if *bounds != WorldBounds::None {
+            *bounds = WorldBounds::None;
+        }
+        return;
+    }
     // Only a STATIC collider can move the union the loop below computes, so a
     // changed DYNAMIC collider must not re-fire it. Gating on any `ColliderOf`
     // change instead meant a single rover in motion recomputed the full static
@@ -408,7 +356,7 @@ fn update_world_bounds(
     let static_changed = q_changed
         .iter()
         .any(|collider_of| matches!(q_bodies.get(collider_of.body), Ok(RigidBody::Static)));
-    if !static_changed && !removed_any {
+    if !static_changed && !removed_any && !domain_changed {
         return;
     }
 
@@ -765,6 +713,73 @@ mod tests {
             max: DVec3::new(600.0, 10_100.0, 600.0),
         };
         assert!(b.escaped(DVec3::new(0.0, 1.0e9, 0.0)));
+    }
+
+    #[test]
+    fn unbounded_frame_does_not_turn_resident_contacts_into_a_flight_ceiling() {
+        let mut app = App::new();
+        app.init_resource::<WorldBounds>()
+            .add_systems(Update, update_world_bounds);
+        let frame = app.world_mut().spawn_empty().id();
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        let ground = app.world_mut().spawn(RigidBody::Static).id();
+        app.world_mut().spawn((
+            ColliderOf { body: ground },
+            ColliderAabb {
+                min: Vec3::new(-48.0, -1.0, -48.0),
+                max: Vec3::new(48.0, 0.0, 48.0),
+            },
+        ));
+        app.update();
+        assert!(
+            app.world()
+                .resource::<WorldBounds>()
+                .escaped(DVec3::Y * 1100.0)
+        );
+
+        app.world_mut()
+            .entity_mut(frame)
+            .insert(UnboundedPhysicsDomain);
+        app.update();
+        for distance in [1055.2833650156979, 2000.0, 10_000.0, 1.5e11] {
+            assert!(
+                !app.world()
+                    .resource::<WorldBounds>()
+                    .escaped(DVec3::Y * distance)
+            );
+        }
+        assert!(
+            app.world()
+                .resource::<WorldBounds>()
+                .escaped(DVec3::splat(f64::NAN))
+        );
+        assert!(
+            app.world()
+                .resource::<WorldBounds>()
+                .escaped(DVec3::splat(f64::INFINITY))
+        );
+
+        // Domain withdrawal must recompute even when the static colliders did
+        // not change, including when the active frame itself changes.
+        app.world_mut()
+            .entity_mut(frame)
+            .remove::<UnboundedPhysicsDomain>();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<WorldBounds>()
+                .escaped(DVec3::Y * 1100.0)
+        );
+        let space_frame = app.world_mut().spawn(UnboundedPhysicsDomain).id();
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(space_frame));
+        app.update();
+        assert_eq!(*app.world().resource::<WorldBounds>(), WorldBounds::None);
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        app.update();
+        assert!(matches!(
+            *app.world().resource::<WorldBounds>(),
+            WorldBounds::Some { .. }
+        ));
     }
 
     /// End-to-end wiring: a static ground collider must actually produce bounds,

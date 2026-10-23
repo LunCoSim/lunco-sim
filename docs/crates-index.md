@@ -60,7 +60,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-celestial-ephemeris`** | Analytic natural-body ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity), consuming the shared native simulation-pose boundary for gravity bodies and mounted probes. |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
-| **`lunco-terrain-globe`** | Whole-body cube-sphere terrain tiling (orbital/planetary scale): quadtree-CDLOD globe, avian heightfield collision ring, `big_space` anchoring; the "globe" projection of the terrain family over the shared `lunco-terrain-core` LOD spine. |
+| **`lunco-terrain-globe`** | Whole-body cube-sphere geometry (orbital/planetary scale): balanced multi-focus LOD, shared f64 contact/render tiles and DEM collars; the "globe" projection of the terrain family over the shared `lunco-terrain-core` LOD spine. |
 | **`lunco-terrain-surface`** | Local DEM ground terrain (surface scale): authoritative height queries, certified physical solar occlusion with bounded reusable rectangle covers, sampled triangle collider rings with nonlinear CCD support, immutable active-frame coverage snapshots for bounded presentation work, and an opt-in visualization plugin for camera-driven visual LOD, overlays, and bounded persistent surface-annotation indexes and transactional segment patches. |
 | **`lunco-terrain-bake`** | Pure (bevy/avian-free) DEM bake pipeline shared verbatim by the native async task and the wasm Web Worker: GeoTIFF decode → crop/resample → crater stamp → `HeightGrid`. Owns the `dem_worker` companion binary + its main-thread client (over `lunco-worker-transport`), moving the ~40 MB decode + crater stamp off the page's main thread on web (coarse-then-full progressive). |
 | **`lunco-geotiff`** | The **geo** half of a GeoTIFF: GeoKey/tie-point/pixel-scale read and write, shared by the writer (`lunco-assets-processing`) and the reader (`lunco-terrain-bake`). A raster states its own extent and projection; nothing restates it in a sidecar. See `docs/architecture/57-dem-georeferencing.md`. |
@@ -506,7 +506,7 @@ integration. Scene-authored spacecraft motion stays in standard USD transform
 time samples and uses the generic USD animation adapter.
 
 **`lunco-celestial-spatial`**
-Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, tick-boundary physical body/irradiance sampling, cadence-gated rendered body and solar projection, links, cadence, and runtime commands. It publishes link class declarations through the backend-neutral co-simulation initialization schedule before connected solver admission. Globe tiles, terrain, stations, and links share the body's single body-fixed grid; the celestial child of the tick root supplies their boundary epochs and the presentation `CelestialTime` snapshot. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
+Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, body-demanded native planetary contact coverage, globe/imagery integration, tick-boundary physical body/irradiance sampling, cadence-gated rendered body and solar projection, links, cadence, and runtime commands. It publishes link class declarations through the backend-neutral co-simulation initialization schedule before connected solver admission. Globe tiles, terrain, stations, and links share the body's single body-fixed grid; the celestial child of the tick root supplies their boundary epochs and the presentation `CelestialTime` snapshot. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
 
 **`lunco-celestial-ephemeris`**
 Analytic natural-body ephemeris provider for `lunco-celestial`. Pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real natural-body positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`; scene-authored motion remains standard USD animation.
@@ -524,7 +524,7 @@ native-position change detection and body-relative math.
 Projection-agnostic terrain LOD spine. Provides quadtree-CDLOD tile selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde only) with no bevy/avian/DEM/sphere dependency, so it is shared by both the planar DEM streamer (`lunco-terrain-surface`) and the cube-sphere planetary tiler (`lunco-terrain-globe`).
 
 **`lunco-terrain-globe`**
-Whole-body cube-sphere terrain tiling at orbital/planetary scale: quadtree-CDLOD globe, avian heightfield collision ring, and `big_space` anchoring. The "globe" projection of the terrain family; pairs with `lunco-terrain-surface` (local DEM ground) over the shared `lunco-terrain-core` LOD spine.
+Whole-body cube-sphere geometry at orbital/planetary scale: balanced multi-focus quadtree selection, canonical f64 tile/cutout/collar geometry, its explicit GPU mesh adapter, and `big_space` tile identities. Native contact residency belongs to `lunco-celestial-spatial`; the DEM collider ring belongs to `lunco-terrain-surface`. The "globe" projection of the terrain family; pairs with `lunco-terrain-surface` (local DEM ground) over the shared `lunco-terrain-core` LOD spine.
 
 **`lunco-terrain-surface`**
 Local high-detail DEM ground terrain at surface scale: `TerrainSurfaceChange` carries the replaced/current oracle identity and dirty bounds through visual tiles, the collider ring, static collider rebuilds, and derived maps; the products retain independent resolution and cache contracts. Also owns per-node geometry/envelope caching, nearest 3D camera distance through the shared `big_space` frame, and `big_space` per-tile anchoring and the layered color pipeline. The "surface" projection pairs with `lunco-terrain-globe` over the shared `lunco-terrain-core` LOD spine.
@@ -873,9 +873,10 @@ Traversal budgets and errors are defined in the
 [dependency-closure contract](architecture/16-document-identity-and-collaboration.md#dependency-closure-separates-asset-traversal-from-usd-interpretation).
 
 **`lunco-viewport-core`**
-Small renderer-independent viewport geometry contract. It owns the physical-pixel
-`PanelRect` value used to pass measured panel bounds across render, scene, and
-editor packages without coupling those contracts to egui or the Workbench shell.
+Renderer-independent main-scene viewport contract. It owns the explicit active
+camera binding, visibility and layout for window or image outputs, and the
+physical-pixel `PanelRect` value passed across render, scene and editor packages
+without coupling them to egui or the Workbench shell.
 
 **`lunco-usd-viewport-core`**
 Render-independent USD preview contracts. It owns preview/session/view

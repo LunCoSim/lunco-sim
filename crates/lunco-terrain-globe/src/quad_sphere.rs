@@ -173,10 +173,14 @@ pub fn tile_center_uv(_face: u8, level: u32, i: i32, j: i32) -> (f64, f64) {
     (u_mid, v_mid)
 }
 
-/// Subdivide a quad sphere face into tiles based on camera distance.
+/// Subdivide a cube-sphere face by distance to the nearest demanded focus.
+/// Render consumers pass a camera; collision consumers pass physical surface
+/// demands. Both use the same deterministic subdivision and balancing rules.
 ///
 /// Recursively subdivides until `max_lod` or the tile is far enough from the
-/// camera. `resident` is the currently-streamed leaf set: the split threshold
+/// nearest focus. Render callers supply their camera; physical callers supply
+/// surface projections of all bodies that demand contact support.
+/// `resident` is the currently-streamed leaf set: the split threshold
 /// carries a ±5% dead band around it (a resident leaf must come clearly
 /// inside to split; a split node stays split until the camera is clearly
 /// outside). Without it a camera parked exactly on a threshold — the focus
@@ -191,7 +195,7 @@ pub fn subdivide_face(
     level: u32,
     i: i32,
     j: i32,
-    camera_body_local: DVec3,
+    foci_body_local: &[DVec3],
     body_radius: f64,
     max_lod: u32,
     lod_distance_factor: f64,
@@ -228,7 +232,10 @@ pub fn subdivide_face(
     let v = -1.0 + (j as f64 + 0.5) * step;
     let tile_center_sphere = cube_to_sphere(face, u, v);
     let tile_center_local = tile_center_sphere * body_radius;
-    let dist = camera_body_local.distance(tile_center_local);
+    let dist = foci_body_local
+        .iter()
+        .map(|p| p.distance(tile_center_local))
+        .fold(f64::INFINITY, f64::min);
     let tile_size = (body_radius * std::f64::consts::PI * 0.5) / tiles_at_level as f64;
     let intersects_refinement_region = refinement_regions.iter().any(|region| {
         if level >= region.max_lod || tile_size <= region.max_tile_size_m {
@@ -277,7 +284,7 @@ pub fn subdivide_face(
                     level + 1,
                     i * 2 + di,
                     j * 2 + dj,
-                    camera_body_local,
+                    foci_body_local,
                     body_radius,
                     max_lod,
                     lod_distance_factor,
@@ -421,6 +428,44 @@ mod tests {
     }
 
     #[test]
+    fn multiple_foci_refine_opposite_faces_without_losing_closed_coverage() {
+        let body = bevy::prelude::Entity::from_bits(1);
+        let radius = 1_737_400.0;
+        let max_level = 14;
+        let mut desired = HashSet::new();
+        for face in 0..6 {
+            subdivide_face(
+                &mut desired,
+                &HashSet::new(),
+                body,
+                face,
+                0,
+                0,
+                0,
+                &[DVec3::X * radius, -DVec3::X * radius],
+                radius,
+                max_level,
+                2.5,
+                &[],
+            );
+        }
+        balance_cube_sphere_lod(&mut desired, body, max_level);
+        for face in [0, 1] {
+            assert!(
+                desired
+                    .iter()
+                    .any(|tile| tile.face == face && tile.level == max_level)
+            );
+        }
+        let covered: u64 = desired
+            .iter()
+            .map(|tile| 1_u64 << (2 * (max_level - tile.level)))
+            .sum();
+        assert_eq!(covered, 6_u64 << (2 * max_level));
+        assert!(desired.len() < 10_000, "contact demands must remain local");
+    }
+
+    #[test]
     fn handoff_refinement_is_local_and_independent_of_camera_distance() {
         let body = bevy::prelude::Entity::from_bits(1);
         let radius_m = 1_737_400.0;
@@ -445,7 +490,7 @@ mod tests {
                 0,
                 0,
                 0,
-                DVec3::splat(1.0e12),
+                &[DVec3::splat(1.0e12)],
                 radius_m,
                 4,
                 2.0,

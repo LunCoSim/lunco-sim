@@ -18,6 +18,7 @@ use lunco_environment::{Gravity, GravityBody};
 
 mod big_space_setup;
 pub mod cadence;
+mod globe_collision;
 mod globe_lod;
 mod gravity;
 mod imagery;
@@ -34,6 +35,7 @@ pub mod commands;
 pub use commands::*;
 
 pub use big_space_setup::*;
+pub use globe_collision::GlobeCollisionSettings;
 pub use globe_lod::{GlobeLod, GlobeLodBudget};
 pub use gravity::*;
 pub use link::*;
@@ -157,6 +159,7 @@ impl Plugin for CelestialPlugin {
         // over (docs 10/12) — plus the solar-pose tracking system that feeds
         // the sole `SolarFramePose` reader path, including scene-local prims.
         queries::register_celestial_queries(app);
+        globe_collision::install(app);
         app.register_type::<lunco_celestial_spatial_core::SolarTracked>();
         app.register_type::<lunco_celestial::CelestialBody>();
         // Generic connectivity kernel: cadence-gated pairwise link solving in
@@ -238,7 +241,8 @@ impl Plugin for CelestialPlugin {
         }
         app.register_type::<ReferenceFrame>();
         app.init_resource::<ReferenceFrameIndex>();
-        app.add_observer(tag_world_reference_frame);
+        app.add_observer(tag_world_reference_frame)
+            .add_observer(placement::withdraw_site_physics_domain);
         app.add_systems(
             First,
             (
@@ -429,8 +433,8 @@ impl Plugin for CelestialPlugin {
                 .after(lunco_terrain_surface::TerrainSurfaceSet::Build),
         );
         // Curvature is consumed by DEM construction and stays on that
-        // authoritative boundary. Handoff selection, appearance, and globe LOD
-        // are presentation work after the DEM build.
+        // authoritative boundary. Shared handoff preparation consumes the
+        // built surface; appearance and camera LOD remain presentation work.
         app.add_systems(
             Update,
             placement::sync_terrain_body_curvature
@@ -447,7 +451,6 @@ impl Plugin for CelestialPlugin {
                 imagery::bind_dataset_body_imagery,
                 imagery::adopt_authored_body_albedo,
                 big_space_setup::adopt_authored_body_look,
-                placement::sync_globe_handoffs.run_if(lunco_time::scene_time_ready),
                 globe_lod::update_globe_lod.run_if(globe_lod::globe_lod_update_due),
             )
                 .chain()

@@ -83,6 +83,7 @@ pub fn attach_site_scene_to_surface_grid(
     q_parents: Query<&ChildOf>,
     q_children: Query<&Children>,
     q_grids: Query<&Grid>,
+    q_unbounded: Query<(), With<lunco_physics::UnboundedPhysicsDomain>>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_desc_spatial: Query<
         (),
@@ -101,6 +102,11 @@ pub fn attach_site_scene_to_surface_grid(
         return;
     };
     let make_site_grid = || grid_config.grid();
+    if !q_unbounded.contains(scene_root) {
+        commands
+            .entity(scene_root)
+            .try_insert(lunco_physics::UnboundedPhysicsDomain);
+    }
     // Establish the authored scene frame as soon as its SiteAnchor is
     // projected. The celestial hierarchy is itself staged: the USD scene can
     // materialise physical descendants before the SolarSystem payload has
@@ -180,6 +186,15 @@ pub fn attach_site_scene_to_surface_grid(
             current = parent.parent();
         }
     }
+}
+
+pub(crate) fn withdraw_site_physics_domain(
+    removed: On<Remove<SiteAnchor>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<lunco_physics::UnboundedPhysicsDomain>();
 }
 
 /// Hide UNANCHORED local scene roots while the orbital view is active; restore
@@ -719,7 +734,8 @@ fn clear_globe_handoffs(
     }
 }
 
-/// Prepare the measured DEM-to-globe collar from the visualization cycle.
+/// Prepare the shared physical/visual DEM-to-globe surface independently of
+/// camera and rendering cadence.
 /// Boundary statistics and slope sampling run on the compute pool; this system
 /// only polls completed work and commits a result whose input key is still current.
 pub(crate) fn sync_globe_handoffs(
@@ -1230,7 +1246,8 @@ mod tests {
     fn site_scene_and_globe_lod_share_the_body_fixed_surface_grid() {
         let mut app = App::new();
         app.insert_resource(lunco_spatial::WorldGridConfig::default());
-        app.add_systems(Update, attach_site_scene_to_surface_grid);
+        app.add_systems(Update, attach_site_scene_to_surface_grid)
+            .add_observer(withdraw_site_physics_domain);
 
         let world_grid = app
             .world_mut()
@@ -1313,6 +1330,11 @@ mod tests {
         assert_eq!(lod.surface_grid, surface_grid);
         assert!(world.get::<Grid>(lod.surface_grid).is_some());
         assert!(world.get::<Grid>(site).is_some());
+        assert!(
+            world
+                .get::<lunco_physics::UnboundedPhysicsDomain>(site)
+                .is_some()
+        );
         assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
         assert_eq!(
             world
@@ -1346,6 +1368,13 @@ mod tests {
                 .last_changed(),
             gravity_link_tick,
             "unchanged gravitational ownership must not publish a source change"
+        );
+        app.world_mut().entity_mut(site).remove::<SiteAnchor>();
+        app.update();
+        assert!(
+            app.world()
+                .get::<lunco_physics::UnboundedPhysicsDomain>(site)
+                .is_none()
         );
     }
 

@@ -197,9 +197,14 @@ when diagnosing cross-entity geometry changes or stale instance meshes.
 
 For celestial globes, verify the installed Earth/Moon imagery dataset, composed
 USD body look, and generated shell's shadow intent. Globe tiles and their
-render-only DEM collars disable casting and receiving via `ShaderLook`; the
+shared-surface DEM collars disable casting and receiving via `ShaderLook`; the
 material binder alone applies the Bevy markers. DEM terrain and scene objects
 retain their shadows, and shell surfaces retain normal sunlight shading.
+The physical globe/collar cover uses the same f64 geometry and datum with
+body-driven residency; camera LOD and shadow flags cannot remove ground contact.
+For offscreen captures, the explicitly bound `SceneViewport.active_camera`
+must drive globe LOD even when it renders to an image. A window-target filter
+would omit the Moon and show the local DEM as an isolated square in space.
 A body shader look may add shader parameters, but it must retain the installed
 dataset albedo unless USD supplies an explicit
 albedo layer or `AuthoredBodyAlbedo`. Body frames, globe tiles, stations,
