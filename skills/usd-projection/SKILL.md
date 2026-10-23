@@ -88,9 +88,13 @@ Use fallible `UsdRead::transform_might_be_time_varying` for transform admission.
 The worker plan captures the native ordered-stack result, including suffixed
 operations. Samples outside `xformOpOrder` do not admit transform animation;
 live order edits must remove `UsdAnimated` when no consumed channel remains.
+The animation owner claims order edits through `UsdLiveEditRegistry`, classifies
+the committed native stage, and reconciles its marker and cached plan in place.
+Retiring and restoring the order must preserve the projected entity and geometry.
 Unreadable authored order values fail at the shared transform validator. The
 production scenario `lunco://scenarios/tests/native_xform_animation.rhai`
-checks suffix sampling, unordered inputs, marker retirement, and rejected
+checks suffix sampling, unordered inputs, marker retirement/restoration, stable
+entity identity, and rejected
 malformed-order commands on the settled replacement fixture.
 Reset-stack facts also come from fallible native `UsdRead::resets_xform_stack`.
 The sentinel may appear after other operations; native USD discards those

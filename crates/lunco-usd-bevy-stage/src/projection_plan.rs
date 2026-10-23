@@ -198,6 +198,7 @@ impl UsdStageProjectionPlan {
             let active = reader
                 .is_active(&path)
                 .map_err(|error| anyhow!("{path_string}: {error}"))?;
+            let transform_span = bevy::log::debug_span!("usd_projection_transforms").entered();
             let transform = if active {
                 crate::local_transform_at(&reader, &path, 0.0)
                     .map_err(|error| anyhow!("{path_string}: {error}"))?
@@ -210,7 +211,9 @@ impl UsdStageProjectionPlan {
             } else {
                 None
             };
+            drop(transform_span);
             let attribute_names = reader.attr_names(&path);
+            let values_span = bevy::log::debug_span!("usd_projection_attribute_values").entered();
             let attributes = attribute_names
                 .iter()
                 .filter_map(|name| {
@@ -219,6 +222,9 @@ impl UsdStageProjectionPlan {
                         .map(|value| (name.clone(), value))
                 })
                 .collect::<HashMap<_, _>>();
+            drop(values_span);
+            let metadata_span =
+                bevy::log::debug_span!("usd_projection_attribute_metadata").entered();
             let attribute_types = attribute_names
                 .iter()
                 .filter_map(|name| {
@@ -240,13 +246,15 @@ impl UsdStageProjectionPlan {
                         .map(|hint| (name.clone(), hint))
                 })
                 .collect();
+            drop(metadata_span);
             let api_schemas = reader.api_schemas(&path);
             let connections = attribute_names
                 .iter()
                 .map(|name| (name.clone(), reader.connections(&path, name)))
                 .filter(|(_, values)| !values.is_empty())
                 .collect();
-            let time_samples = attribute_names
+            let time_span = bevy::log::debug_span!("usd_projection_time_samples").entered();
+            let time_samples: HashMap<String, Vec<f64>> = attribute_names
                 .iter()
                 .map(|name| (name.clone(), reader.time_sample_times(&path, name)))
                 .filter(|(_, values)| !values.is_empty())
@@ -254,10 +262,7 @@ impl UsdStageProjectionPlan {
             let time_sample_values = attribute_names
                 .iter()
                 .filter_map(|name| {
-                    let mut times = reader.time_sample_times(&path, name);
-                    if times.is_empty() {
-                        return None;
-                    }
+                    let mut times = time_samples.get(name)?.clone();
                     if !times.contains(&0.0) {
                         times.push(0.0);
                     }
@@ -272,6 +277,7 @@ impl UsdStageProjectionPlan {
                     Some((name.clone(), values))
                 })
                 .collect();
+            drop(time_span);
             let relationships = reader
                 .relationship_names(&path)
                 .into_iter()
@@ -304,6 +310,7 @@ impl UsdStageProjectionPlan {
                         .map(|(instance, _)| instance.to_owned())
                 }))
                 .collect();
+            let assets_span = bevy::log::debug_span!("usd_projection_asset_sources").entered();
             let asset_sources = attribute_names
                 .iter()
                 .filter(|name| {
@@ -327,9 +334,11 @@ impl UsdStageProjectionPlan {
                     )
                 })
                 .flat_map(|name| {
-                    reader
-                        .time_sample_times(&path, name)
+                    time_samples
+                        .get(name)
                         .into_iter()
+                        .flatten()
+                        .copied()
                         .filter_map(|time| {
                             reader
                                 .asset_source_layer(&path, name, Some(time))
@@ -338,6 +347,7 @@ impl UsdStageProjectionPlan {
                         .collect::<Vec<_>>()
                 })
                 .collect();
+            drop(assets_span);
             let prim = UsdPrimProjectionPlan {
                 path: path_string.clone(),
                 transform,
@@ -1274,11 +1284,14 @@ def Xform \"World\"\n\
             0: (1, 2, 3),\n\
             10: (11, 2, 3),\n\
         }\n\
+        asset inputs:map.timeSamples = { 2: @a.png@, 10: @b.png@ }\n\
         uniform token[] xformOpOrder = [\"xformOp:translate\"]\n\
     }\n\
 }\n",
         );
-        let plan = UsdStageProjectionPlan::from_recipe(&recipe).expect("projection plan builds");
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let live = StageView::new(&stage);
+        let plan = UsdStageProjectionPlan::from_stage(&stage).expect("projection plan builds");
         let world = SdfPath::new("/World").unwrap();
         let child = SdfPath::new("/World/Child").unwrap();
 
@@ -1292,7 +1305,24 @@ def Xform \"World\"\n\
             plan.scalar_at::<[f64; 3]>(&child, "xformOp:translate", 0.0),
             Some([1.0, 2.0, 3.0])
         );
-        assert_eq!(plan.children(&world), vec![child]);
+        assert_eq!(plan.children(&world), vec![child.clone()]);
+        assert_eq!(
+            plan.time_sample_times(&child, "inputs:map"),
+            vec![2.0, 10.0]
+        );
+        assert!(plan.time_sample_times(&child, "missing").is_empty());
+        for time in [0.0, 2.0, 10.0] {
+            assert_eq!(
+                plan.attr_value_at(&child, "inputs:map", time),
+                live.attr_value_at(&child, "inputs:map", time)
+            );
+        }
+        for time in [2.0, 10.0] {
+            assert_eq!(
+                plan.asset_source_layer(&child, "inputs:map", Some(time)),
+                live.asset_source_layer(&child, "inputs:map", Some(time))
+            );
+        }
     }
 
     #[test]

@@ -36,7 +36,7 @@ fn on_tick(me, ctx) {
     if this.pending != () {
         let result = command_result(this.pending);
         if result.status == "pending" { return; }
-        if this.phase == 3 {
+        if this.phase == 4 {
             this.checks.push(t_true(result.ok == false && result.error != (),
                 "malformed transform order is terminally rejected"));
             this.checks.push(t_true(assembly_edit::describe(this.doc).generation == this.generation,
@@ -81,6 +81,7 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(abs(get(rotating, "Transform.rotation.w")) < 0.8 &&
             abs(get(inert, "Transform.rotation.w")) > 0.99,
             "production sampler rotates the suffix stack and preserves the unordered identity"));
+        this.rotating = rotating;
         let queued = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: (),
             op: order(ROOT + "/Suffixed", "[]")});
         if queued == () || queued.id == () { throw("transform order edit was not admitted"); }
@@ -92,13 +93,26 @@ fn on_tick(me, ctx) {
         track_entity_read(rotating);
         this.checks.push(t_true(get(rotating, "UsdAnimated") == (),
             "live order edit retires the animation marker"));
-        this.checks.push(t_true(get(rotating, "Mesh3d") != (),
-            "live order edit preserves the projected geometry"));
+        this.checks.push(t_true(rotating == this.rotating && get(rotating, "Mesh3d") != (),
+            "live order edit preserves the projected entity and geometry"));
+        let queued = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: (),
+            op: order(ROOT + "/Suffixed", "[\"xformOp:rotateZ:spin\"]")});
+        if queued == () || queued.id == () { throw("transform order restoration was not admitted"); }
+        this.pending = queued.id; this.phase = 3; return;
+    }
+    if this.phase == 3 {
+        let rotating = find(ROOT + "/Suffixed");
+        if rotating < 0 { return; }
+        track_entity_read(rotating);
+        this.checks.push(t_true(get(rotating, "UsdAnimated") != (),
+            "restoring a sampled order re-admits animation"));
+        this.checks.push(t_true(rotating == this.rotating && get(rotating, "Mesh3d") != (),
+            "order restoration preserves the projected entity and geometry"));
         this.generation = assembly_edit::describe(this.doc).generation;
         let queued = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: this.generation,
             op: #{SetAttribute: #{edit_target: "@runtime@", path: ROOT + "/Suffixed",
                 name: "xformOpOrder", type_name: "bool", value: "true"}}});
         if queued == () || queued.id == () { throw("negative transform edit was not admitted"); }
-        this.pending = queued.id; this.phase = 3;
+        this.pending = queued.id; this.phase = 4;
     }
 }

@@ -1050,6 +1050,7 @@ pub(crate) fn drain_pending_twin_docs(
                 let completions = Arc::clone(&pending.completions);
                 let source = source.clone();
                 let job = move || {
+                    let _span = bevy::log::info_span!("usd_twin_source_decode").entered();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         PreparedUsdSource::from_bytes(source)
                     }))
@@ -1117,6 +1118,7 @@ pub(crate) fn drain_pending_twin_docs(
                 let key = twin_usd_work_key(&item, generation, operation);
                 let completions = Arc::clone(&pending.completions);
                 let job = move || {
+                    let _span = bevy::log::info_span!("usd_twin_stage_input").entered();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         snapshot
                             .capture_stage_input(&root_id, false)

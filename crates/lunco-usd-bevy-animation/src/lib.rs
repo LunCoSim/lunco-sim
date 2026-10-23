@@ -11,6 +11,7 @@ use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
 use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
 use lunco_usd_bevy_scene::{UsdAnimated, UsdPrimPath};
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
 use lunco_usd_bevy_stage::read::{
@@ -33,6 +34,15 @@ impl Plugin for UsdAnimationPlugin {
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
+        app.init_resource::<UsdLiveEditRegistry>();
+        app.world_mut()
+            .resource_mut::<UsdLiveEditRegistry>()
+            .register(UsdLiveEditOwner::new(
+                "usd-animation",
+                |_, _, attribute| attribute == "xformOpOrder",
+                None,
+                refresh_animation_topology,
+            ));
         app.add_systems(
             Update,
             (
@@ -52,6 +62,75 @@ impl Plugin for UsdAnimationPlugin {
                 .before(bevy::transform::TransformSystems::Propagate),
         );
     }
+}
+
+/// Reconcile native animation topology once after a committed order-edit batch.
+fn refresh_animation_topology(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    paths: &[SdfPath],
+) {
+    let facts = {
+        let Some(stage) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|stages| stages.get(stage_id))
+        else {
+            return;
+        };
+        let reader = stage.view();
+        paths
+            .iter()
+            .map(|path| {
+                (
+                    path.to_string(),
+                    lunco_usd_bevy_core::animation::prim_is_animated(&reader, path),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let mut prims = world.query::<(Entity, &UsdPrimPath)>();
+    let mut targets = prims
+        .iter(world)
+        .filter_map(|(entity, prim)| {
+            (prim.stage_handle.id() == stage_id)
+                .then(|| {
+                    facts
+                        .get(&prim.path)
+                        .map(|animated| (prim.path.clone(), entity, animated.clone()))
+                })
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    targets.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut commands = world.commands();
+    for (_, entity, animated) in targets {
+        match animated {
+            Ok(true) => {
+                commands
+                    .entity(entity)
+                    .try_insert(UsdAnimated)
+                    .try_remove::<AnimationPlan>();
+            }
+            Ok(false) => {
+                commands
+                    .entity(entity)
+                    .try_remove::<(UsdAnimated, AnimationPlan)>();
+            }
+            Err(message) => reject_animation_projection(&mut commands, entity, message),
+        }
+    }
+}
+
+/// Reject invalid native animation facts before any further sampling.
+fn reject_animation_projection(commands: &mut Commands, entity: Entity, message: String) {
+    commands
+        .entity(entity)
+        .try_insert((
+            lunco_usd_bevy_scene::UsdSceneProjectionFailed(message.clone()),
+            Visibility::Hidden,
+        ))
+        .try_remove::<(UsdAnimated, AnimationPlan)>();
+    lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
 }
 
 /// The transform channel that drives an [`AnimationPlan`] prim.
@@ -139,14 +218,7 @@ pub fn plan_usd_animation(
         let shader = match reader.bound_shader(&path) {
             Ok(shader) => shader,
             Err(message) => {
-                commands
-                    .entity(entity)
-                    .try_insert((
-                        lunco_usd_bevy_scene::UsdSceneProjectionFailed(message.clone()),
-                        Visibility::Hidden,
-                    ))
-                    .remove::<UsdAnimated>();
-                lunco_core::trigger_runtime_error(&mut commands, "usd-visual-sync-failed", message);
+                reject_animation_projection(&mut commands, entity, message);
                 continue;
             }
         };

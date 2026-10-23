@@ -1,5 +1,44 @@
 # High-quality realtime performance handover
 
+## Snapshot sample reuse and live animation retirement — 2026-10-23
+
+Worker spans measure Tesla source decoding at 24.79 ms and stage-input encoding
+at 37.40 ms. Neither explains most of the pre-mount interval. Debug extraction
+spans attribute 67.46 ms to attribute metadata and 43.38 ms to time-sample reads
+over 259 prims. The snapshot now collects each native sample table once and
+reuses it for captured values and sampled asset-source identities. It adds no
+cache or alternate reader.
+
+On identical recorded Twin sources, the sample phase takes 21.09 ms, versus
+43.38 ms before; the large complete snapshot takes 256.61 ms, versus 268.42 ms.
+Admission is 2.45 s versus 3.41 s, but varying native preparation and scheduling
+prevent attributing that whole difference to this change. These are contended
+Tracy observations, not sub-second loading or clean FPS acceptance.
+Both captures pass native framing, payload, owned PID, 1,000,000 ns sampling
+and native CSV-export checks. Runtime diagnostics are clear and final screenshots
+were inspected. Their source hashes match and remain unchanged within each run.
+Evidence is `tesla-projection-phases-profile/` (PID 762330/API 4926) and
+`tesla-sample-reuse-profile/` (PID 772693/API 4928) under
+`.cache/codex-evidence/performance-20261023/`; their apps and collectors are closed.
+Tesla's HUD frame/datum remains unavailable and full-mission acceptance is open.
+
+The focused snapshot test passes and compares live versus prepared sampled
+assets, native sample times, an absent channel, and the zero-time sample before
+the first authored asset sample. The production animation gate exposed a live
+order-edit bug: transform projection changed the pose but retained `UsdAnimated`.
+The animation owner now claims `xformOpOrder` through the existing live-edit
+registry, classifies the committed stage with the shared native helper, and
+reconciles its marker and cached plan without replacing the entity. The gate
+passes ten checks, including retirement/restoration, stable entity/geometry and
+terminal rejection of a malformed order. PID 778365/API 4929 exited normally;
+`native-animation-order-owner-production.log` retains the verdict.
+
+Next, trace admission outside these measured worker phases. The text catalog
+currently starts result-body `TextAsset` loads and waits for their terminal
+events before publishing `JsonAssetContent::PersistedResult`, whose consumer
+requires identity only. Inspect that asset-owner boundary and its actual startup
+delay before changing it. The strict timing targets remain open.
+
 ## Projection loading attribution and material diagnostics — 2026-10-23
 
 Three bounded startup spans separate native recipe composition

@@ -90,7 +90,10 @@ analytic primitive preparation and weak native mesh identity described in
 [render decoupling](render-decoupling.md#immutable-primitive-mesh-assets);
 `lunco-usd-bevy-light` owns UsdLux light and dome projection, including live
 refresh from info paths in the generic stage-change batch;
-`lunco-usd-bevy-animation` owns the render-free time-sample projection;
+`lunco-usd-bevy-animation` owns the render-free time-sample projection and
+claims `xformOpOrder` edits through the shared live-edit registry. After each
+committed order batch it reuses native animation classification to reconcile
+`UsdAnimated` and invalidate `AnimationPlan`, preserving the entity and geometry;
 `lunco-usd-bevy` owns hierarchy, transform, async projection orchestration, and
 material intent while consuming the camera, light, lathe, and mesh packages
 directly; authored control/program projection is installed by
@@ -445,6 +448,9 @@ When the canonical owner confirms that the exact prepared plan
 is still the current live-stage snapshot, read-only projections reuse its
 composed schema indexes instead of traversing the live stage. The async-prepared
 projection plan indexes prims by composed schema type and applied API schema.
+Each native time-sample table is collected once per property; captured values
+and sampled asset-source identities consume that same table, preserving native
+sample order, f64 times and the explicit zero-time sample used by admission.
 Native graph errors reject snapshot extraction. PBR `SetObjectProperty` commands
 on a failed projection return its existing diagnostic before reading or adopting
 an appearance intent, preserving that intent state on rejection.

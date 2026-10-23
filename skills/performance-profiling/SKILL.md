@@ -997,6 +997,17 @@ live-edit resolution. `test_native_material_terminals.py` drives eleven authored
 checks for native terminals, live PBR edits, cyclic-graph rejection and unchanged
 intent after rejected edits.
 
+For snapshot attribution, enable
+`RUST_LOG=info,lunco_usd_bevy_stage::projection_plan=debug`. The bounded
+`usd_projection_transforms`, `usd_projection_attribute_values`,
+`usd_projection_attribute_metadata`, `usd_projection_time_samples`, and
+`usd_projection_asset_sources` spans separate the extraction groups.
+`usd_twin_source_decode` and `usd_twin_stage_input` measure the two worker jobs
+before scene mounting. Time-sample extraction resolves each native table once;
+value capture and sampled asset-source capture reuse that existing table.
+Keep native clips, sample order and default-time behavior intact; the focused
+snapshot test compares sampled values and asset-source layers with live USD.
+
 For Twin-open stalls, profile the active Twin policy loader separately from
 policy activation. Native manifest and Rhai source reads should run through
 bounded `AsyncWorkAdmission`; `twin_policy_source_prepare_offthread` measures
