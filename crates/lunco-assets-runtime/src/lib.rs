@@ -35,5 +35,5 @@ pub use lunco_assets_core::closure::{
 };
 pub use text_asset::{
     JsonAssetContent, JsonAssetRecord, JsonAssetScopeChanged, JsonAssetScopeLoading, TextAsset,
-    TextAssetCatalog, TextAssetEntry, TextAssetLoader, TextAssetPlugin,
+    TextAssetCatalog, TextAssetContent, TextAssetEntry, TextAssetLoader, TextAssetPlugin,
 };

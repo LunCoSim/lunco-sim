@@ -54,8 +54,39 @@ pub struct TextAssetEntry {
     pub twin_id: Option<lunco_workspace::TwinId>,
     /// Exact asset source authority assigned to a Twin.
     pub twin_name: Option<String>,
-    /// The handle for the asynchronously loaded text.
-    pub handle: Handle<TextAsset>,
+    /// Source read ownership or a history identity whose body is loaded on demand.
+    pub content: TextAssetContent,
+}
+
+/// Catalog content ownership. Completed histories never start catalog reads.
+#[derive(Clone, Debug)]
+pub enum TextAssetContent {
+    /// The handle for asynchronously loaded authored text.
+    Source(Handle<TextAsset>),
+    /// Only the identity is cataloged; the experiment-artifact reader owns the body.
+    PersistedResult,
+}
+
+impl TextAssetEntry {
+    /// The source read, when this entry owns authored text rather than history metadata.
+    pub fn source_handle(&self) -> Option<&Handle<TextAsset>> {
+        match &self.content {
+            TextAssetContent::Source(handle) => Some(handle),
+            TextAssetContent::PersistedResult => None,
+        }
+    }
+}
+
+fn catalog_content(
+    asset_uri: &str,
+    results_root_uri: &str,
+    load: impl FnOnce() -> Handle<TextAsset>,
+) -> TextAssetContent {
+    if asset_uri.starts_with(results_root_uri) && asset_uri.ends_with(".json") {
+        TextAssetContent::PersistedResult
+    } else {
+        TextAssetContent::Source(load())
+    }
 }
 
 /// One source identity in a complete asynchronous JSON asset-scope snapshot.
@@ -103,10 +134,10 @@ pub struct JsonAssetScopeChanged {
 
 /// Runtime catalog of small text assets in the engine library and open Twins.
 ///
-/// This catalog answers only “which text assets exist?” and starts their
-/// platform-neutral loads. Consumers inspect the loaded text and own their
-/// semantic kind/schema, so this layer remains independent of domain and policy
-/// types.
+/// This catalog answers only “which text assets exist?” and starts authored
+/// source loads. Completed experiment histories retain identity only. Consumers
+/// inspect the loaded text and own its semantic kind/schema, so this layer
+/// remains independent of domain and policy types.
 #[derive(Resource, Default)]
 pub struct TextAssetCatalog {
     entries: Vec<TextAssetEntry>,
@@ -153,6 +184,8 @@ fn discover_text_assets(
         .drain(..)
         .filter(|entry| entry.twin_id.is_some())
         .collect::<Vec<_>>();
+    let asset_root_uri = lunco_assets_core::engine_asset_uri("");
+    let results_root_uri = format!("{asset_root_uri}{}/", lunco_twin::RESULTS_DIR_NAME);
     entries.extend(
         manifest
             .rels()
@@ -183,7 +216,11 @@ fn discover_text_assets(
                     asset_path: asset_path.clone(),
                     twin_id: None,
                     twin_name: None,
-                    handle: asset_server.load::<TextAsset>(path),
+                    content: catalog_content(
+                        &lunco_assets_core::engine_asset_uri(asset_path),
+                        &results_root_uri,
+                        || asset_server.load::<TextAsset>(path),
+                    ),
                 })
             })
             .collect::<Vec<_>>(),
@@ -199,8 +236,9 @@ fn discover_text_assets(
             &mut readiness,
         );
     }
-    let json_count = json_entries(&catalog.entries, None).count();
-    let asset_root_uri = lunco_assets_core::engine_asset_uri("");
+    let json_count = json_entries(&catalog.entries, None)
+        .filter_map(TextAssetEntry::source_handle)
+        .count();
     commands.trigger(JsonAssetScopeLoading {
         twin_id: None,
         twin_name: None,
@@ -235,10 +273,12 @@ fn load_twin_text_assets(
     };
     let twin_id = trigger.event().twin;
     readiness.terminal.retain(|id, _| {
-        !catalog
-            .entries
-            .iter()
-            .any(|entry| entry.twin_id == Some(twin_id) && entry.handle.id() == *id)
+        !catalog.entries.iter().any(|entry| {
+            entry.twin_id == Some(twin_id)
+                && entry
+                    .source_handle()
+                    .is_some_and(|handle| handle.id() == *id)
+        })
     });
     catalog
         .entries
@@ -246,6 +286,8 @@ fn load_twin_text_assets(
     let Some(asset_server) = asset_server else {
         return;
     };
+    let asset_root_uri = lunco_assets_core::twin_uri(&trigger.event().name, "");
+    let results_root_uri = format!("{asset_root_uri}{}/", lunco_twin::RESULTS_DIR_NAME);
     for file in twin.files() {
         let extension = file
             .relative_path
@@ -263,12 +305,14 @@ fn load_twin_text_assets(
                     continue;
                 }
             };
-        let handle = asset_server.load::<TextAsset>(path);
+        let content = catalog_content(&asset_path, &results_root_uri, || {
+            asset_server.load::<TextAsset>(path)
+        });
         catalog.entries.push(TextAssetEntry {
             asset_path,
             twin_id: Some(twin_id),
             twin_name: Some(trigger.event().name.clone()),
-            handle,
+            content,
         });
     }
     if let Some(assets) = assets.as_deref() {
@@ -280,8 +324,9 @@ fn load_twin_text_assets(
             &mut readiness,
         );
     }
-    let json_count = json_entries(&catalog.entries, Some(twin_id)).count();
-    let asset_root_uri = lunco_assets_core::twin_uri(&trigger.event().name, "");
+    let json_count = json_entries(&catalog.entries, Some(twin_id))
+        .filter_map(TextAssetEntry::source_handle)
+        .count();
     commands.trigger(JsonAssetScopeLoading {
         twin_id: Some(twin_id),
         twin_name: Some(trigger.event().name.clone()),
@@ -309,7 +354,8 @@ fn release_twin_text_assets(
         .entries
         .iter()
         .filter(|entry| entry.twin_id == Some(twin_id))
-        .map(|entry| entry.handle.id())
+        .filter_map(TextAssetEntry::source_handle)
+        .map(Handle::id)
         .collect::<Vec<_>>();
     catalog
         .entries
@@ -325,7 +371,10 @@ fn seed_ready_assets(
     readiness: &mut TextAssetReadiness,
 ) {
     for entry in json_entries(entries, twin_id) {
-        let id = entry.handle.id();
+        let Some(handle) = entry.source_handle() else {
+            continue;
+        };
+        let id = handle.id();
         if assets.get(id).is_some() {
             readiness.terminal.insert(id, Ok(()));
         } else if asset_server
@@ -372,26 +421,27 @@ fn publish_json_scope_if_ready(
     let entries = json_entries(&catalog.entries, twin_id).collect::<Vec<_>>();
     if entries
         .iter()
-        .any(|entry| !readiness.terminal.contains_key(&entry.handle.id()))
+        .filter_map(|entry| entry.source_handle())
+        .any(|handle| !readiness.terminal.contains_key(&handle.id()))
     {
         return;
     }
-    let results_root_uri = format!("{asset_root_uri}{}/", lunco_twin::RESULTS_DIR_NAME);
     let records = entries
         .iter()
         .map(|entry| {
             let asset_uri = json_asset_uri(entry);
-            let content = if asset_uri.starts_with(&results_root_uri) {
-                JsonAssetContent::PersistedResult
-            } else {
-                JsonAssetContent::Source(match readiness.terminal.get(&entry.handle.id()) {
-                    Some(Ok(())) => assets
-                        .and_then(|assets| assets.get(&entry.handle))
-                        .map(|asset| asset.text.clone())
-                        .ok_or_else(|| "the asset was marked loaded but has no text".into()),
-                    Some(Err(error)) => Err(error.clone()),
-                    None => Err("asset readiness changed while building the snapshot".into()),
-                })
+            let content = match &entry.content {
+                TextAssetContent::PersistedResult => JsonAssetContent::PersistedResult,
+                TextAssetContent::Source(handle) => {
+                    JsonAssetContent::Source(match readiness.terminal.get(&handle.id()) {
+                        Some(Ok(())) => assets
+                            .and_then(|assets| assets.get(handle))
+                            .map(|asset| asset.text.clone())
+                            .ok_or_else(|| "the asset was marked loaded but has no text".into()),
+                        Some(Err(error)) => Err(error.clone()),
+                        None => Err("asset readiness changed while building the snapshot".into()),
+                    })
+                }
             };
             JsonAssetRecord { asset_uri, content }
         })
@@ -418,11 +468,11 @@ fn publish_json_asset_changes(
             AssetEvent::Added { id } | AssetEvent::Modified { id } => *id,
             AssetEvent::LoadedWithDependencies { .. } => continue,
             AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
-                let Some(entry) = catalog
-                    .entries
-                    .iter()
-                    .find(|entry| entry.handle.id() == *id)
-                else {
+                let Some(entry) = catalog.entries.iter().find(|entry| {
+                    entry
+                        .source_handle()
+                        .is_some_and(|handle| handle.id() == *id)
+                }) else {
                     continue;
                 };
                 if entry.asset_path.ends_with(".json") {
@@ -435,7 +485,11 @@ fn publish_json_asset_changes(
                 continue;
             }
         };
-        let Some(entry) = catalog.entries.iter().find(|entry| entry.handle.id() == id) else {
+        let Some(entry) = catalog.entries.iter().find(|entry| {
+            entry
+                .source_handle()
+                .is_some_and(|handle| handle.id() == id)
+        }) else {
             continue;
         };
         if !entry.asset_path.ends_with(".json") {
@@ -453,11 +507,11 @@ fn publish_json_asset_changes(
         dirty_scopes.push(entry.twin_id);
     }
     for failure in failures.read() {
-        let Some(entry) = catalog
-            .entries
-            .iter()
-            .find(|entry| entry.handle.id() == failure.id)
-        else {
+        let Some(entry) = catalog.entries.iter().find(|entry| {
+            entry
+                .source_handle()
+                .is_some_and(|handle| handle.id() == failure.id)
+        }) else {
             continue;
         };
         if entry.asset_path.ends_with(".json") {
@@ -512,5 +566,95 @@ impl Plugin for TextAssetPlugin {
                 Update,
                 (discover_text_assets, publish_json_asset_changes).chain(),
             );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn history_identities_do_not_load_or_delay_authored_sources() {
+        let root = "twin://catalog-probe/";
+        let results_root = format!("{root}{}/", lunco_twin::RESULTS_DIR_NAME);
+        let history_uri = format!("{results_root}snapshot.json");
+        let history = catalog_content(&history_uri, &results_root, || {
+            panic!("catalog history must not start a body read")
+        });
+        assert!(matches!(history, TextAssetContent::PersistedResult));
+
+        let mut assets = Assets::<TextAsset>::default();
+        let source = assets.add(TextAsset {
+            text: "authored source".into(),
+        });
+        let sibling = catalog_content(
+            "twin://catalog-probe/results-copy/catalog.json",
+            &results_root,
+            || source.clone(),
+        );
+        assert!(matches!(sibling, TextAssetContent::Source(_)));
+        let other_scope =
+            catalog_content("twin://other/results/catalog.json", &results_root, || {
+                source.clone()
+            });
+        assert!(matches!(other_scope, TextAssetContent::Source(_)));
+        let make_entry = |asset_path, content| TextAssetEntry {
+            asset_path,
+            twin_id: None,
+            twin_name: None,
+            content,
+        };
+        let mut catalog = TextAssetCatalog {
+            entries: vec![make_entry(history_uri, history)],
+            ready: true,
+        };
+        let mut readiness = TextAssetReadiness::default();
+        let snapshots = Arc::new(Mutex::new(Vec::new()));
+        let observed = snapshots.clone();
+        let mut world = World::new();
+        world.add_observer(move |event: On<JsonAssetScopeChanged>| {
+            observed.lock().unwrap().push(event.event().clone());
+        });
+        let mut publish = |catalog: &TextAssetCatalog, readiness: &TextAssetReadiness| {
+            publish_json_scope_if_ready(
+                None,
+                None,
+                root.into(),
+                catalog,
+                readiness,
+                Some(&assets),
+                &mut world.commands(),
+            );
+            world.flush();
+        };
+        publish(&catalog, &readiness);
+        assert_eq!(
+            snapshots.lock().unwrap().len(),
+            1,
+            "history-only scopes settle immediately"
+        );
+        assert!(matches!(
+            snapshots.lock().unwrap()[0].assets[0].content,
+            JsonAssetContent::PersistedResult
+        ));
+
+        catalog.entries.push(make_entry(
+            "catalog.json".into(),
+            TextAssetContent::Source(source.clone()),
+        ));
+        publish(&catalog, &readiness);
+        assert_eq!(
+            snapshots.lock().unwrap().len(),
+            1,
+            "authored reads must still settle"
+        );
+        readiness.terminal.insert(source.id(), Ok(()));
+        publish(&catalog, &readiness);
+        let snapshots = snapshots.lock().unwrap();
+        assert_eq!(snapshots.len(), 2);
+        assert!(
+            matches!(&snapshots[1].assets[1].content, JsonAssetContent::Source(Ok(text)) if text == "authored source")
+        );
     }
 }

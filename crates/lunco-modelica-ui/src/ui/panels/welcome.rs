@@ -124,7 +124,11 @@ pub fn load_example_path_catalog(
         .entries()
         .iter()
         .filter(|entry| entry.twin_id.is_none() && entry.asset_path.ends_with(".json"))
-        .map(|entry| (entry.asset_path.clone(), entry.handle.clone()))
+        .filter_map(|entry| {
+            entry
+                .source_handle()
+                .map(|handle| (entry.asset_path.clone(), handle.clone()))
+        })
         .collect::<Vec<_>>();
     commands.insert_resource(ExamplePathCatalogAssets(candidates));
     commands.insert_resource(ExamplePathCatalogState::Loading);

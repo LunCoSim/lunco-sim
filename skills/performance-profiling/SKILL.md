@@ -122,7 +122,9 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 For JSON-scope stalls, distinguish authored source catalogs from completed
 experiment histories. The asset/Twin owner publishes
 `JsonAssetContent::PersistedResult` as identity-only metadata, projecting the
-`persisted_result` Rhai fact without copying result bodies. The existing
+`persisted_result` Rhai fact without loading or copying result bodies. These
+entries own no Bevy text handle and never delay JSON-scope readiness; loading
+counts cover authored reads only. The existing
 application asset policy skips those records before JSON decoding. Confirm the
 `application_json_catalogs` production gate and measure the same admitted source
 cohort. Do not hide malformed authored catalogs, change

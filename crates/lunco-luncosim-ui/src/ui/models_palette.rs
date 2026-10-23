@@ -238,9 +238,12 @@ pub(crate) fn sync_program_contracts(
         if entry.twin_id.is_some() {
             continue;
         }
-        let Some(asset) = text_assets.get(&entry.handle) else {
+        let Some(handle) = entry.source_handle() else {
+            continue;
+        };
+        let Some(asset) = text_assets.get(handle) else {
             if !asset_server
-                .get_load_state(entry.handle.id())
+                .get_load_state(handle.id())
                 .is_some_and(|state| state.is_failed())
             {
                 pending = true;

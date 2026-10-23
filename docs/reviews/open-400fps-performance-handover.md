@@ -1,5 +1,39 @@
 # High-quality realtime performance handover
 
+## History catalog read ownership — 2026-10-23
+
+The generic text catalog classifies reserved completed-result JSON identities
+before requesting Bevy loads. Its typed entry content distinguishes authored
+source handles from persisted-result metadata. Only authored source reads count
+or participate in JSON-scope readiness; the experiment-artifact owner retains
+bounded on-demand history reading and decoding. All four text readers use the
+new ownership contract. No second loader, cache or scheduling path is added.
+
+The focused asset-resource regression passes: a history cannot start a read,
+history-only scopes publish immediately, a similar directory or another scope
+remains authored, and authored reads still gate publication. The production
+`application_json_catalogs` gate passes its six positive/negative checks.
+
+Tesla has seven completed JSON artifacts totaling 21,590,526 bytes. The prior
+native capture records seven result-loader locations with 44.74 ms accumulated
+self time; this is asynchronous work, not a startup critical-path measurement.
+The new physics-admission observation is 2.49 s versus 2.45 s on the same recorded
+Twin sources, so no startup speedup is established. The strict sub-second
+loading and clean physics/graphics targets remain open.
+
+The new native capture retains all eleven authored-text loader locations.
+Result-body loader locations fall from seven to **zero**.
+It passes framing/payload, owned PID 796986, 1,000,000 ns sampling and native
+CSV-export checks. Runtime diagnostics are clear and the final screenshot was
+inspected. API 4930, the app and collector are closed. The same foreign USD app
+remains active, so these observations are contended diagnostic evidence.
+Evidence is `tesla-history-identities-profile/` under
+`.cache/codex-evidence/performance-20261023/`, including
+`catalog-read-comparison.json`, the production verdict and session receipt.
+Tesla's frame/datum HUD remains unavailable; full-mission acceptance is open.
+The tested regular Tracy artifact is SHA-256
+`2cd0148cc52bd82acfd4ba194b5c37e6d2b4837b17c82b1362e9212f105de849`.
+
 ## Snapshot sample reuse and live animation retirement — 2026-10-23
 
 Worker spans measure Tesla source decoding at 24.79 ms and stage-input encoding
@@ -33,11 +67,8 @@ passes ten checks, including retirement/restoration, stable entity/geometry and
 terminal rejection of a malformed order. PID 778365/API 4929 exited normally;
 `native-animation-order-owner-production.log` retains the verdict.
 
-Next, trace admission outside these measured worker phases. The text catalog
-currently starts result-body `TextAsset` loads and waits for their terminal
-events before publishing `JsonAssetContent::PersistedResult`, whose consumer
-requires identity only. Inspect that asset-owner boundary and its actual startup
-delay before changing it. The strict timing targets remain open.
+Trace the remaining admission intervals outside these measured worker phases.
+The strict timing targets remain open.
 
 ## Projection loading attribution and material diagnostics — 2026-10-23
 

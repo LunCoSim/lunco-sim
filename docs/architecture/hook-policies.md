@@ -215,9 +215,12 @@ The asset owner derives `persisted_result` from the canonical scope URI and
 `lunco-twin`'s reserved experiment-result directory. Native
 `JsonAssetContent::PersistedResult` carries identity only; its Rhai `text` and
 `error` fields are unit. Authored `Source` records carry a text/read-error result.
-Completed-history bodies are not copied into the hook inputs. The installed
-Rhai policy skips persisted records before parsing or considering source-read
-errors. The experiment-artifact owner interprets completed history.
+The text catalog classifies completed histories before requesting a Bevy load;
+they have no text handle and cannot delay scope readiness. Loading counts include
+only authored source reads. Completed-history bodies are not read or copied into
+the hook inputs. The installed Rhai policy skips persisted records before
+parsing or considering source-read errors. The experiment-artifact owner
+interprets completed history.
 Authored catalogs elsewhere retain kind/schema validation. Both contexts include the
 asset owner's canonical `asset_root_uri` for scope-relative references.
 `parse_json(text)` is shared by the world-bound Rhai engine and Rhai policy

@@ -73,9 +73,13 @@ fn load_input_bindings_defaults(
             .entries()
             .iter()
             .filter(|entry| entry.twin_id.is_none() && entry.asset_path.ends_with(".json"))
-            .map(|entry| PendingInputBindingsAsset {
-                path: entry.asset_path.clone(),
-                handle: entry.handle.clone(),
+            .filter_map(|entry| {
+                entry
+                    .source_handle()
+                    .map(|handle| PendingInputBindingsAsset {
+                        path: entry.asset_path.clone(),
+                        handle: handle.clone(),
+                    })
             })
             .collect();
         state.scan_started = true;
