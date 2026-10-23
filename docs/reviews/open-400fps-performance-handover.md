@@ -40,6 +40,18 @@ claimed from it.
 All original loading, coupled-tick, graphics, complete-mission and platform
 acceptance targets remain open.
 
+The published-pin diagnostic runs in `*-portable-proof-profile/` retain unchanged
+source hashes, clear retained diagnostics, inspected final images and verified
+native capture/CSV output. Tesla admission is 5.455 s, Summer 5.899 s and Griffin
+57.028 s; Griffin's subsequent cache-populated run remains 53.926 s. Final
+240-tick median/p95 service times are 6.126/8.353 ms for Tesla, 9.769/15.161 ms
+for Summer and 10.936/16.437 ms for the first Griffin run. These instrumented,
+contention-affected observations are not clean performance or mission acceptance.
+The coupled initializer still takes 12.510 s with 16,414 native-cache hits out
+of 16,482 requests. No whole-scene speedup follows from the read-discovery
+microbenchmark. Continue profiling constructor term/key work and live port-write
+preflight; all owned sessions, collectors and exporters are closed.
+
 ## Native surface-terminal reuse during projection
 
 The stage owner reuses each prim's resolved render binding and resolves its
