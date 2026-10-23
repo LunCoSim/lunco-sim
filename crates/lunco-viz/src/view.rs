@@ -53,6 +53,15 @@ impl ViewTarget {
     }
 }
 
+/// Shared horizontal viewport supplied by a time-series composition.
+#[derive(Clone, Copy)]
+pub struct SharedTimeAxis {
+    /// Native plot linking identity; Y axes remain independent.
+    pub group: egui::Id,
+    /// Earliest and latest timestamps across the displayed native histories.
+    pub span_s: [f64; 2],
+}
+
 /// Context passed to a viz kind's 2D render path.
 ///
 /// Carries the egui `Ui` to paint into plus a capability-narrowed
@@ -65,4 +74,6 @@ impl ViewTarget {
 pub struct Panel2DCtx<'a, 'w> {
     pub ui: &'a mut egui::Ui,
     pub wb: &'a mut lunco_workbench_core::PanelCtx<'w>,
+    /// Shared X viewport only. No signal is resampled or retimestamped.
+    pub time_axis: Option<SharedTimeAxis>,
 }

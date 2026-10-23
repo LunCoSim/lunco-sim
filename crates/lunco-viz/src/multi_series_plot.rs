@@ -775,7 +775,29 @@ pub fn render_multi_series_plot(
 #[cfg(test)]
 mod follow_tests {
     use super::{follow_latest_x, following_bounds};
+    use crate::shared_time_axis::shared_time_span;
     use egui_plot::{Line, Plot, PlotBounds, PlotMemory};
+
+    #[test]
+    fn shared_time_axes_align_late_start_and_idle_histories() {
+        // A sensor starts after settling; another channel retains setup and
+        // stops publishing earlier. Neither is a different time origin.
+        let spans = [[2.016_666_7, 6.1], [0.0, 3.0]];
+        let shared = shared_time_span(spans).unwrap();
+        assert_eq!(shared, [0.0, 6.1]);
+        let contexts = [egui::Context::default(), egui::Context::default()];
+        for context in &contexts {
+            let (_, bounds) = frame(context, Some(shared), true, Some(5.0));
+            assert!((bounds.min()[0] - 1.1).abs() < 1e-9);
+            assert!((bounds.max()[0] - 6.1).abs() < 1e-9);
+        }
+        // Independent views keep their original behavior when not grouped.
+        assert_ne!(
+            following_bounds(2.016_666_7, 6.1, 5.0),
+            following_bounds(0.0, 3.0, 5.0)
+        );
+        assert_eq!(shared_time_span([]), None);
+    }
 
     fn frame(
         ctx: &egui::Context,

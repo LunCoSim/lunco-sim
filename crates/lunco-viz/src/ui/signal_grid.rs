@@ -34,6 +34,9 @@ pub struct ConfigureSignalGrid {
     pub title: String,
     pub columns: u32,
     pub signals: Vec<SignalGridEntry>,
+    /// Link the time axes and follow one common history interval. Defaults to
+    /// true for a new grid; false leaves independently framed plots.
+    pub sync_time_axes: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -41,6 +44,7 @@ struct SignalGrid {
     title: String,
     columns: usize,
     plots: Vec<VizId>,
+    sync_time_axes: bool,
 }
 
 // Like VisualizationRegistry, composition survives scene replacement. Its
@@ -144,12 +148,19 @@ fn on_configure_signal_grid(
             registry.remove(id);
         }
     }
+    let sync_time_axes = request.sync_time_axes.unwrap_or_else(|| {
+        grids
+            .0
+            .get(&request.grid)
+            .is_none_or(|grid| grid.sync_time_axes)
+    });
     grids.0.insert(
         request.grid,
         SignalGrid {
             title: request.title.clone(),
             columns: request.columns as usize,
             plots,
+            sync_time_axes,
         },
     );
     Ok(Ack::new(OpId::new()))
@@ -196,6 +207,17 @@ impl InstancePanel for SignalGridPanel {
             return;
         };
         let bounds = ui.available_rect_before_wrap();
+        let time_axis = if grid.sync_time_axes {
+            ctx.resource::<VisualizationRegistry>()
+                .zip(ctx.resource::<SignalRegistry>())
+                .and_then(|(plots, signals)| grid_time_span(&grid, plots, signals, Some(ui.ctx())))
+                .map(|span_s| crate::view::SharedTimeAxis {
+                    group: ui.id().with(("signal_grid_time", instance)),
+                    span_s,
+                })
+        } else {
+            None
+        };
         let rows = grid.plots.len().div_ceil(grid.columns);
         let gap = 8.0_f32
             .min(bounds.width() / (grid.columns as f32 * 4.0))
@@ -212,10 +234,38 @@ impl InstancePanel for SignalGridPanel {
             );
             // The ordinary plot owns history caching, transforms, labels,
             // follow-latest and typed appearance controls in every cell.
-            VizPanel.render(&mut child, ctx, plot.raw());
+            VizPanel.render_with_time_axis(&mut child, ctx, plot.raw(), time_axis);
         }
         ui.allocate_rect(bounds, egui::Sense::hover());
     }
+}
+
+/// Read endpoint metadata from the existing history owner; do not scan samples
+/// or create another history/cache for the grid.
+fn grid_time_span(
+    grid: &SignalGrid,
+    plots: &VisualizationRegistry,
+    signals: &SignalRegistry,
+    context: Option<&egui::Context>,
+) -> Option<[f64; 2]> {
+    crate::shared_time_axis::shared_time_span(
+        grid.plots
+            .iter()
+            .filter_map(|id| plots.get(*id))
+            .filter(|plot| {
+                context
+                    .map_or_else(
+                        || LinePlotStyle::load(plot),
+                        |context| LinePlotStyle::load_cached(context, plot),
+                    )
+                    .x_signal
+                    .is_none()
+            })
+            .flat_map(|plot| plot.inputs.iter())
+            .filter(|binding| binding.visible && binding.role == "y")
+            .filter_map(|binding| signals.scalar_history(&binding.source))
+            .filter_map(|history| Some([history.front()?.time, history.back()?.time])),
+    )
 }
 
 pub(crate) struct InspectSignalGridProvider;
@@ -244,7 +294,9 @@ impl lunco_api::queries::ApiQueryProvider for InspectSignalGridProvider {
         Ok(Some(
             api_value!({"grids": grids.into_iter().map(|(id, grid)| api_value!({
             "grid": *id, "title": grid.title.clone(), "columns": grid.columns,
-            "plots": grid.plots.iter().map(|id| id.raw()).collect::<Vec<_>>()
+            "plots": grid.plots.iter().map(|id| id.raw()).collect::<Vec<_>>(),
+            "sync_time_axes": grid.sync_time_axes,
+            "time_span_s": grid_time_span(grid, world.resource::<VisualizationRegistry>(), world.resource::<SignalRegistry>(), None)
         })).collect::<Vec<_>>()}),
         ))
     }
