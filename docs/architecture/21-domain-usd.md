@@ -336,6 +336,14 @@ target lists; attribute connections remain a separate surface. The
 `native_relationships` production gate checks query discovery and live target
 clearing, while the focused snapshot test compares native and prepared readers.
 
+Collection query construction and expansion share the native `StageView` path.
+During one immutable snapshot, native-equivalent membership queries reuse one
+successful expansion and share its owned result. The query-reuse state stays
+local to that worker call; no native query or stage handle crosses the prepared
+asset boundary. Native evaluator queries remain distinct, and later snapshots
+build fresh queries and memberships. Live reads continue to evaluate the current
+stage. Collection failures retain their owning diagnostic.
+
 The public composed-stage reader, StageView, and prepared-reader contracts live
 in `crates/lunco-usd-bevy-stage/tests/stage_reads.rs`. They use in-memory
 `StageRecipe` closures, so fixture edits do not touch the asset filesystem and

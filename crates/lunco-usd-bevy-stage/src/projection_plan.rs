@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use bevy::prelude::Transform;
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::Stage;
+use openusd::usd::{MembershipQuery, Stage};
 
 use crate::{MaterialPurpose, StageView, UsdRead, UsdReadPrimFacts};
 use lunco_usd_compose::recipe::StageRecipe;
@@ -98,7 +98,7 @@ struct UsdStageProjectionData {
     type_indices: HashMap<String, Vec<usize>>,
     /// Composed applied API schema → prim indices, built with the type index.
     api_schema_indices: HashMap<String, Vec<usize>>,
-    collections: HashMap<(String, String), Result<Vec<String>, String>>,
+    collections: HashMap<(String, String), Result<Arc<Vec<String>>, String>>,
     prim_indices: HashMap<String, usize>,
     stage_metadata: HashMap<String, Value>,
     time_codes_per_second: f64,
@@ -195,6 +195,12 @@ impl UsdStageProjectionPlan {
             ..UsdStageProjectionData::default()
         };
 
+        // Native query equality certifies reuse only within this immutable stage.
+        // Evaluator queries remain distinct under that native contract.
+        let mut collection_expansions: Vec<(MembershipQuery, Arc<Vec<String>>)> = Vec::new();
+        let mut collection_requests = 0;
+        let mut collection_reuses = 0;
+        let mut collection_expansion_count = 0;
         for path in paths {
             let path_string = path.to_string();
             let active = reader
@@ -419,14 +425,44 @@ impl UsdStageProjectionPlan {
 
             let collections_span = bevy::log::debug_span!("usd_projection_collections").entered();
             for instance in collection_names {
+                collection_requests += 1;
                 let members = reader
-                    .collection_members(&path, &instance)
-                    .map(|members| members.into_iter().map(|p| p.to_string()).collect());
+                    .collection_membership_query(&path, &instance)
+                    .and_then(|query| {
+                        if let Some((_, members)) = collection_expansions
+                            .iter()
+                            .find(|(previous, _)| previous == &query)
+                        {
+                            collection_reuses += 1;
+                            return Ok(members.clone());
+                        }
+                        let expansion_span =
+                            bevy::log::debug_span!("usd_projection_collection_expansion").entered();
+                        collection_expansion_count += 1;
+                        let members = Arc::new(
+                            reader
+                                .expand_collection_membership(&query)?
+                                .into_iter()
+                                .map(|path| path.to_string())
+                                .collect::<Vec<_>>(),
+                        );
+                        drop(expansion_span);
+                        if query.expression_evaluator().is_none() {
+                            collection_expansions.push((query, members.clone()));
+                        }
+                        Ok(members)
+                    });
                 data.collections
                     .insert((path_string.clone(), instance), members);
             }
             drop(collections_span);
         }
+        bevy::log::debug!(
+            collection_requests,
+            collection_reuses,
+            collection_expansion_count,
+            "prepared native collection memberships"
+        );
         for diagnostic in stage.composition_errors() {
             bevy::log::warn!(target: "usd-bevy", %diagnostic, "USD composition diagnostic");
         }

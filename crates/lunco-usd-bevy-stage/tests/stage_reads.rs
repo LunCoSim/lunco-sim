@@ -891,3 +891,86 @@ def Xform "World" (
         );
     }
 }
+
+#[test]
+fn prepared_collections_preserve_native_equivalence_and_stage_edits() -> Result<()> {
+    use lunco_usd_bevy_stage::UsdStageProjectionPlan;
+    use openusd::sdf::Path as SdfPath;
+    use openusd::usd::CollectionAPI;
+
+    let recipe = StageRecipe::from_source(
+        "collections.usda",
+        r#"#usda 1.0
+def Xform "World" {
+    def Scope "Group" {
+        double value = 1
+        def Scope "Child" { double value = 2 }
+        def Scope "Excluded" {}
+    }
+    def Scope "Other" {}
+    def Scope "First" (prepend apiSchemas = ["CollectionAPI:members"]) {
+        uniform token collection:members:expansionRule = "expandPrimsAndProperties"
+        rel collection:members:includes = </World/Group>
+        rel collection:members:excludes = </World/Group/Excluded>
+    }
+    def Scope "Second" (prepend apiSchemas = ["CollectionAPI:members"]) {
+        uniform token collection:members:expansionRule = "expandPrimsAndProperties"
+        rel collection:members:includes = </World/Group>
+        rel collection:members:excludes = </World/Group/Excluded>
+    }
+    def Scope "Expression" (prepend apiSchemas = ["CollectionAPI:members"]) {
+        uniform token collection:members:mode = "expression"
+        pathExpression collection:members:membershipExpression = "/World/Group//"
+    }
+}
+"#,
+    );
+    let stage = build_stage_from_closure(&recipe)?;
+    let first = CollectionAPI::from_prim_unchecked(stage.prim("/World/First")?, "members");
+    let second = CollectionAPI::from_prim_unchecked(stage.prim("/World/Second")?, "members");
+    let expression =
+        CollectionAPI::from_prim_unchecked(stage.prim("/World/Expression")?, "members");
+    assert!(first.compute_membership_query()? == second.compute_membership_query()?);
+    assert!(expression.compute_membership_query()? != expression.compute_membership_query()?);
+    let plan = UsdStageProjectionPlan::from_stage(&stage)?;
+    let live = StageView::new(&stage);
+    for name in ["First", "Second", "Expression"] {
+        let path = SdfPath::new(&format!("/World/{name}"))?;
+        assert_eq!(
+            plan.collection_members(&path, "members"),
+            live.collection_members(&path, "members")
+        );
+    }
+    let first_path = SdfPath::new("/World/First")?;
+    let second_path = SdfPath::new("/World/Second")?;
+    let old = plan
+        .collection_members(&first_path, "members")
+        .map_err(anyhow::Error::msg)?;
+    assert!(old.contains(&SdfPath::new("/World/Group.value")?));
+    assert!(!old.contains(&SdfPath::new("/World/Group/Excluded")?));
+    second.includes_rel().set_targets(["/World/Other"])?;
+    let changed = UsdStageProjectionPlan::from_stage(&stage)?;
+    assert_eq!(
+        changed
+            .collection_members(&first_path, "members")
+            .map_err(anyhow::Error::msg)?,
+        old
+    );
+    assert_eq!(
+        plan.collection_members(&second_path, "members")
+            .map_err(anyhow::Error::msg)?,
+        old
+    );
+    let expected = live
+        .collection_members(&second_path, "members")
+        .map_err(anyhow::Error::msg)?;
+    assert!(expected.contains(&SdfPath::new("/World/Other")?));
+    assert_ne!(expected, old);
+    assert_eq!(
+        changed
+            .collection_members(&second_path, "members")
+            .map_err(anyhow::Error::msg)?,
+        expected
+    );
+    Ok(())
+}

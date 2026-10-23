@@ -268,6 +268,11 @@ snapshot admission and queries. Prepared plans preserve those names in
 composed property order; never infer property kinds by attempting target reads
 or discard a relationship because it has no targets. Keep attribute connections
 separate and qualify changes through the `native_relationships` production gate.
+Collection snapshots reuse native-equivalent membership queries only during
+one immutable preparation. Their owned member lists may be shared; the native
+queries remain worker-local and are discarded. Native evaluator queries are
+not equivalent under OpenUSD's equality contract. A live edit or later snapshot
+must read its current stage rather than a previous snapshot's membership.
 Do not add frame-count timeouts, per-frame load polls, or direct filesystem
 reads to this path. After admission,
 `DocumentChanged` and stage-asset lifecycle events wake the single

@@ -1019,6 +1019,13 @@ self time moves into those children and is not a loading improvement by itself.
 Native typed relationship enumeration avoids target-resolution probes on every
 attribute. The prepared reader retains empty relationships; verify the
 `native_relationships` gate as well as the complete snapshot timing.
+For collection costs, inspect `usd_projection_collection_expansion` and the
+`prepared native collection memberships` counts. Immutable preparation reuses
+successful expansions only when OpenUSD's membership queries compare equal;
+evaluator queries remain distinct. Compare inclusive collection/snapshot spans
+on matching Twin sources, and qualify native membership errors through the
+`usd_collection_lint` production gate. The focused stage-read test covers
+exclusions, property expansion, expressions and fresh membership after edits.
 `usd_twin_source_decode` and `usd_twin_stage_input` measure the two worker jobs
 before scene mounting. Time-sample extraction resolves each native table once;
 value capture and sampled asset-source capture reuse that existing table.

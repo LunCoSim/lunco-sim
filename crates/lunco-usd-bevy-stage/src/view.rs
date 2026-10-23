@@ -8,7 +8,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::{CollectionAPI, PrimPredicate, Stage, compute_included_paths};
+use openusd::usd::{CollectionAPI, MembershipQuery, PrimPredicate, Stage, compute_included_paths};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from the runtime adapter's `NonSend`
@@ -119,14 +119,28 @@ impl<'a> StageView<'a> {
         prim: &SdfPath,
         instance_name: &str,
     ) -> Result<Vec<SdfPath>, String> {
-        let collection = CollectionAPI::from_prim_unchecked(
-            self.stage.prim(prim).map_err(|e| e.to_string())?,
+        let query = self.collection_membership_query(prim, instance_name)?;
+        self.expand_collection_membership(&query)
+    }
+
+    pub(crate) fn collection_membership_query(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<MembershipQuery, String> {
+        CollectionAPI::from_prim_unchecked(
+            self.stage.prim(prim).map_err(|error| error.to_string())?,
             instance_name,
-        );
-        let query = collection
-            .compute_membership_query()
-            .map_err(|error| format!("could not compute collection membership: {error}"))?;
-        compute_included_paths(self.stage, &query, PrimPredicate::DEFAULT)
+        )
+        .compute_membership_query()
+        .map_err(|error| format!("could not compute collection membership: {error}"))
+    }
+
+    pub(crate) fn expand_collection_membership(
+        &self,
+        query: &MembershipQuery,
+    ) -> Result<Vec<SdfPath>, String> {
+        compute_included_paths(self.stage, query, PrimPredicate::DEFAULT)
             .map_err(|error| format!("could not expand collection membership: {error}"))
     }
 

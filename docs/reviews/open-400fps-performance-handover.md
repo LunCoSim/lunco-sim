@@ -1,5 +1,49 @@
 # High-quality realtime performance handover
 
+## Native collection expansion reuse — 2026-10-23
+
+One immutable USD projection snapshot now reuses successful collection
+expansions when native OpenUSD membership queries compare equal. Owned member
+lists share their storage; native queries stay local to the worker call.
+Expression evaluators remain distinct under native equality. Fresh snapshots
+and live reads evaluate the current stage, and native errors retain their
+existing diagnostic path. No dependency changes or persistent cache are added.
+
+The focused `prepared_collections_preserve_native_equivalence_and_stage_edits`
+test passes, covering exclusions, property expansion, expressions, retained old
+snapshot values and current membership after edits. The production
+`usd_collection_lint` gate passes all **three checks**, including its malformed
+collection case (PID 935183/API 4941, exit zero). The regular Tracy build passes.
+
+Fresh baseline and candidate Griffin captures have matching recorded Twin source
+hashes, unchanged within each run. Inclusive collection work falls from
+**1,552.85 ms to 188.54 ms**; the main snapshot's 48 requests require **seven**
+native expansions and reuse 41 results. Complete inclusive fact extraction falls
+from **4,790.48 ms to 3,215.37 ms**. Physics admission is 38.38 s before and
+24.27 s after, but construction, caching and scheduling also vary; that complete
+admission difference cannot be attributed to collection reuse.
+
+Evidence is under `.cache/codex-evidence/performance-20261023/`:
+`collection-query-reuse-{test,build,production}.log`,
+`griffin-collection-reuse-baseline/` and `griffin-collection-reuse-profile/`,
+including `snapshot-phase-comparison.json`. Both captures pass native framing,
+compressed-payload, owned PID, 1,000,000 ns sampling and inclusive/self CSV-export
+checks. Baseline PID 923914/API 4942 and candidate PID 935955/API 4943, their
+collectors and exporters are closed. The candidate's runtime diagnostics and
+script errors are clear; its final screenshot was inspected. This is not
+completed landing or settled-terrain acceptance.
+
+The foreign USD session (PID 53186/API 4391) remained active during profiling;
+a foreign tutorials Tesla session (PID 924029/API 4387) started during the
+baseline and remained active in the candidate run. Their distinct executable,
+working directory and parent were recorded without controlling them. These are
+contended attribution measurements, not clean physics or graphics acceptance.
+Candidate regular Tracy binary SHA-256 is
+`5faba372d1c3cad0f77c98b934c6caa1ec1279f15be86017c365ace001d80756`.
+The strict sub-second loading, sub-millisecond physics and graphics targets
+remain open. Continue with the remaining snapshot groups and Modelica
+construction/compilation before repeating complete acceptance cohorts.
+
 ## Native relationship discovery and complete snapshot attribution — 2026-10-23
 
 `lunco-usd-bevy-stage` uses native typed relationship enumeration rather than
