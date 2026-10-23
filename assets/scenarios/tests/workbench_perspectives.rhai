@@ -39,6 +39,25 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(contains_id(state.perspectives, "rover_build") && contains_id(state.perspectives, "editor"), "application policy assembled the engineering tasks"));
         let rejected = cmd("OpenTab", #{kind: "missing-panel-kind", instance: 0});
         this.checks.push(t_true(!rejected.ok && rejected.error.contains("missing-panel-kind"), "unknown instance kinds reject visibly without opening a tab"));
+        must_cmd("ActivatePerspective", #{id: "editor"});
+        must_cmd("ResetWorkspaceLayout", #{}); this.phase = 16; return;
+    }
+    if this.phase == 16 {
+        if state.active_perspective != "editor" { return; }
+        this.checks.push(t_true(!state.docked_panels.contains("usd_connection_canvas") && !state.docked_panels.contains("rhai_editor") && !state.docked_panels.contains("usd::viewport"), "Editor starts without content tabs"));
+        print("PERSPECTIVES_CAPTURE:editor-empty"); this.resume_at = this.elapsed + 1.5;
+        this.phase = 165; return;
+    }
+    if this.phase == 165 {
+        must_cmd("FocusPanel", #{id: "usd_connection_canvas"}); this.phase = 17; return;
+    }
+    if this.phase == 17 {
+        if !contains_id(state.rendered_panels, "usd_connection_canvas") { return; }
+        this.checks.push(t_true(state.docked_panels.contains("usd_connection_canvas"), "explicit tool requests open Connections in Editor"));
+        must_cmd("ResetWorkspaceLayout", #{}); this.phase = 18; return;
+    }
+    if this.phase == 18 {
+        this.checks.push(t_true(!state.docked_panels.contains("usd_connection_canvas") && !state.docked_panels.contains("rhai_editor") && !state.docked_panels.contains("usd::viewport"), "explicit reset restores the empty Editor center"));
         must_cmd("ActivatePerspective", #{id: "rover_build"}); this.phase = 1; return;
     }
     if this.phase == 1 {

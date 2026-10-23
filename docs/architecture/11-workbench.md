@@ -401,7 +401,7 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | View (`sandbox_view`) | Observe and operate a mission | Full-window live scene |
 | Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Analyze (`analysis`) | Inspect and compare simulation signals | Telemetry above Entities; Graphs center; Ports right |
-| Editor (`editor`) | Edit an explicit USD assembly document | Prim/Twin tabs left; isolated preview/behavior center; Inspector/Requirements tabs above change History right |
+| Editor (`editor`) | Edit an explicitly opened document | Prim/Twin tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
 | Lunica (`modelica_analyze`) | Engineer continuous models | Twin/Files browser; Welcome or open model views center |
 
 Optional panel contributions still use `Panel::visible_in_perspective`, for
@@ -610,6 +610,8 @@ Toggle Activity Bar directly available, then groups panel checkboxes into
 Build, Analyze, Editor, and Lunica submenus according to `PanelMenuGroup`;
 unclassified integrations use Other. The Editor default places Prim and Twin
 in the same left tab group, preserving the full height for either browser.
+Its center starts empty: Connections, source editors, and USD previews open
+only through an explicit document/tool action or a declared perspective layout.
 SysML Requirements and Requirement details share the upper-right tab group
 with Inspector; details follows the selected requirement. Change History
 occupies the lower-right pane.
