@@ -359,6 +359,7 @@ impl SurfaceOracle {
         // them from origin + direction * t can round into the cell just exited.
         // Each iteration crosses at least one boundary, including zero-length
         // entry spans; no offset or epsilon changes the physical ray.
+        let coarse_span = bevy::log::debug_span!("terrain_occlusion_coarse_traversal").entered();
         while near < far {
             let exit = |axis: usize, d: f64, o: f64| {
                 if d == 0.0 {
@@ -412,10 +413,12 @@ impl SurfaceOracle {
                 }
             }
         }
+        drop(coarse_span);
         // Search all coarse cells before refining uncertain boundaries. A
         // grazing contact must not consume the budget before a later definite
         // blocker can be found. Breadth-first refinement has the same property
         // across unresolved cells and its storage is bounded by the work quota.
+        let _refinement_span = bevy::log::debug_span!("terrain_occlusion_refinement").entered();
         while let Some((cell, a, b, depth, rect)) = pending.pop_front() {
             if depth != 0 {
                 match classify(cell, a, b, rect)? {

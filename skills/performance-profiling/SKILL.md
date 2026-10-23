@@ -1383,6 +1383,15 @@ wall-clock physics cadence and UI isolation are required, measure the whole
 simulation-owner boundary and consume immutable snapshots from the UI/render
 side; separate cycle labels alone do not provide thread isolation.
 
+For physical terrain Sun visibility, enable only
+`RUST_LOG=info,lunco_terrain_surface::occlusion=debug` for attribution.
+`terrain_occlusion_coarse_traversal` and `terrain_occlusion_refinement` separate
+raster traversal from unresolved interval refinement. Their self times exclude
+the nested bounds-miss, exact-footprint and point-sample spans; do not add
+inclusive parents to their children. These spans are disabled by the normal
+info filter. Compare the complete surface/source cohort and preserve exact ray
+coordinates, conservative bounds and terminal budget errors when optimizing it.
+
 Inspect effective compiler profiles as well as runtime work. The root's explicit
 development overrides optimize `lunco-physics`, the workspace glam math owner
 and `lunco-luncosim-simulation`, which instantiates native systems with USD hooks,

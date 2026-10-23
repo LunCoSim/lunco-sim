@@ -1,5 +1,52 @@
 # High-quality realtime performance handover
 
+## Summer CPU/GPU and terrain-ray attribution — 2026-10-23
+
+The native GPU export of the direct-topology capture contains 803 opaque and
+shadow passes in trace seconds 8–23. Camera shadow GPU p50/p95 is
+1.493/2.371 ms, and opaque GPU p50/p95 is 0.684/0.688 ms. The shadow delegate
+is nested inside its named camera scope; these are individual pass timings,
+not whole-frame acceptance. The roughly 19 ms instrumented application frames
+must not be reported as GPU execution time. The native GPU export exits zero;
+`topology-direct-profile/summer/gpu-zones.csv` retains the events.
+
+An isolated compiler-setting experiment at identical Summer sources gives
+`publish_sun_visibility` mean self time 1.308 ms versus 1.328 ms at baseline,
+with no material fixed-tick improvement. Its production solar-visibility gate
+passes eight checks, with identical printed physical samples, and its malformed
+sampling gate terminates with expected `solar-sample-unavailable`, exit zero.
+The experiment's compiler overrides are discarded; the regular build settings
+are restored. Evidence is `terrain-kernel-*` under the current evidence root.
+
+The retained code adds two debug-only timing spans at the terrain occlusion
+owner. With `RUST_LOG=info,lunco_terrain_surface::occlusion=debug`, a fresh
+regular Tracy build attributes 1689.03 ms aggregate self time to coarse raster
+traversal over 10,935 rays. Refinement self time is 90.52 ms; uncached height
+bounds are 7.14 ms, exact-footprint bounds 144.97 ms and point samples 133.61 ms.
+The solar publisher's remaining self time is 95.16 ms over 1233 calls.
+These are disjoint self times across the captured startup/active window, not
+per-frame acceptance. They identify traversal as the next algorithmic target;
+new broad procedural caches or more compiler tuning are not justified by this
+sample. Exact ray coordinates and conservative certification remain required.
+
+The next candidate is bounded aggregation of existing whole-cell certificates
+over aligned intervals within one raster row or column. Their union can reject
+a clear stretch in one test instead of visiting every cell, provided the fresh
+ray segment remains contained. It needs moving-ray, surface-replacement,
+capacity, grazing and quota tests before production comparison; no such
+aggregation is implemented by this checkpoint.
+
+The attribution artifact is SHA-256
+`bef96c53f34783064bf8bea4c91bcbcd70daa1d8ce4d27ff7431cd78a520acd7`;
+the native capture is
+`scripts/perf/captures/default-summer-terrain-traversal-profile-20261023.tracy`.
+Framing, payload size, owned PID 419209, 1,000,000 ns sampling period and native
+CPU export pass. Summer source hashes match the direct-topology run and remain
+unchanged, with clear runtime diagnostics. Owned API 4896/Tracy 8196 and both
+processes are closed. The foreign USD app remains active, so the diagnostic is
+contention-affected. The normal info filter disables the new spans; no geometry,
+solver, sampling, cache capacity or quality setting changes are retained.
+
 ## Direct canonical topology preparation — 2026-10-23
 
 `lunco-usd-sim` composes the exact captured canonical recipe on its admitted
