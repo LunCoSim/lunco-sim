@@ -141,6 +141,7 @@ impl Plugin for ScreenshotPlugin {
         // The `science::take_photo` tool fires `CaptureFromCamera`, so it is advertised only
         // where that command actually exists.
         register_science_tools();
+        crate::presentation::install(app);
         // Registers the observers AND the reflected types for both commands. Internal Rhai and
         // behaviour-tree triggers use correlation id 0 and remain fire-and-forget; HTTP calls
         // receive the actual file path or a correlated failure.
@@ -1557,6 +1558,7 @@ fn start_recording_when_scene_ready(
     // `Option`: the bus belongs to the workbench UI, which a headless/API-only
     // binary does not add. Absent simply means clause (3) has nothing to say.
     bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
+    ui_presentation: Option<Res<crate::presentation::CaptureUiPresentation>>,
     mut commands: Commands,
 ) {
     let Some(mut pending) = pending else { return };
@@ -1569,6 +1571,11 @@ fn start_recording_when_scene_ready(
         render_readiness.as_deref(),
         capture_target.is_some(),
     );
+    let blocker = blocker.or_else(|| {
+        ui_presentation.as_ref().filter(|ui| !ui.ready()).map(|_| {
+            "captured UI has not submitted a clean frame without loading indicators".to_string()
+        })
+    });
     if let Some(reason) = blocker {
         if pending.last_blocker.as_deref() != Some(reason.as_str()) {
             pending.last_blocker = Some(reason.clone());
@@ -1632,6 +1639,7 @@ fn drive_offline_clock(
     // Visual refinement is independent work. Keep the logical frame fixed while
     // its active readiness projection is present on the shared status bus.
     status_bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
+    ui_presentation: Option<Res<crate::presentation::CaptureUiPresentation>>,
     fixed_time: Res<Time<bevy::time::Fixed>>,
     virtual_time: Res<Time<bevy::time::Virtual>>,
     step_control: Option<Res<lunco_time::SimulationStepControl>>,
@@ -1688,6 +1696,18 @@ fn drive_offline_clock(
         info!("[offline-record] offscreen render warm-up complete; capturing frame 0");
     }
 
+    // Readiness can change after activation, including during the UI lifecycle.
+    // Keep this logical image fixed until both domain work and the rendered
+    // loading-overlay acknowledgement are clear. No dirty image is numbered.
+    if visual_work_pending(status_bus.as_deref())
+        || ui_presentation.as_ref().is_some_and(|ui| !ui.ready())
+    {
+        commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::ZERO,
+        ));
+        return;
+    }
+
     let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);
 
     if state.is_waiting_for_frame {
@@ -1730,15 +1750,6 @@ fn drive_offline_clock(
             ));
             return;
         }
-        // Time advanced this frame. If its camera move selected new terrain,
-        // hold that logical frame while bounded background work completes; do
-        // not advance physics or capture an intermediate LOD cover.
-        if terrain_stream_busy(status_bus.as_deref()) {
-            commands.insert_resource(TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::ZERO,
-            ));
-            return;
-        }
         // The frame is presentable — capture it, then hold the clock until the
         // readback delivers.
         state.last_capture_sim_tick = sim_tick.as_ref().map(|tick| tick.0);
@@ -1754,10 +1765,10 @@ fn drive_offline_clock(
     }
 }
 
-fn terrain_stream_busy(bus: Option<&lunco_status_core::status_bus::StatusBus>) -> bool {
+fn visual_work_pending(bus: Option<&lunco_status_core::status_bus::StatusBus>) -> bool {
     bus.is_some_and(|bus| {
         bus.active_progress()
-            .any(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
+            .any(|event| VISUAL_BUSY_SOURCES.contains(&event.source))
     })
 }
 
@@ -2023,11 +2034,15 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
         _params: &lunco_api_core::ApiValue,
     ) -> lunco_api::ApiQueryResult {
         let state = world.resource::<OfflineRecordingState>();
+        let ui = world.get_resource::<crate::presentation::CaptureUiPresentation>();
         Ok(Some(lunco_api_core::api_value!({
             "active": state.active,
             "frame_index": state.frame_index,
             "last_capture_sim_tick": state.last_capture_sim_tick,
             "is_waiting_for_frame": state.is_waiting_for_frame,
+            "pending": world.contains_resource::<PendingShotStart>(),
+            "ui_presentation_required": ui.is_some(),
+            "ui_presentation_ready": ui.is_none_or(|ui| ui.ready()),
         })))
     }
 }
@@ -2037,18 +2052,22 @@ mod recording_readiness_tests {
     use super::*;
 
     #[test]
-    fn terrain_streaming_holds_capture_but_optional_derived_work_does_not() {
-        use lunco_status_core::status_bus::{StatusBus, TERRAIN_DERIVED_SOURCE, TERRAIN_SOURCE};
+    fn visual_work_holds_capture_but_optional_derived_work_does_not() {
+        use lunco_status_core::status_bus::{
+            RUNTIME_UI_SOURCE, StatusBus, TERRAIN_DERIVED_SOURCE, TERRAIN_SOURCE,
+        };
 
         let mut bus = StatusBus::default();
-        assert!(!terrain_stream_busy(Some(&bus)));
+        assert!(!visual_work_pending(Some(&bus)));
 
         bus.set_progress(TERRAIN_DERIVED_SOURCE, "optional", 0, 0);
-        assert!(!terrain_stream_busy(Some(&bus)));
+        assert!(!visual_work_pending(Some(&bus)));
 
         bus.set_progress(TERRAIN_SOURCE, "terrain tiles", 0, 0);
-        assert!(terrain_stream_busy(Some(&bus)));
+        assert!(visual_work_pending(Some(&bus)));
         bus.remove_progress(TERRAIN_SOURCE);
-        assert!(!terrain_stream_busy(Some(&bus)));
+        assert!(!visual_work_pending(Some(&bus)));
+        bus.set_progress(RUNTIME_UI_SOURCE, "recorded HUD extraction", 0, 0);
+        assert!(visual_work_pending(Some(&bus)));
     }
 }

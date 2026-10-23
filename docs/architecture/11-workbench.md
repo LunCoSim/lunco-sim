@@ -52,6 +52,13 @@
 
 ## 1. What "workbench" means here
 
+Windowed offline capture consumes the workbench's painted loading visibility
+through `lunco-capture::presentation::CaptureUiPresentation`. Capture requires
+the current clean revision to have completed render submission. The status
+bar remains visible during actual loading; the recorder waits rather than
+hiding it. The same gate holds images when loading returns during a take.
+Offscreen hosts without a captured UI have no workbench acknowledgement.
+
 A **workbench** is the application shell of a LunCoSim app — the chrome around
 the 3D world. The `lunco-workbench-core` crate defines the stable panel,
 perspective, menu, read-model, scheduling-label, and command-payload

@@ -32,6 +32,11 @@ pub(super) fn render_layout(
             .get_resource::<OfflineRecordingPresentation>()
             .is_some_and(|p| p.retain_workbench_chrome)
     {
+        if let Some(mut presentation) =
+            world.get_resource_mut::<lunco_capture::presentation::CaptureUiPresentation>()
+        {
+            presentation.set_loading_visible(false);
+        }
         // Presentation panels are deliberate scene overlays, just like a HUD;
         // they survive clean capture without restoring any shell chrome.
         render_floating_panels(ctx, layout, world, theme, ctx.content_rect());

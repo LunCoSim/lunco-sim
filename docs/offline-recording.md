@@ -43,6 +43,17 @@ elapsed time stays continuous and recording wall time creates no catch-up debt.
 The recording CLI arms through the same readiness gate and recorder state as the
 commands below — never a parallel implementation:
 
+Windowed UI recordings also require a clean rendered UI presentation. The
+workbench publishes whether its current pass paints loading progress; the
+render world acknowledges that clean revision after submission. `lunco-capture`
+waits for both domain readiness and this acknowledgement before starting,
+and checks them again before every image. Loading that returns during a take
+holds the logical image without numbering a frame or admitting extra time.
+This is a capture condition, not a hidden indicator or a post-production crop.
+Hosts without a captured UI do not require the workbench acknowledgement.
+`GetOfflineRecordingStatus` exposes `pending`, `ui_presentation_required` and
+`ui_presentation_ready` alongside the frame/cycle receipt.
+
 ```sh
 # Windowed: record the live window once the scene's visuals are ready
 luncosim --record-offline take.mp4 --record-fps 30

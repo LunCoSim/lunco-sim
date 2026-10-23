@@ -1278,6 +1278,14 @@ pub(crate) fn render_status_bar_inner(
         (notification, primary_progress)
     };
     let mut history = Vec::new();
+    #[cfg(feature = "api")]
+    if let Some(mut presentation) =
+        world.get_resource_mut::<lunco_capture::presentation::CaptureUiPresentation>()
+    {
+        let loading_visible = primary_progress.is_some()
+            || matches!(&notification, StatusBarNotificationSnapshot::Event(event) if event.level == StatusLevel::Progress);
+        presentation.set_loading_visible(loading_visible);
+    }
     let mut history_loaded = false;
     let latest = match &notification {
         StatusBarNotificationSnapshot::Event(event) => Some(event),
