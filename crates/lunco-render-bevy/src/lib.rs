@@ -12,6 +12,7 @@
 //!
 //! See `docs/architecture/render-decoupling.md`.
 
+mod backend;
 mod data_texture;
 mod env_light;
 mod gpu_culling;
@@ -168,6 +169,7 @@ impl Plugin for LuncoRenderPlugin {
                 .add_systems(PostUpdate, apply_usd_prim_display_modes);
         }
         scene_camera::build(app);
+        backend::build(app);
         scene_depth::build(app);
         gpu_culling::build(app);
         data_texture::build(app);

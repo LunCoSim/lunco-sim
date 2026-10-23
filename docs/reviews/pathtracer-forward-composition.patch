@@ -1,0 +1,32 @@
+--- a/src/pathtracer/mod.rs
++++ b/src/pathtracer/mod.rs
+@@ -10,7 +10,7 @@
+     schedule::{Core3d, Core3dSystems},
+     tonemapping::tonemapping,
+ };
+-use bevy_ecs::{component::Component, reflect::ReflectComponent, schedule::IntoScheduleConfigs};
++use bevy_ecs::{component::Component, reflect::ReflectComponent, schedule::{IntoScheduleConfigs, SystemSet}};
+ use bevy_reflect::{std_traits::ReflectDefault, Reflect};
+ use bevy_render::{
+     init_gpu_resource, renderer::RenderDevice, ExtractSchedule, Render, RenderApp, RenderStartup,
+@@ -26,6 +26,12 @@
+ /// This plugin is meant to generate reference screenshots to compare against,
+ /// and is not intended to be used by games.
+ pub struct PathtracingPlugin;
++
++/// Ordering point for path-traced color generation, before tonemapping.
++#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub enum PathtracingSystems {
++    Trace,
++}
+ 
+ impl Plugin for PathtracingPlugin {
+     fn build(&self, app: &mut App) {
+@@ -58,6 +64,7 @@
+             .add_systems(
+                 Core3d,
+                 pathtracer
++                    .in_set(PathtracingSystems::Trace)
+                     .after(Core3dSystems::MainPass)
+                     .before(tonemapping),
+             );

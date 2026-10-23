@@ -1925,6 +1925,7 @@ dependencies = [
  "bevy_scene",
  "bevy_shader",
  "bevy_shape",
+ "bevy_solari",
  "bevy_sprite",
  "bevy_sprite_render",
  "bevy_state",
@@ -2415,6 +2416,36 @@ dependencies = [
  "rand_distr 0.6.0",
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "bevy_solari"
+version = "0.20.0"
+dependencies = [
+ "bevy_anti_alias",
+ "bevy_app",
+ "bevy_asset",
+ "bevy_camera",
+ "bevy_color",
+ "bevy_core_pipeline",
+ "bevy_derive",
+ "bevy_diagnostic",
+ "bevy_ecs",
+ "bevy_image",
+ "bevy_light",
+ "bevy_math",
+ "bevy_mesh",
+ "bevy_pbr",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_render",
+ "bevy_shader",
+ "bevy_transform",
+ "bevy_utils",
+ "bytemuck",
+ "derive_more",
+ "tracing",
+ "wgpu",
 ]
 
 [[package]]
@@ -10055,6 +10086,7 @@ dependencies = [
  "lunco-materials",
  "lunco-physics",
  "lunco-render",
+ "lunco-settings",
  "lunco-spatial",
  "lunco-terrain-surface",
  "lunco-usd-bevy-scene",

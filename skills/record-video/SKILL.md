@@ -20,6 +20,18 @@ sequencing uses frame index, independent of machine speed. Full design:
 
 ## The one-command take (start here)
 
+For the experimental reference path tracer, select it in Graphics or use the
+Twin's `render.backend = "path_tracer"` override with a positive
+`render.samples_per_pixel`. The recorder holds each completed simulation state
+for its render samples. Verify `last_capture_samples`, frame/tick receipts and
+raw pictures; fps and a sample counter alone do not prove visual acceptance.
+An unsupported scene must report `failure`, end with `active:false` and
+`pending:false`, and produce no images. A CLI take exits with an error even if
+no image was saved. `renderer_pending_reason` instead identifies temporary
+material preparation. Keep
+renderer settings fixed throughout a take. The current compatibility boundary
+is documented in [Offline Recording](../../docs/offline-recording.md).
+
 ```sh
 # Windowless: no window/egui, renders offscreen, EXITS BY ITSELF when done
 "$LUNCOSIM_BIN" --api 4101 \
