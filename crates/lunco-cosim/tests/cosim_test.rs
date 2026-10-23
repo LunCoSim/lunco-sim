@@ -73,7 +73,7 @@ fn test_avian_body_ports_listed() {
         .spawn((
             RigidBody::Dynamic,
             Position(DVec3::new(0.0, 0.0, 0.0)),
-            LinearVelocity(DVec3::ZERO),
+            LinearVelocity(Vec3::ZERO),
         ))
         .id();
 
@@ -109,14 +109,17 @@ fn test_avian_body_ports_read_live_state() {
         .spawn((
             RigidBody::Dynamic,
             Position(DVec3::new(100.0, 1200.0, 50.0)),
-            LinearVelocity(DVec3::new(1.0, 3.2, 0.5)),
+            LinearVelocity(Vec3::new(1.0, 3.2, 0.5)),
         ))
         .id();
 
     let w = app.world();
     assert_eq!(ports().read_output_port(w, e, "position_x"), Some(100.0));
     assert_eq!(ports().read_output_port(w, e, "position_y"), Some(1200.0));
-    assert_eq!(ports().read_output_port(w, e, "velocity_y"), Some(3.2));
+    assert_eq!(
+        ports().read_output_port(w, e, "velocity_y"),
+        Some(f64::from(3.2_f32))
+    );
 }
 
 #[test]
@@ -289,7 +292,7 @@ fn test_propagate_avian_to_sim_component() {
         .spawn((
             RigidBody::Dynamic,
             Position(DVec3::new(0.0, 1200.0, 0.0)),
-            LinearVelocity(DVec3::new(0.0, 3.2, 0.0)),
+            LinearVelocity(Vec3::new(0.0, 3.2, 0.0)),
             SimComponent {
                 model_name: "Balloon".into(),
                 inputs: [("height".into(), 0.0), ("velocity".into(), 0.0)]

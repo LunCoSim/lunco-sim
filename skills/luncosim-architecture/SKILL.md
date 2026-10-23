@@ -669,8 +669,9 @@ that still use live-world access.
 
 Publish each fact through its one domain boundary before adding a consumer:
 scalar co-simulation endpoints use `PortRegistry`. Backend `declare_ports`
-publishes borrowed names through `PortDeclarationQuery`; full inspection and
-exact-name discovery consume the same owner declarations. Live writes still
+publishes borrowed names, directions and optional process-local slots through
+`PortDeclarationQuery`; full inspection and exact-name discovery consume the
+same owner declarations. Live writes still
 validate current metadata, precedence, revision and slot before committing,
 even before structural publication catches an owner edit. Snapshot copying uses
 `ScalarPortMap::upsert_samples`, whose destination hints validate every live name

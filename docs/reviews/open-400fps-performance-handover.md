@@ -1,5 +1,68 @@
 # High-quality realtime performance handover
 
+## Unified live port declarations and slots
+
+`lunco-port-core::PortDeclarationQuery` publishes a borrowed name, direction and
+optional process-local slot together. The same owner callback supplies full
+inspection and exact-name discovery; inspection retains that slot in its handle.
+Live write admission queries each candidate once and consumes the winning
+direction without another declaration lookup. Metadata, bounds, writability,
+revision, slot identity and atomic commit retain their existing checks. Every
+backend and caller uses this contract. It adds no cache, clock or Rhai policy;
+this is generic engine dispatch and validation.
+
+All 24 port-core tests pass. The diagnostic admission benchmark measures
+131,072 writes through sixteen preceding owners at 20.996 ms before and
+13.811 ms after. This is not a whole-tick result. The five affected caller test
+packages compile, including the corrected Avian native-velocity fixtures with
+explicit f32-to-f64 expectations. The regular Tracy production build passes in
+3m 58s with the same pre-existing USD unused-import warning.
+
+Local main's independent diagram navigation/presentation change (`faf8b1132`)
+is fast-forwarded without overlapping these owners. The integrated regular
+production rebuild passes in 5m 01s. An owned schema session verifies all 275
+settled commands, including `ConfigureDiagramPresentation` and both optional
+boolean fields; the generated command reference consumes that runtime schema.
+The physics gates and captures in this section precede that UI integration;
+their coupling code and inputs are unchanged.
+
+The authored ownership gate passes all twelve checks, including refusal to
+invent a `piloted` sample on a root without an input surface. The same negative
+check fails on the previous binary. The drivetrain passes eight checks and the
+non-finite observation reaches its expected terminal fault without a process
+panic. Gate receipts remain ignored in `port-declaration-gates/`.
+
+The `*-port-declaration-profile/` diagnostic runs have stable sources, clear
+retained diagnostics, inspected final images, and verified native capture
+framing, owned PIDs, 1 ms sampling periods and terminal CSV exports. Sources also
+match their preceding captured Twin cohorts. Foreign builds and simulator
+sessions remain active; cache contents and compilation counts differ.
+
+| Twin | Admission (s) | Complete FixedMain median/p95 (ms) |
+|---|---:|---:|
+| Tesla | 3.242 | 4.009 / 5.278 |
+| Summer | 7.944 | 9.296 / 21.575 |
+| Griffin | 61.790 | 11.891 / 23.805 |
+
+No controlled scene speedup follows from these captures. Griffin's write span
+averages 2.072 ms; its coupled initializer takes 29.790 s with 5,499 hits and
+10,983 compilations/evictions out of 16,482 requests. The source key remains
+`9cf16dad6cc36d49`. Native artifacts load 32,768 entries occupying 61,070,501
+bytes; the owner limits are 32,768 entries and 64 MiB. Investigate the admitted
+working set, cache keys and eviction before tuning these budgets. Each
+application publishes its complete native-artifact snapshot to the cache-relative
+`native-code-v1/stencils.json.zst` path; the older USD checkout uses that same
+relative path. The effect of cross-process publication on this miss surge is not
+established; record actual cache roots and artifact provenance next.
+
+The images show Griffin above the terrain, Summer's distant rover/terrain,
+and stationary Tesla with its existing frame/datum-unavailable HUD. They do not
+qualify landing, settled terrain, driving or complete missions. Raw evidence is
+ignored under `.cache/codex-evidence/performance-20261023/`. All owned sessions,
+collectors and exporters are closed. Loading below one second, complete ticks
+below one millisecond, graphics below ten milliseconds and the full mission and
+platform requirements remain open.
+
 ## Native execution and shared-value proof construction
 
 LunCoSim pins published Rumoca `b972002340d180034151207b7e2776a8c3c069f0`
@@ -6307,7 +6370,7 @@ raw physics cost, full replay and Apollo measurement admission remain open.
 `lunco-port-core` owns `PortDeclarationQuery`, consumed by every backend's
 `declare_ports` callback. Inspection collects the complete declaration rows in
 their existing order. A named query borrows the exact name and causality side,
-retaining only its first matching direction; map-backed owners use their name
+retaining only its first matching direction and slot; map-backed owners use their name
 index directly. The fixed propagation consumer no longer builds and copies the
 owner's complete surface to validate one resolved target. Live owner precedence,
 metadata, writability, bounds, revision and slot validation still run before the

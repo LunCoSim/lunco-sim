@@ -1269,8 +1269,18 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
             if !out.accepts_direction(lunco_port_core::ports::PortDirection::Out) {
                 return;
             }
+            if out
+                .requested_name()
+                .is_some_and(|name| split_link_class_port_name(name).is_none())
+            {
+                return;
+            }
             for (name, _) in link_port_rows(world, entity) {
-                out.declare(&name, lunco_port_core::ports::PortDirection::Out);
+                out.declare(
+                    &name,
+                    lunco_port_core::ports::PortDirection::Out,
+                    resolve_link_port_slot(world, entity, &name),
+                );
             }
         },
         metadata: |_world, _entity, name, direction| {
@@ -1305,22 +1315,14 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
             )
         },
         read_output: |world, entity, name| {
-            if let Some(slot) = resolve_link_port_slot(world, entity, name) {
-                return read_link_port_slot(world, entity, slot);
-            }
-            let state = world.get::<LinkState>(entity)?;
-            let (class_segment, suffix) = split_link_class_port_name(name)?;
-            let peers = best_per_class(state);
-            let peer = peers.get(class_segment)?;
-            class_ports(peer).find_map(|(candidate, value)| (candidate == suffix).then_some(value))
+            link_port_rows(world, entity)
+                .into_iter()
+                .find_map(|(candidate, value)| (candidate == name).then_some(value))
         },
-        // Link geometry is solver-derived: there is no input to read and nothing to
-        // write. Returning `None`/`false` is what lets the registry fall through to a
-        // backend that DOES own the name.
+        // Geometry is a read-only output surface.
         read_input: |_, _, _| None,
         initial_expression: None,
-        resolve_output: Some(resolve_link_port_slot),
-        resolve_input: None,
+
         read_slot: Some(read_link_port_slot),
         read_input_slot: None,
         write_slot: None,

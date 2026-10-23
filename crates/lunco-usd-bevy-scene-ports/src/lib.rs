@@ -368,8 +368,8 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
             return;
         }
         if let Some(name) = out.requested_name() {
-            if resolve_input_slot(world, entity, name).is_some() {
-                out.declare(name, PortDirection::In);
+            if let Some(slot) = resolve_input_slot(world, entity, name) {
+                out.declare(name, PortDirection::In, Some(slot));
             }
             return;
         }
@@ -379,12 +379,20 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
         // happens to hold a default.
         if world.get::<PointLight>(entity).is_some() || world.get::<SpotLight>(entity).is_some() {
             for name in LIGHT_PORTS {
-                out.declare(name, PortDirection::In);
+                out.declare(
+                    name,
+                    PortDirection::In,
+                    resolve_input_slot(world, entity, name),
+                );
             }
         }
         if world.get::<Transform>(entity).is_some() {
             for name in TRANSFORM_PORTS {
-                out.declare(name, PortDirection::In);
+                out.declare(
+                    name,
+                    PortDirection::In,
+                    resolve_input_slot(world, entity, name),
+                );
             }
         }
     },
@@ -392,8 +400,7 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
     read_output: |_, _, _| None,
     read_input,
     initial_expression: None,
-    resolve_output: None,
-    resolve_input: Some(resolve_input_slot),
+
     read_slot: None,
     read_input_slot: Some(|world, entity, slot| {
         read_value_slot(world, entity, ScenePropertySlot::from_slot(slot)?).map(f64::from)

@@ -702,10 +702,10 @@ For fixed-step port costs, the exchange exposes `cosim_exchange_topology`,
 `cosim_exchange_holds`, `cosim_exchange_write` and `cosim_exchange_diagnostics`
 inside the single propagation owner. Attribute these phases before changing
 lookup or validation; do not add their nested duration to the parent.
-Backend `declare_ports` uses `PortDeclarationQuery`
+Backend `declare_ports` publishes direction and optional slot in one `PortDeclarationQuery`
 for both full inspection and exact-name, direction-constrained discovery.
 Map-backed owners query the requested name directly; named queries retain only
-the first matching direction without constructing owned rows. Preserve the
+the first matching direction and slot without constructing owned rows. Preserve the
 same declaration order and live metadata checks; topology publication alone
 cannot guard an owner edit before its scheduled publication pass.
 Avian resolution, named declarations and metadata selection share immutable

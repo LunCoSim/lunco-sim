@@ -10,8 +10,9 @@ fn by_code(findings, code) {
 
 fn simulation_dependencies(me, ctx) {
     let collision = find_path("/PortOwnerCollision/CollisionCase");
+    let root = find_path("/PortOwnerCollision");
     #{ modelica_entities: [],
-       entity_reads: [collision],
+       entity_reads: [collision, root],
        entity_writes: [],
        query_reads: ["GetDiagnostics", "QueryPhysicsState", "ReadPorts"],
        required_inputs: [] }
@@ -85,6 +86,8 @@ fn on_tick(me, ctx) {
 
         let collisions = by_code(report.diagnostics, "port-owner-collision");
         let failures = [];
+        failures.push(t_true(port(find_path("/PortOwnerCollision"), "piloted") == (),
+            "a non-input scene root must not expose a fabricated piloted sample"));
         failures.push(t_true(collisions.len() == 1,
             "expected one port-owner-collision finding, got " + collisions.len()));
         failures.push(t_true(report.ok == false && to_int(report.errors) > 0,
@@ -98,7 +101,7 @@ fn on_tick(me, ctx) {
             failures.push(t_true(finding.message.contains("PORT_OWNER_COLLISION: `mass` has 2 input owners"),
                 "collision message did not describe the duplicate input owners"));
             failures.push(t_true(finding.message.contains("winner: ")
-                && finding.message.contains("Modelica co-simulation component at"),
+                && finding.message.contains("Co-simulation participant at"),
                 "collision message did not identify the Modelica owner"));
             failures.push(t_true(finding.message.contains("Avian rigid body"),
                 "collision message did not identify the rigid-body owner"));

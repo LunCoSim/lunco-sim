@@ -486,9 +486,9 @@ mod tests {
         topology_key: |_world, _entity| 1,
         declare_ports: |world, entity, out| {
             if world.get::<TestActuator>(entity).is_some() {
-                out.declare("target", PortDirection::In);
-                out.declare("measured", PortDirection::Out);
-                out.declare("rate", PortDirection::Out);
+                out.declare("target", PortDirection::In, Some(0));
+                out.declare("measured", PortDirection::Out, Some(1));
+                out.declare("rate", PortDirection::Out, Some(2));
             }
         },
         metadata: |_world, _entity, name, direction| {
@@ -537,12 +537,7 @@ mod tests {
                 .flatten()
         },
         initial_expression: None,
-        resolve_output: Some(|_world, _entity, name| match name {
-            "measured" => Some(1),
-            "rate" => Some(2),
-            _ => None,
-        }),
-        resolve_input: Some(|_world, _entity, name| (name == "target").then_some(0)),
+
         read_slot: Some(|world, entity, slot| {
             let actuator = world.get::<TestActuator>(entity)?;
             match slot {

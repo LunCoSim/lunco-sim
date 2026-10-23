@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**271 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**275 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -34,7 +34,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Modelica modeling & simulation**
 
 - [`lunco-modelica-core`](#lunco-modelica-core) (1 command)
-- [`lunco-modelica-ui`](#lunco-modelica-ui) (33 commands)
+- [`lunco-modelica-ui`](#lunco-modelica-ui) (34 commands)
 
 **Co-simulation**
 
@@ -51,7 +51,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Workbench UI & panels**
 
 - [`lunco-ui`](#lunco-ui) (1 command)
-- [`lunco-workbench`](#lunco-workbench) (1 command)
+- [`lunco-workbench`](#lunco-workbench) (2 commands)
 
 **Scripting & scenarios**
 
@@ -117,7 +117,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-bevy-runtime-core`](#lunco-usd-bevy-runtime-core) (5 commands)
 - [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
-- [`lunco-viz`](#lunco-viz) (1 command)
+- [`lunco-viz`](#lunco-viz) (3 commands)
 - [`lunco-workbench-core`](#lunco-workbench-core) (12 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
@@ -641,6 +641,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `plot` | `u64` |  `VizId` of the target plot panel. |
 | `signal` | `String` |  Signal name to add. |
+| `target_gid` | `Option < lunco_core :: GlobalEntityId >` |   |
 
 #### `AutoArrangeDiagram`
 
@@ -852,6 +853,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `title` | `String` |  Panel title. Empty = derived from `source` (`"<title> (copy)"`), or a  default when there is no source. |
 | `signals` | `Vec < String >` |  Signal names to plot initially. |
+| `target_gid` | `Option < lunco_core :: GlobalEntityId >` |  Explicit live source. Omitted uses only the active/pinned document's  simulator; a batch-only document adds historical picks without inventing  a live binding to an unrelated scene participant. |
 | `source` | `u64` |  `VizId` of a plot to clone bindings from. `0` = start empty. |
 
 #### `Open`
@@ -1036,6 +1038,20 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |   |
 | `path` | `String` |   |
 
+#### `SetPlotSignals`
+
+ Replace one plot's exact signal selection. Unlike the additive telemetry
+ action, this also retires earlier live bindings and historical picks, so a
+ presentation cannot silently mix quantities from a previous analysis.
+
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/plot.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `plot` | `u64` |   |
+| `signals` | `Vec < String >` |   |
+| `target_gid` | `Option < lunco_core :: GlobalEntityId >` |  Omission uses only the active/pinned document's admitted simulator. |
+
 #### `SetViewMode`
 
  Switch how a document is rendered — source text, diagram canvas, icon, or
@@ -1211,6 +1227,18 @@ actually call, with the fields the deserializer actually accepts. See the
 - *fields:* none — call with `CloseModal` (no params)
 
 ### `lunco-workbench` <a id="lunco-workbench"></a>
+
+#### `ConfigureDiagramPresentation`
+
+ Configure native diagram presentation through the UI settings owner.
+ Omitted fields retain their current preference.
+
+- *defined in:* `crates/lunco-workbench/src/theme_command.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `show_controls` | `Option < bool >` |   |
+| `use_authored_colors` | `Option < bool >` |   |
 
 #### `SetTheme`
 
@@ -3636,6 +3664,46 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-viz` <a id="lunco-viz"></a>
 
+#### `ConfigureLinePlot`
+
+ Configure a native plot through the same persisted style used by its UI.
+ Omitted fields retain their values; an empty title restores automatic labels.
+
+- *defined in:* `crates/lunco-viz/src/kinds/line_plot.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `plot` | `u64` |   |
+| `x_label` | `Option < String >` |   |
+| `y_label` | `Option < String >` |   |
+| `y_reference_range` | `Option < Vec < f64 > >` |  Empty clears the reference range; otherwise exactly two increasing,  finite values in the plotted signal's units. Autoscaling can expand it. |
+| `line_width` | `Option < f32 >` |   |
+| `text_size` | `Option < f32 >` |  8–64 logical pixels for plot text only; zero restores the theme. |
+| `show_controls` | `Option < bool >` |   |
+| `show_hover_values` | `Option < bool >` |   |
+| `show_legend` | `Option < bool >` |   |
+| `simplified_grid` | `Option < bool >` |   |
+| `compact_layout` | `Option < bool >` |   |
+| `show_latest_value` | `Option < bool >` |   |
+| `caption` | `Option < String >` |  Empty clears the explanatory caption. |
+| `follow_latest` | `Option < bool >` |   |
+| `time_window_s` | `Option < f64 >` |  Positive seconds sets the requested window; zero restores current-window  following. Omission leaves the setting unchanged. |
+
+#### `ConfigureSignalGrid`
+
+ Compose 1–64 measured scalar channels as independent native line plots.
+ Prepare first, inspect the returned plot identities with InspectSignalGrid,
+ then use ConfigureLinePlot for each plot's existing appearance settings.
+
+- *defined in:* `crates/lunco-viz/src/ui/signal_grid.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `grid` | `u64` |   |
+| `title` | `String` |   |
+| `columns` | `u32` |   |
+| `signals` | `Vec < SignalGridEntry >` |   |
+
 #### `SetTelemetryBrowserView`
 
  Select the telemetry browser's signal filter and focused signal.
@@ -4132,7 +4200,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 271 commands from the runtime schema; scanned 1029 .rs files for docs (0 parse failure(s) skipped).
+<!-- 275 commands from the runtime schema; scanned 1035 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

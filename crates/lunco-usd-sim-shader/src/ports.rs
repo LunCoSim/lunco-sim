@@ -166,7 +166,11 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         };
         if let Some(name) = out.requested_name() {
             if look.driven().contains(name) || look.values().contains_key(name) {
-                out.declare(name, PortDirection::In);
+                out.declare(
+                    name,
+                    PortDirection::In,
+                    resolve_shader_input(world, entity, name),
+                );
             }
             return;
         }
@@ -175,7 +179,11 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         let mut names: std::collections::BTreeSet<&String> = look.driven().iter().collect();
         names.extend(look.values().keys());
         for name in names {
-            out.declare(name, PortDirection::In);
+            out.declare(
+                name,
+                PortDirection::In,
+                resolve_shader_input(world, entity, name),
+            );
         }
     },
     metadata: |world, entity, name, direction| {
@@ -203,8 +211,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
     read_output: |_, _, _| None,
     read_input: read_value,
     initial_expression: None,
-    resolve_output: None,
-    resolve_input: Some(resolve_shader_input),
+
     read_slot: None,
     read_input_slot: Some(read_shader_slot),
     write_slot: Some(write_shader_slot),

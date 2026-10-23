@@ -58,11 +58,23 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
         {
             if let Some(name) = out.requested_name() {
                 if model.inputs.contains_key(name) {
-                    out.declare(name, PortDirection::In);
+                    out.declare(
+                        name,
+                        PortDirection::In,
+                        Some(
+                            model
+                                .inputs
+                                .keys()
+                                .filter(|candidate| candidate.as_str() < name)
+                                .count() as u64,
+                        ),
+                    );
                 }
             } else {
-                for name in model.inputs.keys() {
-                    out.declare(name, PortDirection::In);
+                let mut names = model.inputs.keys().collect::<Vec<_>>();
+                names.sort_unstable();
+                for (slot, name) in names.into_iter().enumerate() {
+                    out.declare(name, PortDirection::In, Some(slot as u64));
                 }
             }
         }
@@ -98,20 +110,7 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
             .copied()
     },
     initial_expression: None,
-    resolve_output: None,
-    resolve_input: Some(|world, entity, name| {
-        let model = world.get::<ModelicaModel>(entity)?;
-        if world.get::<SimComponent>(entity).is_some() || !model.inputs.contains_key(name) {
-            return None;
-        }
-        Some(
-            model
-                .inputs
-                .keys()
-                .filter(|candidate| candidate.as_str() < name)
-                .count() as u64,
-        )
-    }),
+
     read_slot: None,
     read_input_slot: Some(|world, entity, slot| {
         let model = world.get::<ModelicaModel>(entity)?;

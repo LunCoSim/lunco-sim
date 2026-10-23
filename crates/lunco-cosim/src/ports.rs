@@ -331,22 +331,22 @@ pub(crate) fn register_avian_port_topology(app: &mut App) {
 
 fn avian_list(world: &World, entity: Entity, out: &mut PortDeclarationQuery<'_>) {
     if let Some(name) = out.requested_name() {
-        if let Some((_, _, port)) = avian_named_port(world, entity, name, |direction| {
+        if let Some((slot, _, port)) = avian_named_port(world, entity, name, |direction| {
             out.accepts_direction(direction)
         }) {
-            out.declare(port.name, port.dir);
+            out.declare(port.name, port.dir, Some(slot));
         }
         return;
     }
-    for group in AVIAN {
+    for (group_index, group) in AVIAN.iter().enumerate() {
         if !(group.present)(world, entity) {
             continue;
         }
-        for p in group.ports {
+        for (port_index, p) in group.ports.iter().enumerate() {
             // The group owns this declared contract regardless of whether its
             // backing state currently has a sample. `PortInfo.value` carries
             // sample availability without changing port identity.
-            out.declare(p.name, p.dir);
+            out.declare(p.name, p.dir, Some(avian_slot(group_index, port_index)));
         }
     }
 }
@@ -647,12 +647,12 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             {
                 if let Some(name) = out.requested_name() {
                     if declared.names.contains(name) && !c.outputs.contains_key(name) {
-                        out.declare(name, PortDirection::Out);
+                        out.declare(name, PortDirection::Out, None);
                     }
                 } else {
                     for name in &declared.names {
                         if !c.outputs.contains_key(name) {
-                            out.declare(name, PortDirection::Out);
+                            out.declare(name, PortDirection::Out, None);
                         }
                     }
                 }
@@ -685,15 +685,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             .and_then(|c| c.inputs.get(n).copied())
     },
     initial_expression: None,
-    resolve_output: Some(|world, entity, name| {
-        world
-            .get::<SimComponent>(entity)?
-            .outputs
-            .resolve_slot(name)
-    }),
-    resolve_input: Some(|world, entity, name| {
-        world.get::<SimComponent>(entity)?.inputs.resolve_slot(name)
-    }),
+
     read_slot: Some(|world, entity, slot| {
         published_sim_outputs(world.get::<SimComponent>(entity)?)?
             .get_slot(slot)
@@ -759,8 +751,6 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
         }))
     }),
 
-    resolve_output: Some(avian_resolve_output),
-    resolve_input: Some(avian_resolve_input),
     read_slot: Some(avian_read_slot),
     read_input_slot: Some(avian_read_slot),
     write_slot: Some(avian_write_slot),
@@ -832,7 +822,7 @@ const PORT_BACKEND: PortBackend = PortBackend {
     },
     declare_ports: |w, e, out| {
         if w.get::<Port>(e).is_some() {
-            out.declare(PORT_NAME, PortDirection::InOut);
+            out.declare(PORT_NAME, PortDirection::InOut, Some(0));
         }
     },
     metadata: |world, entity, _name, direction| {
@@ -851,12 +841,7 @@ const PORT_BACKEND: PortBackend = PortBackend {
         w.get::<Port>(e).map(|p| p.value)
     },
     initial_expression: None,
-    resolve_output: Some(|world, entity, name| {
-        (name == PORT_NAME && world.get::<Port>(entity).is_some()).then_some(0)
-    }),
-    resolve_input: Some(|world, entity, name| {
-        (name == PORT_NAME && world.get::<Port>(entity).is_some()).then_some(0)
-    }),
+
     read_slot: Some(|world, entity, slot| {
         (slot == 0)
             .then(|| world.get::<Port>(entity).map(|port| port.value))
@@ -920,13 +905,13 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             if let Some(port_entity) = outputs.ports.get(name)
                 && world.get::<Port>(*port_entity).is_some()
             {
-                out.declare(name, PortDirection::Out);
+                out.declare(name, PortDirection::Out, outputs.ports.resolve_slot(name));
             }
             return;
         }
         for (name, port_entity) in &outputs.ports {
             if world.get::<Port>(*port_entity).is_some() {
-                out.declare(name, PortDirection::Out);
+                out.declare(name, PortDirection::Out, outputs.ports.resolve_slot(name));
             }
         }
     },
@@ -946,10 +931,7 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
     },
     read_input: |_world, _entity, _name| None,
     initial_expression: None,
-    resolve_output: Some(|world, entity, name| {
-        world.get::<OutputPorts>(entity)?.ports.resolve_slot(name)
-    }),
-    resolve_input: None,
+
     read_slot: Some(|world, entity, slot| {
         let port_entity = world
             .get::<OutputPorts>(entity)?
@@ -1010,7 +992,7 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
             if let Some(authored) = surface.ports.get(name)
                 && world.get::<Port>(authored.endpoint).is_some()
             {
-                out.declare(name, authored.direction);
+                out.declare(name, authored.direction, surface.ports.resolve_slot(name));
             }
             return;
         }
@@ -1018,7 +1000,7 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
         ports.sort_by(|left, right| left.0.cmp(right.0));
         for (name, authored) in ports {
             if world.get::<Port>(authored.endpoint).is_some() {
-                out.declare(name, authored.direction);
+                out.declare(name, authored.direction, surface.ports.resolve_slot(name));
             }
         }
     },
@@ -1061,23 +1043,7 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
             .map(|endpoint| endpoint.value)
     },
     initial_expression: None,
-    resolve_output: Some(|world, entity, name| {
-        let surface = world.get::<PortSurface>(entity)?;
-        let authored = surface.ports.get(name)?;
-        matches!(
-            authored.direction,
-            PortDirection::Out | PortDirection::InOut
-        )
-        .then(|| surface.ports.resolve_slot(name))
-        .flatten()
-    }),
-    resolve_input: Some(|world, entity, name| {
-        let surface = world.get::<PortSurface>(entity)?;
-        let authored = surface.ports.get(name)?;
-        matches!(authored.direction, PortDirection::In | PortDirection::InOut)
-            .then(|| surface.ports.resolve_slot(name))
-            .flatten()
-    }),
+
     read_slot: Some(|world, entity, slot| {
         let authored = world.get::<PortSurface>(entity)?.ports.get_slot(slot)?;
         if !matches!(
@@ -1154,7 +1120,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
         // Never manufacture `piloted` on meshes, joints, sensors, or arbitrary
         // Modelica children merely because they happen to have a stable id.
         if w.get::<InputPorts>(e).is_some() {
-            out.declare("piloted", PortDirection::Out);
+            out.declare("piloted", PortDirection::Out, Some(0));
         }
     },
     metadata: |_world, _entity, _name, direction| {
@@ -1172,8 +1138,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
     read_output: |w, e, n| (n == "piloted").then(|| piloted_value(w, e)),
     read_input: |_, _, _| None,
     initial_expression: None,
-    resolve_output: Some(|_world, _entity, name| (name == "piloted").then_some(0)),
-    resolve_input: None,
+
     read_slot: Some(|world, entity, slot| (slot == 0).then(|| piloted_value(world, entity))),
     read_input_slot: None,
     write_slot: None,

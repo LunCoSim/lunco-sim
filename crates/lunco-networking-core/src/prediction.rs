@@ -2711,7 +2711,7 @@ mod tests {
                 topology_key: |_, _| 0,
                 declare_ports: |world, entity, out| {
                     if world.get::<lunco_core::GlobalEntityId>(entity).is_some() {
-                        out.declare("frame", lunco_port_core::ports::PortDirection::In);
+                        out.declare("frame", lunco_port_core::ports::PortDirection::In, Some(0));
                     }
                 },
                 metadata: |_, _, _, direction| {
@@ -2729,11 +2729,7 @@ mod tests {
                 read_output: |_, _, _| None,
                 read_input: |_, _, _| None,
                 initial_expression: None,
-                resolve_output: None,
-                resolve_input: Some(|world, entity, name| {
-                    (name == "frame" && world.get::<lunco_core::GlobalEntityId>(entity).is_some())
-                        .then_some(0)
-                }),
+
                 read_slot: None,
                 read_input_slot: None,
                 write_slot: Some(|world, entity, slot, _value| {
