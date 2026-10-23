@@ -6,6 +6,7 @@ use crate::{
 use avian3d::dynamics::{
     joints::{EntityConstraint, joint_graph::JointGraphPlugin},
     solver::{
+        islands::BodyIslandNode,
         schedule::SolverSystems,
         solver_body::{SolverBody, SolverBodyInertia},
         xpbd::*,
@@ -139,7 +140,10 @@ fn sync_limits(
         ),
         Without<lunco_core::SimulationObjectPaused>,
     >,
-    bodies: Query<(&Position, &Rotation), (With<RigidBody>, Without<RigidBodyDisabled>)>,
+    bodies: Query<
+        (&Position, &Rotation, Has<BodyIslandNode>),
+        (With<RigidBody>, Without<RigidBodyDisabled>),
+    >,
     owners: Query<&ColliderOf>,
     mut visuals: Query<&mut Transform, Without<WheelRaycast>>,
     step: Res<Time<Physics>>,
@@ -158,7 +162,7 @@ fn sync_limits(
                 / (step.delta_secs_f64() * substep.delta_secs_f64())
         });
         commands.entity(entity).insert(RaycastStopLoad(load));
-        let Ok((position, rotation)) = bodies.get(mount.body) else {
+        let Ok((position, rotation, carrier_admitted)) = bodies.get(mount.body) else {
             commands
                 .entity(entity)
                 .remove::<(RaycastTravelLimit, TravelSolverData, RaycastStopLoad)>();
@@ -192,13 +196,15 @@ fn sync_limits(
         let support = owners
             .get(hit.entity)
             .map_or(hit.entity, |owner| owner.body);
-        let Ok((support_position, support_rotation)) = bodies.get(support) else {
+        let Ok((support_position, support_rotation, support_admitted)) = bodies.get(support) else {
             commands
                 .entity(entity)
                 .remove::<(RaycastTravelLimit, TravelSolverData, RaycastStopLoad)>();
             continue;
         };
-        if support == mount.body {
+        // Static bodies have no solver node. Their rays and visuals remain valid,
+        // but Avian can only admit a constraint with at least one native island.
+        if support == mount.body || !(carrier_admitted || support_admitted) {
             commands
                 .entity(entity)
                 .remove::<(RaycastTravelLimit, TravelSolverData, RaycastStopLoad)>();
@@ -237,5 +243,66 @@ fn sync_limits(
             normal: support_rotation.0.inverse() * hit.normal,
         };
         commands.entity(entity).insert(limit);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use avian3d::dynamics::joints::joint_graph::JointGraph;
+    use bevy::ecs::system::RunSystemOnce;
+    use std::time::Duration;
+
+    #[test]
+    fn travel_contacts_require_a_native_solver_endpoint() {
+        for (carrier_mode, support_mode, expected) in [
+            (RigidBody::Static, RigidBody::Static, false),
+            (RigidBody::Dynamic, RigidBody::Static, true),
+            (RigidBody::Static, RigidBody::Dynamic, true),
+            (RigidBody::Kinematic, RigidBody::Static, true),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<Assets<Mesh>>()
+                .add_message::<AssetEvent<Mesh>>()
+                .add_plugins((MinimalPlugins, PhysicsPlugins::default()))
+                .add_plugins(JointGraphPlugin::<RaycastTravelLimit>::default())
+                .init_resource::<lunco_physics::PhysicsHolds>()
+                .init_resource::<lunco_core::RuntimeFaults>();
+            app.finish();
+            app.cleanup();
+            let carrier = app.world_mut().spawn(carrier_mode).id();
+            let support = app.world_mut().spawn(support_mode).id();
+            let wheel = app
+                .world_mut()
+                .spawn((
+                    lunco_physics::PhysicsOrderKey("wheel".into()),
+                    WheelRaycast::default(),
+                    Suspension::default(),
+                    WheelBodyMount {
+                        body: carrier,
+                        local: Transform::IDENTITY,
+                    },
+                    RayHits(vec![RayHitData {
+                        entity: support,
+                        distance: 0.2,
+                        normal: Vec3::Y,
+                    }]),
+                ))
+                .id();
+            app.world_mut().flush();
+            app.world_mut()
+                .resource_mut::<Time<Physics>>()
+                .advance_by(Duration::from_secs_f64(1.0 / 60.0));
+            app.world_mut()
+                .resource_mut::<Time<Substeps>>()
+                .advance_by(Duration::from_secs_f64(1.0 / 480.0));
+            app.world_mut().run_system_once(sync_limits).unwrap();
+            assert_eq!(
+                app.world().resource::<JointGraph>().get(wheel).is_some(),
+                expected,
+                "{carrier_mode:?} carrier on {support_mode:?} support"
+            );
+            app.world_mut().run_schedule(PhysicsSchedule);
+        }
     }
 }

@@ -1,5 +1,29 @@
 # High-quality realtime performance handover
 
+## Static raycast contact admission — 2026-10-23
+
+The Griffin packaging scene's island panic reproduces in the production test
+runner and ordinary headless host. Its raycast suspension travel constraints
+entered Avian's joint graph with two static endpoints, neither having a native
+solver island. `lunco-mobility` now requires at least one `BodyIslandNode`
+before publishing the transient contact constraint. Ray samples and wheel
+presentation remain available for static carriers; moving carrier/support
+contacts retain the existing solver. No dependency patch is needed.
+
+The focused native graph test fails on static/static admission before the fix
+and passes afterward, including dynamic/static, static/dynamic and
+kinematic/static pairs. The new production `static_wheel_contact` scene
+reproduces the panic before the fix and passes five authored checks afterward
+in 12 fixed ticks. The exact reported Griffin packaging scene completes 126
+native steps with zero joint graph edges, readiness clear and its model sources
+unchanged. Its inactive mission program is not a mission acceptance verdict.
+
+Evidence is under `.cache/codex-evidence/performance-20261023/`:
+`raycast-travel-static-*`, `static-wheel-contact-*`, and
+`griffin-static-wheel-fixed/session.json`. Owned APIs 4919/4920 and their apps
+are closed. These are correctness checks, not clean performance acceptance;
+the foreign USD application remains active and all timing targets remain open.
+
 ## Immutable terrain-query cache boundary — 2026-10-23
 
 The terrain occlusion owner validates the complete surface identity and trims

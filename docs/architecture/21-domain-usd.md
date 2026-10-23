@@ -158,6 +158,13 @@ Initial projection and live resynchronization consume the same geometry reader;
 an accepted edit republishes its validated collider even when radius and width
 are unchanged. Invalid geometry or stage conventions reject projection.
 
+Raycast suspension travel stops are transient Avian constraints owned by
+`lunco-mobility`. Admission requires at least one endpoint's native
+`BodyIslandNode`; static/static support retains its ray samples and presentation
+without adding a solver edge. Moving carriers and moving supports retain the
+same unilateral stop. The production `static_wheel_contact` gate covers a
+disabled rigid-body carrier on static ground.
+
 The existing `PhysxVehicleWheelAPI`, tire, suspension and attachment schemas own
 wheel authoring. Mesh collision remains supported under standard USD rules.
 The authored `wheel-mesh-rolling-contact` lint warns about potentially unstable

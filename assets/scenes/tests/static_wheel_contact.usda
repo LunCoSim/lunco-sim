@@ -1,0 +1,62 @@
+#usda 1.0
+(
+    defaultPrim = "WheelAttachmentContract"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "WheelAttachmentContract" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    documentation = "A rover wheel whose standard attachment resolves tire and suspension from separate targets."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = { string "drivetrain" = "raycast"; string "generation" = "none"; string "power" = "infinite"; string "thermal" = "none" }
+    )
+    {
+        double3 xformOp:translate = (0.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:rigidBodyEnabled = false
+        over "Suspension_FL"
+        {
+            over "Wheel_FL"
+            {
+                rel physxVehicleWheelAttachment:tire = </WheelAttachmentContract/SeparateTire>
+                rel physxVehicleWheelAttachment:suspension = </WheelAttachmentContract/SeparateSuspension>
+            }
+        }
+    }
+    def Xform "SeparateTire" (
+        prepend references = @lunco://components/mobility/tires/hard.usda@</Tire>
+    )
+    {
+    }
+    def Xform "SeparateSuspension" (
+        prepend references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+    )
+    {
+    }
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "wheel-attachment-contract"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/static_wheel_contact.rhai@
+        }
+    }
+    def Plane "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double width = 20.0
+        double length = 20.0
+        uniform token axis = "Y"
+    }
+}

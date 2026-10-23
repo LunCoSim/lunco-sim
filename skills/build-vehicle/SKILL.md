@@ -144,6 +144,12 @@ Keep exactly one suspension and tangential-contact owner for each realization.
 Motors, reductions, efficiency laws and thermal networks are authored higher
 level components, not wheel-core defaults.
 
+Raycast suspension stops require a native solver island on at least one
+endpoint. A disabled USD rigid body projects as static collision geometry;
+its wheels may still query static support without creating a suspension edge.
+Use the production `static_wheel_contact` gate for that boundary and the native
+mobility contact test for moving carrier/support admission.
+
 ## Minimal rover
 
 ```usda
