@@ -665,6 +665,17 @@ standard realization and must author both APIs on their collision geometry.
 The `collision-enabled-without-api`, `raycast-wheel-collision-contract`, and
 `physical-wheel-collision-contract` rules are errors, not runtime fallbacks.
 
+Standalone collision prims and collision-only triggers honor standard
+`physics:collisionEnabled` before material loading or shape cooking; omission
+means true, false admits no native shape, and a wrongly typed value faults
+projection. On a rigid body, false suppresses only its own geometry, preserving
+enabled child shapes. The `collision_enabled` production scene checks native
+admission and probe motion; `collision_enabled_invalid` checks the terminal
+owner diagnostic for a malformed flag.
+When validating live edits during body admission, include scene retirement
+before deferred pose-marker application. The frame bridge must leave retired
+colliders absent and seed surviving shapes without a process panic.
+
 Terrain collider ownership is mode-specific: `lunco:assetMode="mesh"` waits for
 the USD-to-Avian mesh bridge, while `"dem"` and `"layered"` use the native
 `SurfaceOracle` collider from `lunco-terrain-surface`. Do not author or project a

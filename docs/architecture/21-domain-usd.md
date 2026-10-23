@@ -871,6 +871,19 @@ section.
 5. **UsdShaderPlugin** — Projects authored `UsdShade` WESL intent and registers the shader-parameter port backend in the shared preparation phase.
 6. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored vehicle topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `lunco_port_core::OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, and sensors. **UsdSimCosimPlugin** separately discovers programs, publishes model surfaces, and derives co-simulation wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
+Standalone collider and collision-only trigger admission reads the standard
+`physics:collisionEnabled` boolean before loading materials or cooking a shape.
+Omission retains the USD true default; false admits neither a native collider
+nor its implicit static body. Malformed values report
+`usd-avian-collider-invalid` and hold the owning operation. A rigid body's own
+disabled geometry does not disable enabled child collision shapes: compound
+collection remains at the body owner. Production `collision_enabled` and
+`collision_enabled_invalid` scenes cover motion, admission and rejection.
+Attached collider pose seeding tolerates retirement before its deferred marker
+command applies; retired entities receive no marker, while surviving colliders
+retain their seeded pose. The frame bridge owns this boundary independently
+of source projection and scene reload.
+
 Vehicle simulation prim discovery uses a separate `PendingEntityWork` instance
 from the shared `lunco-usd-sim-core` contract. Path, visual-projection, and
 processed-marker lifecycle observers queue only affected entities; one initial

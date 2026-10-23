@@ -763,7 +763,7 @@ fn seed_attached_collider_poses(
         rotation.0 = (body_rotation.0 * mount.rotation).normalize();
         commands
             .entity(entity)
-            .insert(lunco_physics::PhysicsPoseSeeded);
+            .try_insert(lunco_physics::PhysicsPoseSeeded);
     }
 }
 
@@ -2027,6 +2027,50 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn collider_pose_seeding_survives_retirement_before_command_application() {
+        let mut world = World::new();
+        let body = world
+            .spawn((
+                RigidBody::Static,
+                Position(DVec3::new(3.0, 0.0, 0.0)),
+                Rotation::default(),
+                lunco_physics::PhysicsPoseSeeded,
+            ))
+            .id();
+        let mut spawn_collider = || {
+            world
+                .spawn((
+                    Collider::sphere(0.5),
+                    ColliderOf { body },
+                    ColliderTransform {
+                        translation: Vec3::X,
+                        ..default()
+                    },
+                    Position::default(),
+                    Rotation::default(),
+                ))
+                .id()
+        };
+        let retired = spawn_collider();
+        let surviving = spawn_collider();
+        let mut seed = IntoSystem::into_system(seed_attached_collider_poses);
+        seed.initialize(&mut world);
+        seed.run_without_applying_deferred((), &mut world).unwrap();
+        assert!(world.despawn(retired));
+        seed.apply_deferred(&mut world);
+        assert!(world.get_entity(retired).is_err());
+        assert!(
+            world
+                .get::<lunco_physics::PhysicsPoseSeeded>(surviving)
+                .is_some()
+        );
+        assert_eq!(
+            world.get::<Position>(surviving).unwrap().0,
+            DVec3::new(4.0, 0.0, 0.0)
+        );
+    }
 
     #[test]
     fn native_collider_detach_keeps_its_tree_proxy_identity() {

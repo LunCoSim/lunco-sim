@@ -1,0 +1,28 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461395.5
+    def Cube "Enabled" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/collision_enabled_invalid.rhai@
+    }
+    def DistantLight "TestLight"
+    {
+    }
+}

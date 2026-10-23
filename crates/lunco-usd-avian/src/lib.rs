@@ -1293,6 +1293,34 @@ fn extract_avian_prim(
         return;
     }
 
+    // A standalone collision prim has no body whose compound reader can filter
+    // its geometry. Exclude disabled shapes before material or collider work.
+    // A rigid body's own flag filters only that shape, not its child shapes.
+    if has_collision_api && !has_rigid_body_api {
+        match read_authored_bool_or_default(reader, sdf_path, ptok::PHYSICS_COLLISION_ENABLED, true)
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                commands.entity(entity).try_insert(UsdPhysicsProjected);
+                return;
+            }
+            Err(()) => {
+                reject_collider_projection(
+                    commands,
+                    entity,
+                    sdf_path,
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    ColliderProjectionError::Backend {
+                        prim: sdf_path.to_string(),
+                        detail: format!("malformed {}", ptok::PHYSICS_COLLISION_ENABLED),
+                    },
+                );
+                return;
+            }
+        }
+    }
+
     // ── TRIGGER SENSOR ── applying the API opts into an overlap-only static
     // Sensor; `lunco:triggerZone` is an optional label for named geofence events.
     if reader.has_api_schema(sdf_path, "LunCoTriggerZoneAPI") {

@@ -1,5 +1,45 @@
 # High-quality realtime performance handover
 
+## Standalone collision admission and reload retirement — 2026-10-23
+
+The Griffin handoff identifies a real application projection omission:
+ordinary standalone `PhysicsCollisionAPI` prims and collision-only triggers
+reach shape cooking without reading `physics:collisionEnabled`. The bridge
+now uses the existing strict boolean reader before material or shape work.
+False admits neither a collider nor an implicit static body; omission retains
+the standard true default. A malformed flag reports
+`usd-avian-collider-invalid`. Compound bodies retain their reader, including
+enabled child shapes when the body's own collision geometry is disabled.
+No solver settings, native contact algorithms, or per-step loops change.
+
+The authored `collision_enabled` baseline faults while cooking a disabled
+unsupported shape. With the fix, all eight production checks pass at tick 180:
+native membership, enabled/disabled triggers, compound ownership, exclusion
+before cooking, and moving enabled/disabled control probes.
+`collision_enabled_invalid` passes its expected terminal owner fault at tick 1.
+Both USD fixtures were authored and read back through the document API.
+
+Authoring during admission also exposes a queued pose-marker command targeting
+a collider retired by scene reload. The frame bridge uses Bevy's `try_insert`
+for that deferred marker. Its focused lifecycle regression reproduces the
+panic before the change, then passes while checking that a surviving collider
+still receives the correct seeded pose. The production live document edit
+also completes with a ready probe, clear runtime diagnostics and no panic.
+
+The regular Tracy build passes after integration through `060ba6b5d`.
+Final production gate PIDs 1793104/1794361 use API 4970; the live-edit PID
+1794814 uses API 4973. All are closed. The subsequently integrated
+`c9d59fffd` changes only the UI framebuffer binding and its documentation;
+the tested physics owners and fixtures are unchanged. Evidence remains local
+and ignored in `static-disabled-collider/` under
+`.cache/codex-evidence/performance-20261023/`, including build, baseline/final
+owner tests, integrated scene verdicts, and the live-edit receipt.
+
+Direct normal launches of the external Griffin static witness did not admit
+its panel entities, so those attempts do not qualify the reported model fixture.
+The generic production gates establish the collision contract; complete Griffin
+landing, rover sliding and all strict performance targets remain open.
+
 ## Isolated preparation execution — 2026-10-23
 
 `lunco-core-runtime` executes admitted native preparation on one process-owned
