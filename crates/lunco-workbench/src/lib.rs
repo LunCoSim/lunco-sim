@@ -685,6 +685,8 @@ fn stack_hud_layers(mut contexts: bevy_egui::EguiContexts) {
 
 impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(feature = "api")]
+        app.init_resource::<lunco_capture::presentation::CaptureUiPresentation>();
         // Source browsing can read browser-served assets, so the shared
         // transport policy must exist even when the workbench is composed
         // without the dataset or updater plugins.

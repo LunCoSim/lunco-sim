@@ -36,6 +36,11 @@ sequencing uses frame index, independent of machine speed. Full design:
   projections, asynchronously generated meshes, and the selected image camera;
   a Rhai verdict or one early `Mesh3d` is not sufficient evidence that the render
   view has participants.
+- Windowed UI capture additionally waits for a clean rendered presentation
+  without loading progress. The recorder holds the current logical image if
+  loading returns, so neither opening frames nor later frames may burn in a
+  loading indicator. Check the raw opening frames before accepting a take;
+  cropping an indicator is not proof that capture waited correctly.
 - **Destination picks the format**: `.mp4`/`.mkv`/`.mov` streams into `ffmpeg`
   (one small file); any other path is a directory of `frame_%06d.png`. No
   `ffmpeg` installed ⇒ loud warn + PNG fallback in `<name>.frames/`.
@@ -94,7 +99,8 @@ extract a frame from the finished video.
 
 ```rhai
 query("GetOfflineRecordingStatus")
-// #{ active, frame_index, is_waiting_for_frame, last_capture_sim_tick }
+// #{ active, pending, frame_index, is_waiting_for_frame, last_capture_sim_tick,
+//    ui_presentation_required, ui_presentation_ready }
 ```
 
 - **Stalled?** Check `active`, `frame_index`, `is_waiting_for_frame` and the

@@ -6,3 +6,6 @@
 
 #[cfg(feature = "api")]
 pub mod screenshot;
+
+#[cfg(feature = "api")]
+pub mod presentation;
