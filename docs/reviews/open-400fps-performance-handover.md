@@ -1,5 +1,47 @@
 # High-quality realtime performance handover
 
+## Isolated preparation execution — 2026-10-23
+
+`lunco-core-runtime` executes admitted native preparation on one process-owned
+Bevy `TaskPool`, separate from the native asset/shader async pool. Its width
+follows the host's configured async worker count at first use. This adds a
+bounded executor; admission limits, source validation, deterministic commits,
+and scene retirement remain at their existing owners. The process lifetime
+avoids joining a parser worker during scene teardown or joining the executor
+from its own completing worker. No numerical settings or rendering quality
+change. The saturation regression fails on the shared executor and passes with
+isolation; all **17 async-work tests** and the regular Tracy production build
+pass.
+
+Tesla's USD decode and serialization start approximately **0.249 / 0.187 ms**
+after dispatch. Serialization waits approximately 24.99 ms for admission and
+starts while all three optional admission slots are occupied. Its 110 recorded
+Twin source hashes match the earlier dispatch and capacity cohorts and remain
+unchanged within the run. The earlier 1,521 ms post-dispatch wait establishes
+the contention boundary; these differently contended runs do not establish a
+whole-loading speedup. Instrumented physics admission takes 3.65 s for Tesla
+and 4.49 s for Summer, whose 72 recorded sources also remain unchanged.
+
+Griffin admits physics after 31.81 s, but its
+`tests/griffin_solar_collision_disabled.usda` changes during capture. Exclude it
+from paired source-cohort loading comparisons. All three runs retain clear
+runtime diagnostics and script results. Their final images were inspected:
+Tesla is stationary with its existing unavailable frame/datum HUD, Summer
+shows the traverse, and Griffin is descending. These short observations do not
+qualify a complete mission or settled terrain. Concurrent foreign graphical
+sessions and build activity prevent clean performance acceptance.
+
+Native framing, compressed payload, owned PID, 1,000,000 ns sampling, and
+terminal inclusive CSV exports pass for all three captures. APIs 4965–4967,
+owned apps, collectors, and exporters are closed. Raw evidence remains local
+and ignored in `{tesla,summer,griffin}-isolated-preparation-profile/` under
+`.cache/codex-evidence/performance-20261023/`, including admission latency and
+framing receipts. Captures remain in ignored `scripts/perf/captures/`.
+Owner test/build logs use the `preparation-pool-` prefix. Loading below one
+second, whole coupled ticks below one millisecond, and full-mission graphics
+targets remain open. Continue with USD facts, Modelica construction, and
+active Griffin physics costs.
+
 ## Protected simulation preparation capacity — 2026-10-23
 
 `AsyncWorkAdmission` protects one slot for required preparation when its

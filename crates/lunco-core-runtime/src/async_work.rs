@@ -1,8 +1,8 @@
 //! Shared bounded admission for immutable background preparation.
 //!
 //! Owners keep their typed jobs and result handling. This module orders queued
-//! work before it reaches Bevy's existing async-compute pool; it never commits
-//! a result into simulation state.
+//! work on a bounded Bevy task pool isolated from native asset preparation; it
+//! never commits a result into simulation state.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -14,7 +14,9 @@ use std::{
 
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
-use bevy::tasks::AsyncComputeTaskPool;
+use bevy::tasks::{AsyncComputeTaskPool, TaskPool, TaskPoolBuilder};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
 
 /// Semantic priority for a queued preparation request.
 ///
@@ -641,12 +643,27 @@ fn dispatch_async_work(admission: Res<AsyncWorkAdmission>) {
     refill_async_work(&admission.shared);
 }
 
+/// Process-owned execution keeps worker completion from joining its own pool
+/// when an application retires. Queues and captured scene work keep their
+/// independent owner lifetimes; the host's async width bounds this one pool.
+#[cfg(not(target_arch = "wasm32"))]
+fn preparation_pool() -> Option<&'static TaskPool> {
+    static POOL: OnceLock<TaskPool> = OnceLock::new();
+    let host_pool = AsyncComputeTaskPool::try_get()?;
+    Some(POOL.get_or_init(|| {
+        TaskPoolBuilder::new()
+            .num_threads(host_pool.thread_num())
+            .thread_name("LunCo preparation".to_owned())
+            .build()
+    }))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn refill_async_work(shared: &Arc<SharedWorkState>) {
     let Some(queued_state) = shared.queued.upgrade() else {
         return;
     };
-    let Some(pool) = AsyncComputeTaskPool::try_get() else {
+    let Some(pool) = preparation_pool() else {
         bevy::log::warn_once!(
             "[async-work] queued preparation cannot start before AsyncComputeTaskPool is initialized"
         );
@@ -698,6 +715,43 @@ fn refill_async_work(shared: &Arc<SharedWorkState>) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn native_asset_work_cannot_block_admitted_preparation() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AsyncWorkAdmissionPlugin));
+        let native_pool = AsyncComputeTaskPool::get();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = crossbeam_channel::unbounded::<()>();
+        for _ in 0..native_pool.thread_num() {
+            let started_tx = started_tx.clone();
+            let release_rx = release_rx.clone();
+            native_pool
+                .spawn(async move {
+                    started_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                })
+                .detach();
+        }
+        for _ in 0..native_pool.thread_num() {
+            started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        let (prepared_tx, prepared_rx) = mpsc::channel();
+        app.world_mut()
+            .resource_mut::<AsyncWorkAdmission>()
+            .submit(AsyncWorkPriority::SimulationRequired, key(1), move || {
+                let _ = prepared_tx.send(());
+            })
+            .unwrap();
+        app.world_mut().run_schedule(PostUpdate);
+        prepared_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("admitted preparation must run while native asset workers are occupied");
+        drop(release_tx);
+    }
 
     #[test]
     fn worker_completion_refills_queue_without_another_app_update() {

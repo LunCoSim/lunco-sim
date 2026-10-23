@@ -378,7 +378,10 @@ to separate shared admission delay from task-pool dispatch delay. Wall-clock
 log differences are diagnostic correlation, not simulation clock inputs.
 When capacity exceeds one, required preparation retains one admission slot;
 optional queued work and external permits share the remaining capacity. Inspect
-pool dispatch separately because admission does not preempt native workers.
+pool dispatch separately. Queued native preparation uses the process-owned
+`LunCo preparation` Bevy pool, with the host's configured async worker width.
+Native asset/shader compilation keeps its own pool; test preparation while
+those native workers are occupied and preserve non-blocking queue retirement.
 Verify refill without another host update and retirement with captured permits,
 then compare settled terrain readiness and replay the authoritative state.
 For physical solar visibility, attribute `publish_sun_visibility` separately

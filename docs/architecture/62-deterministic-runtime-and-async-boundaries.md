@@ -789,8 +789,8 @@ primary-stage preparation failure, including an unavailable worker transport
 on browser hosts, faults and safety-holds that scene; scene teardown releases
 the initial progress key.
 
-Independent preparation is allowed to run in parallel on the existing worker
-pools. Submission uses one shared bounded admission policy with three semantic
+Independent preparation runs in parallel through one shared bounded admission
+policy with three semantic
 priorities: `SimulationRequired` (only work that gates a declared simulation
 boundary), `Interactive` (work for the visible/active Twin or viewport), and
 `Background` (prefetch, inactive documents, and optional analysis). Stable
@@ -802,7 +802,7 @@ validation. An owner may cancel a request while it is still queued. Once a
 worker has started it, work that owns a simulation progress hold keeps that
 exact hold until a current result commits or the operation is explicitly
 retired; a stale completion cannot release a newer operation's hold. The
-shared policy only admits bounded work onto the existing pool and reports
+shared policy admits bounded work and reports
 queue, in-flight, rejection, and queued cancellation counts.
 
 Native Bevy hosts install `AsyncWorkAdmission` from `lunco-core-runtime`. Each
@@ -817,9 +817,16 @@ task. Owners still validate and commit their typed
 results at their own boundary. Debug diagnostics distinguish queued time from
 worker execution using bounded kind/priority zones and operation-specific
 dispatch logs; timing is not an input to admission or result commitment.
-`PostUpdate` starts queued native preparation;
-worker and external-permit completion refill released capacity immediately on
-the existing async-compute pool. Queue selection and slot reservation share
+Native queued jobs execute on one process-owned Bevy `TaskPool`, separate from
+the native asset/shader `AsyncComputeTaskPool`. Its worker count follows the
+host's configured async-pool width at first use. The process lifetime keeps
+worker completion from dropping and joining its own executor, and retiring a
+scene or admission resource does not join running parser workers. This pool
+owns no scene state; queued captures and late results retain their existing
+scope retirement and source-validation boundaries.
+`PostUpdate` starts queued native preparation; worker and external-permit
+completion refill released capacity immediately on that preparation pool.
+Queue selection and slot reservation share
 one short critical section, preserving the global bound and priority service.
 Jobs are spawned after releasing that lock. The queue owns its limits;
 completion guards retain only a weak queue reference. Resource retirement stops refill and
