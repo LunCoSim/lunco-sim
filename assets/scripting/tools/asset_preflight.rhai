@@ -15,7 +15,7 @@ fn advance(state) {
         query("ValidateAsset", #{operation_id: state.operation_id})
     };
     if response == () || response.state == () {
-        state.error = path + ": validation did not return an operation envelope";
+        state.error = path + ": validation did not return an operation envelope: " + response.to_string();
         return state;
     }
     if response.state == "pending" {
