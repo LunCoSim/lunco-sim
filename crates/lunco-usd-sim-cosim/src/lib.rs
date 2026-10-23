@@ -1762,6 +1762,7 @@ fn publish_loaded_modelica_interfaces(
         (
             Entity,
             &PendingModelicaSource,
+            &UsdPrimPath,
             &mut SimComponent,
             Option<&DeclaredOutputPorts>,
             Option<&ModelicaSignalLayout>,
@@ -1771,16 +1772,48 @@ fn publish_loaded_modelica_interfaces(
         With<lunco_port_core::PortSurfacePending>,
     >,
     sources: Res<Assets<ModelicaSource>>,
+    channels: Option<Res<ModelicaChannels>>,
+    mut source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     mut notices: MessageWriter<lunco_modelica_runtime::ModelicaNotice>,
 ) {
-    for (entity, pending, mut component, declared, current_layout, current_contracts, contract) in
-        &mut pending
+    let mut pending: Vec<_> = pending.iter_mut().collect();
+    pending
+        .sort_unstable_by(|(_, _, a, _, _, _, _, _), (_, _, b, _, _, _, _, _)| a.path.cmp(&b.path));
+    for (
+        entity,
+        pending,
+        _,
+        mut component,
+        declared,
+        current_layout,
+        current_contracts,
+        contract,
+    ) in pending
     {
         let Some(source) = sources.get(&pending.handle) else {
             continue;
         };
         if source.interface.model_name.is_none() {
             continue;
+        }
+        // Source dependencies need no physical sample. Queue their existing
+        // preparation lane while scene projection and input admission settle.
+        // Compile dispatch validates the then-current source requirements again.
+        if let (Some(roots), Some(channels)) = (source_roots.as_deref_mut(), channels.as_deref()) {
+            if let Err(error) = lunco_modelica_source_roots::admit_compile_roots(
+                roots,
+                source.interface.required_source_roots.iter().cloned(),
+                channels,
+            ) {
+                reject_modelica_source(
+                    &mut commands,
+                    &mut notices,
+                    entity,
+                    &mut component,
+                    format!("could not admit Modelica source roots: {error}"),
+                );
+                continue;
+            }
         }
         for name in &source.interface.inputs {
             if !component.inputs.contains_key(name) {

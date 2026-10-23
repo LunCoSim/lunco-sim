@@ -1,5 +1,52 @@
 # High-quality realtime performance handover
 
+## Source-root preparation overlap — 2026-10-23
+
+File-backed participants queue their parsed library requirements when publishing
+the selected declaration interface, in authored prim-path order. The existing
+source-root registry and ordered worker lane own deduplication, loading and
+retirement. Compile dispatch still validates the current dependencies and waits
+for certified physical inputs; no solver state is initialized early.
+
+On unchanged recorded Tesla sources, LunCo root readiness moves from 128.63 ms
+after scene epoch selection to 45.92 ms before it. Its load overlaps scene
+projection instead of serializing behind numerical admission. Total admission
+remains 2.47 s versus 2.49 s; compile and cache-read timing vary, so these runs do
+not establish an overall loading speedup. The production initialization network
+passes all **44 checks**, including coupled initial values, mixed rates and
+pause; the inconsistent-model fixture reports its expected terminal
+`modelica-initialization-failed` fault. Both processes exit zero and release APIs
+4932/4933. Evidence is `early-modelica-roots-gates/` under
+`.cache/codex-evidence/performance-20261023/`.
+
+The regular Tracy build also reaches physics admission for all three default
+Twins without source changes, script failures or runtime diagnostics. Their
+final screenshots were inspected. These are contended diagnostic windows with
+the foreign USD app active; application frame time includes more than graphics
+and does not certify the graphics target. Terrain visual preparation and full
+missions remain separate acceptance gates.
+
+| Twin | Physics admission | Latest physics p50 / p95 | Latest application-frame p50 / p95 |
+| --- | ---: | ---: | ---: |
+| Tesla | 2.47 s | 1.07 / 1.48 ms | 14.45 / 16.83 ms |
+| Summer | 3.09 s | 1.07 / 1.36 ms | 20.42 / 28.59 ms |
+| Griffin | 24.79 s | 3.04 / 3.80 ms | 25.47 / 29.60 ms |
+
+The native captures pass framing, compressed-payload, owned PID, 1,000,000 ns
+sampling and CSV-export checks. Evidence is `tesla-early-modelica-roots-profile/`
+(PID 808896/API 4931) and `remaining-early-modelica-roots-profile/` (Summer
+810153/4934, Griffin 810732/4935) in the same evidence root. All owned apps,
+collectors and exporters are closed. The tested binary SHA-256 is
+`e00942266ef17650fb1cf91a5ea78dca61055351134130cce51b8820be0dc140`.
+Tesla's frame/datum HUD remains unavailable; none of these windows proves a
+completed mission or a clean performance target.
+
+Next, use `phase-attribution.json` and the native zones to address Griffin's
+large USD snapshot and Modelica preparation. Its fact-extraction span has
+3.31 s self time, and twelve constructor spans have 10.95 s accumulated self
+time (largest 6.26 s). These totals are not additive wall time across workers.
+The strict loading, physics and graphics requirements remain open.
+
 ## History catalog read ownership — 2026-10-23
 
 The generic text catalog classifies reserved completed-result JSON identities

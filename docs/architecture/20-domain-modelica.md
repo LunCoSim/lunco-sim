@@ -475,6 +475,13 @@ stage and synthesizer query set. The system retains the same trigger guard for
 direct system invocation, while the production schedule owns the idle-frame
 skip.
 
+A selected file-backed participant queues its required source roots when its
+prepared declaration interface is published, in authored prim-path order. This
+uses the existing source-root registry and ordered preparation lane while scene
+projection and physical input admission settle; it publishes no solver state.
+Compile dispatch revalidates the current source requirements, so a source edit
+or failed/retired root cannot reuse an earlier preparation decision.
+
 Before a live Modelica compile is submitted, its owner admits required roots
 through `lunco-modelica-source-roots` and sends each `LoadSourceRoot` before the
 `Compile` command on the same ordered worker channel. File-backed source assets

@@ -823,6 +823,14 @@ Check interface ownership too: each scope lookup should share the cached immutab
 class interface, rather than deep-cloning its complete member/header inventory.
 Retain per-file fingerprint invalidation and snapshot isolation.
 
+Selected file-backed Modelica participants queue parsed source-root requirements
+at declaration publication through the existing registry, in authored prim-path
+order. Trace root preparation alongside scene projection and physical-input
+admission. Compile dispatch still checks current dependencies and waits for
+certified initial samples; earlier library I/O must not become earlier numerical
+initialization. Qualify changes with the `modelica_initialization_network` and
+`modelica_initialization_failure` production gates.
+
 For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 `prepare_fmi_component`, and ordered result commit. When equivalent requests share the
 same structural solve key, coalesce in-flight lowering instead of occupying a
