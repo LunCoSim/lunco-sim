@@ -150,9 +150,23 @@ include its first complete observation. Zero native compilations do not prove
 faster admission: reference evaluation can dominate a large coupled initializer
 even when it avoids JIT work. Keep an evaluator change only when the actual
 scene improves with its numerical contract intact.
+Shared-value construction also pays for source discovery and symbolic proofs.
+Its read collector shares the exhaustive Solve operand checks in one traversal;
+preserve range/context checks and whole-program equivalence when optimizing it.
 Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.
+
+For fixed RK4, verify that its ME component receives the opaque execution
+backend issued by `rumoca_sim::fmi_execution_backend`. Selecting a fixed
+integrator does not itself install compiled evaluation. Keep the same lattice,
+input transaction and complete checked observation when comparing native and
+reference execution. The nonlinear-array differential test qualifies numerical
+agreement; its small diagnostic timing does not certify whole coupled ticks.
+Use actual compiler-cache accounting on nontrivial production models to verify
+native work. A local dependency path patch can disable prepared-model disk
+caching; record that state and reject it as final loading acceptance for a
+portable Git pin.
 
 ## Architecture checks
 

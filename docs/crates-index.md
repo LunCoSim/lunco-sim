@@ -1500,7 +1500,8 @@ Bevy, compiler worker, UI, or simulation lifecycle; hosts install its
 Renderer-free Rumoca solver capability. It owns backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session; the execution host supplies checked FMI components and owns worker lifecycle. This keeps solver-specific numerical dependencies and low-level integration tests out of the compiler host's source boundary.
 Both session types use Rumoca's Model Exchange host for initialization, input
 transactions and observations. The fixed-step adapter supplies only its RK4
-numerical plugin through the host's derivative capability.
+numerical plugin through the host's derivative capability and obtains its
+opaque native execution handle from `rumoca_sim::fmi_execution_backend`.
 It consumes the pure experiment solver registry with host features disabled,
 so a standalone solver build has no Bevy dependency.
 

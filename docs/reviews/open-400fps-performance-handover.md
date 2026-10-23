@@ -1,5 +1,45 @@
 # High-quality realtime performance handover
 
+## Native execution and single-pass shared-value source discovery
+
+LunCoSim pins published Rumoca `affb2057c8a319015e4b8990e93076f81c5c7dea`
+across all consumers. The source checkout is `../rumoca`, branch
+`fix/luncosim-native-execution`; its original stream-semantics branch is
+preserved. The local path override is removed. The lockfile retains the same
+package versions, checksums and dependencies, with all 29 Rumoca-owned source
+identities pointing to the published revision.
+
+`FixedStepSession` obtains its opaque component execution handle from
+`rumoca_sim::fmi_execution_backend`, sharing the native-admission owner used by
+the built-in solvers. Its integrator, exact lattice, input transactions and
+complete checked observation retain their owners. All seven fixed-step tests
+pass against the published Git dependency, including the nonlinear-array
+native/reference differential and deterministic input replay.
+
+Rumoca collects an operation's read registers in one traversal of the same
+exhaustive structural operand checks used by whole-program dominance
+validation. It retains all range/context checks and ordered shared-value
+output/final-slot proofs. All 418 Solve IR tests pass. The isolated 64-operation
+range-discovery benchmark measures 36,838,415 ns before and 227,143 ns after;
+this is not a whole-simulation speedup.
+
+The fixed twenty-model Tier 1 canary has exactly the same band and diagnostic
+rows as the native-factory baseline: twenty parse/flatten, fourteen DAE/solve
+and twelve initialized, simulated and compared high-band traces. Six DAE and
+two solve refusals remain visible. It is a zero-delta canary, not full-cohort
+qualification. Raw results and timings remain ignored under
+`.cache/codex-evidence/performance-20261023/shared-proof-*`.
+
+The regular Tracy production build passes. The drivetrain production scene
+passes all eight authored checks, and the non-finite-observation scene reaches
+the expected terminal `modelica-step-failed` fault without a process panic.
+Both owned API sessions are closed; receipts are in `shared-proof-portable-gates/`.
+The diagnostic unit-optimization capture is rejected as an A/B measurement
+because two Twin tool sources changed during its window; no whole-tick gain is
+claimed from it.
+All original loading, coupled-tick, graphics, complete-mission and platform
+acceptance targets remain open.
+
 ## Native surface-terminal reuse during projection
 
 The stage owner reuses each prim's resolved render binding and resolves its
@@ -1080,10 +1120,11 @@ API reports, native exports, checks and screenshots are under
 
 ## Native Modelica stack commitment — 2026-10-21
 
-LunCoSim pins Rumoca `09bdd3034633cf971e4404f9ef0efbf65485a66a` across
-all consumers. Its shared Cranelift builder emits inline stack probes, so
-large native frames touch Windows guard pages in order. The fresh-thread
-768 KiB regression and all 112 native execution tests passed on Linux.
+The native stack-probe qualification used Rumoca ancestor
+`09bdd3034633cf971e4404f9ef0efbf65485a66a`: the fresh-thread 768 KiB regression
+and all 112 native execution tests passed on Linux. The current pin retains
+the same shared Cranelift builder probes, so large native frames touch Windows
+guard pages in order.
 The Windows handoff reports the same configuration correction taking the
 regression from access violation to success and allowing Griffin initialization.
 Fresh Windows acceptance of this exact fork revision remains open: workflow
