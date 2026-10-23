@@ -30,6 +30,8 @@ pub mod plot_fmt;
 pub mod registry;
 #[cfg(feature = "ui")]
 mod scene_state;
+#[cfg(feature = "ui")]
+mod shared_time_axis;
 pub mod signal;
 #[cfg(feature = "ui")]
 pub mod telemetry_browser;

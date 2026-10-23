@@ -66,6 +66,19 @@ impl InstancePanel for VizPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
+        self.render_with_time_axis(ui, ctx, instance, None);
+    }
+}
+
+impl VizPanel {
+    /// Compose ordinary plots with an optional shared horizontal viewport.
+    pub(crate) fn render_with_time_axis(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &mut PanelCtx,
+        instance: u64,
+        time_axis: Option<crate::view::SharedTimeAxis>,
+    ) {
         let id = VizId(instance);
 
         let drop_target = ui.interact(
@@ -125,7 +138,11 @@ impl InstancePanel for VizPanel {
 
         match config.view {
             ViewTarget::Panel2D => {
-                let mut ctx2d = Panel2DCtx { ui, wb: ctx };
+                let mut ctx2d = Panel2DCtx {
+                    ui,
+                    wb: ctx,
+                    time_axis,
+                };
                 viz.render_panel_2d(&mut ctx2d, &config);
             }
             ViewTarget::Viewport3D => {

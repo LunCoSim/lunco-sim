@@ -39,6 +39,11 @@ Style them through `ConfigureLinePlot`, then reveal registered instance kind
 `signal_grid` in a dock or floating host. The shared grid supports up to 64
 channels and reuses native plots, rather than adding an alternate renderer or
 duplicating telemetry. A few cells support explanation; dense views show scope.
+Time-series grids share their native X viewport and cursor by default. A
+late-starting sensor or an idle channel therefore stays aligned with the other
+measurements. Y scales and units remain independent; phase-space X bindings
+are not linked. `ConfigureSignalGrid.sync_time_axes:false` opts out.
+`InspectSignalGrid` reports the selected mode and common native time interval.
 For captured charts, `show_hover_values:false` hides hover readouts and
 crosshairs without hiding axes or changing the recorded samples.
 

@@ -3703,6 +3703,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `title` | `String` |   |
 | `columns` | `u32` |   |
 | `signals` | `Vec < SignalGridEntry >` |   |
+| `sync_time_axes` | `Option < bool >` |  Link the time axes and follow one common history interval. Defaults to  true for a new grid; false leaves independently framed plots. |
 
 #### `SetTelemetryBrowserView`
 
@@ -4200,7 +4201,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 275 commands from the runtime schema; scanned 1035 .rs files for docs (0 parse failure(s) skipped).
+<!-- 275 commands from the runtime schema; scanned 1039 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

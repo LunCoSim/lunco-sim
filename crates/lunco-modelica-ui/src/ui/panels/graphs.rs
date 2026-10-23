@@ -300,7 +300,11 @@ fn render_line_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
         None => return,
     };
     let viz = LinePlot;
-    let mut p2d = Panel2DCtx { ui, wb: ctx };
+    let mut p2d = Panel2DCtx {
+        ui,
+        wb: ctx,
+        time_axis: None,
+    };
     viz.render_panel_2d_with_actions(&mut p2d, &config, |ui, ctx| {
         plot_action_buttons(ui, ctx, viz_id);
     });

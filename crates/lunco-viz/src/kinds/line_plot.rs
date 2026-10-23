@@ -864,6 +864,11 @@ impl LinePlot {
                 };
                 Some(crate::plot_fmt::hover_label(name, point, log_y))
             });
+        let shared_time = ctx.time_axis.filter(|_| style.x_signal.is_none());
+        if let Some(axis) = shared_time {
+            plot = plot.link_axis(axis.group, [true, false])
+                .link_cursor(axis.group, [true, false]);
+        }
         if let Some(label) = x_label.filter(|_| !style.compact_layout) {
             plot = plot.x_axis_label(label);
         }
@@ -928,7 +933,7 @@ impl LinePlot {
                     plot_ui,
                     &egui_ctx,
                     egui::Id::new(("line_plot", config.id.raw())),
-                    endpoints,
+                    shared_time.map(|axis| axis.span_s).or(endpoints),
                     style.follow_latest && style.x_signal.is_none(),
                     style.time_window_s,
                     style.time_window_revision,
