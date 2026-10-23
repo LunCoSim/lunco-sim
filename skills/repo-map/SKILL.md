@@ -56,6 +56,10 @@ verified” or “externally blocked”.
 | Author / compile / simulate Modelica models, browse source libraries | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
 | Download / verify / process external assets | **`lunco-assets` + `lunco-assets-{transport,download,processing}`** | `-- download\|list\|process`; explicit workers/CLI compose shared transport, atomic installation, and native processors. |
 
+Before compiling native LunCoSim, install the
+[source-build dependencies](../../docs/apps/README.md#build-from-source),
+including LLVM/libclang for FMI bindings and MSVC C++ Build Tools on Windows.
+
 Launch the installed production executable, or explicitly select a checkout
 build when source validation is the goal. Workspace `default-members` make a
 bare `cargo run` ambiguous — **always pass a target**:

@@ -10,6 +10,27 @@ full CLI flags, controls, and workflows.
 
 ## Build from source
 
+Native `luncosim` and `luncosim-server` builds require **LLVM's libclang**:
+the FMI 3 import dependency (`fmi-sys`) uses bindgen to generate Rust bindings
+from C headers during compilation. This is a source-build dependency; packaged
+LunCoSim users do not need to install LLVM.
+
+On **Windows x64**, install the MSVC C++ Build Tools and Windows SDK, then
+install LLVM once from a Windows terminal:
+
+```powershell
+winget install --exact --id LLVM.LLVM --architecture x64
+```
+
+Then run the build below, or retry your existing build command. Bindgen searches
+the standard LLVM installation folder automatically. If it still reports
+`Unable to find libclang`, check that LLVM contains `libclang.dll` and that
+`LIBCLANG_PATH`, if set, points to its containing directory (usually
+`C:\Program Files\LLVM\bin`). See the
+[bindgen requirements](https://rust-lang.github.io/rust-bindgen/requirements.html)
+for custom installations and other platforms. On Debian/Ubuntu, install
+`libclang-dev`; on macOS, the Xcode Command Line Tools provide libclang.
+
 Clone the repository and build the production simulator with the repository's
 Rust toolchain:
 

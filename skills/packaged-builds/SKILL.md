@@ -11,6 +11,11 @@ application guide [`docs/apps/luncosim/README.md`](../../docs/apps/luncosim/READ
 
 ## Build and inspect
 
+Before compiling LunCoSim, install the
+[source-build dependencies](../../docs/apps/README.md#build-from-source),
+including LLVM/libclang for native FMI bindings. These tools are needed on the
+build machine, not on machines that only run the packaged application.
+
 Use the repository's native build script and the requested runtime target. A
 packaged acceptance run must use exactly one dated installer from the official
 GitHub releases: Windows `LunCoSim-Windows-x86_64-Setup.exe`, macOS Apple

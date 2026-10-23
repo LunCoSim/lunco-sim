@@ -41,8 +41,10 @@
 #
 # Platform detection is automatic. The script works on:
 #   Linux   (x86_64 / aarch64)  — needs libasound2, libudev, libwayland, libxkbcommon
-#   macOS   (x86_64 / arm64)    — needs nothing extra (Metal is built-in)
-#   Windows (x86_64)            — needs MSVC build tools (Visual Studio)
+#   macOS   (x86_64 / arm64)    — needs Xcode Command Line Tools (Metal is built-in)
+#   Windows (x86_64)            — needs MSVC C++ Build Tools and Windows SDK
+# Native LunCoSim also needs LLVM/libclang for FMI bindings. See
+# docs/apps/README.md#build-from-source for platform installation commands.
 #
 # The script downloads the manifest-declared package assets before staging:
 #   cargo run -p lunco-assets -- download --bundle lunica-native
