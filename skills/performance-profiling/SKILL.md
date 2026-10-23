@@ -156,6 +156,9 @@ preserve range/context checks and whole-program equivalence when optimizing it.
 The symbolic term table interns complete operation keys once; each scalar output
 uses the table-local ID and output ordinal. Retain full structural equality and
 the shared table lifetime across segments and both sides of a check.
+Operation shapes use the complete typed IR encoding, including floating-point
+bits. A changed constant's bits must fail the checker; hash equality alone
+cannot establish operation identity.
 Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.

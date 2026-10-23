@@ -1,5 +1,46 @@
 # High-quality realtime performance handover
 
+## Exact proof shape keys
+
+The published Rumoca `d47a5bf3` change moves shared-value operation identity
+into `shared_values/shape.rs`. Complete typed IR encodings retain floating-point
+bits; a hash lookup still compares the complete key. Slot reads have distinct
+typed variants, and proof IDs follow program-order insertion within their
+owning table. The output and final-slot checks retain their independent table.
+
+The new regression demonstrates that the baseline checker accepted a change
+to a constant's NaN payload bits. The current checker rejects it while retaining
+destination-independent sharing. All 422 owner tests and the owner-only
+all-feature Clippy check pass. The fixed twenty-model MSL canary preserves every
+phase/error and channel-band row: twelve high-agreement traces, six known DAE
+refusals and two known solve refusals, with no skipped or missing candidate
+traces. This is Tier 1 qualification.
+The worker's proof-failure counter is zero for all fourteen attempted
+simulations in both cohorts; the encoding change introduces no observed
+single-program proof refusals in this canary.
+
+The scalar diagnostic measures 7.067 ms before and 6.621 ms after, while the
+wide diagnostic measures 4.521 ms and 5.206 ms. The focused baseline and full
+owner suite have different scopes and concurrent workloads, so these values do
+not establish a performance gain. The application's nonlinear-array native/
+reference test passes one hundred input changes, identical clock bits and
+complete reported values within `1e-12`. All eleven manifest pins and twenty-nine
+locked source identities use the published revision; the only additional graph
+edge is the existing `bincode 1.3.3` dependency of `rumoca-ir-solve`. Unrelated
+Windows lockfile edges are preserved. The regular Tracy build passes in
+29m 52s. Its production drivetrain gate passes eight checks; planetary flight
+and contact pass fourteen checks at tick 8103; scoped escape containment passes
+five checks. The negative observation fixture reaches the expected terminal
+`modelica-step-failed` fault without a process panic. All four owned test
+sessions are closed; their receipts remain ignored in `structural-shape-gates/`.
+Production captures and clean performance qualification remain open.
+The integrated base at `9d90d03d1`
+includes the offline renderer, shared plot time axes and planetary-flight
+contact support; preserve these changes and treat the next capture as a fresh
+cohort. The planetary-flight review's authored-velocity frame-admission and
+high-energy articulated-impact findings still require physics-owner
+reproduction; its admitted-force gate does not certify those cases.
+
 ## Native compiler cache attribution
 
 Opt-in trace events in `worker/native_code_cache.rs` expose the actual cache
@@ -103,13 +144,6 @@ platform requirements remain open.
 
 ## Native execution and shared-value proof construction
 
-LunCoSim pins published Rumoca `b972002340d180034151207b7e2776a8c3c069f0`
-across all consumers. The source checkout is `../rumoca`, branch
-`fix/luncosim-native-execution`; its original stream-semantics branch is
-preserved. The local path override is removed. The lockfile retains the same
-package versions, checksums and dependencies, with all 29 Rumoca-owned source
-identities pointing to the published revision.
-
 `FixedStepSession` obtains its opaque component execution handle from
 `rumoca_sim::fmi_execution_backend`, sharing the native-admission owner used by
 the built-in solvers. Its integrator, exact lattice, input transactions and
@@ -170,7 +204,7 @@ clear, the final image is inspected, and native capture framing, owned PID,
 1 ms sampling period and terminal CSV exports are verified. The lander is still
 above the terrain in this bounded observation; landing and settled terrain are
 not qualified. Five authored Twin sources changed since the preceding capture,
-and foreign simulator workloads remain active, so this is diagnostic evidence
+and other LunCoSim workloads remain active, so this is diagnostic evidence
 with no controlled A/B or clean graphics claim. All owned sessions and capture
 tools are closed. Loading, complete coupled ticks and every original acceptance
 target remain open.
@@ -536,7 +570,7 @@ on the course, and Summer shows its rover/traverse terrain. Tesla's HUD still
 reports unavailable frame/datum. These are short admission observations, not
 completed mission or settled-terrain acceptance.
 
-Owned APIs 4953–4956, apps, collectors and exporters are closed. The foreign
+Owned APIs 4953–4956, apps, collectors and exporters are closed. The concurrent
 tutorials graphics session (PID 1274357/API 4387) remained active and untouched.
 These instrumented, contended timings do not establish clean product physics
 or graphics acceptance. All strict targets remain open. Continue with native
@@ -579,7 +613,7 @@ Evidence is under `.cache/codex-evidence/performance-20261023/`:
 compressed-payload, owned PID, 1,000,000 ns sampling and native CSV-export checks.
 Their runtime diagnostics and script errors are clear and final screenshots were
 inspected. APIs 4945/4949, both apps, collectors and exporters are closed. The
-foreign Tesla session (PID 950669/API 4387) stayed active; these are contended
+other LunCoSim Tesla session (PID 950669/API 4387) stayed active; these are contended
 attribution windows, not clean performance or completed-mission acceptance.
 
 The published causal wiring connects the six stalled Griffin participants into
