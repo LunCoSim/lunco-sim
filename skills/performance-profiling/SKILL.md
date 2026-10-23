@@ -153,6 +153,9 @@ scene improves with its numerical contract intact.
 Shared-value construction also pays for source discovery and symbolic proofs.
 Its read collector shares the exhaustive Solve operand checks in one traversal;
 preserve range/context checks and whole-program equivalence when optimizing it.
+The symbolic term table interns complete operation keys once; each scalar output
+uses the table-local ID and output ordinal. Retain full structural equality and
+the shared table lifetime across segments and both sides of a check.
 Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.

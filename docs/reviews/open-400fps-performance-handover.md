@@ -1,8 +1,8 @@
 # High-quality realtime performance handover
 
-## Native execution and single-pass shared-value source discovery
+## Native execution and shared-value proof construction
 
-LunCoSim pins published Rumoca `affb2057c8a319015e4b8990e93076f81c5c7dea`
+LunCoSim pins published Rumoca `b972002340d180034151207b7e2776a8c3c069f0`
 across all consumers. The source checkout is `../rumoca`, branch
 `fix/luncosim-native-execution`; its original stream-semantics branch is
 preserved. The local path override is removed. The lockfile retains the same
@@ -19,38 +19,60 @@ native/reference differential and deterministic input replay.
 Rumoca collects an operation's read registers in one traversal of the same
 exhaustive structural operand checks used by whole-program dominance
 validation. It retains all range/context checks and ordered shared-value
-output/final-slot proofs. All 418 Solve IR tests pass. The isolated 64-operation
+output/final-slot proofs. All 420 Solve IR tests pass. The isolated 64-operation
 range-discovery benchmark measures 36,838,415 ns before and 227,143 ns after;
 this is not a whole-simulation speedup.
+
+The term table interns complete operation keys once, retaining full structural
+equality. Each output term holds that table-local ID and output ordinal; the
+builder keeps its table across segments and the checker uses one table for both
+sequences. Register normalization uses one operation clone. Eight paired matrix
+derivations/checks with 512 inputs and 256 outputs measure 37.768 ms before and
+6.114 ms after. Corrupt operand order and output selection are both rejected.
+These are isolated proof-construction results, not a whole-scene speedup claim.
 
 The fixed twenty-model Tier 1 canary has exactly the same band and diagnostic
 rows as the native-factory baseline: twenty parse/flatten, fourteen DAE/solve
 and twelve initialized, simulated and compared high-band traces. Six DAE and
 two solve refusals remain visible. It is a zero-delta canary, not full-cohort
 qualification. Raw results and timings remain ignored under
-`.cache/codex-evidence/performance-20261023/shared-proof-*`.
+`.cache/codex-evidence/performance-20261023/shared-{proof,value-key}-*`.
 
-The regular Tracy production build passes. The drivetrain production scene
-passes all eight authored checks, and the non-finite-observation scene reaches
+The regular Tracy production build passes in 5m 58s. The drivetrain production
+scene passes all eight authored checks, and the non-finite-observation scene reaches
 the expected terminal `modelica-step-failed` fault without a process panic.
-Both owned API sessions are closed; receipts are in `shared-proof-portable-gates/`.
+Both owned API sessions are closed; receipts are in `shared-value-key-portable-gates/`.
 The diagnostic unit-optimization capture is rejected as an A/B measurement
 because two Twin tool sources changed during its window; no whole-tick gain is
 claimed from it.
 All original loading, coupled-tick, graphics, complete-mission and platform
 acceptance targets remain open.
 
-The published-pin diagnostic runs in `*-portable-proof-profile/` retain unchanged
-source hashes, clear retained diagnostics, inspected final images and verified
+The preceding `affb2057` diagnostic runs in `*-portable-proof-profile/` retain
+unchanged source hashes, clear retained diagnostics, inspected final images and verified
 native capture/CSV output. Tesla admission is 5.455 s, Summer 5.899 s and Griffin
 57.028 s; Griffin's subsequent cache-populated run remains 53.926 s. Final
 240-tick median/p95 service times are 6.126/8.353 ms for Tesla, 9.769/15.161 ms
 for Summer and 10.936/16.437 ms for the first Griffin run. These instrumented,
 contention-affected observations are not clean performance or mission acceptance.
-The coupled initializer still takes 12.510 s with 16,414 native-cache hits out
+That coupled initializer takes 12.510 s with 16,414 native-cache hits out
 of 16,482 requests. No whole-scene speedup follows from the read-discovery
 microbenchmark. Continue profiling constructor term/key work and live port-write
 preflight; all owned sessions, collectors and exporters are closed.
+
+The `b9720023` run in `griffin-operation-key-profile/` reaches usable physics in
+26.748 s. The same coupled source key `9cf16dad6cc36d49` constructs in 6.804 s
+with 16,414 native-cache hits out of 16,482 requests and 68 compilations.
+Its final 240-tick complete FixedMain median/p95 is 6.580/7.731 ms. Sources remain
+unchanged throughout that run, retained diagnostics and script-error checks are
+clear, the final image is inspected, and native capture framing, owned PID,
+1 ms sampling period and terminal CSV exports are verified. The lander is still
+above the terrain in this bounded observation; landing and settled terrain are
+not qualified. Five authored Twin sources changed since the preceding capture,
+and foreign simulator workloads remain active, so this is diagnostic evidence
+with no controlled A/B or clean graphics claim. All owned sessions and capture
+tools are closed. Loading, complete coupled ticks and every original acceptance
+target remain open.
 
 ## Native surface-terminal reuse during projection
 
