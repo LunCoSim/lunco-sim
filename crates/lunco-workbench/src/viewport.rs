@@ -44,8 +44,8 @@
 //! - **Sentinels catch regressions.** [`check_camera_invariants`] warns when a
 //!   new window-targeting `Camera3d` has no `SceneCamera` intent. Such a camera
 //!   has no owner and must be fixed at its spawn/binding site, not adopted here.
-//! - **The texture key is maintained by its owner.** [`sync_egui_host_msaa`]
-//!   follows the active window scene camera's MSAA and HDR format rather than
+//! - **The texture key is maintained by its owner.** [`sync_egui_host_framebuffer`]
+//!   follows the active window scene camera's usages, MSAA and HDR format rather than
 //!   relying on a hardcoded presentation setting. This keeps the shared target
 //!   valid when the user changes graphics quality or a Twin replaces cameras.
 //!
@@ -60,7 +60,7 @@
 //! ## What goes where
 //!
 //! - `ensure_egui_host` (Startup) — auto-spawn the egui host.
-//! - `sync_egui_host_msaa` (Update) — maintain the shared main-texture key.
+//! - `sync_egui_host_framebuffer` (PostUpdate) — maintain the shared main-texture key.
 //! - `apply_workbench_viewport` (PostUpdate, before `CameraUpdateSystems`)
 //!   — publish scene visibility into `SceneViewport`; the camera remains
 //!   full-window while the dock leaf rect stays in `PanelRects`/`ScenePickGate`.
@@ -76,7 +76,7 @@ use bevy::prelude::*;
 // exists when the `bevy_render` feature is on, which wasm strips.
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
+use bevy::camera::{CameraMainTextureUsages, ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{EguiGlobalSettings, PrimaryEguiContext, egui};
 use lunco_control_core::{IntentState, LocalIntentSurface};
 use lunco_input_core::InputBindingsSettings;
@@ -197,14 +197,14 @@ impl Panel for ViewportPanel {
 /// Bevy keys a render target's intermediate textures by `(target, usages,
 /// format, msaa)`. The host deliberately shares the scene camera's main
 /// texture so egui paints directly over the scene pixels that were cleared in
-/// the lower-order camera. MSAA and HDR are part of that key; both must follow
+/// the lower-order camera. Texture usages, MSAA and HDR are part of that key and follow
 /// the active scene camera rather than being presentation constants.
 ///
 /// This is change-driven and covers every owner transition: camera quality
 /// changes, camera replacement/activation, a newly bound scene camera, and
 /// scene-camera removal. If no active window scene camera exists, the layout
 /// paints its own opaque backdrop and there is no valid scene texture to share.
-pub(crate) fn sync_egui_host_msaa(
+pub(crate) fn sync_egui_host_framebuffer(
     dirty: Query<
         (),
         (
@@ -214,21 +214,35 @@ pub(crate) fn sync_egui_host_msaa(
                 Changed<Msaa>,
                 Changed<Camera>,
                 Changed<Hdr>,
+                Changed<CameraMainTextureUsages>,
                 Added<SceneCamera>,
             )>,
         ),
     >,
     mut removed: RemovedComponents<SceneCamera>,
+    mut removed_hdr: RemovedComponents<Hdr>,
+    mut removed_usages: RemovedComponents<CameraMainTextureUsages>,
     host_added: Query<(), Added<WorkbenchEguiHost>>,
     scene_cams: Query<
-        (Entity, &Camera, &Msaa, &RenderTarget, Has<Hdr>),
+        (
+            Entity,
+            &Camera,
+            &Msaa,
+            &RenderTarget,
+            Has<Hdr>,
+            &CameraMainTextureUsages,
+        ),
         (With<SceneCamera>, Without<WorkbenchEguiHost>),
     >,
     viewport: Option<Res<SceneViewport>>,
-    mut host: Query<(Entity, &mut Msaa, Has<Hdr>), (With<WorkbenchEguiHost>, Without<SceneCamera>)>,
+    mut host: Query<
+        (Entity, &mut Msaa, Has<Hdr>, &mut CameraMainTextureUsages),
+        (With<WorkbenchEguiHost>, Without<SceneCamera>),
+    >,
     mut commands: Commands,
 ) {
-    let had_removal = removed.read().count() > 0;
+    let had_removal =
+        removed.read().count() + removed_hdr.read().count() + removed_usages.read().count() > 0;
     if dirty.is_empty() && host_added.is_empty() && !had_removal {
         return;
     }
@@ -240,13 +254,16 @@ pub(crate) fn sync_egui_host_msaa(
     let want = scene_cams
         .get(active_camera)
         .ok()
-        .filter(|(_, camera, _, target, _)| camera.is_active && is_window(target))
-        .map(|(_, _, msaa, _, hdr)| (*msaa, hdr));
-    let Some((want_msaa, want_hdr)) = want else {
+        .filter(|(_, camera, _, target, _, _)| camera.is_active && is_window(target))
+        .map(|(_, _, msaa, _, hdr, usages)| (*msaa, hdr, *usages));
+    let Some((want_msaa, want_hdr, want_usages)) = want else {
         return;
     };
 
-    for (entity, mut msaa, host_hdr) in &mut host {
+    for (entity, mut msaa, host_hdr, mut usages) in &mut host {
+        if usages.0 != want_usages.0 {
+            *usages = want_usages;
+        }
         if *msaa != want_msaa {
             *msaa = want_msaa;
         }
@@ -306,7 +323,7 @@ fn ensure_egui_host(
             Camera2d,
             // `order = 1` places egui strictly after the scene Camera3d.
             // `egui_host_camera` keeps the UI pass on the scene camera's shared
-            // main texture; `sync_egui_host_msaa` maintains the texture key.
+            // main texture; `sync_egui_host_framebuffer` maintains the texture key.
             egui_host_camera(),
             //
             // Render NO world layers. This camera exists ONLY to paint egui chrome
@@ -785,18 +802,17 @@ impl Plugin for WorkbenchViewportPlugin {
             // `Update`, before the egui pass writes it. It is cleared at the top of
             // `render_workbench` instead.)
             .add_systems(First, reset_scene_pick_gate)
-            .add_systems(
-                Update,
-                (
-                    check_camera_invariants,
-                    check_host_invariant_once,
-                    sync_egui_host_msaa,
-                ),
-            )
+            .add_systems(Update, (check_camera_invariants, check_host_invariant_once))
             // Keep bevy_egui's blanket pointer-capture OFF; we provide our own
             // viewport-aware backend instead (so the egui-dock ViewportPanel leaf
             // doesn't suppress 3D picking over the scene).
             .add_systems(Update, disable_egui_pointer_capture)
+            .add_systems(
+                PostUpdate,
+                sync_egui_host_framebuffer
+                    .after(lunco_render::RenderCameraBindingSet)
+                    .after(lunco_viewport_core::SceneViewportSet::Reconcile),
+            )
             // Resolve the per-frame scene-vs-chrome signal from the render fold +
             // egui geometry. PostUpdate after the egui pass, BEFORE the two
             // consumers below (which read the resolved `pointer_over_scene`).

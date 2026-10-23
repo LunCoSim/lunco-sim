@@ -70,6 +70,11 @@ pub struct SceneBloomOverride {
     pub intensity: Option<f32>,
 }
 
+/// Concrete render-camera binding precedes consumers of the shared target key.
+/// Render hosts use this boundary before synchronizing overlay cameras.
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderCameraBindingSet;
+
 /// This entity's mesh asset is immutable and may be shared by other entities.
 /// Entity-specific mesh writers must attach a private asset and remove this
 /// marker before changing geometry or vertex attributes.

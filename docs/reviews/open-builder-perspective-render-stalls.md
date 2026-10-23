@@ -42,8 +42,8 @@ Update 4.313 ms, and PostUpdate 5.470 ms, with no continued >16.67 ms burst.
   `Camera3d` full-window in the docked Builder layout. `apply_workbench_viewport`
   publishes `visible=true, rect=None`; the measured dock leaf is for
   occlusion/picking and must not become a camera crop.
-- The same file’s `sync_egui_host_msaa` is change-driven and mirrors the active
-  scene camera’s MSAA/HDR into the persistent egui host because both cameras
+- The same file’s `sync_egui_host_framebuffer` is change-driven and mirrors the active
+  scene camera’s usages/MSAA/HDR into the persistent egui host because both cameras
   share the window main texture.
 - `crates/lunco-usd-bevy/src/camera_switch.rs::reconcile_scene_viewport` is the
   sole writer of window-camera `is_active` and `viewport`. It gates activation

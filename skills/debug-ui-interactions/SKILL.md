@@ -243,6 +243,14 @@ BigSpace/frame conversion.
 
 ## Verify each observable boundary
 
+For retained panels or duplicated loading cards, compare the scene and UI
+cameras' complete Bevy main-texture key: target, texture usages, HDR format and
+MSAA. The workbench synchronizes them after renderer binding and viewport
+reconciliation. A load-preserving UI camera with a private texture retains old
+cards even after the status bus is clear. Repair target sharing and verify raw
+images after a real load; do not hide the status indicator or accept the bus
+state alone as proof of clean pixels.
+
 For menu availability during scene loading, run
 `python3 scripts/api/test_twin_loading_replacement.py --port <free-port>`.
 It opens File and selects the second recent Twin while a sandbox load is still

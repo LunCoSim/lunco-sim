@@ -252,11 +252,13 @@ the egui pass.
 The host is deliberately keyed to the scene camera's shared Bevy main texture.
 Its `clear_color: None` leaves the scene pixels intact while the scene camera's
 lower-order pass clears and redraws that same texture every frame. Because
-Bevy includes MSAA and HDR format in the texture key, the workbench's
-change-driven `sync_egui_host_msaa` follows the active scene camera across
+Bevy includes texture usages, MSAA and HDR format in the texture key, the workbench's
+change-driven `sync_egui_host_framebuffer` follows the active scene camera across
 quality changes, camera replacement, resize, and Twin teardown. A private
 load-preserving UI texture would accumulate panels removed by a perspective
-switch and is not a valid composition.
+switch and is not a valid composition. Synchronization runs after backend camera
+binding and viewport reconciliation, before extraction. A ray-traced scene's
+storage-binding usage must reach the UI camera in that same render frame.
 
 When no window `Camera3d` is active at all (a central-content perspective, the
 Modelica workbench, or the short handoff while a selected camera is being
