@@ -224,6 +224,14 @@ label through the existing generic `Callsign` marker. This is membership and aut
 second name heuristic: declarations without it remain in the full telemetry catalog, and the
 catalog's labels still use `display_channel_label`.
 
+Browser rows allocate the latest value and unit from the right edge before
+the channel name and tree indentation. That edge follows the visible clip,
+including when toolbar controls widen the scroll content. Each row owns an
+explicit rectangle so parent justification cannot widen or shift its cells.
+Values stay on one line when the panel narrows; names truncate and indentation
+is bounded by the remaining label area. Long units truncate before consuming
+the value's measured width.
+
 ---
 
 ## 0. What is true today (verify before trusting)

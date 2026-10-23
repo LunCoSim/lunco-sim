@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument("--scene-free", action="store_true")
     args = parser.parse_args()
     title = "Scene-free workbench" if args.scene_free else "Workbench perspectives"
-    count = 8 if args.scene_free else 20
+    count = 8 if args.scene_free else 23
     scenario = "workbench_scene_free" if args.scene_free else "workbench_perspectives"
     extra = ("--no-throttle", "--no-vsync") if args.scene_free else ("--no-throttle", "--no-vsync", "--scene", "scenes/fixtures/usd_query_api/site.usda")
     output = ROOT / "target" / ("workbench-scene-free" if args.scene_free else "workbench-perspectives")
@@ -48,7 +48,7 @@ def main() -> None:
             output_text = log.read_text(errors="replace")
             if "TESTS_FAIL" in output_text or "task leaf failed" in output_text or "on_tick failed" in output_text:
                 raise RuntimeError(f"Authored perspective test failed; log={log}")
-            for subject in ("build", "analyze", "reopened-graph", "twin-power-study"):
+            for subject in ("editor-empty", "build", "analyze", "reopened-graph", "twin-power-study"):
                 key = "capture:" + subject
                 if f"PERSPECTIVES_CAPTURE:{subject}" in output_text and key not in installed:
                     session.capture_screenshot(output / f"{subject}.png")

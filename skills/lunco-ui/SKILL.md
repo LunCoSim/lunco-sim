@@ -27,6 +27,11 @@ and design decisions. This skill is a quick-reference summary.
 
 ## Graph readability
 
+Telemetry browser rows reserve the measured value and unit at the right edge
+before allocating the channel name and hierarchy indentation. Bound each row
+with an explicit visible rectangle, including in justified parents. Truncate
+names and bound indentation on narrow panels; keep numeric cells on one line.
+
 For small multiples, use `ConfigureSignalGrid` with an explicit source, signal
 and caption for every cell. Discover active sampled channels through
 `ListTelemetryChannels`; inspect allocated plot ids with `InspectSignalGrid`.
@@ -243,6 +248,8 @@ and applies `PerspectiveLayoutPlan`; do not add a Rust preset for changeable
 presentation policy. See [Twin perspectives](../../docs/tutorials/05-twin-perspectives.md)
 for the return schema, namespace, lifecycle and production acceptance. Policy
 updates preserve visited user layouts; explicit Reset Layout uses the new plan.
+The default Editor has no central tabs. Open documents and tools explicitly,
+or declare them in the owning perspective policy; do not seed empty editors.
 `PerspectiveAdmission` fences workspace restoration while definitions prepare.
 Activation of the current task preserves its dock; Reset Layout is explicit.
 For a title-free measurement/diagram overlay, author `floating` in that same

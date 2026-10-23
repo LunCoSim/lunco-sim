@@ -1690,6 +1690,13 @@ fn render_visible_telemetry_row(
     clicked: &mut Option<SignalRef>,
     tree_changed: &mut bool,
 ) {
+    let available = ui.available_rect_before_wrap();
+    let visible = available.intersect(ui.clip_rect());
+    let row_width = visible.width().max(0.0);
+    let row_rect = egui::Rect::from_min_size(
+        egui::pos2(visible.left(), available.top()),
+        egui::vec2(row_width, ui.spacing().interact_size.y),
+    );
     match entry {
         VisibleTelemetryRow::Group {
             display_label,
@@ -1697,30 +1704,35 @@ fn render_visible_telemetry_row(
             depth,
         } => {
             ui.push_id(("tb_entity_row", branch_id), |ui| {
-                let indent = ui.spacing().indent * *depth as f32;
-                ui.horizontal(|ui| {
-                    ui.add_space(indent);
-                    ui.vertical(|ui| {
-                        let branch_state = lunco_workbench_widgets::tree::branch(
-                            ui,
-                            *branch_id,
-                            lunco_workbench_widgets::tree::default_open_at_depth(*depth),
-                            None,
-                            |ui| {
-                                let width = ui.available_width();
-                                lunco_workbench_widgets::tree::label(
-                                    ui,
-                                    egui::RichText::new(display_label.as_ref()).strong(),
-                                    width,
-                                    egui::Sense::click(),
-                                )
-                                .clicked()
-                            },
-                            |_| {},
-                        );
-                        *tree_changed |= branch_state.changed;
-                    });
-                });
+                let indent = (ui.spacing().indent * *depth as f32)
+                    .min((row_width - ui.spacing().indent - ui.spacing().interact_size.x).max(0.0));
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(row_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    |ui| {
+                        ui.add_space(indent);
+                        ui.vertical(|ui| {
+                            let branch_state = lunco_workbench_widgets::tree::branch_header(
+                                ui,
+                                *branch_id,
+                                lunco_workbench_widgets::tree::default_open_at_depth(*depth),
+                                None,
+                                |ui| {
+                                    let width = ui.available_width();
+                                    lunco_workbench_widgets::tree::label(
+                                        ui,
+                                        egui::RichText::new(display_label.as_ref()).strong(),
+                                        width,
+                                        egui::Sense::click(),
+                                    )
+                                    .clicked()
+                                },
+                            );
+                            *tree_changed |= branch_state.changed;
+                        });
+                    },
+                );
             });
         }
         VisibleTelemetryRow::Channel { row, depth, stripe } => {
@@ -1733,58 +1745,74 @@ fn render_visible_telemetry_row(
             let value_text = row_text_cache.value_text(row, latest, display_settings, theme);
             let unit_text = row_text_cache.unit_text(row, theme);
             ui.push_id(("tb_channel_row", &row.sig), |ui| {
-                let row_height = ui.spacing().interact_size.y;
-                let row_rect = ui.available_rect_before_wrap();
                 if stripe % 2 == 1 {
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(
-                            row_rect.min,
-                            egui::vec2(row_rect.width(), row_height),
-                        ),
-                        0.0,
-                        ui.visuals().faint_bg_color,
-                    );
+                    ui.painter()
+                        .rect_filled(row_rect, 0.0, ui.visuals().faint_bg_color);
                 }
-                let indent = ui.spacing().indent * *depth as f32;
-                ui.horizontal(|ui| {
-                    ui.add_space(indent);
-                    let width = ui.available_width();
-                    let label_width = (width * 0.55).max(72.0).min(width);
-                    let inner = ui.dnd_drag_source(
-                        ui.id().with(("tb_row", &row.sig)),
-                        row.drag_payload.clone(),
-                        |ui| {
-                            lunco_workbench_widgets::tree::selectable_label(
+                // Allocate live values before names and hierarchy indentation.
+                // Deep rows must not move measurements beyond the panel edge.
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(row_rect)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    |ui| {
+                        let value = egui::WidgetText::RichText(value_text).into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Extend),
+                            f32::INFINITY,
+                            egui::TextStyle::Body,
+                        );
+                        if !unit_text.text().is_empty() {
+                            let unit_width = (ui.available_width()
+                                - value.size().x
+                                - ui.spacing().item_spacing.x)
+                                .max(0.0);
+                            let unit = egui::WidgetText::RichText(unit_text).into_galley(
                                 ui,
-                                selected == Some(&row.sig),
-                                egui::WidgetText::RichText(label_text),
-                                label_width,
-                            )
-                        },
-                    );
-                    let response = inner.inner;
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let unit_response = ui.label(egui::WidgetText::RichText(unit_text));
-                        let tip = unit_tooltip(row.unit.as_deref());
-                        if !tip.is_empty() && unit_response.hovered() {
-                            unit_response.on_hover_text(tip);
+                                Some(egui::TextWrapMode::Truncate),
+                                unit_width,
+                                egui::TextStyle::Body,
+                            );
+                            let unit_response = ui.add(egui::Label::new(unit));
+                            let tip = unit_tooltip(row.unit.as_deref());
+                            if !tip.is_empty() && unit_response.hovered() {
+                                unit_response.on_hover_text(tip);
+                            }
                         }
-                        ui.label(egui::WidgetText::RichText(value_text));
-                    });
-                    if response.double_clicked() {
-                        queue_plot_drop(
-                            ui.ctx(),
-                            PlotDropRequest {
-                                payload: row.drag_payload.clone(),
-                                world_pos: None,
+                        ui.add(egui::Label::new(value).extend());
+                        let width = ui.available_width();
+                        let indent = (ui.spacing().indent * *depth as f32)
+                            .min((width - ui.spacing().button_padding.x * 2.0).max(0.0));
+                        let label_width = (width - indent).max(0.0);
+                        let inner = ui.dnd_drag_source(
+                            ui.id().with(("tb_row", &row.sig)),
+                            row.drag_payload.clone(),
+                            |ui| {
+                                lunco_workbench_widgets::tree::selectable_label(
+                                    ui,
+                                    selected == Some(&row.sig),
+                                    egui::WidgetText::RichText(label_text),
+                                    label_width,
+                                )
                             },
                         );
-                        *clicked = Some(row.sig.clone());
-                    } else if response.clicked() {
-                        *clicked = Some(row.sig.clone());
-                    }
-                    attach_row_tooltip(response, row);
-                });
+                        let response = inner.inner;
+                        ui.add_space(indent);
+                        if response.double_clicked() {
+                            queue_plot_drop(
+                                ui.ctx(),
+                                PlotDropRequest {
+                                    payload: row.drag_payload.clone(),
+                                    world_pos: None,
+                                },
+                            );
+                            *clicked = Some(row.sig.clone());
+                        } else if response.clicked() {
+                            *clicked = Some(row.sig.clone());
+                        }
+                        attach_row_tooltip(response, row);
+                    },
+                );
             });
         }
     }
@@ -3059,14 +3087,14 @@ mod tests {
     }
 
     #[test]
-    fn draggable_telemetry_rows_use_left_aligned_tree_labels() {
+    fn telemetry_rows_keep_values_visible_at_narrow_widths_and_deep_indents() {
         let row = Arc::new(Row {
             sig: SignalRef::new(ent(1), "x"),
             drag_payload: ChannelDragPayload {
                 entity_bits: ent(1).to_bits(),
                 path: Arc::from("x"),
             },
-            unit: None,
+            unit: Some("kg.m2/s2".into()),
             description: None,
             provenance: None,
             group_path: None,
@@ -3081,12 +3109,8 @@ mod tests {
             search_fields: Default::default(),
         });
         let label = telemetry_row_label(&row, false);
-        let entry = VisibleTelemetryRow::Channel {
-            row,
-            depth: 0,
-            stripe: 0,
-        };
-        let registry = SignalRegistry::default();
+        let mut registry = SignalRegistry::default();
+        registry.push_scalar(row.sig.clone(), 0.0, -1234.0);
         let theme = TelemetryTheme {
             text: egui::Color32::WHITE,
             text_subdued: egui::Color32::GRAY,
@@ -3096,50 +3120,112 @@ mod tests {
         let mut row_text_cache = TelemetryRowTextCache::default();
         let mut clicked = None;
         let mut tree_changed = false;
-        let mut row_left = 0.0;
-        let mut label_width = 0.0;
-        let mut input = egui::RawInput::default();
-        input.screen_rect = Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(600.0, 200.0),
-        ));
-
         let egui_context = egui::Context::default();
         egui_context.all_styles_mut(|style| {
             lunco_theme::Theme::default()
                 .typography
                 .apply_to_style(style)
         });
-        let mut output = egui_context.run_ui(input, |ui| {
-            let available = ui.available_rect_before_wrap();
-            row_left = available.left();
-            label_width = (available.width() * 0.55).max(72.0).min(available.width());
-            render_visible_telemetry_row(
-                ui,
-                &entry,
-                &registry,
-                &theme,
-                &display_settings,
-                &mut row_text_cache,
-                None,
-                &mut clicked,
-                &mut tree_changed,
-            );
-        });
-
-        output.textures_delta.clear();
-        let label_x = output
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos.x),
-                _ => None,
-            })
-            .expect("the telemetry channel label should be painted");
-        assert!(
-            label_x < row_left + label_width * 0.25,
-            "channel label started at {label_x}, away from the left edge of its column"
-        );
+        let expected_value = row_text_cache
+            .value_text(&row, Some(-1234.0), &display_settings, &theme)
+            .text()
+            .to_owned();
+        for width in [120.0, 180.0, 300.0, 600.0] {
+            for depth in [0, 4, 12] {
+                let entry = VisibleTelemetryRow::Channel {
+                    row: Arc::clone(&row),
+                    depth,
+                    stripe: 0,
+                };
+                let mut input = egui::RawInput::default();
+                input.screen_rect = Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 200.0),
+                ));
+                let mut row_rect = egui::Rect::NOTHING;
+                let mut output = egui_context.run_ui(input, |ui| {
+                    ui.scope_builder(
+                        egui::UiBuilder::new().layout(
+                            egui::Layout::top_down(egui::Align::Min).with_cross_justify(true),
+                        ),
+                        |ui| {
+                            row_rect = ui.available_rect_before_wrap();
+                            // Toolbar controls can widen the scroll content beyond its clip.
+                            ui.set_min_width(width + 150.0);
+                            render_visible_telemetry_row(
+                                ui,
+                                &VisibleTelemetryRow::Group {
+                                    display_label: Arc::from("Deeply nested subsystem"),
+                                    branch_id: egui::Id::new(("nested_group", depth)),
+                                    depth,
+                                },
+                                &registry,
+                                &theme,
+                                &display_settings,
+                                &mut row_text_cache,
+                                None,
+                                &mut clicked,
+                                &mut tree_changed,
+                            );
+                            for row_index in 0..4 {
+                                ui.push_id(row_index, |ui| {
+                                    render_visible_telemetry_row(
+                                        ui,
+                                        &entry,
+                                        &registry,
+                                        &theme,
+                                        &display_settings,
+                                        &mut row_text_cache,
+                                        None,
+                                        &mut clicked,
+                                        &mut tree_changed,
+                                    );
+                                });
+                            }
+                        },
+                    );
+                });
+                output.textures_delta.clear();
+                let values: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(text) if text.galley.text() == expected_value => {
+                            Some((text, clipped.clip_rect))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(values.len(), 4, "every row must paint its complete value");
+                for value in values {
+                    let value_rect = egui::Rect::from_min_size(value.0.pos, value.0.galley.size());
+                    assert_eq!(value.0.galley.rows.len(), 1, "numbers must not wrap");
+                    assert!(
+                        row_rect
+                            .intersect(value.1)
+                            .expand(0.5)
+                            .contains_rect(value_rect),
+                        "value {value_rect:?} clipped at width {width}, depth {depth}"
+                    );
+                }
+                if depth == 0 && width == 600.0 {
+                    let label_x = output
+                        .shapes
+                        .iter()
+                        .find_map(|clipped| match &clipped.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.pos.x)
+                            }
+                            _ => None,
+                        })
+                        .expect("the channel label should be painted");
+                    assert!(
+                        label_x < row_rect.left() + 20.0,
+                        "channel names stay left aligned"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
