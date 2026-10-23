@@ -16,6 +16,7 @@
 use bevy::ecs::reflect::ReflectComponent;
 
 pub mod appearance;
+pub mod backend;
 pub mod camera;
 pub mod data_texture;
 pub mod quality;
@@ -25,6 +26,9 @@ pub mod sun;
 pub use appearance::{
     PbrLook, PbrLookKey, PbrTextures, ProceduralSkybox, ScreenConstantMarker,
     ScreenConstantMarkerVisibility, SurfaceAlpha,
+};
+pub use backend::{
+    OfflineImageSampling, RendererSettings, RendererStatus, RenderingBackend, TwinRendererOverride,
 };
 pub use camera::{
     BloomLook, CameraRetiring, EditorPreviewCamera, GraphicsCameraDefaults, MsaaLevel, SceneCamera,

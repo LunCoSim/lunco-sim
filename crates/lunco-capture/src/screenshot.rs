@@ -101,6 +101,7 @@ impl Plugin for ScreenshotPlugin {
             .init_resource::<OfflineRecordingState>()
             .init_resource::<OfflineVideoSettings>()
             .init_resource::<OfflineVideoSink>()
+            .init_resource::<lunco_render::OfflineImageSampling>()
             .add_observer(deliver_offline_frame)
             // The readiness gate. `Update` (not `Last`): it must run before
             // `drive_offline_clock`, which only acts once `state.active` is set —
@@ -115,7 +116,7 @@ impl Plugin for ScreenshotPlugin {
             .add_systems(
                 Update,
                 (
-                    abort_recording_on_runtime_fault,
+                    abort_recording_on_terminal_failure,
                     stop_recording_at_limit,
                     exit_when_recording_drained,
                 ),
@@ -820,6 +821,8 @@ pub struct OfflineRecordingState {
     /// Shared simulation tick sampled when the latest image was requested.
     /// None when the host has no simulation clock or no image has been requested.
     pub last_capture_sim_tick: Option<u64>,
+    /// Render submissions accumulated for the latest requested output image.
+    pub last_capture_samples: Option<u32>,
     /// Destination directory.
     pub output_dir: std::path::PathBuf,
     /// Video target FPS (determines input duration per frame).
@@ -829,6 +832,8 @@ pub struct OfflineRecordingState {
     /// Set by `deliver_offline_frame` when a frame lands; consumed by
     /// `drive_offline_clock` to schedule exactly one `1/fps` time step.
     pub frame_just_captured: bool,
+    /// One sampling ticket per output image, after the fixed-cycle barriers.
+    pub sampling_started: bool,
     /// Cold-GPU warm-up fence for offscreen recording. No simulation time or
     /// output frame is consumed while this is active.
     pub render_warmup_until: Option<web_time::Instant>,
@@ -1186,6 +1191,7 @@ fn activate_recording(
     state.active = true;
     state.frame_index = 0;
     state.last_capture_sim_tick = None;
+    state.last_capture_samples = None;
     state.video = output_is_video(&dir);
     state.output_dir = dir;
     state.fps = pending.fps;
@@ -1194,6 +1200,7 @@ fn activate_recording(
     // that state first; subsequent deliveries set this latch and advance virtual
     // time by exactly one frame before requesting the next capture.
     state.frame_just_captured = false;
+    state.sampling_started = false;
     // A camera can be structurally ready before its first offscreen render has
     // completed pipeline compilation. Hold virtual time and frame numbering for
     // one render-second so frame 0 cannot become a clear-color race on a cold GPU.
@@ -1293,6 +1300,11 @@ fn teardown_recording(
     state.is_waiting_for_frame = false;
     state.frame_just_captured = false;
     state.render_warmup_until = None;
+    commands.queue(|world: &mut World| {
+        if let Some(mut sampling) = world.get_resource_mut::<lunco_render::OfflineImageSampling>() {
+            sampling.end_capture();
+        }
+    });
 
     // Video mode: EOF the encoder and wait for the container trailer. When
     // this returns the take is a complete, playable file — synchronous, like
@@ -1559,6 +1571,8 @@ fn start_recording_when_scene_ready(
     // binary does not add. Absent simply means clause (3) has nothing to say.
     bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
     ui_presentation: Option<Res<crate::presentation::CaptureUiPresentation>>,
+    renderer: Option<Res<lunco_render::RendererStatus>>,
+    mut sampling: ResMut<lunco_render::OfflineImageSampling>,
     mut commands: Commands,
 ) {
     let Some(mut pending) = pending else { return };
@@ -1571,11 +1585,20 @@ fn start_recording_when_scene_ready(
         render_readiness.as_deref(),
         capture_target.is_some(),
     );
-    let blocker = blocker.or_else(|| {
-        ui_presentation.as_ref().filter(|ui| !ui.ready()).map(|_| {
-            "captured UI has not submitted a clean frame without loading indicators".to_string()
+    let blocker = blocker
+        .or_else(|| {
+            renderer.as_ref().and_then(|renderer| {
+                renderer
+                    .error
+                    .clone()
+                    .or_else(|| renderer.pending_reason.clone())
+            })
         })
-    });
+        .or_else(|| {
+            ui_presentation.as_ref().filter(|ui| !ui.ready()).map(|_| {
+                "captured UI has not submitted a clean frame without loading indicators".to_string()
+            })
+        });
     if let Some(reason) = blocker {
         if pending.last_blocker.as_deref() != Some(reason.as_str()) {
             pending.last_blocker = Some(reason.clone());
@@ -1602,6 +1625,15 @@ fn start_recording_when_scene_ready(
         &mut commands,
         capture_target.is_some(),
     );
+    if state.active {
+        sampling.capture_settings =
+            renderer
+                .as_ref()
+                .map(|renderer| lunco_render::RendererSettings {
+                    backend: renderer.requested,
+                    samples_per_pixel: renderer.samples_per_pixel,
+                });
+    }
     if !state.active {
         restore_recording_clock(&mut state, &mut commands);
     }
@@ -1644,6 +1676,8 @@ fn drive_offline_clock(
     virtual_time: Res<Time<bevy::time::Virtual>>,
     step_control: Option<Res<lunco_time::SimulationStepControl>>,
     sim_tick: Option<Res<lunco_core_runtime::SimTick>>,
+    mut sampling: ResMut<lunco_render::OfflineImageSampling>,
+    renderer: Option<Res<lunco_render::RendererStatus>>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. A CLI request can arrive before
@@ -1682,6 +1716,16 @@ fn drive_offline_clock(
     }
 
     if !state.active {
+        return;
+    }
+
+    if renderer
+        .as_ref()
+        .is_some_and(|renderer| renderer.error.is_some() || renderer.pending_reason.is_some())
+    {
+        commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::ZERO,
+        ));
         return;
     }
 
@@ -1728,6 +1772,8 @@ fn drive_offline_clock(
         }
         // A frame landed: let the next frame advance by exactly one step.
         state.frame_just_captured = false;
+        state.sampling_started = false;
+        sampling.clear();
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dur));
     } else {
         // Drain every whole fixed cycle admitted for this logical frame before
@@ -1750,9 +1796,35 @@ fn drive_offline_clock(
             ));
             return;
         }
+        // A path-traced output image can require many GPU render passes. Keep
+        // the completed physics state fixed until this image's own ticket has
+        // enough samples; rendering throughput never changes the time quantum.
+        if renderer.as_ref().is_some_and(|renderer| {
+            renderer.requested == lunco_render::RenderingBackend::PathTracer
+        }) {
+            if !state.sampling_started {
+                sampling.begin_image();
+                state.sampling_started = true;
+            }
+            if !sampling.ready {
+                commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+                    std::time::Duration::ZERO,
+                ));
+                return;
+            }
+        }
         // The frame is presentable — capture it, then hold the clock until the
         // readback delivers.
         state.last_capture_sim_tick = sim_tick.as_ref().map(|tick| tick.0);
+        state.last_capture_samples = Some(
+            if renderer.as_ref().is_some_and(|renderer| {
+                renderer.requested == lunco_render::RenderingBackend::PathTracer
+            }) {
+                sampling.completed_samples
+            } else {
+                1
+            },
+        );
         if let Some(target) = &capture_target {
             commands.spawn(Readback::texture(target.0.clone()));
         } else {
@@ -1962,28 +2034,30 @@ fn stop_recording_at_limit(
 /// owners already hold their schedules; this boundary also makes the recorder's
 /// result truthful and guarantees the encoder follows its normal finalization
 /// path.
-fn abort_recording_on_runtime_fault(
+fn abort_recording_on_terminal_failure(
     state: Res<OfflineRecordingState>,
+    pending: Option<Res<PendingShotStart>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
+    renderer: Option<Res<lunco_render::RendererStatus>>,
+    sampling: Res<lunco_render::OfflineImageSampling>,
+    failure: Option<Res<OfflineRecordingFailure>>,
     mut commands: Commands,
-    mut fired: Local<bool>,
 ) {
-    if *fired || !state.active {
+    if failure.is_some() || (!state.active && pending.is_none()) {
         return;
     }
-    let Some(fault) = faults.and_then(|faults| faults.first.clone()) else {
+    let runtime_failure = faults
+        .and_then(|faults| faults.first.clone())
+        .map(|fault| format!("{}: {} ({})", fault.kind, fault.subject, fault.detail));
+    let reason = runtime_failure
+        .or_else(|| renderer.and_then(|renderer| renderer.error.clone()))
+        .or_else(|| sampling.error.clone());
+    let Some(reason) = reason else {
         return;
     };
-    error!(
-        "[offline-record] aborting capture on {} for {}: {}",
-        fault.kind, fault.subject, fault.detail
-    );
-    commands.insert_resource(OfflineRecordingFailure(format!(
-        "{}: {} ({})",
-        fault.kind, fault.subject, fault.detail
-    )));
+    error!("[offline-record] aborting capture: {reason}");
+    commands.insert_resource(OfflineRecordingFailure(reason));
     commands.trigger(StopOfflineRecording {});
-    *fired = true;
 }
 
 /// One-shot process contract (`--offscreen`): exit once the recording has
@@ -2003,7 +2077,7 @@ fn exit_when_recording_drained(
     if exit_requested.is_none() || *fired {
         return;
     }
-    if pending.is_some() || state.active || state.is_waiting_for_frame || state.frame_index == 0 {
+    if pending.is_some() || state.active || state.is_waiting_for_frame {
         return;
     }
     if let Some(failure) = failure {
@@ -2013,6 +2087,11 @@ fn exit_when_recording_drained(
         );
         *fired = true;
         exit.write(bevy::app::AppExit::error());
+        return;
+    }
+    // An idle API host has no result yet. A rejected startup take above is a
+    // terminal result even when it saved zero images.
+    if state.frame_index == 0 {
         return;
     }
     info!(
@@ -2035,14 +2114,26 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
     ) -> lunco_api::ApiQueryResult {
         let state = world.resource::<OfflineRecordingState>();
         let ui = world.get_resource::<crate::presentation::CaptureUiPresentation>();
+        let sampling = world.get_resource::<lunco_render::OfflineImageSampling>();
+        let renderer = world.get_resource::<lunco_render::RendererStatus>();
+        let failure = world.get_resource::<OfflineRecordingFailure>();
         Ok(Some(lunco_api_core::api_value!({
             "active": state.active,
             "frame_index": state.frame_index,
             "last_capture_sim_tick": state.last_capture_sim_tick,
+            "last_capture_samples": state.last_capture_samples,
             "is_waiting_for_frame": state.is_waiting_for_frame,
             "pending": world.contains_resource::<PendingShotStart>(),
             "ui_presentation_required": ui.is_some(),
             "ui_presentation_ready": ui.is_none_or(|ui| ui.ready()),
+            "render_samples": sampling.map(|sampling| sampling.completed_samples),
+            "render_samples_ready": sampling.map(|sampling| sampling.ready),
+            "render_sampling_error": sampling.and_then(|sampling| sampling.error.clone()),
+            "renderer_error": renderer.and_then(|renderer| renderer.error.clone()),
+            "renderer_pending_reason": renderer.and_then(|renderer| renderer.pending_reason.clone()),
+            "failure": failure.map(|failure| failure.0.clone()),
+            "render_backend": renderer.map(|renderer| renderer.requested.id()),
+            "samples_per_pixel": renderer.map(|renderer| renderer.samples_per_pixel),
         })))
     }
 }

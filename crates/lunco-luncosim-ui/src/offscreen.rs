@@ -528,7 +528,10 @@ fn maintain_offscreen_render_camera(
             continue;
         }
         found = true;
-        *mirror_transform = *source_transform;
+        // Preserve change detection while the physical image is held. Bevy's
+        // path tracer resets accumulation on Changed<GlobalTransform>; writing
+        // an identical pose every render submission would reset every sample.
+        mirror_transform.set_if_neq(*source_transform);
         *mirror_projection = projection.clone();
         let (viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view) =
             &source_camera_settings;
@@ -554,8 +557,8 @@ fn maintain_offscreen_render_camera(
         } else {
             commands.entity(mirror_entity).try_insert(*source_msaa);
         }
-        if let (Some(source_cell), Some(mirror_cell)) = (cell, mirror_cell.as_deref_mut()) {
-            *mirror_cell = *source_cell;
+        if let (Some(source_cell), Some(mirror_cell)) = (cell, mirror_cell.as_mut()) {
+            mirror_cell.set_if_neq(*source_cell);
         }
         sync_offscreen_environment(
             &mut commands,

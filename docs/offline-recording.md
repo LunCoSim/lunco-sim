@@ -21,6 +21,34 @@ that decouples Bevy's update loop from the system clock, and the rhai surface
 
 ## 1. Why it exists
 
+### Offline path-tracing samples
+
+Settings → Graphics keeps raster rendering as its default and offers the
+experimental reference path tracer without DLSS. Its positive sample target is
+independent of output fps. A Twin may override preferences with
+`[settings] "render.backend" = "path_tracer"` and
+`"render.samples_per_pixel" = 128` in its manifest. The renderer validates
+hardware and scene compatibility. Opaque standard materials are path traced;
+supported sorted transparent materials, including custom jet effects, are
+composited by Bevy's native forward pass before early post-processing. They do
+not enter path accumulation or secondary-ray reflections. Opaque custom shaders,
+alpha-tested surfaces, order-independent transparency and active local lights
+block capture with an explicit error. Hidden or zero-intensity lights do not
+contribute to the selected scene view.
+
+After each logical image's fixed-step and participant barriers, the recorder
+issues a fresh sampling revision and holds virtual time. The renderer gathers
+samples for that revision; only a matching acknowledgement can admit the image.
+Unsupported renderer intent or a GPU pipeline failure ends the armed/active
+take through normal teardown and exposes `failure`; it does not wait forever.
+Preparing material assets remain a distinct `renderer_pending_reason`. A new
+request clears the prior per-take failure. CLI zero-image failures exit with an
+error. The next `1/fps` duration is admitted after the image lands. A take locks backend
+and sample settings, and `GetOfflineRecordingStatus` exposes progress and the
+latest saved image's sample count. More samples cost wall time, never physics
+steps. See the [qualification review](reviews/offline-path-tracing-2026-10-23.md)
+for current runtime evidence and film compatibility limits.
+
 Recording off the wall clock drops and duplicates frames: the renderer is at the mercy of
 whatever else the machine is doing, and a stall becomes a visible hitch in the output.
 Offline recording supplies one `1/fps` input duration per frame through the shared

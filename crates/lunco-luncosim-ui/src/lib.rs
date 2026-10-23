@@ -9,6 +9,7 @@ mod application;
 mod camera;
 #[cfg(feature = "api-transport")]
 mod offscreen;
+mod render_settings;
 mod save_scenario;
 mod ui;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]

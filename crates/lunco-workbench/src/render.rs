@@ -2456,6 +2456,25 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Graphics", |ui, ctx| {
+        if let Some(current) = ctx.resource::<lunco_render::RendererSettings>() {
+            let mut settings = *current;
+            let changed = settings_choice_menu(
+                ui,
+                format!("Renderer: {}", settings.backend.label()),
+                &mut settings.backend,
+                [lunco_render::RenderingBackend::Raster, lunco_render::RenderingBackend::PathTracer]
+                    .into_iter().map(|backend| (backend, backend.label().to_owned())),
+            );
+            let samples_changed = ui.add(bevy_egui::egui::DragValue::new(&mut settings.samples_per_pixel).range(1..=u32::MAX).prefix("Samples per video frame: ")).changed();
+            if changed || samples_changed { ctx.set_resource(settings); }
+            if let Some(project) = ctx.resource::<lunco_render::TwinRendererOverride>()
+                && (project.backend.is_some() || project.samples_per_pixel.is_some()) {
+                ui.label("The active Twin overrides renderer preferences.");
+            }
+            if let Some(status) = ctx.resource::<lunco_render::RendererStatus>()
+                && let Some(error) = &status.error { ui.colored_label(bevy_egui::egui::Color32::YELLOW, error); }
+            ui.separator();
+        }
         ui.label(
             egui::RichText::new("Rendering")
                 .text_style(lunco_theme::TypographyRole::Label.text_style())

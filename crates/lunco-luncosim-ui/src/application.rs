@@ -594,6 +594,7 @@ fn build_gui_app_with_profile(
         headless: false,
         startup_scene,
     });
+    crate::render_settings::register(&mut app);
     if !offscreen {
         crate::camera::install_interactive_camera(&mut app);
     }
