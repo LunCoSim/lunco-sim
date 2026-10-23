@@ -811,7 +811,10 @@ source revision, and operation id. The resource bounds queued and admitted
 work, applies the three priorities with reserved interactive/background
 service, and exposes aggregate queue counters. It can withdraw queued work but
 does not preempt a running task. Owners still validate and commit their typed
-results at their own boundary. `PostUpdate` starts queued native preparation;
+results at their own boundary. Debug diagnostics distinguish queued time from
+worker execution using bounded kind/priority zones and operation-specific
+dispatch logs; timing is not an input to admission or result commitment.
+`PostUpdate` starts queued native preparation;
 worker and external-permit completion refill released capacity immediately on
 the existing async-compute pool. Queue selection and slot reservation share
 one short critical section, preserving the global bound and priority service.

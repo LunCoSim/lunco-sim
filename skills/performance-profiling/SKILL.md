@@ -370,6 +370,12 @@ For loading throughput, compare worker CPU duration with the complete job window
 and idle gaps while preparation is queued. `AsyncWorkAdmission` starts work in
 PostUpdate and refills released slots on completion; its global bound, priority
 service, cancellation and weak queue lifetime remain independent of frame rate.
+Enable `lunco_core_runtime::async_work=debug` for `async_preparation_job` zones
+grouped by finite work kind and priority. Dispatch logs report each operation's
+queue wait separately; identities and elapsed values stay out of zone fields.
+Correlate `preparation dispatched` with `preparation started` by operation key
+to separate shared admission delay from task-pool dispatch delay. Wall-clock
+log differences are diagnostic correlation, not simulation clock inputs.
 Verify refill without another host update and retirement with captured permits,
 then compare settled terrain readiness and replay the authoritative state.
 For physical solar visibility, attribute `publish_sun_visibility` separately

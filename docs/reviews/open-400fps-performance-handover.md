@@ -1,5 +1,54 @@
 # High-quality realtime performance handover
 
+## Normal active windows and preparation admission — 2026-10-23
+
+The regular non-Tracy build passes at `66bba7645`. After five seconds of warmup,
+each owned High-quality window collects twenty seconds of complete,
+deduplicated native-step and application-frame histories:
+
+| Twin | Physics admission | Native physics p50 / p95 / max | Application frame p50 / max | Native steps ≥1 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Griffin | 17.88 s | 1.733 / 2.732 / 6.197 ms | 13.920 / 25.317 ms | 1,220 / 1,220 |
+| Tesla | 2.21 s | 0.155 / 0.258 / 0.399 ms | 3.742 / 9.783 ms | 0 / 1,210 |
+| Summer | 3.30 s | 0.306 / 0.666 / 1.375 ms | 13.558 / 26.191 ms | 6 / 1,228 |
+
+These are different from whole coupled fixed ticks. Their final retained
+240-tick windows have median service times of 6.486, 1.763 and 4.946 ms,
+respectively. No Twin meets the whole coupled one-millisecond budget. Tesla's
+stationary window meets the observed native-step and application-frame budgets;
+it does not qualify driving or the complete course. Griffin reaches touchdown,
+and Summer renders its rover/traverse. Final screenshots were inspected.
+Tesla's frame/datum HUD remains unavailable. A secondary pointer event appears
+in Griffin's runtime log, so that presentation window is not a controlled
+no-input cohort. The concurrent foreign tutorials Tesla session remains
+untouched. These are not clean full-mission or settled-terrain acceptance.
+All sources remain unchanged within each run, retained diagnostics and scripts
+are clear, and APIs 4959–4961 and their apps are closed. Local evidence is
+`normal-physics-baseline-summary.json` and
+`{griffin,tesla,summer}-normal-physics-baseline/` under
+`.cache/codex-evidence/performance-20261023/`.
+
+`AsyncWorkAdmission` exposes bounded debug execution zones by work kind and
+priority. Separate start/dispatch logs retain operation identity and wait time;
+these values never become zone identities or scheduling inputs. The focused
+owner compile check and regular Tracy production builds pass. Two owned Tesla
+captures exercise the diagnostics with clear runtime/script results and
+unchanged within-run sources. The final capture includes the independently
+integrated main screenshot/workbench changes at `eca1a3a96`.
+
+In `tesla-async-admission-profile/`, required USD decode/serialization wait
+225.96 / 464.04 ms before worker entry, then run for 10.26 / 14.30 ms. The
+follow-up `tesla-async-dispatch-profile/admission-latency.json` separates the
+boundaries: the serialization job waits approximately 178.38 ms for admission
+and 2.51 ms from dispatch to worker entry. Its dispatch snapshot has one
+required, two interactive and one background operation in flight, including
+the just-admitted required job. Two interactive SysML analyses take roughly
+0.8–0.9 seconds in the first capture. Inspect capacity protection for required
+preparation before changing limits or parsing semantics. Both captures pass
+native framing, compressed-payload, owned-PID, 1,000,000 ns sampling and CSV
+export checks. APIs 4962/4963, apps, collectors and exporters are closed; the
+final Tesla image was inspected. All raw evidence stays ignored and local.
+
 ## Schema metadata lookup and current evidence — 2026-10-23
 
 `SchemaMetadata` groups its immutable declarations by property name and schema.

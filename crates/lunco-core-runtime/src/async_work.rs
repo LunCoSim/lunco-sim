@@ -331,13 +331,32 @@ impl AsyncWorkAdmission {
                 return Err(AsyncWorkRejection::QueueFull);
             }
 
+            let queued_at = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG)
+                .then(bevy::platform::time::Instant::now);
             queued.jobs.insert(
                 QueueKey {
                     priority,
                     order,
                     key,
                 },
-                Box::new(job),
+                Box::new(move || {
+                    let _span = bevy::log::debug_span!(
+                        "async_preparation_job",
+                        kind = ?key.kind,
+                        priority = ?priority
+                    )
+                    .entered();
+                    if let Some(queued_at) = queued_at {
+                        bevy::log::debug!(
+                            kind = ?key.kind,
+                            priority = ?priority,
+                            key = ?key,
+                            queue_wait_ms = queued_at.elapsed().as_secs_f64() * 1000.0,
+                            "[async-work] preparation started"
+                        );
+                    }
+                    job();
+                }),
             );
             queued.keys.insert(key);
             self.shared.submitted.fetch_add(1, Ordering::Relaxed);
@@ -650,6 +669,12 @@ fn refill_async_work(shared: &Arc<SharedWorkState>) {
             priority,
             shared: Arc::clone(shared),
         };
+        bevy::log::debug!(
+            key = ?key,
+            priority = ?priority,
+            in_flight = ?shared.in_flight.each_ref().map(|count| count.load(Ordering::Acquire)),
+            "[async-work] preparation dispatched"
+        );
         pool.spawn(async move {
             let _completion = completion;
             job();
