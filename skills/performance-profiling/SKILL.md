@@ -377,6 +377,10 @@ rectangle keys, complete surface invalidation, FIFO capacity and the configured
 These exact-key caches use Bevy's maintained hash map. Keep lookup storage
 independent of decision order: eviction uses the FIFO queue, and neither the
 certificate map nor the ray-local sample map supplies traversal order.
+The immutable ray query fences surface identity and capacity once before its
+first bounds read. Preserve the first fault kind and remaining quota under
+cold/warm caches, tiny capacity, surface replacement, grazing rays and both
+travel directions when changing this boundary.
 Enable `lunco_terrain_surface::occlusion=debug` for the bounded diagnostic spans
 `terrain_occlusion_bounds_miss`, `terrain_occlusion_exact_footprint` and
 `terrain_occlusion_point_sample`. They separate reusable-certificate preparation,

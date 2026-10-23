@@ -59,7 +59,7 @@ mod tests {
         }
         let pad = Collider::compound(vec![(
             DVec3::new(0.0, -1.32, 0.0),
-            bevy::math::DQuat::IDENTITY,
+            avian3d::prelude::Rotation::IDENTITY,
             Collider::cylinder(0.35, 0.04),
         )]);
         for angular_speed in [0.0, 0.3] {

@@ -43,13 +43,8 @@ pub struct SurfaceOcclusionCache {
     ray_cover: std::collections::VecDeque<RayCoverEntry>,
 }
 impl SurfaceOcclusionCache {
-    fn bounds(
-        &mut self,
-        surface: &SurfaceOracle,
-        cell: [usize; 2],
-        rect: [f64; 4],
-        capacity: usize,
-    ) -> Result<[f64; 2], String> {
+    /// Fence retained bounds once for the immutable query surface.
+    fn prepare(&mut self, surface: &SurfaceOracle, capacity: usize) {
         let key = surface.surface_key();
         if self.surface != Some(key) {
             self.surface = Some(key);
@@ -61,6 +56,15 @@ impl SurfaceOcclusionCache {
                 self.cells.remove(&oldest);
             }
         }
+    }
+
+    fn bounds(
+        &mut self,
+        surface: &SurfaceOracle,
+        cell: [usize; 2],
+        rect: [f64; 4],
+        capacity: usize,
+    ) -> Result<[f64; 2], String> {
         let rectangle = (cell, rect.map(f64::to_bits));
         if let Some(bounds) = self.cells.get(&rectangle) {
             return Ok(*bounds);
@@ -276,6 +280,7 @@ impl SurfaceOracle {
         if !near.is_finite() || !far.is_finite() {
             return Err("terrain ray interval exceeds finite coordinates".into());
         }
+        cache.prepare(self, budget.max_cached_cells);
         let spacing = self.spacing() as f64;
         let mut examined = 0;
         let mut ambiguous = false;
@@ -474,6 +479,183 @@ mod tests {
     use lunco_obstacle_field::field::HeightGrid;
     use lunco_terrain_core::{BrushModifier, HeightModifier};
     use std::sync::Arc;
+
+    #[test]
+    fn certified_cache_preserves_quotas_capacity_and_surface_invalidation() {
+        let surface = SurfaceOracle::bare(Arc::new(HeightGrid::new_flat(129, 64.0)));
+        let mut raised = HeightGrid::new_flat(129, 64.0);
+        raised.heights.fill(10.0);
+        let raised = SurfaceOracle::bare(Arc::new(raised));
+        for capacity in [1, 3, 32, 65536] {
+            let budget = SurfaceOcclusionBudget {
+                max_cached_cells: capacity,
+                ..Default::default()
+            };
+            for axis in [DVec3::X, DVec3::Z] {
+                for sign in [-1.0, 1.0] {
+                    let direction = sign * axis;
+                    let origin = -63.5 * direction
+                        + DVec3::Y * 2.0
+                        + if axis == DVec3::X { DVec3::Z } else { DVec3::X } * 0.25;
+                    let mut cache = SurfaceOcclusionCache::default();
+                    let mut remaining = budget.max_tick_intervals;
+                    assert_eq!(
+                        surface.occludes_ray(origin, direction, budget, &mut remaining, &mut cache),
+                        Ok(false)
+                    );
+                    for (ray_quota, tick_quota) in [
+                        (300, 400),
+                        (3, 5),
+                        (5, 3),
+                        (3, 3),
+                        (128, 128),
+                        (127, 200),
+                        (200, 127),
+                    ] {
+                        let budget = SurfaceOcclusionBudget {
+                            max_intervals: ray_quota,
+                            ..budget
+                        };
+                        let mut cold_remaining = tick_quota;
+                        let mut warm_remaining = tick_quota;
+                        let cold = surface.occludes_ray(
+                            origin,
+                            direction,
+                            budget,
+                            &mut cold_remaining,
+                            &mut SurfaceOcclusionCache::default(),
+                        );
+                        let warm = surface.occludes_ray(
+                            origin,
+                            direction,
+                            budget,
+                            &mut warm_remaining,
+                            &mut cache,
+                        );
+                        assert_eq!(
+                            (warm, warm_remaining),
+                            (cold.clone(), cold_remaining),
+                            "cache residency must not change quota admission: capacity={capacity}, ray={ray_quota}, tick={tick_quota}"
+                        );
+                        if (ray_quota, tick_quota) == (3, 5) {
+                            assert_eq!(
+                                (cold, cold_remaining),
+                                (Err("terrain occlusion interval budget exceeded".into()), 1)
+                            );
+                        } else if (ray_quota, tick_quota) == (5, 3) {
+                            assert_eq!(
+                                (cold, cold_remaining),
+                                (Err("solar fixed-tick interval budget exceeded".into()), 0)
+                            );
+                        }
+                        assert!(cache.cells.len() <= capacity && cache.order.len() <= capacity);
+                    }
+                    let grazing = SurfaceOcclusionBudget {
+                        max_depth: 4,
+                        max_intervals: 8,
+                        ..budget
+                    };
+                    let origin = origin - DVec3::Y * 2.0;
+                    let mut cold_remaining = 100;
+                    let mut warm_remaining = 100;
+                    let cold = surface.occludes_ray(
+                        origin,
+                        direction,
+                        grazing,
+                        &mut cold_remaining,
+                        &mut SurfaceOcclusionCache::default(),
+                    );
+                    assert!(
+                        cold.is_err(),
+                        "unresolved grazing geometry must remain unavailable"
+                    );
+                    assert_eq!(
+                        (
+                            surface.occludes_ray(
+                                origin,
+                                direction,
+                                grazing,
+                                &mut warm_remaining,
+                                &mut cache
+                            ),
+                            warm_remaining
+                        ),
+                        (cold, cold_remaining)
+                    );
+                    let mut remaining = budget.max_tick_intervals;
+                    assert_eq!(
+                        raised.occludes_ray(
+                            origin + DVec3::Y * 2.0,
+                            direction,
+                            budget,
+                            &mut remaining,
+                            &mut cache
+                        ),
+                        Ok(true),
+                        "a replacement surface must invalidate every retained certificate"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn certified_cache_matches_fresh_caches_for_moving_diagonal_rays() {
+        let mut grid = HeightGrid::new_flat(33, 16.0);
+        for z in 0..grid.res {
+            for x in 0..grid.res {
+                grid.heights[z * grid.res + x] =
+                    (x as f64 * 0.7).sin() * 0.1 + (z as f64 * 0.43).cos() * 0.15;
+            }
+        }
+        let surface = SurfaceOracle::bare(Arc::new(grid));
+        for capacity in [4, 65536] {
+            let budget = SurfaceOcclusionBudget {
+                max_cached_cells: capacity,
+                ..Default::default()
+            };
+            let mut cache = SurfaceOcclusionCache::default();
+            for direction in [
+                DVec3::new(1.0, 0.0, 0.001),
+                DVec3::new(0.001, 0.0, 1.0),
+                DVec3::new(1.0, 0.0, 1.0),
+                DVec3::new(-0.7388253175039277, 0.141, 0.6592623470722384),
+            ] {
+                for sx in [-1.0, 1.0] {
+                    for sz in [-1.0, 1.0] {
+                        let direction = (direction * DVec3::new(sx, 1.0, sz)).normalize();
+                        for height in [-0.5, 0.0, 0.2, 1.0, 5.0] {
+                            for offset in [0.0, 1e-8, -1e-8, 0.1] {
+                                let origin =
+                                    DVec3::new(-15.5 * sx + offset, height, -15.5 * sz + offset);
+                                let mut cold_remaining = budget.max_tick_intervals;
+                                let mut warm_remaining = budget.max_tick_intervals;
+                                let cold = surface.occludes_ray(
+                                    origin,
+                                    direction,
+                                    budget,
+                                    &mut cold_remaining,
+                                    &mut SurfaceOcclusionCache::default(),
+                                );
+                                let warm = surface.occludes_ray(
+                                    origin,
+                                    direction,
+                                    budget,
+                                    &mut warm_remaining,
+                                    &mut cache,
+                                );
+                                assert_eq!(
+                                    (warm, warm_remaining),
+                                    (cold, cold_remaining),
+                                    "moving rays retain geometry and quota: capacity={capacity}, origin={origin:?}, direction={direction:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn certified_occlusion_excludes_transverse_relief_from_grazing_rays() {

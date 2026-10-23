@@ -1,5 +1,42 @@
 # High-quality realtime performance handover
 
+## Immutable terrain-query cache boundary — 2026-10-23
+
+The terrain occlusion owner validates the complete surface identity and trims
+certificate capacity once per immutable ray query, before any bounds read.
+Bounds lookups reuse that boundary; insertions still enforce the same FIFO cap.
+Traversal, refinement, ray coordinates, quota ordering and physical results
+are unchanged. No new cache, tuning parameter or dependency is retained.
+
+Ten focused occlusion checks pass, including cold/warm quota error and remaining
+count parity, tiny capacities, moving diagonal rays, grazing geometry and surface
+replacement. The production terrain-solar gate passes eight checks with identical
+printed physical observations to baseline; invalid sampling terminates with
+expected `solar-sample-unavailable`, exit zero. The native compound-collider test
+fixture now supplies Avian's `Rotation::IDENTITY`; its rotating-pad sweep and
+sample-preservation test passes.
+
+The regular Tracy artifact is SHA-256
+`ec03dd48a2feb1b30fa6f65f5c946f811109a80868b451417a833070156c8f7d`.
+Coarse traversal self time averages 130.86 microseconds per ray (11,259 rays),
+versus 154.46 in the preceding attribution capture. Summer source hashes match
+and remain unchanged within the run. This is a contention-affected diagnostic
+observation, not whole-frame or clean performance acceptance. Admission is
+2.61 s; the loading target remains open. The full requested terrain is resident,
+runtime diagnostics are clear and the final screenshot was inspected.
+
+The capture `scripts/perf/captures/default-summer-terrain-query-fence-profile-20261023.tracy`
+passes native framing, payload, owned PID 605675, 1,000,000 ns sampling period
+and CPU CSV export checks. All owned processes and APIs 4902/4903/4905 are closed;
+the foreign USD app remains active. Evidence is under
+`.cache/codex-evidence/performance-20261023/terrain-query-fence-*`.
+
+Three bounded adjacent-cell union experiments preserve geometry and quota
+behavior but average 188.86, 200.19 and 185.86 microseconds per ray: certificate
+selection costs exceed saved traversal work. Their implementation and
+setup-specific test are removed. The `terrain-strip-*` diagnostic receipts
+retain this finding to prevent repeating that unprofitable cache expansion.
+
 ## Summer CPU/GPU and terrain-ray attribution — 2026-10-23
 
 The native GPU export of the direct-topology capture contains 803 opaque and
@@ -28,13 +65,6 @@ These are disjoint self times across the captured startup/active window, not
 per-frame acceptance. They identify traversal as the next algorithmic target;
 new broad procedural caches or more compiler tuning are not justified by this
 sample. Exact ray coordinates and conservative certification remain required.
-
-The next candidate is bounded aggregation of existing whole-cell certificates
-over aligned intervals within one raster row or column. Their union can reject
-a clear stretch in one test instead of visiting every cell, provided the fresh
-ray segment remains contained. It needs moving-ray, surface-replacement,
-capacity, grazing and quota tests before production comparison; no such
-aggregation is implemented by this checkpoint.
 
 The attribution artifact is SHA-256
 `bef96c53f34783064bf8bea4c91bcbcd70daa1d8ce4d27ff7431cd78a520acd7`;

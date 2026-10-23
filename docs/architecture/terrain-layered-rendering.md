@@ -327,6 +327,9 @@ these spatial bounds while retaining their full f64 coordinates. The
 `SurfaceOcclusionBudget.max_ray_cache_depth` bound limits this preparation
 (eight cuts by default; zero skips preparatory cuts);
 every attempted cut and classification follows the same order on a hit or miss.
+Each query fences retained bounds against its complete immutable surface key
+and current capacity before any enclosure read. The surface remains unchanged
+during that query, so bounds lookups share this one validation boundary.
 An unresolved certificate proceeds to the same oracle's exact footprint bounds
 before interval subdivision. Terrain beside that footprint cannot block the ray. Work
 quotas and unavailable/error semantics remain independent of cache residency.
