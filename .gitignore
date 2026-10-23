@@ -58,4 +58,5 @@ assets/icons/linux/
 assets/icons/macos/png/
 assets/icons/windows/png/
 __pycache__/
+*.tracy
 scripts/perf/captures/

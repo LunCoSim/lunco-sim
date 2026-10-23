@@ -46,6 +46,19 @@ These instrumented, contended timings do not establish clean product physics
 or graphics acceptance. All strict targets remain open. Continue with native
 metadata reads and Modelica construction, then active Griffin physics costs.
 
+An additional hint-membership guard experiment did not qualify a performance
+gain and is removed with its test and documentation changes. On 192 matching
+recorded source identities, metadata measures 480.62 → 523.45 ms and complete
+facts 2,650.78 → 3,120.84 ms; these contended runs do not isolate the cause of
+the difference. Its local receipt is `inspector-hint-membership-experiment.json`
+and capture cohort is `griffin-inspector-hint-membership-profile/` in the same
+ignored evidence root. The capture passes native integrity/export checks;
+diagnostics and scripts are clear. API 4958 and its app/collector/exporter are
+closed. The retained implementation is the property-name grouping above.
+Its regular Tracy rebuild passes after restoration; the local receipt is
+`schema-metadata-restored-build.json`. Unchanged-input runtime evidence is
+reused, with no additional performance acceptance claim.
+
 ## Griffin initialization cost boundary — 2026-10-23
 
 Native coupled initialization remains the active application contract. On
