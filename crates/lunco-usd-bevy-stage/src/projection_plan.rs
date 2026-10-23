@@ -154,6 +154,7 @@ impl UsdStageProjectionPlan {
     pub fn from_stage(stage: &Stage) -> Result<Self> {
         let _span = bevy::log::info_span!("usd_projection_facts").entered();
         let reader = StageView::new(stage);
+        let traversal_span = bevy::log::debug_span!("usd_projection_traversal").entered();
         let mut paths = Vec::new();
         let mut seen = std::collections::HashSet::new();
         stage
@@ -179,6 +180,7 @@ impl UsdStageProjectionPlan {
                 paths.push(path);
             }
         }
+        drop(traversal_span);
         let mut data = UsdStageProjectionData {
             default_prim: reader.default_prim(),
             time_codes_per_second: reader.time_codes_per_second(),
@@ -212,7 +214,9 @@ impl UsdStageProjectionPlan {
                 None
             };
             drop(transform_span);
+            let properties_span = bevy::log::debug_span!("usd_projection_property_names").entered();
             let attribute_names = reader.attr_names(&path);
+            drop(properties_span);
             let values_span = bevy::log::debug_span!("usd_projection_attribute_values").entered();
             let attributes = attribute_names
                 .iter()
@@ -247,12 +251,14 @@ impl UsdStageProjectionPlan {
                 })
                 .collect();
             drop(metadata_span);
+            let connections_span = bevy::log::debug_span!("usd_projection_connections").entered();
             let api_schemas = reader.api_schemas(&path);
             let connections = attribute_names
                 .iter()
                 .map(|name| (name.clone(), reader.connections(&path, name)))
                 .filter(|(_, values)| !values.is_empty())
                 .collect();
+            drop(connections_span);
             let time_span = bevy::log::debug_span!("usd_projection_time_samples").entered();
             let time_samples: HashMap<String, Vec<f64>> = attribute_names
                 .iter()
@@ -278,18 +284,24 @@ impl UsdStageProjectionPlan {
                 })
                 .collect();
             drop(time_span);
+            let relationships_span =
+                bevy::log::debug_span!("usd_projection_relationships").entered();
             let relationships = reader
                 .relationship_names(&path)
+                .map_err(|error| anyhow!(error))?
                 .into_iter()
-                .filter_map(|name| {
+                .map(|name| {
                     let targets = reader
                         .rel_targets(&path, &name)
                         .into_iter()
                         .map(|target| target.to_string())
                         .collect::<Vec<_>>();
-                    (!targets.is_empty()).then_some((name, targets))
+                    (name, targets)
                 })
                 .collect();
+            drop(relationships_span);
+            let bindings_span =
+                bevy::log::debug_span!("usd_projection_material_bindings").entered();
             let mut bound_materials = HashMap::new();
             for purpose in [MaterialPurpose::Render, MaterialPurpose::Physics] {
                 if let Some(material) = reader
@@ -299,6 +311,7 @@ impl UsdStageProjectionPlan {
                     bound_materials.insert(purpose, material);
                 }
             }
+            drop(bindings_span);
             let collection_names: std::collections::BTreeSet<String> = api_schemas
                 .iter()
                 .filter_map(|schema: &String| {
@@ -348,6 +361,7 @@ impl UsdStageProjectionPlan {
                 })
                 .collect();
             drop(assets_span);
+            let identity_span = bevy::log::debug_span!("usd_projection_prim_identity").entered();
             let prim = UsdPrimProjectionPlan {
                 path: path_string.clone(),
                 transform,
@@ -389,6 +403,7 @@ impl UsdStageProjectionPlan {
                 bound_materials,
                 bound_shader: reader.bound_shader(&path).map_err(|error| anyhow!(error))?,
             };
+            drop(identity_span);
             let index = data.prims.len();
             data.prim_indices.insert(path_string.clone(), index);
             data.prims.push(prim);
@@ -402,6 +417,7 @@ impl UsdStageProjectionPlan {
                 }
             }
 
+            let collections_span = bevy::log::debug_span!("usd_projection_collections").entered();
             for instance in collection_names {
                 let members = reader
                     .collection_members(&path, &instance)
@@ -409,6 +425,7 @@ impl UsdStageProjectionPlan {
                 data.collections
                     .insert((path_string.clone(), instance), members);
             }
+            drop(collections_span);
         }
         for diagnostic in stage.composition_errors() {
             bevy::log::warn!(target: "usd-bevy", %diagnostic, "USD composition diagnostic");
@@ -623,10 +640,16 @@ impl UsdRead for UsdStageProjectionPlan {
             .collect()
     }
 
-    fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
+    fn relationship_names(&self, prim: &SdfPath) -> Result<Vec<String>, String> {
         self.prim(prim)
-            .map(|prim| prim.relationships.keys().cloned().collect())
-            .unwrap_or_default()
+            .map(|prim| {
+                prim.property_names
+                    .iter()
+                    .filter(|name| prim.relationships.contains_key(*name))
+                    .cloned()
+                    .collect()
+            })
+            .ok_or_else(|| format!("{prim}: prim is absent from the prepared stage"))
     }
 
     fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
@@ -900,6 +923,82 @@ def Xform "Instance" (prepend references = </Source>) {}
                 .has_composition_arc(&SdfPath::new("/Instance/Child").unwrap())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn native_relationship_discovery_preserves_empty_properties() {
+        let recipe = StageRecipe::from_source(
+            "relationships.usda",
+            r#"#usda 1.0
+def "Root" {
+    double value = 2
+    double inputs:drive.connect = </Root.outputs:speed>
+    double outputs:speed = 1
+    custom rel empty = []
+    rel linked = </Root/Child>
+    def "Child" {}
+}
+def Scope "Collection" (prepend apiSchemas = ["CollectionAPI:parts"]) {}
+"#,
+        );
+        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let root = SdfPath::new("/Root").unwrap();
+        stage
+            .prim(root.clone())
+            .unwrap()
+            .set_metadata(
+                "propertyOrder",
+                Value::TokenVec(
+                    ["empty", "value", "linked"]
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                ),
+            )
+            .unwrap();
+        let live = StageView::new(&stage);
+        let plan = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+        let expected = vec!["empty".to_owned(), "linked".to_owned()];
+        assert_eq!(
+            (
+                live.relationship_names(&root).unwrap(),
+                plan.relationship_names(&root).unwrap()
+            ),
+            (expected.clone(), expected),
+            "relationship discovery must exclude attributes and retain empty relationships"
+        );
+        let collection = SdfPath::new("/Collection").unwrap();
+        assert_eq!(
+            live.relationship_names(&collection),
+            plan.relationship_names(&collection)
+        );
+        for reader in [&live as &dyn crate::UsdReadObject, &plan] {
+            assert!(
+                reader
+                    .relationship_names(&SdfPath::new("/Missing").unwrap())
+                    .is_err()
+            );
+            assert!(
+                reader
+                    .relationship_names(&collection)
+                    .unwrap()
+                    .contains(&"collection:parts:includes".to_owned())
+            );
+            assert!(
+                reader
+                    .rel_targets(&collection, "collection:parts:includes")
+                    .is_empty()
+            );
+            assert!(reader.rel_targets(&root, "empty").is_empty());
+            assert_eq!(
+                reader.rel_targets(&root, "linked"),
+                vec![SdfPath::new("/Root/Child").unwrap()]
+            );
+            assert_eq!(
+                reader.connections(&root, "inputs:drive"),
+                vec!["/Root.outputs:speed".to_owned()]
+            );
+        }
     }
 
     #[test]

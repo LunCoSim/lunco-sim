@@ -1,5 +1,53 @@
 # High-quality realtime performance handover
 
+## Native relationship discovery and complete snapshot attribution — 2026-10-23
+
+`lunco-usd-bevy-stage` uses native typed relationship enumeration rather than
+resolving targets on every property to identify relationships. Snapshots retain
+empty and schema-declared relationships and expose their composed property
+order through the existing property inventory. Attribute connections remain
+separate. Enumeration returns errors for absent prims/native failures, which
+snapshot admission and `QueryUsdPrim` propagate without an empty-data substitute.
+All reader and query callers use this contract.
+
+The focused inline composition test reproduces attributes appearing as live
+relationships and an empty relationship disappearing from the snapshot. It now
+passes, including authored order, schema-declared empty relationships, preserved
+connections and absent-prim errors. The production `native_relationships` fixture
+was authored/saved/read back through the document API. Its baseline fails three
+of seven checks; the final production build passes all **seven**, including a
+live target-clear edit (PID 835868/API 4940, exit zero, terminal tick 2). The
+regular Tracy build and narrow unit test pass. Evidence is
+`native-relationship-{baseline,final-unit}.log` and
+`native-relationships-{baseline,final}.log` under
+`.cache/codex-evidence/performance-20261023/`.
+
+Additional bounded debug spans cover the unassigned snapshot groups. Always
+compare **inclusive** `usd_projection_facts` time when changing child spans:
+self time moves into the children. The previous Griffin capture has 4.71 s
+inclusive extraction, versus its previously reported 3.31 s self time.
+
+The new Griffin capture has 4.42 s inclusive extraction and 27.09 s physics
+admission. It is a different Twin cohort: eight source identities changed
+between captures, including the airless-wheel visual USD, requirements and
+related tools/tests. No performance improvement or regression can be attributed
+from this comparison. Sources remain unchanged within the new run, diagnostics
+and script errors are clear, and the final screenshot was inspected. Its native
+capture passes framing, compressed-payload, owned PID 836074, 1,000,000 ns
+sampling and self/inclusive CSV-export checks. API 4939, app, collector and
+exporters are closed; the foreign USD app remains active.
+Evidence is `griffin-native-relationships-profile/` in the same evidence root,
+including `source-cohort-comparison.json` and `snapshot-phases.json`.
+The tested regular Tracy artifact SHA-256 is
+`d7baad13112b12cda55cd19f8135b3cb922ff37fdf18f07c3b910b5fa0a02bbf`.
+
+The new attribution identifies collection membership as the largest remaining
+snapshot group: 1.31 s, followed by attribute metadata 0.69 s and prim
+identity/visibility 0.48 s. Inspect the native collection query APIs and the
+shared `StageView::collection_members` owner next. Keep native collection
+semantics and complete scene fidelity. Full missions and the strict loading,
+physics and graphics targets remain open.
+
 ## Source-root preparation overlap — 2026-10-23
 
 File-backed participants queue their parsed library requirements when publishing

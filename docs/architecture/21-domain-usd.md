@@ -327,6 +327,15 @@ Public USD query behavior is exercised through the production query bridge by
 `assets/scenes/fixtures/usd_query_api/site.usda`. The editor proposal lifecycle
 is covered by the authored `assembly_editor_proposal` scene and scenario.
 
+Relationship discovery uses native `UsdPrim::relationships`, preserving composed
+property kinds and order without resolving targets to identify properties.
+The reader returns native enumeration failures and absent-prim errors; snapshot
+admission and `QueryUsdPrim` propagate them instead of publishing empty data.
+Prepared plans retain empty and schema-declared relationships as well as their
+target lists; attribute connections remain a separate surface. The
+`native_relationships` production gate checks query discovery and live target
+clearing, while the focused snapshot test compares native and prepared readers.
+
 The public composed-stage reader, StageView, and prepared-reader contracts live
 in `crates/lunco-usd-bevy-stage/tests/stage_reads.rs`. They use in-memory
 `StageRecipe` closures, so fixture edits do not touch the asset filesystem and

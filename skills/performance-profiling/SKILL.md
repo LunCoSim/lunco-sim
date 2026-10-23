@@ -1012,6 +1012,13 @@ For snapshot attribution, enable
 `usd_projection_transforms`, `usd_projection_attribute_values`,
 `usd_projection_attribute_metadata`, `usd_projection_time_samples`, and
 `usd_projection_asset_sources` spans separate the extraction groups.
+Additional bounded spans attribute traversal, property enumeration, connections,
+relationships, material bindings, prim identity/visibility and collections.
+Compare **inclusive** `usd_projection_facts` durations when adding child spans;
+self time moves into those children and is not a loading improvement by itself.
+Native typed relationship enumeration avoids target-resolution probes on every
+attribute. The prepared reader retains empty relationships; verify the
+`native_relationships` gate as well as the complete snapshot timing.
 `usd_twin_source_decode` and `usd_twin_stage_input` measure the two worker jobs
 before scene mounting. Time-sample extraction resolves each native table once;
 value capture and sampled asset-source capture reuse that existing table.

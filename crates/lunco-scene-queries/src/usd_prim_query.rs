@@ -1473,7 +1473,7 @@ fn read_prim_from_reader(
 
     let mut relationships = Vec::new();
     let relationship_names = if include_relationships {
-        view.relationship_names(prim)
+        view.relationship_names(prim)?
     } else {
         requested_relationships.clone().unwrap_or_default()
     };

@@ -262,6 +262,12 @@ requests cannot consume outgoing completions. Native USD composition owns
 reference namespaces, relationship and connection targets, material bindings,
 and root opinions. Prepared asset plans snapshot those composed facts without
 remapping or overriding them; runtime entity reads use the live scene stage.
+Relationship names come from native typed relationship enumeration, including
+empty and schema-declared properties. Enumeration errors must propagate through
+snapshot admission and queries. Prepared plans preserve those names in
+composed property order; never infer property kinds by attempting target reads
+or discard a relationship because it has no targets. Keep attribute connections
+separate and qualify changes through the `native_relationships` production gate.
 Do not add frame-count timeouts, per-frame load polls, or direct filesystem
 reads to this path. After admission,
 `DocumentChanged` and stage-asset lifecycle events wake the single

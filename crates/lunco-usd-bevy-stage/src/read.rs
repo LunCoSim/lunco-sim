@@ -516,7 +516,9 @@ pub trait UsdRead {
     /// This keeps snapshot readers and live readers on the same relationship
     /// discovery path. Consumers that need a relationship should ask for the
     /// composed property here, rather than maintaining a list of schema names.
-    fn relationship_names(&self, prim: &SdfPath) -> Vec<String>;
+    /// Empty and schema-declared relationships are included; absent prims and
+    /// native enumeration failures return errors.
+    fn relationship_names(&self, prim: &SdfPath) -> Result<Vec<String>, String>;
 
     /// **All** composed connection sources of attribute `name` on `prim` — the
     /// full `connectionPaths` list (fan-in), as path strings, in list order. The
@@ -822,7 +824,7 @@ pub trait UsdReadObject {
     fn api_schemas(&self, prim: &SdfPath) -> Vec<String>;
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String>;
     fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath>;
-    fn relationship_names(&self, prim: &SdfPath) -> Vec<String>;
+    fn relationship_names(&self, prim: &SdfPath) -> Result<Vec<String>, String>;
     fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String>;
     fn connection_source(&self, prim: &SdfPath, name: &str) -> Option<String> {
         self.connections(prim, name).into_iter().next()
@@ -1423,7 +1425,7 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::rel_targets(self, prim, name)
     }
 
-    fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
+    fn relationship_names(&self, prim: &SdfPath) -> Result<Vec<String>, String> {
         UsdRead::relationship_names(self, prim)
     }
 
@@ -1786,26 +1788,23 @@ impl UsdRead for StageView<'_> {
             .unwrap_or_default()
     }
 
-    fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
-        self.stage()
+    fn relationship_names(&self, prim: &SdfPath) -> Result<Vec<String>, String> {
+        let native = self
+            .stage()
             .prim(prim.clone())
-            .expect("validated USD path")
-            .property_names()
-            .map(|names| {
-                names
+            .map_err(|error| error.to_string())?;
+        if !native.is_valid().map_err(|error| error.to_string())? {
+            return Err(format!("{prim}: prim is absent from the live stage"));
+        }
+        native
+            .relationships()
+            .map(|relationships| {
+                relationships
                     .iter()
-                    .filter_map(|name| {
-                        self.stage()
-                            .prim(prim.clone())
-                            .expect("validated USD path")
-                            .relationship(name.as_str())
-                            .targets()
-                            .ok()
-                            .map(|_| name.to_string())
-                    })
+                    .map(|rel| rel.name().to_owned())
                     .collect()
             })
-            .unwrap_or_default()
+            .map_err(|error| format!("{prim}: {error}"))
     }
 
     fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
@@ -2209,7 +2208,7 @@ impl UsdRead for UsdReadSource<'_> {
         }
     }
 
-    fn relationship_names(&self, prim: &SdfPath) -> Vec<String> {
+    fn relationship_names(&self, prim: &SdfPath) -> Result<Vec<String>, String> {
         match self {
             Self::Prepared(reader) => UsdRead::relationship_names(*reader, prim),
             Self::Live(reader) => UsdRead::relationship_names(reader, prim),
