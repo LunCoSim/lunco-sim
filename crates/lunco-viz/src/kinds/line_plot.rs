@@ -92,6 +92,10 @@ pub struct LinePlotStyle {
     /// available when these controls are hidden for a presentation.
     #[serde(default = "default_show_controls")]
     pub show_controls: bool,
+    /// Show pointer crosshairs and measured-value tooltips. Independent of axes
+    /// and editing controls, so presentation plots can stay unobstructed.
+    #[serde(default = "default_show_controls")]
+    pub show_hover_values: bool,
     /// Curve identity can be omitted when the axes already explain one series.
     #[serde(default = "default_show_controls")]
     pub show_legend: bool,
@@ -138,6 +142,7 @@ impl Default for LinePlotStyle {
             line_width: default_line_width(),
             text_size: None,
             show_controls: true,
+            show_hover_values: true,
             show_legend: true,
             simplified_grid: false,
             compact_layout: false,
@@ -841,6 +846,8 @@ impl LinePlot {
         // space left after the toolbar + separator; `max_rect()` would
         // double-count that strip and push the plot off the bottom.
         let mut plot = Plot::new(("line_plot", config.id.raw()))
+            .show_x(style.show_hover_values)
+            .show_y(style.show_hover_values)
             .width(remaining.x)
             .height(remaining.y)
             .auto_bounds(egui::emath::Vec2b::new(true, true))
@@ -968,6 +975,10 @@ pub fn render_appearance_menu(
         request.show_controls = Some(controls);
     }
     let mut legend = style.show_legend;
+    let mut hover = style.show_hover_values;
+    if ui.checkbox(&mut hover, "Show hover values").changed() {
+        request.show_hover_values = Some(hover);
+    }
     if ui.checkbox(&mut legend, "Show curve legend").changed() {
         request.show_legend = Some(legend);
     }
@@ -1065,6 +1076,7 @@ pub fn render_appearance_menu(
         || request.show_latest_value.is_some()
         || request.caption.is_some()
         || request.show_controls.is_some()
+        || request.show_hover_values.is_some()
         || request.x_label.is_some()
         || request.y_label.is_some()
         || request.y_reference_range.is_some()
@@ -1091,6 +1103,7 @@ pub struct ConfigureLinePlot {
     /// 8–64 logical pixels for plot text only; zero restores the theme.
     pub text_size: Option<f32>,
     pub show_controls: Option<bool>,
+    pub show_hover_values: Option<bool>,
     pub show_legend: Option<bool>,
     pub simplified_grid: Option<bool>,
     pub compact_layout: Option<bool>,
@@ -1162,6 +1175,9 @@ fn configure_line_plot(
     }
     if let Some(controls) = request.show_controls {
         style.show_controls = controls;
+    }
+    if let Some(hover) = request.show_hover_values {
+        style.show_hover_values = hover;
     }
     if let Some(legend) = request.show_legend { style.show_legend = legend; }
     if let Some(grid) = request.simplified_grid { style.simplified_grid = grid; }
@@ -1510,6 +1526,7 @@ mod tests {
             line_width: 4.0,
             text_size: Some(24.0),
             show_controls: false,
+            show_hover_values: false,
             show_legend: false,
             simplified_grid: true,
             compact_layout: true,
@@ -1529,6 +1546,7 @@ mod tests {
         assert_eq!(roundtrip.line_width, 4.0);
         assert_eq!(roundtrip.text_size, Some(24.0));
         assert!(!roundtrip.show_controls);
+        assert!(!roundtrip.show_hover_values);
         assert!(!roundtrip.show_legend);
         assert!(roundtrip.simplified_grid);
         assert!(roundtrip.compact_layout);
@@ -1564,6 +1582,7 @@ mod tests {
                 line_width: Some(4.0),
                 text_size: Some(24.0),
                 show_controls: Some(false),
+                show_hover_values: Some(false),
                 show_legend: Some(false),
                 simplified_grid: Some(true),
                 compact_layout: Some(true),
@@ -1580,6 +1599,7 @@ mod tests {
         let style = LinePlotStyle::load(config);
         assert!(style.log_y);
         assert!(!style.show_controls);
+        assert!(!style.show_hover_values);
         assert!(!style.show_legend);
         assert!(style.simplified_grid);
         assert!(style.compact_layout);

@@ -2095,6 +2095,7 @@ fn render_experiments_plot_inner(
         };
         let options = MultiSeriesPlotOptions {
             id: egui::Id::new(("graphs_experiments_plot", viz_id.0)),
+            show_hover_values: style.show_hover_values,
             log_y,
             reset_bounds: fit_requested,
             y_axis_label: style.y_label.clone().or(y_axis_label),

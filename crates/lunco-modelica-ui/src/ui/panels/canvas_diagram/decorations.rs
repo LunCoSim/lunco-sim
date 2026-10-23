@@ -58,24 +58,29 @@ impl lunco_canvas::Layer for DiagramDecorationLayer {
             bevy_egui::egui::pos2(screen_rect_canvas.min.x, screen_rect_canvas.min.y),
             bevy_egui::egui::pos2(screen_rect_canvas.max.x, screen_rect_canvas.max.y),
         );
-        // Filter out items that have a corresponding scene Node
-        // (Text → editable label). Plot tiles live in a separate
+        // Static text has a corresponding editable scene Node.
+        // DynamicSelect text must stay in the graphics layer so its
+        // expression can read the same snapshot as component icons.
+        // Plot tiles live in a separate
         // vendor annotation now and never appear in `graphics`, so
-        // they don't need filtering here. Painting Text as well
-        // would double-render: the scene Node already paints itself
-        // via its `NodeVisual` and the decoration would sit on top
-        // with stale text. Other graphics (Rectangle / Line /
+        // they don't need filtering here. Painting static Text as well
+        // would double-render the scene Node. Other graphics (Rectangle / Line /
         // Polygon / Ellipse / Bitmap) stay as background decoration.
         use lunco_modelica_ast::annotations::GraphicItem;
         let decoration: Vec<GraphicItem> = graphics
             .iter()
-            .filter(|g| !matches!(g, GraphicItem::Text(_)))
+            .filter(|g| !matches!(g, GraphicItem::Text(t) if t.text_string_dynamic.is_none()))
             .cloned()
             .collect();
-        lunco_modelica_icon_ui::paint_graphics(
+        let state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+        let resolver = |name: &str| state.values.get(name).copied();
+        lunco_modelica_icon_ui::paint_graphics_with_resolver(
             ctx.ui.painter(),
             screen_rect,
             *coord_system,
+            lunco_modelica_icon_ui::IconOrientation::default(),
+            None,
+            Some(&resolver),
             &decoration,
         );
     }
@@ -89,8 +94,8 @@ impl lunco_canvas::Layer for DiagramDecorationLayer {
 /// Emit canvas Nodes for every interactive item in the active
 /// class's diagram. Two sources, intentionally split:
 ///
-///   * `Text` entries in `Diagram(graphics=…)` → `lunco.modelica.text`
-///     (editable label). Standard Modelica; OMEdit renders these too.
+///   * Static `Text` entries in `Diagram(graphics=…)` → `lunco.modelica.text`
+///     (editable label). DynamicSelect text remains in the background layer.
 ///   * `LunCoAnnotations.PlotNode(...)` records in
 ///     `annotation(__LunCo(plotNodes=…))` → `lunco.viz.plot`
 ///     (live signal tile). Lunica-only feature: each tile binds a
@@ -118,7 +123,7 @@ pub(super) fn emit_diagram_decorations(
             // Rumoca has decoded the label. Skip source-library substitutions
             // and empty strings when exposing editable diagram callouts.
             let raw = t.text_string.as_str();
-            if raw.is_empty() || raw.starts_with('%') {
+            if t.text_string_dynamic.is_some() || raw.is_empty() || raw.starts_with('%') {
                 text_idx += 1;
                 continue;
             }
@@ -248,4 +253,35 @@ pub(super) fn diagram_annotation_for_target(
         .map(|d| (d.coordinate_system, d.graphics))
         .unwrap_or_default();
     Some((coordinate_system, graphics, plot_nodes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_modelica_ast::annotations::{DynExpr, Extent, GraphicItem, Point, Text};
+
+    #[test]
+    fn dynamic_diagram_text_keeps_its_expression_instead_of_a_static_node() {
+        let label = Text {
+            extent: Extent {
+                p1: Point { x: -10.0, y: -10.0 },
+                p2: Point { x: 10.0, y: 10.0 },
+            },
+            text_string: "Run model".into(),
+            font_size: 12.0,
+            text_color: None,
+            origin: Point { x: 0.0, y: 0.0 },
+            rotation: 0.0,
+            text_string_dynamic: Some(DynExpr::StringCall(Box::new(DynExpr::Var(
+                "pressure".into(),
+            )))),
+        };
+        let mut static_label = label.clone();
+        static_label.text_string_dynamic = None;
+        static_label.text_string = "Pressure".into();
+        let graphics = [GraphicItem::Text(label), GraphicItem::Text(static_label)];
+        let mut scene = lunco_canvas::Scene::new();
+        let origins = emit_diagram_decorations(&mut scene, &graphics, &[], None);
+        assert_eq!(origins, std::collections::HashSet::from(["text:1".into()]));
+    }
 }

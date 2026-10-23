@@ -34,6 +34,8 @@ Style them through `ConfigureLinePlot`, then reveal registered instance kind
 `signal_grid` in a dock or floating host. The shared grid supports up to 64
 channels and reuses native plots, rather than adding an alternate renderer or
 duplicating telemetry. A few cells support explanation; dense views show scope.
+For captured charts, `show_hover_values:false` hides hover readouts and
+crosshairs without hiding axes or changing the recorded samples.
 
 Use the native line plot toolbar's `Line` control to set curve thickness from
 0.5 to 8 logical pixels. It is saved per visualization in `LinePlotStyle` and

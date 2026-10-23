@@ -358,6 +358,8 @@ pub struct MultiSeriesOverlay {
 
 /// Rendering options for [`render_multi_series_plot`].
 pub struct MultiSeriesPlotOptions {
+    /// Pointer value labels/crosshairs; axis labels remain visible when false.
+    pub show_hover_values: bool,
     /// egui identity; each visible plot must provide a distinct id.
     pub id: egui::Id,
     /// Transform positive Y values to log10 before rendering.
@@ -394,6 +396,7 @@ impl Default for MultiSeriesPlotOptions {
     fn default() -> Self {
         Self {
             id: egui::Id::new("lunco_multi_series_plot"),
+            show_hover_values: true,
             log_y: false,
             reset_bounds: false,
             y_axis_label: None,
@@ -634,6 +637,7 @@ pub fn render_multi_series_plot(
             Some(crate::plot_fmt::hover_label(name, point, options.log_y))
         });
     if options.show_legend { plot = plot.legend(Legend::default()); }
+    plot = plot.show_x(options.show_hover_values).show_y(options.show_hover_values);
     if options.simplified_grid || options.compact_layout { plot = simplify_grid(plot); }
     if options.compact_layout { plot = plot.show_axes(false); }
     if !options.compact_layout { render_plot_caption(ui, options.caption.as_deref(), options.text_size); }
