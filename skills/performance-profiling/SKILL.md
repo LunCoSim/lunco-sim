@@ -68,8 +68,12 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   [`scripts/perf/tracy_samples.cpp`](../../scripts/perf/tracy_samples.cpp) tool
   and its [build/interpretation instructions](../../scripts/perf/README.md#saved-cpu-samples).
   Match the capture's Tracy release when building its server library, verify
-  the owned PID, and select the zone's exact thread and time interval. Raw data
-  stays in ignored `scripts/perf/captures/`, `.cache/` or `target/perf/`; commit
+  the owned PID, and select the zone's exact thread and time interval. Samples
+  can be narrowed to complete instances of one exact zone by appending its name
+  to the sample export command; inspect `matched_zones` and the terminal result.
+  Frame-wide samples include unrelated work outside the selected child zone.
+  Profiling data stays in ignored `scripts/perf/captures/`, `.cache/` or
+  `target/perf/`; commit
   reusable tool sources and documentation only.
 - Compare Builder and View with the same scene, camera, rendering-quality
   settings, physics substeps, shadow settings, and terrain assets. A Builder-

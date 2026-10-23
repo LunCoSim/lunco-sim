@@ -133,6 +133,21 @@ rejects mismatched ownership, unreadable/version-mismatched captures and empty
 sample selections. Check its terminal exit before using the CSV. Its stderr
 receipt includes the actual sampling period and selected sample count.
 
+Append an exact instrumented zone name to select only CPU samples inside that
+zone on the same thread, within the requested time interval:
+
+```sh
+target/perf/tracy-samples "$CAPTURE" "$OWNED_PID" "$TID" "$BEGIN_NS" "$END_NS" \
+  cosim_exchange_write > .cache/write-samples.csv
+```
+
+The filter reads complete native zone events, merges overlapping instances and
+counts each sample once. It excludes unfinished zones and rejects a missing
+zone or a zone selection without CPU samples. Check `matched_zones` in stderr
+alongside the native zone CSV; the exact-name filter is case sensitive. An
+unfiltered frame window also contains unrelated work and cannot by itself
+attribute that work to one child zone.
+
 `csv_thread` is Tracy's compressed thread ID used by the native zone CSV;
 `tid` is the OS thread ID. Select the constructor's thread as well as its time
 interval. Each stack contributes `samples` once, repeated on its frame rows;
