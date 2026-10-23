@@ -1,5 +1,38 @@
 # High-quality realtime performance handover
 
+## Protected simulation preparation capacity — 2026-10-23
+
+`AsyncWorkAdmission` protects one slot for required preparation when its
+in-flight limit exceeds one. Queued jobs and external permits use the same
+capacity predicate; single-slot service, stable queue order, lower-priority
+fairness, cancellation and teardown retain their existing contracts. No native
+solver, authored state, worker count, numerical clock or result-commit rule is
+changed. The new owner regression fails on the previous implementation, and
+all **16 async-work tests** pass with the reservation. The regular Tracy
+production build and skill catalogue check pass.
+
+The baseline dispatch log shows optional jobs filling all four slots between
+the Tesla USD decode and serialization operations. The production candidate's
+257 dispatch snapshots keep optional occupancy at most three and total
+occupancy at most four. Its 110 recorded Twin source hashes match the baseline
+and remain unchanged within the run. Serialization waits approximately
+**14.39 ms for admission**, then **1,521.08 ms after dispatch**. This exposes a
+remaining task-pool delay; admission protection does not preempt native workers.
+
+Whole admission takes 6.04 s in this candidate. Two foreign graphical sessions
+are active, including tutorials' path-tracing scene at PID 1563352 and the
+other app at PID 1552816. A foreign Cargo test is observed near the end, with
+exact overlap unverified. This differs from the baseline workload and cannot
+support a whole-loading speedup or regression attribution. Runtime diagnostics
+and scripts are clear; the inspected image shows the stationary Tesla course
+with its existing unavailable frame/datum HUD. Native framing, payload, owned
+PID, 1,000,000 ns sampling and terminal CSV export checks pass. API 4964, app
+1565850, collector and exporter are closed. Evidence is local and ignored in
+`tesla-required-capacity-profile/`, including `admission-latency.json`, and
+`required-capacity-{baseline-test,final-tests,build-final}.log` under
+`.cache/codex-evidence/performance-20261023/`. All strict targets remain open;
+continue with worker-pool contention and the whole coupled fixed-tick costs.
+
 ## Normal active windows and preparation admission — 2026-10-23
 
 The regular non-Tracy build passes at `66bba7645`. After five seconds of warmup,

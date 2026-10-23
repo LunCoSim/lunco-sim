@@ -197,12 +197,23 @@ impl Default for QueuedWorkState {
     }
 }
 
+impl QueuedWorkState {
+    fn has_capacity(&self, priority: AsyncWorkPriority, in_flight: [usize; 3]) -> bool {
+        let optional = in_flight[1] + in_flight[2];
+        in_flight[0] + optional < self.max_in_flight
+            && (priority == AsyncWorkPriority::SimulationRequired
+                || self.max_in_flight == 1
+                || optional < self.max_in_flight - 1)
+    }
+}
+
 /// Shared admission queue for CPU preparation running on Bevy's async pool.
 ///
 /// Submissions are bounded and sorted by semantic priority, owner-selected
 /// order, then stable operation identity. A reserved lower-priority share
-/// prevents background work from starvation. Domain owners retain result
-/// types, stale-result checks, and commit boundaries.
+/// prevents background work from starvation. With multiple in-flight slots,
+/// optional work leaves one available for required preparation. Domain owners
+/// retain result types, stale-result checks, and commit boundaries.
 #[derive(Resource)]
 pub struct AsyncWorkAdmission {
     queued: Arc<Mutex<QueuedWorkState>>,
@@ -251,14 +262,13 @@ impl AsyncWorkAdmission {
             .unwrap_or_else(PoisonError::into_inner);
         let rejection = if queued.keys.contains(&key) || active.contains(&key) {
             Some(AsyncWorkRejection::DuplicateKey)
-        } else if self
-            .shared
-            .in_flight
-            .iter()
-            .map(|count| count.load(Ordering::Acquire))
-            .sum::<usize>()
-            >= queued.max_in_flight
-        {
+        } else if !queued.has_capacity(
+            priority,
+            self.shared
+                .in_flight
+                .each_ref()
+                .map(|count| count.load(Ordering::Acquire)),
+        ) {
             Some(AsyncWorkRejection::QueueFull)
         } else {
             None
@@ -524,14 +534,20 @@ fn pop_next_queued(
     const REQUIRED_STREAK_LIMIT: u8 = 8;
     const BACKGROUND_SHARE_INTERVAL: u8 = 16;
 
+    let in_flight = shared
+        .in_flight
+        .each_ref()
+        .map(|count| count.load(Ordering::Acquire));
+    let eligible = |key: &QueueKey| queued.has_capacity(key.priority, in_flight);
+
     let interactive = queued
         .jobs
         .keys()
-        .any(|key| key.priority == AsyncWorkPriority::Interactive);
+        .any(|key| eligible(key) && key.priority == AsyncWorkPriority::Interactive);
     let background = queued
         .jobs
         .keys()
-        .any(|key| key.priority == AsyncWorkPriority::Background);
+        .any(|key| eligible(key) && key.priority == AsyncWorkPriority::Background);
     let forced_priority =
         if background && queued.admissions_since_background >= BACKGROUND_SHARE_INTERVAL {
             Some(AsyncWorkPriority::Background)
@@ -545,10 +561,10 @@ fn pop_next_queued(
             queued
                 .jobs
                 .keys()
-                .find(|key| key.priority == priority)
+                .find(|key| eligible(key) && key.priority == priority)
                 .copied()
         })
-        .or_else(|| queued.jobs.keys().next().copied())?;
+        .or_else(|| queued.jobs.keys().find(|key| eligible(key)).copied())?;
 
     let job = queued.jobs.remove(&queue_key)?;
     queued.keys.remove(&queue_key.key);
@@ -639,12 +655,7 @@ fn refill_async_work(shared: &Arc<SharedWorkState>) {
     loop {
         let (priority, key, job) = {
             let mut queued = queued_state.lock().unwrap_or_else(PoisonError::into_inner);
-            let active_count = shared
-                .in_flight
-                .iter()
-                .map(|n| n.load(Ordering::Acquire))
-                .sum::<usize>();
-            if queued.stopped || active_count >= queued.max_in_flight {
+            if queued.stopped {
                 break;
             }
             let Some((priority, key, job)) = pop_next_queued(shared, &mut queued) else {
@@ -815,6 +826,44 @@ mod tests {
         assert_eq!(admission.snapshot().in_flight, [0, 1, 0]);
         drop(replacement);
         assert_eq!(admission.snapshot().finished, 2);
+    }
+
+    #[test]
+    fn required_capacity_is_protected_from_queued_and_external_optional_work() {
+        let mut admission = AsyncWorkAdmission::default();
+        admission.set_limits(8, 2).unwrap();
+        let optional = admission
+            .admit_external(AsyncWorkPriority::Interactive, key(1))
+            .unwrap();
+        assert!(matches!(
+            admission.admit_external(AsyncWorkPriority::Background, key(2)),
+            Err(AsyncWorkRejection::QueueFull)
+        ));
+        admission
+            .submit(AsyncWorkPriority::Background, key(2), || {})
+            .unwrap();
+        assert!(
+            admission.pop_next().is_none(),
+            "optional work must retain required capacity"
+        );
+        admission
+            .submit(AsyncWorkPriority::SimulationRequired, key(3), || {})
+            .unwrap();
+        let (priority, identity, job) = admission.pop_next().unwrap();
+        assert_eq!(
+            (priority, identity),
+            (AsyncWorkPriority::SimulationRequired, key(3))
+        );
+        job();
+        assert!(admission.pop_next().is_none());
+        let required = admission
+            .admit_external(AsyncWorkPriority::SimulationRequired, key(4))
+            .unwrap();
+        assert_eq!(admission.snapshot().in_flight, [1, 1, 0]);
+        assert!(admission.cancel_queued(key(2)));
+        drop(required);
+        drop(optional);
+        assert_eq!(admission.snapshot().in_flight, [0, 0, 0]);
     }
 
     #[test]

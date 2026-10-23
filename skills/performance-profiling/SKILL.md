@@ -376,6 +376,9 @@ queue wait separately; identities and elapsed values stay out of zone fields.
 Correlate `preparation dispatched` with `preparation started` by operation key
 to separate shared admission delay from task-pool dispatch delay. Wall-clock
 log differences are diagnostic correlation, not simulation clock inputs.
+When capacity exceeds one, required preparation retains one admission slot;
+optional queued work and external permits share the remaining capacity. Inspect
+pool dispatch separately because admission does not preempt native workers.
 Verify refill without another host update and retirement with captured permits,
 then compare settled terrain readiness and replay the authoritative state.
 For physical solar visibility, attribute `publish_sun_visibility` separately

@@ -809,8 +809,11 @@ Native Bevy hosts install `AsyncWorkAdmission` from `lunco-core-runtime`. Each
 request carries a stable key containing scope generation, owner identity,
 source revision, and operation id. The resource bounds queued and admitted
 work, applies the three priorities with reserved interactive/background
-service, and exposes aggregate queue counters. It can withdraw queued work but
-does not preempt a running task. Owners still validate and commit their typed
+service, and exposes aggregate queue counters. With more than one in-flight
+slot, one slot is protected for `SimulationRequired`; queued jobs and external
+permits share this capacity rule. Single-slot execution retains ordered service
+for all priorities. It can withdraw queued work but does not preempt a running
+task. Owners still validate and commit their typed
 results at their own boundary. Debug diagnostics distinguish queued time from
 worker execution using bounded kind/priority zones and operation-specific
 dispatch logs; timing is not an input to admission or result commitment.
