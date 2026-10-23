@@ -51,10 +51,23 @@ existing-camera switch, storage-binding changes, HDR removal and the no-camera
 interval before a reload's replacement camera is admitted. These checks protect
 the shared composition invariant rather than clearing or suppressing indicators.
 
-Both focused regression tests passed on 2026-10-23. A native `RestartScene` of
-the ray-traced test view also completed with no retained cards; its image is
-`.cache/roadster-reload-1.png`. The longer renderer round trip was interrupted
-by the test process ending and is not counted as a passed lifecycle run.
+Both focused regression tests and the regular debug build passed on 2026-10-23.
+The native `RestartScene` round trip then passed on the rebuilt binary:
+path tracer → raster → path tracer, each with a fresh projected camera and
+DomeLight completion. All three full-window images were inspected and contain
+no retained cards. Readiness observations include active loading before each
+settled capture; indicators were not suppressed. The proof is scoped to this
+windowed scene and does not qualify all renderer content.
+
+- `.cache/roadster-reload-2.png`, `-3.png`, `-4.png`: reviewed native images.
+- `/home/rod/.cache/roadster-reload-check.log`: `RELOAD_LIFECYCLE_PASS`.
+- `/home/rod/.cache/roadster-reload-lifecycle-proof.json`: per-reload readiness,
+  capture state and native projection log receipts.
+- `/home/rod/.cache/roadster-ui-reload-v3-session.log`: complete production log.
+
+API entity identities deliberately remain stable across replacement. The test
+requires new native restart/projection receipts and settled readiness rather
+than incorrectly requiring the API identity to change.
 
 The ray-tracing backend itself remains under separate qualification, including
 custom surfaces, scene fidelity and film lighting. This UI acceptance does not
