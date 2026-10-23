@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
-use lunco_theme::{Theme, ThemeMode};
+use lunco_theme::{DiagramPresentationSettings, Theme, ThemeMode};
 use serde::{Deserialize, Serialize};
 
 /// Persisted user preference for the active theme. Stored under the
@@ -47,6 +47,30 @@ pub struct SetTheme {
     /// `false` = apply for this session only, leave `settings.json` alone.
     /// Default `true` (the historical behavior).
     pub persist: Option<bool>,
+}
+
+/// Configure native diagram presentation through the UI settings owner.
+/// Omitted fields retain their current preference.
+#[Command(default)]
+pub struct ConfigureDiagramPresentation {
+    pub show_controls: Option<bool>,
+    pub use_authored_colors: Option<bool>,
+}
+
+#[on_command(ConfigureDiagramPresentation)]
+fn on_configure_diagram_presentation(
+    trigger: On<ConfigureDiagramPresentation>,
+    mut settings: ResMut<DiagramPresentationSettings>,
+) {
+    let request = trigger.event();
+    let mut next = settings.clone();
+    if let Some(value) = request.show_controls {
+        next.show_controls = value;
+    }
+    if let Some(value) = request.use_authored_colors {
+        next.use_authored_colors = value;
+    }
+    settings.set_if_neq(next);
 }
 
 #[on_command(SetTheme)]
@@ -113,7 +137,7 @@ fn apply_pref_to_theme(pref: Res<ThemePreference>, mut theme: ResMut<Theme>) {
     theme.set_mode(pref.mode);
 }
 
-register_commands!(on_set_theme,);
+register_commands!(on_set_theme, on_configure_diagram_presentation,);
 
 /// Plugin registering the [`ThemePreference`] settings section and the
 /// [`SetTheme`] command observer.

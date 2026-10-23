@@ -2441,7 +2441,10 @@ pub(crate) fn register_workbench_appearance_settings_menu(world: &mut World) {
             let colors_changed = ui.checkbox(&mut diagrams.use_authored_colors, "Preserve authored diagram colors")
                 .on_hover_text("Use the model's own icon and connection colors, including authored dark backgrounds.").changed();
             if controls_changed || colors_changed {
-                ctx.set_resource(diagrams);
+                ctx.trigger(crate::theme_command::ConfigureDiagramPresentation {
+                    show_controls: Some(diagrams.show_controls),
+                    use_authored_colors: Some(diagrams.use_authored_colors),
+                });
             }
         }
     });

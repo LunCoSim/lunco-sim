@@ -205,11 +205,12 @@ Use `follow_latest=true` to scroll with new samples while keeping the current
 horizontal window. `time_window_s=5` sets an initial five-second span; subsequent
 user zoom is retained, and zero uses the current span. Turning follow off
 restores fit-all. These are viewing controls, independent of telemetry retention.
-For clean Modelica and connection diagrams, use the shared
-`DiagramPresentationSettings.show_controls` setting; it hides editing and zoom
-chrome without changing topology, models or live values.
-`DiagramPresentationSettings.use_authored_colors=true` keeps deliberate dark
-model icons from being inverted by the library's default theme adaptation.
+For clean Modelica and connection diagrams, dispatch
+`ConfigureDiagramPresentation {show_controls:false,use_authored_colors:true}`.
+The shared preferences hide editing and zoom chrome without changing topology,
+models or live values, and keep deliberate dark icons from being inverted by
+the library's default theme adaptation. Presentation programs use this typed
+command; they may not mutate reflected resources directly.
 `FitCanvas` addresses the visible diagram host after moving it into a smaller
 floating panel. Embedded scopes use a `PlotNode` record, bare or qualified as
 `LunCoAnnotations.PlotNode`; arbitrary record names are not plot annotations.
@@ -1281,3 +1282,10 @@ trace, with the Y unit, in the upper-right of the compact chart. The title stays
 centered on the same row. It uses the actual series endpoint; multiple traces
 omit that readout to avoid assigning one number to several quantities. For live
 presentation, combine it with `follow_latest:true,time_window_s:5`.
+
+Canvas navigation commands compose against their destinations: `SetZoom`
+preserves a pending pan/focus target, and `PanCanvas` preserves the requested
+zoom. For a repeatable model insert, focus the document, finish its opening
+and projection, select the view, then issue `FocusComponent` and `SetZoom`.
+Inspect the resulting frame before accepting the take; cadence receipts do not
+prove that the model was framed correctly.
