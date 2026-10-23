@@ -82,11 +82,12 @@ impl std::error::Error for FrameIdError {}
 /// scale is known. Consumers may compare unresolved values only when their
 /// identifiers match; they cannot convert them.
 /// Clones share the immutable identity and definition. Replacing an owner's
-/// reference publishes a new value; equality still compares the full definition.
-#[derive(Clone, PartialEq)]
+/// reference publishes a new value. Equality recognizes shared definitions by
+/// identity and compares the full definition for independently created values.
+#[derive(Clone, PartialEq, Eq)]
 pub struct UnitReference(Arc<UnitReferenceFields>);
 
-#[derive(PartialEq, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename = "UnitReference", deny_unknown_fields)]
 struct UnitReferenceFields {
     id: String,
@@ -753,6 +754,10 @@ pub struct Unit {
     relative_quantity: bool,
 }
 
+// Constructors and deserialization admit only finite scales and offsets, so
+// equality is reflexive. This also lets Arc compare shared definitions by identity.
+impl Eq for Unit {}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnitFields {
@@ -1342,6 +1347,76 @@ mod tests {
         let changed = UnitReference::resolved(Unit::new("m", Dimension::LENGTH, 2.0, 0.0).unwrap());
         assert_ne!(original, changed);
         assert_eq!(cloned.definition().unwrap().scale_to_si(), 1.0);
+    }
+
+    #[test]
+    fn unit_reference_equality_preserves_finite_contract_semantics() {
+        fn equivalence<T: Eq + std::fmt::Debug>(left: &T, right: &T) {
+            assert_eq!(left, left);
+            assert_eq!(left, right);
+            assert_eq!(right, left);
+        }
+        for (scale, offset) in [
+            (1.0, -0.0),
+            (f64::from_bits(1), -f64::MAX),
+            (f64::MAX, f64::MAX),
+        ] {
+            let unit = Unit::new("m", Dimension::LENGTH, scale, offset).unwrap();
+            equivalence(&unit, &unit.clone());
+            let reference = UnitReference::resolved(unit);
+            equivalence(&reference, &reference.clone());
+            let independent =
+                UnitReference::resolved(Unit::new("m", Dimension::LENGTH, scale, offset).unwrap());
+            equivalence(&reference, &independent);
+            assert_ne!(
+                reference,
+                UnitReference::resolved(
+                    independent
+                        .definition()
+                        .unwrap()
+                        .clone()
+                        .with_angle_power(1)
+                )
+            );
+            assert_ne!(
+                reference,
+                UnitReference::resolved(
+                    independent
+                        .definition()
+                        .unwrap()
+                        .clone()
+                        .with_relative_quantity(true)
+                )
+            );
+        }
+        let negative_zero = Unit::new("m", Dimension::LENGTH, 1.0, -0.0).unwrap();
+        let positive_zero = Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap();
+        equivalence(&negative_zero, &positive_zero);
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(Unit::new("m", Dimension::LENGTH, invalid, 0.0).is_err());
+            assert!(Unit::new("m", Dimension::LENGTH, 1.0, invalid).is_err());
+        }
+    }
+
+    /// Isolate repeated contract equality on shared immutable unit definitions.
+    #[test]
+    #[ignore = "manual shared unit contract equality performance measurement"]
+    fn unit_reference_equality_benchmark() {
+        let reference =
+            UnitReference::resolved(Unit::new("m", Dimension::LENGTH, 1.0, 0.0).unwrap());
+        let cloned = reference.clone();
+        let comparisons = 4_194_304;
+        let started = std::time::Instant::now();
+        let mut equal = 0;
+        for _ in 0..comparisons {
+            equal += usize::from(std::hint::black_box(&reference) == std::hint::black_box(&cloned));
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(equal, comparisons);
+        println!(
+            "UNIT_REFERENCE_EQUALITY_BENCH elapsed_ns={} comparisons={comparisons}",
+            elapsed.as_nanos()
+        );
     }
 
     #[test]

@@ -21,6 +21,23 @@ count differ from its earlier baseline, and concurrent foreign workloads affect
 the runs. Continue with Modelica construction, USD extraction and whole coupled
 tick attribution; do not infer a whole-loading gain from fewer terminal queries.
 
+## Shared unit-contract equality
+
+`lunco-engineering-values::Unit` has private conversion coefficients validated
+as finite by every constructor and deserializer. Its equality is therefore
+reflexive. The `Eq` contract propagates through immutable `UnitReference`
+definitions, allowing standard-library `Arc` equality to recognize shared
+definitions by identity. Independently created definitions still compare their
+complete values. Port writes retain all live owner, metadata and batch checks.
+
+The regular targeted engineering-value run passes all twelve tests, including
+finite extremes, signed zero, changed angular/relative semantics, independent
+definitions and non-finite rejection. The ignored diagnostic benchmark measures
+4,194,304 shared-reference comparisons at 25,128,264 ns before and 3,138,082 ns
+after. Logs are ignored `shared-unit-equality-{baseline,qualified}.log` under
+`.cache/codex-evidence/performance-20261023/`. This isolates one contract cost;
+it does not qualify a whole-tick improvement or any original performance target.
+
 ## Native validation joins shared preparation admission — 2026-10-23
 
 `lunco-core-runtime::AsyncWorkAdmission::submit_transport` admits a native

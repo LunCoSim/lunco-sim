@@ -285,6 +285,10 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   validation still derives and checks current metadata; borrowing text does not
   cache permissions, bounds, owner identity or topology. API and lint-hook value
   projection own their output strings, while the Ports panel borrows labels.
+  `Unit` admits only finite conversion coefficients and implements reflexive
+  equality. Shared `UnitReference` clones therefore use standard `Arc` identity
+  equality; independently allocated definitions compare their complete values.
+  This does not cache or bypass the surrounding live metadata checks.
   Live ownership selection retains the winning backend's optional slot from
   that resolution call. Handle creation, write preparation and batch preflight
   consume it within the same immutable World boundary. They do not resolve the
