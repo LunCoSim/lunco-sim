@@ -1,5 +1,44 @@
 # High-quality realtime performance handover
 
+## Projection loading attribution and material diagnostics — 2026-10-23
+
+Three bounded startup spans separate native recipe composition
+(`usd_projection_plan`), complete immutable fact extraction
+(`usd_projection_facts`), and dependency-path preparation
+(`usd_projection_native_paths`). Tesla's large snapshot takes 330.58 ms in the
+baseline; native path preparation takes 1.43 ms. The native capture passes
+framing, payload-size, owned PID 627552, 1,000,000 ns sampling and CSV-export
+checks. Its final screenshot was inspected and runtime diagnostics are clear.
+
+A material-terminal reuse experiment on identical recorded Twin sources gives
+330.13 ms for the same snapshot and 1.34 ms for native paths. The extra cache,
+helper and experiment-specific test changes are removed: the difference does
+not justify them. Admission is 2.71 s before and 2.66 s in that diagnostic run;
+this is not evidence of a loading improvement. The latter constructor takes
+169 ms, versus 281 ms before, while snapshot cost barely changes. Attribute
+the remaining admission phases before another optimization.
+
+The experiment capture
+`scripts/perf/captures/default-tesla-tesla-material-sharing-profile-20261023.tracy`
+also passes native framing, payload-size, owned PID 739909, 1,000,000 ns sampling
+and CSV-export checks. Twin sources remain unchanged, diagnostics are clear and
+the final screenshot was inspected. Tesla's HUD frame/datum remains unavailable;
+this run does not qualify its full mission or graphics target. All owned apps,
+collectors and APIs 4907/4922 are closed; the foreign USD app remains active.
+Evidence is `tesla-stage-plan-baseline/` and `tesla-material-sharing-profile/`
+under `.cache/codex-evidence/performance-20261023/`.
+
+The native material production gate exposes a command diagnostic issue:
+`SetObjectProperty` must return an existing projection failure before trying to
+adopt or read PBR intent. Its cyclic-graph test now compares the complete intent
+state across rejection, including an absent intent on failed projection. The
+eleven authored terminal/edit/negative checks pass with the owner guard; the
+discarded material cache is not part of the retained solution.
+The retained regular Tracy artifact is SHA-256
+`d817df94984ddbc850548c64a037dbb5ad2e0a672f58b1d515bdf5a0e95c38cf`.
+Its final production gate uses PID 748707/API 4925 and exits zero; the port is
+released. `projection-profile-final-*` retains the build and eleven verdicts.
+
 ## Static raycast contact admission — 2026-10-23
 
 The Griffin packaging scene's island panic reproduces in the production test

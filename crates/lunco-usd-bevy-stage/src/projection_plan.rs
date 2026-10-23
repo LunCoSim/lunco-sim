@@ -129,6 +129,7 @@ impl UsdStageProjectionPlan {
         origin: Option<bevy::asset::AssetPath<'static>>,
         roots: Option<&lunco_assets_core::TwinRoots>,
     ) {
+        let _span = bevy::log::info_span!("usd_projection_native_paths").entered();
         let references =
             crate::native_paths::native_references_for_prims(self, UsdRead::prim_paths(self));
         self.native_paths = Some(Arc::new(
@@ -142,6 +143,7 @@ impl UsdStageProjectionPlan {
     /// runtime readers use. The stage is local to this worker call and is
     /// dropped before the plan crosses the async asset boundary.
     pub fn from_recipe(recipe: &StageRecipe) -> Result<Self> {
+        let _span = bevy::log::info_span!("usd_projection_plan", root = %recipe.root_id).entered();
         let (stage, _) = crate::compose::build_stage_with_resolver(recipe)?;
         Self::from_stage(&stage)
     }
@@ -150,6 +152,7 @@ impl UsdStageProjectionPlan {
     /// an external native adapter. The caller retains the live stage separately
     /// for explicit authoring; this plan owns no OpenUSD handles.
     pub fn from_stage(stage: &Stage) -> Result<Self> {
+        let _span = bevy::log::info_span!("usd_projection_facts").entered();
         let reader = StageView::new(stage);
         let mut paths = Vec::new();
         let mut seen = std::collections::HashSet::new();

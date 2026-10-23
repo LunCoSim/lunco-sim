@@ -667,6 +667,11 @@ pub fn on_set_object_property(
             let command_id = active_command.get();
             commands.queue(move |world: &mut World| {
                 let result = (|| {
+                    if let Some(failure) =
+                        world.get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(target)
+                    {
+                        return Err(failure.0.clone());
+                    }
                     let mut look = match world.get::<PbrLook>(target) {
                         Some(look) => look.clone(),
                         None if world.get::<Mesh3d>(target).is_some() => PbrLook::default(),

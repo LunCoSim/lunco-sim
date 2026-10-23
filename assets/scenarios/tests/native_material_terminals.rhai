@@ -93,7 +93,7 @@ fn material_invalid(doc) {
     if shape < 0 || get(shape, "UsdSceneProjectionFailed") == () { print("MATERIAL_PENDING"); return; }
     let inspection = query("QueryUsdPrim", #{doc_id: doc, path: material_shape(), topology: true});
     let rejected = inspection.ok == false && inspection.to_string().contains("no producing shader");
-    let before = get(shape, "PbrLook").perceptual_roughness;
+    let before = get(shape, "PbrLook");
     let edit = cmd("SetObjectProperty", #{entity_id: shape, property: "roughness", value: "0.1"});
     report_verdict([
         t_true(get(shape, "UsdSceneProjectionFailed").to_string().contains("no producing shader"),
@@ -104,7 +104,7 @@ fn material_invalid(doc) {
             "inspection preserves the terminal failure instead of returning an absent shader"),
         t_true(edit.ok == false && edit.status == "rejected" && edit.to_string().contains("no producing shader"),
             "material edit returns a terminal native graph rejection"),
-        t_true(get(shape, "PbrLook").perceptual_roughness == before,
-            "rejected material edit preserves the live PBR intent")
+        t_true(get(shape, "PbrLook") == before,
+            "rejected material edit leaves the projection intent unchanged")
     ], "NATIVE MATERIAL TERMINAL NEGATIVE", "NATIVE_MATERIAL_TERMINAL_NEGATIVE");
 }

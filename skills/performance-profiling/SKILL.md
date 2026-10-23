@@ -990,6 +990,13 @@ insertion, including deferred reference descendants. `usd_visual_projection_batc
 measures the bounded per-update component and visual projection pass; keep its
 frame cost separate from total time until the last descendant is admitted.
 
+Use `usd_projection_plan`, `usd_projection_facts`, and
+`usd_projection_native_paths` to separate native composition, immutable fact
+extraction, and dependency-path preparation. Preserve native graph errors and
+live-edit resolution. `test_native_material_terminals.py` drives eleven authored
+checks for native terminals, live PBR edits, cyclic-graph rejection and unchanged
+intent after rejected edits.
+
 For Twin-open stalls, profile the active Twin policy loader separately from
 policy activation. Native manifest and Rhai source reads should run through
 bounded `AsyncWorkAdmission`; `twin_policy_source_prepare_offthread` measures

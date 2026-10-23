@@ -445,6 +445,10 @@ When the canonical owner confirms that the exact prepared plan
 is still the current live-stage snapshot, read-only projections reuse its
 composed schema indexes instead of traversing the live stage. The async-prepared
 projection plan indexes prims by composed schema type and applied API schema.
+Native graph errors reject snapshot extraction. PBR `SetObjectProperty` commands
+on a failed projection return its existing diagnostic before reading or adopting
+an appearance intent, preserving that intent state on rejection.
+
 Startup policy extraction visits only `LunCoPolicy` prims, environment settings
 visit only `LunCoEnvironment` prims, and simulation topology extraction visits
 only physics joints, wheel attachments, and vehicle roots. Initial simulation
