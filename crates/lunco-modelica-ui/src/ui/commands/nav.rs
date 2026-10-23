@@ -78,11 +78,13 @@ pub(crate) fn visible_tab_for_doc(
     doc: DocumentId,
 ) -> Option<crate::model_tabs_types::TabId> {
     let layout = world.get_resource::<lunco_workbench_core::WorkbenchSnapshot>();
-    if layout.is_some_and(|layout| layout.is_panel_visible(
-        crate::ui::panels::canvas_diagram::CANVAS_DIAGRAM_PANEL_ID,
-    )) {
-        if let Some(tab) = world.get_resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
-            .and_then(|state| state.singleton_tab_for(doc)) {
+    if layout.is_some_and(|layout| {
+        layout.is_panel_visible(crate::ui::panels::canvas_diagram::CANVAS_DIAGRAM_PANEL_ID)
+    }) {
+        if let Some(tab) = world
+            .get_resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
+            .and_then(|state| state.singleton_tab_for(doc))
+        {
             return Some(tab);
         }
     }
@@ -195,7 +197,7 @@ pub fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
             }
         } else {
             let vp = &mut docstate.canvas.viewport;
-            let c = vp.center;
+            let c = vp.target_center;
             vp.set_target(c, zoom);
         }
     });
@@ -286,7 +288,7 @@ pub fn on_pan_canvas(trigger: On<PanCanvas>, mut commands: Commands) {
             return;
         };
         let docstate = state.get_mut_for_tab(tab_id, doc);
-        let z = docstate.canvas.viewport.zoom;
+        let z = docstate.canvas.viewport.target_zoom;
         docstate
             .canvas
             .viewport
