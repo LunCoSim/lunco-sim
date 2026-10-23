@@ -691,22 +691,22 @@ pub fn handle_application_json_scope_changed(
             .assets
             .iter()
             .map(|asset| {
+                let (persisted_result, text, error) = match &asset.content {
+                    lunco_assets_runtime::JsonAssetContent::PersistedResult => {
+                        (true, HookValue::Unit, HookValue::Unit)
+                    }
+                    lunco_assets_runtime::JsonAssetContent::Source(Ok(text)) => {
+                        (false, HookValue::str(text.clone()), HookValue::Unit)
+                    }
+                    lunco_assets_runtime::JsonAssetContent::Source(Err(error)) => {
+                        (false, HookValue::Unit, HookValue::str(error.clone()))
+                    }
+                };
                 HookValue::map([
                     ("asset_uri", HookValue::str(asset.asset_uri.clone())),
-                    (
-                        "text",
-                        asset
-                            .text
-                            .as_ref()
-                            .map_or(HookValue::Unit, |text| HookValue::str(text.clone())),
-                    ),
-                    (
-                        "error",
-                        asset
-                            .error
-                            .as_ref()
-                            .map_or(HookValue::Unit, |error| HookValue::str(error.clone())),
-                    ),
+                    ("persisted_result", HookValue::Bool(persisted_result)),
+                    ("text", text),
+                    ("error", error),
                 ])
             })
             .collect(),

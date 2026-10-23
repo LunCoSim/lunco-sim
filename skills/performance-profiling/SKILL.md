@@ -119,6 +119,15 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   an earlier tail in a later run does not prove a fix. Record visible popup/UI
   state alongside camera and graphics settings.
 
+For JSON-scope stalls, distinguish authored source catalogs from completed
+experiment histories. The asset/Twin owner publishes
+`JsonAssetContent::PersistedResult` as identity-only metadata, projecting the
+`persisted_result` Rhai fact without copying result bodies. The existing
+application asset policy skips those records before JSON decoding. Confirm the
+`application_json_catalogs` production gate and measure the same admitted source
+cohort. Do not hide malformed authored catalogs, change
+Rhai limits or classify sources by guessed catalog filenames.
+
 For Modelica native-construction costs, distinguish selected application work
 from whole-source preparation. Projection reuse storage is needed only for
 selected source programs and is shared across that application's issued colors.

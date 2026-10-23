@@ -1,5 +1,49 @@
 # High-quality realtime performance handover
 
+## JSON catalog source ownership — 2026-10-23
+
+The asset owner publishes `JsonAssetContent::Source(Result<String, String>)`
+for authored JSON and `PersistedResult` identity metadata for the Twin owner's
+reserved experiment-results namespace. Completed-history bodies are not copied
+into hook inputs. The existing application asset hook projects the typed
+`persisted_result` fact, and its Rhai policy skips those records before decoding
+or considering source errors. The experiment-artifact reader retains body and
+failure ownership. Authored catalogs keep kind/schema validation and canonical
+URI qualification; similarly named source directories remain eligible. This
+reuses the installed application policy and its existing scope lifecycle, with
+no cache, background scheduler, filename-based catalog rule or numerical change.
+
+The production `application_json_catalogs` gate passes all six checks on the
+final regular Tracy build, PID 320503/API 4881, exit zero at tick zero. The
+previous policy fails exactly three of those checks. Its normal scene-test USD
+fixture was created, saved and read back with document commands on owned
+PID 285423/API 4877; no direct USD edit was used. The preceding regular
+uninstrumented build also passes the gate. Evidence is under
+`.cache/codex-evidence/performance-20261023/json-catalog-*`.
+
+The final diagnostic artifact is SHA-256
+`409057ddaf304de80f174c1946d8b1d759d3cd1bf38d28110a427f1fe4e9ea76`,
+built with `cargo build -p lunco-luncosim --features tracy -j 4`. The largest
+`handle_application_json_scope_changed` self-time is 2.883 ms (three calls,
+4.829 ms total). The earlier selected-preflight capture recorded a 189.56 ms
+maximum. The intervening diagnostic that still carried result bodies recorded
+69.14 ms. Its seven persisted-result bodies, totaling 18,694,498 bytes, match
+the final run exactly; other model Rhai/SysML files changed between runs.
+These are different overall source cohorts and contention-affected profiling
+observations, not a clean total-loading or frame-performance A/B comparison.
+
+The final Griffin capture has unchanged admitted source hashes, including JSON,
+clear runtime diagnostics, successful geometry/spring and mass preflights, and
+normal descent admission. Physics admission still takes 27.01 s; this menu fix
+does not close the loading target. Its active sample window is followed by an
+explicit shared-transport pause. The final image was inspected. PID 320917/API
+4882 and collector 320912 have exited. The native 0.14.1 capture verifies the
+owned PID and 1,000,000 ns sampling period, complete framing and compressed
+payload size, plus successful native CPU CSV export. Sources, settings,
+workloads, socket ownership and readbacks are in
+`json-catalog-metadata-profile/`. No full landing or clean FPS acceptance is
+claimed; native physics, rendering and Modelica startup remain separate work.
+
 ## Regular-build checkpoint — 2026-10-23
 
 The uninstrumented production artifact at application commit `2a4ec5db0` is

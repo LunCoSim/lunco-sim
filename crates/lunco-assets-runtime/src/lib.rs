@@ -34,6 +34,6 @@ pub use lunco_assets_core::closure::{
     FileClosureError, FileClosureLimits, transitive_file_closure, transitive_file_closure_with,
 };
 pub use text_asset::{
-    JsonAssetRecord, JsonAssetScopeChanged, JsonAssetScopeLoading, TextAsset, TextAssetCatalog,
-    TextAssetEntry, TextAssetLoader, TextAssetPlugin,
+    JsonAssetContent, JsonAssetRecord, JsonAssetScopeChanged, JsonAssetScopeLoading, TextAsset,
+    TextAssetCatalog, TextAssetEntry, TextAssetLoader, TextAssetPlugin,
 };

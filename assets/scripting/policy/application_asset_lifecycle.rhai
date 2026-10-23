@@ -132,6 +132,7 @@ fn application_asset_lifecycle(event, ctx) {
     let catalogs = [];
     let unreadable_assets = "";
     for asset in ctx.payload {
+        if asset.persisted_result { continue; }
         if asset.error != () {
             if unreadable_assets != "" {
                 unreadable_assets += "; ";

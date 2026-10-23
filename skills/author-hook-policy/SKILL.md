@@ -173,9 +173,12 @@ generic ownership, safe-path, asset-read, and domain-registration mechanics.
 For application UI contributions, reuse the optional
 `application.asset.lifecycle(event, ctx)` hook. The shared asset layer emits
 JSON-scope loading/changed events after asynchronous reads, including the
-canonical `asset_root_uri`; the Rhai policy can parse each record with
-`parse_json(text)` and return a generic `menus` tree. Scene completion is also
-delivered with the canonical loaded `path` and `root_prim`; return selected declared
+canonical `asset_root_uri` and each JSON record's typed `persisted_result` fact.
+Completed-history records carry identity only, with unit `text` and `error`.
+The application menu policy skips those records before parsing;
+keep that selection in Rhai and the storage classification at the asset/Twin
+owner. Eligible authored records use `parse_json(text)` and return a generic
+`menus` tree. Scene completion is also delivered with the canonical loaded `path` and `root_prim`; return selected declared
 dataset ids in `dataset_text_artifacts` when the scene needs their text. The
 Rust host validates the complete action map, while `DatasetArtifactPlugin`
 resolves each registry id to its canonical asset URI and reads through the

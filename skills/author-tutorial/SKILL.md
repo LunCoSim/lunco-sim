@@ -41,7 +41,11 @@ The `track` value determines the submenu containing the lesson. Reuse an
 existing track when the lesson belongs to that learning path. The Rhai policy
 at `assets/scripting/policy/application_asset_lifecycle.rhai` discovers the unique
 marked catalog from generic asset-scope events and uses the shared `parse_json`
-function; do not add tutorial-specific Rust loading or menu code.
+function; do not add tutorial-specific Rust loading or menu code. The reserved
+experiment-results namespace is classified by the asset owner and excluded by
+the menu policy before parsing. Keep catalogs in authored source directories.
+The `application_json_catalogs` production gate covers catalog selection,
+result exclusion, similar directory names and malformed authored entries.
 
 The menu submits the generic `RunScenarioAsset` command. It uses
 `ScenarioReloadPolicy::Restart` for a predictable fresh start and lets the

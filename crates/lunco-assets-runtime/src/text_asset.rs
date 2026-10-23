@@ -58,15 +58,21 @@ pub struct TextAssetEntry {
     pub handle: Handle<TextAsset>,
 }
 
-/// One JSON source in a complete asynchronous asset-scope snapshot.
+/// One source identity in a complete asynchronous JSON asset-scope snapshot.
 #[derive(Clone, Debug)]
 pub struct JsonAssetRecord {
     /// Canonical `lunco://` or `twin://` source address.
     pub asset_uri: String,
-    /// Current text, or `None` with `error` when loading failed.
-    pub text: Option<String>,
-    /// Asset-owner error for an unreadable source.
-    pub error: Option<String>,
+    pub content: JsonAssetContent,
+}
+
+/// Authored source bytes or a completed-history identity owned elsewhere.
+#[derive(Clone, Debug)]
+pub enum JsonAssetContent {
+    /// Current authored text, or the asset owner's read diagnostic.
+    Source(Result<String, String>),
+    /// Body admission belongs to the experiment-artifact reader.
+    PersistedResult,
 }
 
 /// JSON asset enumeration began for an application or Twin scope.
@@ -370,34 +376,24 @@ fn publish_json_scope_if_ready(
     {
         return;
     }
+    let results_root_uri = format!("{asset_root_uri}{}/", lunco_twin::RESULTS_DIR_NAME);
     let records = entries
         .iter()
         .map(|entry| {
             let asset_uri = json_asset_uri(entry);
-            match readiness.terminal.get(&entry.handle.id()) {
-                Some(Ok(())) => match assets.and_then(|assets| assets.get(&entry.handle)) {
-                    Some(asset) => JsonAssetRecord {
-                        asset_uri,
-                        text: Some(asset.text.clone()),
-                        error: None,
-                    },
-                    None => JsonAssetRecord {
-                        asset_uri,
-                        text: None,
-                        error: Some("the asset was marked loaded but has no text".into()),
-                    },
-                },
-                Some(Err(error)) => JsonAssetRecord {
-                    asset_uri,
-                    text: None,
-                    error: Some(error.clone()),
-                },
-                None => JsonAssetRecord {
-                    asset_uri,
-                    text: None,
-                    error: Some("asset readiness changed while building the snapshot".into()),
-                },
-            }
+            let content = if asset_uri.starts_with(&results_root_uri) {
+                JsonAssetContent::PersistedResult
+            } else {
+                JsonAssetContent::Source(match readiness.terminal.get(&entry.handle.id()) {
+                    Some(Ok(())) => assets
+                        .and_then(|assets| assets.get(&entry.handle))
+                        .map(|asset| asset.text.clone())
+                        .ok_or_else(|| "the asset was marked loaded but has no text".into()),
+                    Some(Err(error)) => Err(error.clone()),
+                    None => Err("asset readiness changed while building the snapshot".into()),
+                })
+            };
+            JsonAssetRecord { asset_uri, content }
         })
         .collect();
     commands.trigger(JsonAssetScopeChanged {
