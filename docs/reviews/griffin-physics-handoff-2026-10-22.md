@@ -252,3 +252,15 @@ policy paused its 14 dynamic bodies. Receipt:
 event timestamp `2026-10-22T21:24:42.313807Z`. This is a baseline witness,
 not a regression comparison against the repaired solver or landing acceptance.
 USD continues the detached component and static geometry work separately.
+
+## Regular-build contact follow-up — 23 October 2026
+
+The current native source-resolved survey confirms fixed-transition penetration
+by both middle and toe sections in the installed folded vehicle, before ground
+contact. The detached replacement geometry remains under model authoring. The
+[regular-build checkpoint](open-400fps-performance-handover.md#regular-build-checkpoint--2026-10-23)
+records the exact artifact, owned-session receipts, contact/impulse observations
+and three-Twin timing boundaries. Candidate contact-graph pairs and touching
+penetrations are counted separately. The current active Griffin step still
+misses 1 ms; invalid stow geometry must not be masked by collision exclusions or
+changed solver quality.

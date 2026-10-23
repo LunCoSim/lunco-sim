@@ -1,5 +1,63 @@
 # High-quality realtime performance handover
 
+## Regular-build checkpoint — 2026-10-23
+
+The uninstrumented production artifact at application commit `2a4ec5db0` is
+SHA-256 `635a9b4346ddc9397252a3cf4b5f1a7e90d5adea8057dbd435abaa68e9a3248b`,
+built with `cargo build -p lunco-luncosim -j 4` in the normal target directory.
+The targets remain open. A concurrent foreign USD app used roughly 240% CPU
+and 13–18% GPU before these owned runs; these are contention-affected regular
+measurements, not clean acceptance. Settings, source hashes and admission gates
+are recorded under `.cache/codex-evidence/performance-20261023/regular/`.
+
+| Twin | Physics admission | Native physics p50 / p95 / max | Application frame p50 / p95 |
+| --- | ---: | ---: | ---: |
+| Tesla | 2.56 s | 0.223 / 0.351 / 0.769 ms | 7.87 / 10.76 ms |
+| Summer | 2.62 s | 0.261 / 0.414 / 0.819 ms | 11.89 / 15.00 ms |
+| Griffin | 23.07 s | 2.064 / 2.542 / 3.461 ms | 20.17 / 30.99 ms |
+
+Histories are deduplicated by owner counters after the first admitted observation.
+The physics columns measure native Avian steps, not the whole coupled fixed tick;
+application frames are not GPU execution time. Admission is not complete visual
+streaming. Tesla's course completed, Summer rendered its terrain, and Griffin
+passed geometry/spring and mass preflight and armed descent. Directed final
+screenshots were inspected. This window does not qualify Griffin landing or the
+full Summer mission. Tesla's final HUD still reports its frame/datum unavailable;
+the course verdict does not establish that presentation contract. All three
+owned sessions (PIDs 105878/106348/106672, API 4860/4861/4862) exited and released
+their ports.
+
+Griffin's native contact survey separates broad-phase pairs from touching pairs.
+The graphical window retained 187 contact-graph pairs; that is not 187 active
+penetrations. A separate production headless survey at simulation tick 84,
+paused through the shared transport, found 12 touching section/transition-plate
+pairs per side. Middle sections penetrate the fixed plates by about 0.217 m;
+toe sections penetrate them by about 0.318 m. The plates carry about 565 N s of
+normal impulse per side in that sampled step. There is no ground contact on the
+legs at this coordinate. This is invalid folded assembly geometry, not evidence
+that all 187 candidates need additional solver iterations. Do not broaden
+collision filters to conceal it. Detached replacement ramp work is being authored
+in the model checkout and is not installed in the vehicle measured here.
+The owned survey PID 113871/API 4864 exited; native source-resolved facts are in
+`griffin-contact-survey-headless/contacts.json` beside its runtime log. The preceding
+graphical survey was rejected before physics admission and is not a timing cohort.
+
+A separate large-model comparison using Rumoca's supported interpreter is
+rejected. Although it makes zero native compilation attempts, Griffin's composite
+construction takes 9.11 s and its first observation another 2.80 s; total physics
+admission is 28.02 s. The unchanged source hashes within that run, clear
+diagnostics and successful certification qualify the observation, not an
+optimization. The small feedback fixture passes 46 initialization checks and two
+receipt-retirement checks, and the inconsistent composite is correctly rejected;
+those small-model passes do not establish large-model performance. The experiment
+was removed. Production continues to use automatic native execution. Evidence:
+`interpreted-initialization/`, `interpreted-initialization-gate/` and
+`interpreted-initialization-negative.log` under the same evidence root. The
+comparison artifact is SHA-256
+`b8588bfea73ffb59954e5abed37c35b91a1eb3d9f41f804017b5e98aba731ab2`;
+owned PID 203034/API 4874 exited. Investigate native construction and required
+initial observation work rather than assuming that avoiding JIT is faster.
+
 ## Three-Twin checkpoint — 2026-10-23
 
 The sub-second loading, sub-millisecond physics and sub-10 ms graphics targets
