@@ -935,14 +935,22 @@ pub(super) fn coordinate(world: &mut World) {
     world.resource_mut::<CoupledInitialization>().job = Some(Job { actor, plan });
 }
 
-/// Startup preparation is dormant after all USD Modelica participants settle.
+/// Admit initial capture, ready worker outcomes and pending certification.
 pub(super) fn needed(
     pending: Query<(), With<PendingModelicaSource>>,
     models: Query<&ModelicaModel, (With<UsdSourcedCosim>, With<GeneratedModelicaSource>)>,
     owner: Option<Res<CoupledInitialization>>,
+    actors: Query<&ModelicaModel>,
 ) -> bool {
+    if let Some(job) = owner.as_ref().and_then(|owner| owner.job.as_ref()) {
+        // The coordinator consumes physical observations only after the worker
+        // publishes an outcome; its acceptance boundary revalidates the plan.
+        return actors.get(job.actor).map_or(true, |model| {
+            model.is_compiled || model.last_error.is_some()
+        });
+    }
     !pending.is_empty()
-        || owner.is_some_and(|owner| owner.job.is_some() || owner.certificate.is_some())
+        || owner.is_some_and(|owner| owner.certificate.is_some())
         || models
             .iter()
             .any(|model| !model.is_compiled && model.last_error.is_none())

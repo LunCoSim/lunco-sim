@@ -1,5 +1,32 @@
 # High-quality realtime performance handover
 
+## Coupled initialization worker wait — 2026-10-23
+
+The coupled-initialization run condition reads its transient actor's native
+compiled/error state before entering the exclusive coordinator. With no worker
+outcome, the coordinator has no observation to consume and skips initial
+physical sampling. Acceptance still captures current providers and compares the
+complete source, parameter and wire plan; certification and shared holds remain
+at the existing owner. No solver, timestep or substep setting changes.
+
+The regular Tracy build passes the production initialization-network gate
+(44 checks, API 4884) and inconsistent-initial-equation gate (expected terminal
+`modelica-initialization-failed`, API 4885), both exit zero. The Griffin diagnostic
+uses PID 344397/API 4886, collector 344392/8186 and capture
+`scripts/perf/captures/default-griffin-initialization-wait-gate-profile-20261023.tracy`.
+Native framing, owned PID, 1,000,000 ns sampling period and CPU CSV export pass.
+The coordinator executes 232 times (655.31 ms aggregate self time), and
+`InitializationSampling` executes 866 times. The preceding capture recorded
+917 and 1525 calls respectively. Six model source files differ between these
+captures, so those counts do not establish an identical-input speedup.
+
+This run's sources remain unchanged, runtime diagnostics are clear, and its
+final image was inspected. Physics admission takes 22.90 s, still above target;
+the run does not qualify full landing or clean FPS. The active observation window
+ends with a shared-transport pause, and both owned processes exit. Receipts,
+source hashes, workload provenance and native exports are under
+`.cache/codex-evidence/performance-20261023/initialization-wait-gate-profile/`.
+
 ## JSON catalog source ownership — 2026-10-23
 
 The asset owner publishes `JsonAssetContent::Source(Result<String, String>)`

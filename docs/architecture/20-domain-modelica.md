@@ -1398,7 +1398,10 @@ the required `synth.coupled-initialization` hook to emit a transient Modelica
 composite containing those instances, their input bindings and input probes.
 The existing Modelica worker compiles and solves the composite while paused;
 preparation neither advances simulation time nor blocks the live World on parsing
-or solver construction.
+or solver construction. While the transient worker has no outcome, the
+coordinator's native readiness gate skips its World boundary and initial
+physical sampling. A compiled result or worker error wakes the same coordinator;
+acceptance still samples the current providers and compares the complete plan.
 
 Compile admission retains pending requests in source-document/entity/class order.
 `lunco-modelica-worker` runs `InitializationSampling` once for that ordered batch,

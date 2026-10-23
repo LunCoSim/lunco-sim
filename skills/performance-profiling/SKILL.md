@@ -1557,6 +1557,9 @@ unavailable. Compare `system_commands` for `dispatch_modelica_compile_requests`
 and `InitializationSampling` counts when diagnosing startup frame costs; retain
 the production `modelica_initialization_network` and inconsistent-initial-equation
 negative verdicts when changing this boundary.
+The coupled coordinator waits on its transient actor's compiled/error state;
+worker-wait frames do not sample providers. Result acceptance samples current
+providers and revalidates the full plan before admitting participants.
 Check that participant surfaces publish before connection rebuilding and that
 the wiring transaction commits before initialization. Compare admitted inputs
 with authored connections when a missing-input failure varies between runs.

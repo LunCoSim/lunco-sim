@@ -127,6 +127,9 @@ valid-source, missing-target, replacement, recovery and retirement cases.
 Its `CosimStatus.modelica_construction_profile` assertions also cover installed
 construction timings, compact readback and retirement of rejected profiles.
 
+While a coupled initializer is building, its coordinator waits on the native
+worker model's compiled/error state. It samples current physical providers again
+at result acceptance, preserving source, wiring and input fencing.
 For cyclic initial admission, run `modelica_initialization_network.usda` and
 the inconsistent `modelica_initialization_failure.usda` production gates.
 Inspect the scene-scoped `CosimStatus.last_coupled_initialization` receipt for
