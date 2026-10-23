@@ -1,5 +1,41 @@
 # High-quality realtime performance handover
 
+## Griffin initialization cost boundary — 2026-10-23
+
+Native coupled initialization remains the active application contract. On
+matching recorded Griffin sources, its session construction takes **4,771.24 ms**
+and its first complete observation **1.81 ms**. Cranelift reports 16,482 attempts,
+16,414 hits and 68 fresh compilations. Cache hits alone therefore do not certify
+cheap construction.
+
+A reference-interpreter measurement takes **8,495.50 ms** for construction and
+**2,471.34 ms** for the first complete observation, with zero native attempts.
+The complete physics-admission observations are 23.43 s native and 25.65 s
+interpreted. The interpreted application experiment, API and fixtures are removed;
+no alternate evaluator selection is retained. The restored regular Tracy build
+passes and has SHA-256
+`d21944358435f8ccf6b92bfe2ec5d587faaee35b2112b8c57126528e7a539438`.
+
+Evidence is under `.cache/codex-evidence/performance-20261023/`:
+`initialization-execution-policy-comparison.json`,
+`griffin-initialization-policy-baseline-valid/`,
+`griffin-interpreted-initialization-profile/`, and
+`native-initialization-restored-build.log`. Both native captures pass framing,
+compressed-payload, owned PID, 1,000,000 ns sampling and native CSV-export checks.
+Their runtime diagnostics and script errors are clear and final screenshots were
+inspected. APIs 4945/4949, both apps, collectors and exporters are closed. The
+foreign Tesla session (PID 950669/API 4387) stayed active; these are contended
+attribution windows, not clean performance or completed-mission acceptance.
+
+The published causal wiring connects the six stalled Griffin participants into
+one mutually reachable group. Its recorded sources match this cohort across all
+192 common authored identities. `griffin-initialization-causal-wiring.json`
+retains the edges. This participant-level graph precedes initial-port expression
+and hold resolution; it does not establish variable-level direct feedthrough.
+Do not split the composite without that proof. Inspect native construction and
+its complete observation cost, alongside the remaining USD extraction groups.
+All three strict loading, physics and graphics targets remain open.
+
 ## Native collection expansion reuse — 2026-10-23
 
 One immutable USD projection snapshot now reuses successful collection

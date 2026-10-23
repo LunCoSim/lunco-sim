@@ -135,7 +135,11 @@ from whole-source preparation. Projection reuse storage is needed only for
 selected source programs and is shared across that application's issued colors.
 Preserve checked identity, input validation and evaluation order. Compare the
 same prepared component's complete f64 states alongside construction timing;
-exclude overlapping builds/apps and record local dependency patches separately
+include its first complete observation. Zero native compilations do not prove
+faster admission: reference evaluation can dominate a large coupled initializer
+even when it avoids JIT work. Keep an evaluator change only when the actual
+scene improves with its numerical contract intact.
+Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.
 
