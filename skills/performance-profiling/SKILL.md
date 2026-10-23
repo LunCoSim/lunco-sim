@@ -1059,12 +1059,19 @@ only those declarations participate in ambiguity checks. Schema-qualified reads
 remain exact, without allocating lookup keys. Verify both ambiguity rejection
 and native unit/inspector hints before comparing complete snapshot time.
 For collection costs, inspect `usd_projection_collection_expansion` and the
-`prepared native collection memberships` counts. Immutable preparation reuses
-successful expansions only when OpenUSD's membership queries compare equal;
+`prepared native memberships and surface terminals` counts. Immutable preparation
+reuses successful expansions only when OpenUSD's membership queries compare equal;
 evaluator queries remain distinct. Compare inclusive collection/snapshot spans
 on matching Twin sources, and qualify native membership errors through the
 `usd_collection_lint` production gate. The focused stage-read test covers
 exclusions, property expansion, expressions and fresh membership after edits.
+For material costs, compare combined binding/identity and complete snapshot
+durations: surface extraction is inside `usd_projection_material_bindings`.
+`usd_projection_surface_terminal` runs once per distinct bound render material
+within that snapshot. The same debug receipt records terminal requests and
+resolutions. Preserve native binding and terminal errors, shared and empty
+terminals, and fresh resolution after source changes. Live reads remain current;
+the map does not survive a snapshot or own native stage handles.
 `usd_twin_source_decode` and `usd_twin_stage_input` measure the two worker jobs
 before scene mounting. Time-sample extraction resolves each native table once;
 value capture and sampled asset-source capture reuse that existing table.

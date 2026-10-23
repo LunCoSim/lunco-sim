@@ -806,8 +806,9 @@ loading, canonical stage ownership, authored-layer readers, instance identity,
 projection plans, standard material/purpose/variant readers, transform and unit
 decoding, authoring helpers, and the stage integration tests. Projection plans
 capture the native stage's composed namespace, bindings and root opinions
-directly. Runtime referenced entities read the canonical scene stage. It
-deliberately contains no runtime projection systems.
+directly. Within one immutable snapshot they reuse native surface-terminal
+results by resolved material path. Runtime referenced entities read the canonical
+scene stage. It deliberately contains no runtime projection systems.
 `admitted_recipe` captures its owned resolver closure with native root/session
 identities. `recipe_snapshot` adds separate changed-layer `Sdf Data` snapshots;
 the worker encodes those layers through the authoring owner's native codec

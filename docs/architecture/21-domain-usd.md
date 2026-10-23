@@ -348,6 +348,15 @@ asset boundary. Native evaluator queries remain distinct, and later snapshots
 build fresh queries and memberships. Live reads continue to evaluate the current
 stage. Collection failures retain their owning diagnostic.
 
+Surface-terminal extraction uses each prim's resolved render binding. During
+one immutable snapshot, prims bound to the same material share the result of
+native `UsdShade` universal-surface resolution, including a valid absent terminal.
+The material-path map is local to that worker call; subsequent snapshots and
+live reads resolve their current stage. Invalid targets and shader graphs reject
+the snapshot. This is composed-fact reuse at the stage owner, without a new
+material resolver or policy hook. The focused surface-terminal test covers
+shared bindings, empty terminals, replacement stages and cyclic graphs.
+
 The public composed-stage reader, StageView, and prepared-reader contracts live
 in `crates/lunco-usd-bevy-stage/tests/stage_reads.rs`. They use in-memory
 `StageRecipe` closures, so fixture edits do not touch the asset filesystem and

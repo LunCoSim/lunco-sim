@@ -58,9 +58,17 @@ pub(crate) fn resolve_surface_shader(
     let Some(path) = resolve_bound_material(reader, prim, MaterialPurpose::Render)? else {
         return Ok(None);
     };
+    resolve_material_surface_shader(reader, &path)
+}
+
+/// Resolve a material's universal surface terminal after its binding is known.
+pub(crate) fn resolve_material_surface_shader(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+) -> Result<Option<SdfPath>, String> {
     let material = openusd_schemas::shade::Material::get(reader.stage(), path.clone())
         .map_err(|error| format!("{path}: {error}"))?
-        .ok_or_else(|| format!("{prim}: bound target {path} is not a Material"))?;
+        .ok_or_else(|| format!("{path}: surface terminal target is not a Material"))?;
     let terminal = material
         .compute_surface_source(&[])
         .map_err(|error| format!("{path}: {error}"))?;

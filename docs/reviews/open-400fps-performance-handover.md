@@ -1,5 +1,26 @@
 # High-quality realtime performance handover
 
+## Native surface-terminal reuse during projection
+
+The stage owner reuses each prim's resolved render binding and resolves its
+native universal surface terminal once per material within one immutable
+snapshot. Both present and valid absent terminals are shared; errors still
+reject admission. Live reads and subsequent snapshots resolve their current
+stage. The existing focused terminal test covers shared bindings, empty
+terminals, changed sources and cyclic graphs. The regular Tracy production
+build passes, and owned Griffin, Tesla and Summer loading observations retain
+clear diagnostics with inspected final images. Raw evidence stays ignored in
+the `*-material-terminal-profile/` directories under
+`.cache/codex-evidence/performance-20261023/`. Their captures pass framing,
+owned-PID, sampling-period and terminal native CSV export checks. All owned
+sessions and collectors are closed.
+
+These short loading observations do not qualify complete missions, settled
+terrain or any strict performance target. Griffin's source revision and prim
+count differ from its earlier baseline, and concurrent foreign workloads affect
+the runs. Continue with Modelica construction, USD extraction and whole coupled
+tick attribution; do not infer a whole-loading gain from fewer terminal queries.
+
 ## Native validation joins shared preparation admission — 2026-10-23
 
 `lunco-core-runtime::AsyncWorkAdmission::submit_transport` admits a native

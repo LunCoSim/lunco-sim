@@ -201,6 +201,9 @@ impl UsdStageProjectionPlan {
         let mut collection_requests = 0;
         let mut collection_reuses = 0;
         let mut collection_expansion_count = 0;
+        // The stage and universal render context are fixed for this snapshot.
+        let mut material_surface_shaders = HashMap::<String, Option<SdfPath>>::new();
+        let mut surface_terminal_requests = 0;
         for path in paths {
             let path_string = path.to_string();
             let active = reader
@@ -317,6 +320,25 @@ impl UsdStageProjectionPlan {
                     bound_materials.insert(purpose, material);
                 }
             }
+            let bound_shader = if let Some(material) = bound_materials.get(&MaterialPurpose::Render)
+            {
+                surface_terminal_requests += 1;
+                if let Some(shader) = material_surface_shaders.get(material) {
+                    shader.clone()
+                } else {
+                    let _span = bevy::log::debug_span!("usd_projection_surface_terminal").entered();
+                    let material_path = SdfPath::new(material)?;
+                    let shader = crate::material_binding::resolve_material_surface_shader(
+                        &reader,
+                        &material_path,
+                    )
+                    .map_err(|error| anyhow!(error))?;
+                    material_surface_shaders.insert(material.clone(), shader.clone());
+                    shader
+                }
+            } else {
+                None
+            };
             drop(bindings_span);
             let collection_names: std::collections::BTreeSet<String> = api_schemas
                 .iter()
@@ -407,7 +429,7 @@ impl UsdStageProjectionPlan {
                     .effective_visibility(&path)
                     .map_err(|error| anyhow!(error))?,
                 bound_materials,
-                bound_shader: reader.bound_shader(&path).map_err(|error| anyhow!(error))?,
+                bound_shader,
             };
             drop(identity_span);
             let index = data.prims.len();
@@ -461,7 +483,9 @@ impl UsdStageProjectionPlan {
             collection_requests,
             collection_reuses,
             collection_expansion_count,
-            "prepared native collection memberships"
+            surface_terminal_requests,
+            surface_terminal_resolutions = material_surface_shaders.len(),
+            "prepared native memberships and surface terminals"
         );
         for diagnostic in stage.composition_errors() {
             bevy::log::warn!(target: "usd-bevy", %diagnostic, "USD composition diagnostic");
@@ -1043,7 +1067,17 @@ def Scope "Collection" (prepend apiSchemas = ["CollectionAPI:parts"]) {}
 def Cube "Shape" (prepend apiSchemas = ["MaterialBindingAPI"]) {
     rel material:binding = </Mat>
 }
+def Cube "OtherShape" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+    rel material:binding = </Mat>
+}
+def Cube "EmptyShape" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+    rel material:binding = </EmptyMat>
+}
+def Cube "OtherEmptyShape" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+    rel material:binding = </EmptyMat>
+}
 def Cube "Unbound" {}
+def Material "EmptyMat" {}
 def Material "Mat" {
     token outputs:surface.connect = </Mat/Graph.outputs:surface>
     def NodeGraph "Graph" {
@@ -1063,24 +1097,38 @@ def Material "Mat" {
         let live = StageView::new(&stage);
         let plan = UsdStageProjectionPlan::from_stage(&stage).unwrap();
         for reader in [&live as &dyn crate::UsdReadObject, &plan] {
-            assert_eq!(
-                reader
-                    .bound_shader(&SdfPath::new("/Shape").unwrap())
-                    .unwrap(),
-                Some(SdfPath::new("/Mat/Preview").unwrap())
-            );
-            assert!(
-                reader
-                    .bound_shader(&SdfPath::new("/Unbound").unwrap())
-                    .unwrap()
-                    .is_none()
-            );
+            for path in ["/Shape", "/OtherShape"] {
+                assert_eq!(
+                    reader.bound_shader(&SdfPath::new(path).unwrap()).unwrap(),
+                    Some(SdfPath::new("/Mat/Preview").unwrap())
+                );
+            }
+            for path in ["/Unbound", "/EmptyShape", "/OtherEmptyShape"] {
+                assert!(
+                    reader
+                        .bound_shader(&SdfPath::new(path).unwrap())
+                        .unwrap()
+                        .is_none()
+                );
+            }
             assert!(
                 reader
                     .bound_shader(&SdfPath::new("/Missing").unwrap())
                     .is_err()
             );
         }
+        let updated = source.replace("Preview", "Updated");
+        let (updated_stage, _) = crate::compose::build_stage_with_resolver(
+            &StageRecipe::from_source("scene.usda", &updated),
+        )
+        .unwrap();
+        let updated_plan = UsdStageProjectionPlan::from_stage(&updated_stage).unwrap();
+        assert_eq!(
+            updated_plan
+                .bound_shader(&SdfPath::new("/OtherShape").unwrap())
+                .unwrap(),
+            Some(SdfPath::new("/Mat/Updated").unwrap())
+        );
         let cycle = source.replace("</Mat/Preview.outputs:surface>", "</Mat.outputs:surface>");
         let (stage, _) = crate::compose::build_stage_with_resolver(&StageRecipe::from_source(
             "scene.usda",
