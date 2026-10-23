@@ -33,6 +33,29 @@ Evidence retained locally:
 - `/home/rod/.cache/roadster-pathtracer-v17/shot_01/take.mp4` is 2560×1568,
   three images at 60 fps. Its raw frames were reviewed for the card artifact.
 
+## Reload ownership and regression coverage
+
+Scene-derived status already has one lifecycle owner: `StatusBus` is a registered
+`SceneResource`. Scene teardown clears active progress, history, reverse IDs,
+mirror handles and terminal outcomes. Active `TwinClosed` uses the same retirement
+operation. Busy IDs remain monotonic, so late drops from an outgoing scene cannot
+remove a replacement scene's progress. The existing
+`status_retires_at_twin_close_and_scene_teardown` test covers those boundaries.
+The workbench renders one current progress notice from that bus; it does not
+retain a collection of loading cards.
+
+Framebuffer synchronization must also wake for an explicit viewport binding
+change, even if neither camera component changed. The regression test
+`egui_framebuffer_follows_binding_replacement_and_backend_changes` covers an
+existing-camera switch, storage-binding changes, HDR removal and the no-camera
+interval before a reload's replacement camera is admitted. These checks protect
+the shared composition invariant rather than clearing or suppressing indicators.
+
+Both focused regression tests passed on 2026-10-23. A native `RestartScene` of
+the ray-traced test view also completed with no retained cards; its image is
+`.cache/roadster-reload-1.png`. The longer renderer round trip was interrupted
+by the test process ending and is not counted as a passed lifecycle run.
+
 The ray-tracing backend itself remains under separate qualification, including
 custom surfaces, scene fidelity and film lighting. This UI acceptance does not
 qualify Roadster footage or a finished film.

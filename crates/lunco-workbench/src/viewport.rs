@@ -213,6 +213,7 @@ pub(crate) fn sync_egui_host_framebuffer(
             Or<(
                 Changed<Msaa>,
                 Changed<Camera>,
+                Changed<RenderTarget>,
                 Changed<Hdr>,
                 Changed<CameraMainTextureUsages>,
                 Added<SceneCamera>,
@@ -243,7 +244,10 @@ pub(crate) fn sync_egui_host_framebuffer(
 ) {
     let had_removal =
         removed.read().count() + removed_hdr.read().count() + removed_usages.read().count() > 0;
-    if dirty.is_empty() && host_added.is_empty() && !had_removal {
+    let binding_changed = viewport
+        .as_ref()
+        .is_some_and(|viewport| viewport.is_changed());
+    if dirty.is_empty() && host_added.is_empty() && !had_removal && !binding_changed {
         return;
     }
 
@@ -896,6 +900,95 @@ mod tests {
                 clear_color: ClearColorConfig::Default,
             }
         ));
+    }
+
+    #[test]
+    fn egui_framebuffer_follows_binding_replacement_and_backend_changes() {
+        use bevy::render::render_resource::TextureUsages;
+
+        let mut app = App::new();
+        app.init_resource::<SceneViewport>()
+            .add_systems(PostUpdate, sync_egui_host_framebuffer);
+        let raster_usages = CameraMainTextureUsages::default();
+        let ray_usages = raster_usages.with(TextureUsages::STORAGE_BINDING);
+        let host = app
+            .world_mut()
+            .spawn((Camera2d, WorkbenchEguiHost, Msaa::Sample4))
+            .id();
+        let raster = app
+            .world_mut()
+            .spawn((Camera3d::default(), SceneCamera::default(), Msaa::Sample2))
+            .id();
+        let ray = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                SceneCamera::default(),
+                Msaa::Off,
+                Hdr,
+                ray_usages,
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(ray);
+        app.update();
+        assert_eq!(
+            app.world().get::<CameraMainTextureUsages>(host).unwrap().0,
+            ray_usages.0
+        );
+        assert_eq!(*app.world().get::<Msaa>(host).unwrap(), Msaa::Off);
+        assert!(app.world().get::<Hdr>(host).is_some());
+
+        // Neither camera changes: selection of an existing camera must wake
+        // synchronization itself, including when simulation is paused.
+        app.update();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(raster);
+        app.update();
+        assert_eq!(
+            app.world().get::<CameraMainTextureUsages>(host).unwrap().0,
+            raster_usages.0
+        );
+        assert_eq!(*app.world().get::<Msaa>(host).unwrap(), Msaa::Sample2);
+        assert!(app.world().get::<Hdr>(host).is_none());
+
+        // A same-camera backend change and HDR removal must also replace the
+        // shared key, rather than leave a persistent load-preserving UI texture.
+        app.world_mut()
+            .entity_mut(raster)
+            .insert((ray_usages, Hdr, Msaa::Off));
+        app.update();
+        assert_eq!(
+            app.world().get::<CameraMainTextureUsages>(host).unwrap().0,
+            ray_usages.0
+        );
+        assert!(app.world().get::<Hdr>(host).is_some());
+        app.world_mut().entity_mut(raster).remove::<Hdr>();
+        app.update();
+        assert!(app.world().get::<Hdr>(host).is_none());
+
+        // Scene reload retires the previous camera before its replacement exists.
+        app.world_mut().despawn(raster);
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = None;
+        app.update();
+        let replacement = app
+            .world_mut()
+            .spawn((Camera3d::default(), SceneCamera::default(), Msaa::Sample4))
+            .id();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(replacement);
+        app.update();
+        assert_eq!(
+            app.world().get::<CameraMainTextureUsages>(host).unwrap().0,
+            raster_usages.0
+        );
+        assert_eq!(*app.world().get::<Msaa>(host).unwrap(), Msaa::Sample4);
+        assert!(app.world().get::<Hdr>(host).is_none());
     }
 
     #[test]

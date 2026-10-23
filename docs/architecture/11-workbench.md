@@ -259,6 +259,8 @@ load-preserving UI texture would accumulate panels removed by a perspective
 switch and is not a valid composition. Synchronization runs after backend camera
 binding and viewport reconciliation, before extraction. A ray-traced scene's
 storage-binding usage must reach the UI camera in that same render frame.
+An explicit viewport binding change also wakes synchronization, even if both
+cameras already exist and neither camera's components changed.
 
 When no window `Camera3d` is active at all (a central-content perspective, the
 Modelica workbench, or the short handoff while a selected camera is being
