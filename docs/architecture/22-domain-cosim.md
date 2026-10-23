@@ -60,7 +60,8 @@ bounds, update at contract mutation, and exclude changing scalar samples.
 `UnitReference` shares its immutable identity and complete definition across
 metadata clones. Equality and serialized values retain the full unit contract;
 owner replacement creates a distinct reference. Fixed engine endpoint units
-come from `lunco-port-core::EngineUnit`; authored participants retain their own
+come from `lunco-port-core::EngineUnit`, including scene-property metre,
+lumen and dimensionless contracts; authored participants retain their own
 resolved unit definitions. Owner precedence, group
 membership, direction, bounds, frame and topology are still checked live.
 FMI unit lowering retains the separate radian exponent and relative-quantity

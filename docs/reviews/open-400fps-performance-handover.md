@@ -38,6 +38,31 @@ after. Logs are ignored `shared-unit-equality-{baseline,qualified}.log` under
 `.cache/codex-evidence/performance-20261023/`. This isolates one contract cost;
 it does not qualify a whole-tick improvement or any original performance target.
 
+## Scene-property metadata uses the shared engine units
+
+The scene-property port backend uses `EngineUnit` for its fixed metre,
+dimensionless and lumen definitions. It derives current bounds and frames as
+before, without rebuilding unit strings and allocations for every metadata
+read. The three duplicate unit constructors are removed. All nine owner tests
+pass. Its ignored contract-construction benchmark measures 1,441,792 calls at
+182,788,120 ns before and 71,478,902 ns after; logs remain ignored under
+`.cache/codex-evidence/performance-20261023/scene-unit-metadata-*.log`.
+These are isolated diagnostic timings, not a measured whole-tick improvement.
+
+The mounted Griffin stage inspection in `griffin-live-composed-wiring-qualified/`
+finds 1,197 authored plume/light input connections across 57 visual entities,
+with unchanged source hashes and clear runtime diagnostics. This is an authored
+graph count, not a measured compiled-wire count. A separate diagnostic capture
+in `griffin-write-stage-baseline/` exposes the existing transaction spans:
+preflight averages 1,926.855 us and commit 88.346 us across 482 transactions,
+including startup writes; the exchange write parent averages 2,828.390 us across
+337 exchanges. Different cohorts and event populations must not be subtracted
+as an A/B comparison. The capture has verified framing, owned PID, native CSV
+export, inspected final image and terminal shutdown. Its production binary
+predates the two unit optimizations, and terrain preparation is still visible;
+it does not qualify their whole-tick gain, a completed mission or any original
+performance target. All sessions and collectors are closed; raw data is ignored.
+
 ## Native validation joins shared preparation admission — 2026-10-23
 
 `lunco-core-runtime::AsyncWorkAdmission::submit_transport` admits a native

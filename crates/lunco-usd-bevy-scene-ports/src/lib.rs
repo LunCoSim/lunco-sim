@@ -1,67 +1,25 @@
-//! Scene properties as connection targets — a light's output and a prim's
-//! transform, driven from USD `.connect` wires.
+//! Scene properties as scalar connection targets.
 //!
-//! These are the render-side properties the simulation legitimately drives. A
-//! plume light brightens because the engine is throttled up; a control surface
-//! deflects because an actuator moved. Both are CONSEQUENCES of something the
-//! solver computed, and both used to be written by a script that sampled a port
-//! every tick and pushed the result into a component. This backend makes them
-//! ordinary port sinks instead, so the value travels the same graph a thruster
-//! force does:
+//! USD `inputs:light_*`, `inputs:translation_*` and `inputs:scale_*`
+//! connections project model results into native light and transform components
+//! through the shared port registry. The backend declares inputs only; readable
+//! input samples use the registry's explicit input-side access contract.
 //!
-//! ```usda
-//! def SphereLight "PlumeLight"
-//! {
-//!     float inputs:light_intensity.connect = </…/Photometry.outputs:intensity>
-//!     float inputs:light_radius.connect    = </…/Photometry.outputs:radius>
-//! }
-//! ```
+//! Native component membership determines which ports exist. Cached slots and
+//! live metadata share that owner, and the registry validates the complete input
+//! transaction before any commit. Fixed units come from `EngineUnit`; bounds
+//! and coordinate frames are derived from the current native components.
+//! Commits validate the explicit f64-to-f32 scene boundary and preserve Bevy
+//! change detection when the written value is bit-identical.
 //!
-//! **This module adds no resolver and no per-frame system**, exactly like
-//! `lunco-usd-sim-shader`'s `ports`: `rewire_usd_connections` already turns
-//! any `inputs:foo.connect` into a `SimConnection` with no check on what kind of
-//! thing the target is, and `propagate_connections` already routes every write
-//! through [`PortRegistry::write_port`]. Making a scene property drivable is one
-//! registered [`PortBackend`].
-//!
-//! ## Is a driven `Transform` just animation again?
-//!
-//! No, and the distinction is worth stating because it is the whole reason the
-//! transform ports exist. A transform COMPUTED per tick in a script is animation:
-//! the script owns the motion, the numbers live in an interpreted file, and
-//! nothing else in the scene can see where they came from. A transform WIRED to a
-//! port is a consequence: some model or joint published the number, the wire is
-//! visible in the stage, and the value is the same one every other consumer reads.
-//! The rule from `AGENTS.md` is unchanged — publish the physical RESULT, wire it,
-//! and never re-derive it on the render side.
-//!
-//! A caveat the author has to keep: a wire onto `translation_*` / `scale_*`
-//! competes with anything else that owns the prim's transform (the USD projector,
-//! a rigid body, a joint). Drive a transform only on a prim nothing else moves.
-//!
-//! ## Scalars only, and one direction only
-//!
-//! A connection carries a single `f64`, so vectors and colours are exposed
-//! per-component (`translation_x`, `light_color_r`). Names are snake_case, as
-//! everywhere else in the port graph.
-//!
-//! Every port here is an **In**: [`read_output`](PortBackend::read_output) returns
-//! `None`, so a scene property can never be a connection SOURCE. That is what
-//! stops a render value feeding back into the simulation — the same discipline
-//! that keeps a shader uniform from closing a loop.
-//!
-//! ## Claiming only what the entity has
-//!
-//! Registration order IS resolution precedence and plugin add-order is not a
-//! contract, so a backend that accepts a name it does not own silently swallows
-//! another layer's write and returns `true`, leaving propagation nothing to
-//! report. Every op here is gated on the COMPONENT that would receive the value:
-//! is accepted provisionally.
+//! Drive transform ports only on prims without another transform owner, such as
+//! a rigid body or joint. A connected transform remains an authored consequence
+//! of the source model, rather than a second motion controller.
 
 use bevy::light::{PointLight, SpotLight};
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
-use lunco_engineering_values::{Dimension, Unit, UnitReference, UnitScaleExactness};
+use lunco_port_core::EngineUnit;
 use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRegistry};
 
 /// The light ports, in declaration order.
@@ -314,33 +272,6 @@ fn transform_translation_frame(
     lunco_engineering_values::CoordinateFrameId::new(frame).ok()
 }
 
-fn meters() -> UnitReference {
-    UnitReference::resolved(
-        Unit::new_with_exactness("m", Dimension::LENGTH, 1.0, 0.0, UnitScaleExactness::Exact)
-            .expect("meter unit definition is valid"),
-    )
-}
-
-fn lumens() -> UnitReference {
-    UnitReference::resolved(
-        Unit::new_with_exactness(
-            "lm",
-            Dimension([0, 0, 0, 0, 0, 0, 1]),
-            1.0,
-            0.0,
-            UnitScaleExactness::Exact,
-        )
-        .expect("lumen unit definition is valid"),
-    )
-}
-
-fn dimensionless() -> UnitReference {
-    UnitReference::resolved(
-        Unit::new_with_exactness("1", Dimension::NONE, 1.0, 0.0, UnitScaleExactness::Exact)
-            .expect("dimensionless unit definition is valid"),
-    )
-}
-
 fn scene_property_metadata(
     world: &World,
     entity: Entity,
@@ -351,21 +282,36 @@ fn scene_property_metadata(
     let slot = ScenePropertySlot::from_name(name)
         .expect("scene property metadata is requested only for a declared slot");
     let (unit, min, max, frame) = match slot {
-        ScenePropertySlot::LightIntensity => (Some(lumens()), Some(0.0), Some(float_max), None),
-        ScenePropertySlot::LightRadius => (Some(meters()), Some(0.0), Some(float_max), None),
+        ScenePropertySlot::LightIntensity => (
+            Some(EngineUnit::Lumen.reference()),
+            Some(0.0),
+            Some(float_max),
+            None,
+        ),
+        ScenePropertySlot::LightRadius => (
+            Some(EngineUnit::Meter.reference()),
+            Some(0.0),
+            Some(float_max),
+            None,
+        ),
         ScenePropertySlot::LightColorR
         | ScenePropertySlot::LightColorG
-        | ScenePropertySlot::LightColorB => (Some(dimensionless()), None, Some(float_max), None),
+        | ScenePropertySlot::LightColorB => (
+            Some(EngineUnit::Dimensionless.reference()),
+            None,
+            Some(float_max),
+            None,
+        ),
         ScenePropertySlot::TranslationX
         | ScenePropertySlot::TranslationY
         | ScenePropertySlot::TranslationZ => (
-            Some(meters()),
+            Some(EngineUnit::Meter.reference()),
             Some(-float_max),
             Some(float_max),
             transform_translation_frame(world, entity),
         ),
         ScenePropertySlot::ScaleX | ScenePropertySlot::ScaleY | ScenePropertySlot::ScaleZ => (
-            Some(dimensionless()),
+            Some(EngineUnit::Dimensionless.reference()),
             Some(-float_max),
             Some(float_max),
             None,
@@ -383,16 +329,7 @@ fn scene_property_metadata(
     )
 }
 
-/// True when the value already at `name` is bit-identical to `v`.
-///
-/// Compared by BITS, not by `==`: a NaN — which `src * factor + offset` in
-/// propagation produces the moment a Modelica source diverges — is never equal to
-/// itself, so a value comparison would mark the component changed every tick
-/// forever. This guard is what keeps a static scene free: mutably dereferencing a
-/// `Transform` or a `PointLight` sets `Changed`, and Bevy's transform propagation
-/// and light clustering both do real work per change.
-/// Scene properties are **inputs**: something the simulation writes into, never a
-/// source another prim reads. See the module docs for why that is not negotiable.
+/// Input-only scene-property owner with component-gated slots and live contracts.
 pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
     list_entities: |world, out| {
         out.extend(
@@ -524,6 +461,37 @@ fn mark_spot_light_surface_ready(trigger: On<Add<SpotLight>>, mut commands: Comm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Measure contract construction without renderer or scene scheduling work.
+    #[test]
+    #[ignore = "manual scene-property metadata performance measurement"]
+    fn scene_property_metadata_benchmark() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                GlobalEntityId::from_raw(1),
+                Transform::default(),
+                PointLight::default(),
+            ))
+            .id();
+        let iterations = 131_072;
+        let started = std::time::Instant::now();
+        for _ in 0..iterations {
+            for name in LIGHT_PORTS.iter().chain(TRANSFORM_PORTS.iter()) {
+                std::hint::black_box(scene_property_metadata(
+                    std::hint::black_box(&world),
+                    entity,
+                    std::hint::black_box(name),
+                    PortDirection::In,
+                ));
+            }
+        }
+        println!(
+            "SCENE_PROPERTY_METADATA_BENCH elapsed_ns={} calls={}",
+            started.elapsed().as_nanos(),
+            iterations * (LIGHT_PORTS.len() + TRANSFORM_PORTS.len())
+        );
+    }
 
     fn app() -> App {
         let mut app = App::new();
