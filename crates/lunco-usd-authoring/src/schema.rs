@@ -221,7 +221,9 @@ pub struct PropertyMetadata {
 /// Immutable inspector metadata derived from composed native prim definitions.
 #[derive(Debug)]
 pub struct SchemaMetadata {
-    properties: HashMap<(String, String), PropertyMetadata>,
+    /// Property name → schema declarations, keeping ambiguity checks local to
+    /// the requested name rather than walking the complete schema registry.
+    properties: HashMap<String, HashMap<String, PropertyMetadata>>,
     prim_types: Vec<String>,
     api_schemas: Vec<String>,
 }
@@ -278,19 +280,24 @@ impl SchemaMetadata {
                     .find(|(owner, attr, _)| *owner == schema.as_str() && *attr == name.as_str())
                     .map(|(_, _, unit)| *unit)
                     .unwrap_or(LinearUnit::None);
-                metadata.properties.insert(
-                    (schema.to_string(), name.to_string()),
-                    PropertyMetadata {
-                        linear,
-                        ui_hint: None,
-                    },
-                );
+                metadata
+                    .properties
+                    .entry(name.to_string())
+                    .or_default()
+                    .insert(
+                        schema.to_string(),
+                        PropertyMetadata {
+                            linear,
+                            ui_hint: None,
+                        },
+                    );
             }
         }
         for &(schema, name, min, max, unit, type_name) in DECLARED_HINTS {
             let property = metadata
                 .properties
-                .get_mut(&(schema.to_owned(), name.to_owned()))
+                .get_mut(name)
+                .and_then(|declarations| declarations.get_mut(schema))
                 .expect("compiled inspector hint names a registered property");
             property.ui_hint = Some(AttrUiHint {
                 min,
@@ -306,20 +313,16 @@ impl SchemaMetadata {
 
     /// A declaration shared unambiguously by every schema exposing this name.
     pub fn property(&self, name: &str) -> Option<&PropertyMetadata> {
-        let mut candidates = self
-            .properties
-            .iter()
-            .filter(|((_, attr), _)| attr == name)
-            .map(|(_, value)| value);
+        let mut candidates = self.properties.get(name)?.values();
         let first = candidates.next()?;
         candidates
-            .all(|candidate| candidate.linear == first.linear && candidate.ui_hint == first.ui_hint)
+            .all(|candidate| candidate == first)
             .then_some(first)
     }
 
     /// Metadata for a specific composed schema property.
     pub fn property_in(&self, schema: &str, name: &str) -> Option<&PropertyMetadata> {
-        self.properties.get(&(schema.to_owned(), name.to_owned()))
+        self.properties.get(name)?.get(schema)
     }
 
     /// Linear-unit facts for a specific schema property.
@@ -378,6 +381,65 @@ include!(concat!(env!("OUT_DIR"), "/schema_hints.rs"));
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn property_lookup_requires_agreement_across_schema_declarations() {
+        let length = PropertyMetadata {
+            linear: LinearUnit::Length {
+                stage_units_per_unit: 1.0,
+            },
+            ui_hint: Some(AttrUiHint {
+                min: Some(0.0),
+                max: Some(2.0),
+                unit: Some("m".into()),
+                type_name: Some("double".into()),
+            }),
+        };
+        let mut metadata = SchemaMetadata {
+            properties: HashMap::new(),
+            prim_types: Vec::new(),
+            api_schemas: Vec::new(),
+        };
+        for (schema, name, value) in [
+            ("First", "unique", length.clone()),
+            ("First", "shared", length.clone()),
+            ("Second", "shared", length.clone()),
+            ("First", "unit_conflict", length.clone()),
+            (
+                "Second",
+                "unit_conflict",
+                PropertyMetadata {
+                    linear: LinearUnit::None,
+                    ..length.clone()
+                },
+            ),
+            ("First", "hint_conflict", length.clone()),
+            (
+                "Second",
+                "hint_conflict",
+                PropertyMetadata {
+                    ui_hint: None,
+                    ..length.clone()
+                },
+            ),
+        ] {
+            metadata
+                .properties
+                .entry(name.into())
+                .or_default()
+                .insert(schema.into(), value);
+        }
+        assert_eq!(metadata.property("unique"), Some(&length));
+        assert_eq!(metadata.property("shared"), Some(&length));
+        assert_eq!(metadata.property("unit_conflict"), None);
+        assert_eq!(metadata.property("hint_conflict"), None);
+        assert_eq!(metadata.property("absent"), None);
+        assert_eq!(
+            metadata.property_in("First", "hint_conflict"),
+            Some(&length)
+        );
+        assert_eq!(metadata.property_in("Missing", "shared"), None);
+    }
 
     #[test]
     fn native_definitions_supply_units_and_project_inspector_hints() {

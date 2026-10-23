@@ -1023,6 +1023,11 @@ self time moves into those children and is not a loading improvement by itself.
 Native typed relationship enumeration avoids target-resolution probes on every
 attribute. The prepared reader retains empty relationships; verify the
 `native_relationships` gate as well as the complete snapshot timing.
+For attribute metadata, inspect `usd_projection_attribute_metadata` and the
+shared `SchemaMetadata` lookup. Its immutable table groups declarations by name;
+only those declarations participate in ambiguity checks. Schema-qualified reads
+remain exact, without allocating lookup keys. Verify both ambiguity rejection
+and native unit/inspector hints before comparing complete snapshot time.
 For collection costs, inspect `usd_projection_collection_expansion` and the
 `prepared native collection memberships` counts. Immutable preparation reuses
 successful expansions only when OpenUSD's membership queries compare equal;

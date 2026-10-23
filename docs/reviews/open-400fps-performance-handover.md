@@ -1,5 +1,51 @@
 # High-quality realtime performance handover
 
+## Schema metadata lookup and current evidence — 2026-10-23
+
+`SchemaMetadata` groups its immutable declarations by property name and schema.
+Unqualified lookup checks only declarations with the requested name; qualified
+lookup borrows both keys. Complete metadata agreement still controls ambiguity.
+The two focused `schema::tests` pass, including conflicting units/hints, absent
+names and native inspector bounds. The regular Tracy production build passes,
+and `wheel_attachment_contract` passes its authored check at tick 1
+(PID 1295638/API 4953, exit zero). The skill catalogue check passes.
+
+Fresh production Tracy observations use binary SHA-256
+`de6282064f205bb13ab4a1e026d49bdb6a01f381b60f3d56bae35260e8aedd3f`:
+
+| Twin | Physics admission | Inclusive attribute metadata | Inclusive USD facts | Final retained physics-history median |
+| --- | ---: | ---: | ---: | ---: |
+| Griffin | 21.98 s | 480.62 ms / 1,956 spans | 2,650.78 ms | 2.56 ms |
+| Tesla | 2.76 s | 37.56 ms / 257 spans | 245.13 ms | 0.88 ms |
+| Summer | 2.89 s | 54.51 ms / 342 spans | 328.41 ms / two snapshots | 0.89 ms |
+
+The baseline's terminal export reported Griffin metadata at 544.76 ms and
+complete facts at 2,661.81 ms. Its raw files and source-hash receipts were
+accidentally deleted during rebuilding, along with earlier local profiling
+evidence referenced below. Those older measurements are historical records;
+the missing files cannot support a freshly verified paired comparison.
+Complete extraction remains a major cost, and no whole-loading improvement is
+claimed from this lookup change.
+
+Current evidence is local and ignored under
+`.cache/codex-evidence/performance-20261023/`, with
+`schema-metadata-candidate-summary.json` and
+`{griffin,tesla,summer}-schema-metadata-profile/`. Native captures stay in the
+ignored `scripts/perf/captures/` directory; CSVs, logs, images and receipts are
+not tracked. Each capture passes framing, compressed-payload, owned-PID,
+1,000,000 ns sampling and native inclusive CSV-export checks. Recorded Twin
+source hashes are unchanged within each run; diagnostics and script errors are
+clear. Final images were inspected: Griffin is descending, Tesla is stationary
+on the course, and Summer shows its rover/traverse terrain. Tesla's HUD still
+reports unavailable frame/datum. These are short admission observations, not
+completed mission or settled-terrain acceptance.
+
+Owned APIs 4953–4956, apps, collectors and exporters are closed. The foreign
+tutorials graphics session (PID 1274357/API 4387) remained active and untouched.
+These instrumented, contended timings do not establish clean product physics
+or graphics acceptance. All strict targets remain open. Continue with native
+metadata reads and Modelica construction, then active Griffin physics costs.
+
 ## Griffin initialization cost boundary — 2026-10-23
 
 Native coupled initialization remains the active application contract. On

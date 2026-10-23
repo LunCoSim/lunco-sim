@@ -273,6 +273,10 @@ schema source is compiled by `openusd-build`, and
 runtime and authoring stage. OpenUSD owns inheritance, type, variability,
 custom flags, and schema defaults. `SchemaMetadata` is an immutable projection
 of the native definitions for inspector hints and scalar linear-unit facts.
+Its single property table groups declarations by property name and then schema.
+Unqualified reads compare only the declarations sharing that name and return
+metadata only when their complete facts agree; schema-qualified reads select
+the exact declaration. No live scene state is cached in this immutable table.
 Schema availability does not depend on runtime asset I/O or frame polling.
 
 `ResolveUsdTarget` reads one native stage made from the current document's

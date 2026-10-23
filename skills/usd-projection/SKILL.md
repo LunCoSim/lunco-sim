@@ -34,7 +34,10 @@ Native USD dependencies are pinned at Rust `openusd` 0.8.0 with
 `openusd-schemas` and `openusd-build`. Use `schema::native_registry` for stage
 construction and native `ResolveInfo` for asset provenance. Standard schema
 fallbacks and metadata are read through the composed stage; inspector/unit
-metadata is derived by `SchemaMetadata`. Project schema declarations are
+metadata is derived by `SchemaMetadata`. Its property-name groups retain exact
+schema-qualified declarations and reject ambiguous unqualified metadata; do not
+scan the complete registry per prim attribute or choose one conflicting schema.
+Project schema declarations are
 generated at build time from `schema/schema.usda`.
 
 ## The pipeline, end to end
