@@ -833,6 +833,15 @@ completion guards retain only a weak queue reference. Resource retirement stops 
 drops queued captures outside the lock, including captures that own permits.
 Execution can advance between host frames; simulation admission, scope, clock,
 source validation and ordered result commitment remain at the domain owner.
+Native transports use `submit_transport` when admission must wait without a
+mutable World borrow. They share the same bounded queue, priority service and
+worker pool as CPU jobs. The callback receives an `ExternalWorkPermit` that
+the transport retains through work and unconsumed results. Its
+`QueuedWorkRequest` cancels only that exact queued incarnation on drop, even
+when another request reuses the operation key. Dispatch ends queued cancellation;
+the domain's lease and publication fence still reject retired running work.
+Immediate `admit_external` reservations serve transports that require a free
+slot at submission, including the browser cooperative executor.
 Modelica document parsing, inline Rhai roots and
 source-matched import misses, Twin SysML source-set analysis, and default USD
 Twin source parsing plus persistent-source serialization use this path. USD

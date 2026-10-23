@@ -5,15 +5,19 @@ use crate::{
     twin_lint::{TwinInspectionInput, TwinNamespaceSnapshot},
     validate::ValidationReport,
 };
+#[cfg(target_arch = "wasm32")]
+use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy::{
     asset::{AssetPath, AssetServer},
     prelude::*,
-    tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
+    tasks::futures_lite::future,
 };
 use lunco_api::ApiQueryError;
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_assets_core::TwinRoots;
 use lunco_core_runtime::async_work::ExternalWorkPermit;
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_core_runtime::async_work::QueuedWorkRequest;
 use lunco_core_runtime::{AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority};
 use lunco_workspace::{DocumentRuntimeOwner, FileDocumentAdmission, WorkspaceResource};
 use std::{
@@ -55,8 +59,18 @@ struct Operation {
     params: Option<ApiValue>,
     reference: String,
     fence: OwnerFence,
+    #[cfg(not(target_arch = "wasm32"))]
+    task: NativePreparation,
+    #[cfg(target_arch = "wasm32")]
     task: Task<Result<Prepared, String>>,
+    #[cfg(target_arch = "wasm32")]
     _permit: Arc<ExternalWorkPermit>,
+}
+#[cfg(not(target_arch = "wasm32"))]
+struct NativePreparation {
+    result: std::sync::mpsc::Receiver<(Result<Prepared, String>, Arc<ExternalWorkPermit>)>,
+    _request: QueuedWorkRequest,
+    _lifetime: Arc<()>,
 }
 #[derive(Clone)]
 struct OwnerFence {
@@ -268,9 +282,26 @@ pub(crate) fn poll_operation(
     if operation.kind != kind {
         return Err(rejected("operation_id belongs to a different query"));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    let (outcome, permit) = match operation.task.result.try_recv() {
+        Ok(completion) => completion,
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            return Ok(PreparationPoll::Pending { operation_id: id });
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.operations.remove(&id);
+            return Ok(PreparationPoll::Failed {
+                operation_id: id,
+                diagnostic: "Validation preparation ended without a result".to_owned(),
+            });
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
     let Some(outcome) = future::block_on(future::poll_once(&mut operation.task)) else {
         return Ok(PreparationPoll::Pending { operation_id: id });
     };
+    #[cfg(target_arch = "wasm32")]
+    let permit = Arc::clone(&operation._permit);
     let operation = state
         .operations
         .remove(&id)
@@ -334,7 +365,7 @@ pub(crate) fn poll_operation(
             policy,
             reference: operation.reference,
             revisions: prepared.revisions,
-            permit: Arc::clone(&operation._permit),
+            permit,
         }),
     };
 }
@@ -379,20 +410,6 @@ fn admit_request(
     let admission = world
         .get_resource::<AsyncWorkAdmission>()
         .ok_or_else(|| rejected("Shared async admission is unavailable"))?;
-    let permit = Arc::new(
-        admission
-            .admit_external(
-                AsyncWorkPriority::Interactive,
-                AsyncWorkKey::new(AsyncWorkKind::ValidationPreparation, 0, 0, 0, next),
-            )
-            .map_err(|error| {
-                rejected(format!(
-                    "Validation preparation was not admitted: {error:?}"
-                ))
-            })?,
-    );
-    let pool = AsyncComputeTaskPool::try_get()
-        .ok_or_else(|| rejected("Validation task pool is unavailable"))?;
     let roots = world.get_resource::<TwinRoots>().cloned();
     let server = world.get_resource::<AssetServer>().cloned();
     let policy = crate::twin_lint::policy_name(&policy)
@@ -402,20 +419,59 @@ fn admit_request(
         .get_resource::<QueryPreparationLimits>()
         .ok_or_else(|| rejected("Validation resource budget is unavailable"))?
         .0;
-    let running_permit = Arc::clone(&permit);
-    let source_reference = reference.clone();
-    let task = pool.spawn(async move {
-        let _running_permit = running_permit;
-        catch_preparation(prepare(
-            source_reference,
-            source,
-            roots,
-            server,
-            policy,
-            limits,
-        ))
-        .await
-    });
+    let key = AsyncWorkKey::new(AsyncWorkKind::ValidationPreparation, 0, 0, 0, next);
+    let work = catch_preparation(prepare(
+        reference.clone(),
+        source,
+        roots,
+        server,
+        policy,
+        limits,
+    ));
+    #[cfg(not(target_arch = "wasm32"))]
+    let task = {
+        let (sender, result) = std::sync::mpsc::sync_channel(1);
+        let lifetime = Arc::new(());
+        let alive = Arc::downgrade(&lifetime);
+        let request = admission
+            .submit_transport(AsyncWorkPriority::Interactive, key, move |permit| {
+                if alive.upgrade().is_none() {
+                    return;
+                }
+                let outcome = future::block_on(work);
+                let _ = sender.send((outcome, Arc::new(permit)));
+            })
+            .map_err(|error| {
+                rejected(format!(
+                    "Validation preparation was not admitted: {error:?}"
+                ))
+            })?;
+        NativePreparation {
+            result,
+            _request: request,
+            _lifetime: lifetime,
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
+    let (task, permit) = {
+        let permit = Arc::new(
+            admission
+                .admit_external(AsyncWorkPriority::Interactive, key)
+                .map_err(|error| {
+                    rejected(format!(
+                        "Validation preparation was not admitted: {error:?}"
+                    ))
+                })?,
+        );
+        let pool = AsyncComputeTaskPool::try_get()
+            .ok_or_else(|| rejected("Validation task pool is unavailable"))?;
+        let running_permit = Arc::clone(&permit);
+        let task = pool.spawn(async move {
+            let _running_permit = running_permit;
+            work.await
+        });
+        (task, permit)
+    };
     state.next = next;
     state.operations.insert(
         next,
@@ -425,6 +481,7 @@ fn admit_request(
             reference,
             fence,
             task,
+            #[cfg(target_arch = "wasm32")]
             _permit: permit,
         },
     );

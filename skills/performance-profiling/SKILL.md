@@ -382,6 +382,11 @@ pool dispatch separately. Queued native preparation uses the process-owned
 `LunCo preparation` Bevy pool, with the host's configured async worker width.
 Native asset/shader compilation keeps its own pool; test preparation while
 those native workers are occupied and preserve non-blocking queue retirement.
+Native one-shot validation uses `submit_transport` to wait in that shared
+queue. Its request owns queued cancellation and the result retains the permit;
+temporary worker occupancy must not become a `QueueFull` query rejection.
+Check both full waiting-queue rejection and stale request retirement, including
+reuse of the same operation key. Keep source/policy publication on the owner.
 Verify refill without another host update and retirement with captured permits,
 then compare settled terrain readiness and replay the authoritative state.
 For physical solar visibility, attribute `publish_sun_visibility` separately

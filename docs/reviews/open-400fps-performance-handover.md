@@ -1,5 +1,46 @@
 # High-quality realtime performance handover
 
+## Native validation joins shared preparation admission — 2026-10-23
+
+`lunco-core-runtime::AsyncWorkAdmission::submit_transport` admits a native
+transport to the existing bounded priority queue rather than requiring an
+immediately free worker slot. It returns a scoped `QueuedWorkRequest`; dropping
+that request cancels its exact queued incarnation, including when another
+request reuses the same work key. The callback receives the real shared permit
+and transfers it through its work and unconsumed result. CPU submissions share
+the same enqueue/dispatch mechanism and retain their permit through execution.
+Worker count, queue capacity, priority/fairness and required capacity are unchanged.
+This generic scheduling/ownership boundary stays in Rust; no scenario retry,
+new policy hook or secondary queue is introduced.
+
+`lunco-scene-validation` uses that transport on native hosts. Its completion
+channel has one slot. The request cancels queued work on retirement; dispatched
+work checks the owner's lease before reading and a dropped receiver rejects
+late completion. Permits remain live through an unconsumed result and the
+retained Twin lint continuation. Source, mount, policy and runtime fences still
+validate at serial publication. Browser validation uses its cooperative task
+transport and immediate capacity reservation.
+
+All **19 shared-admission tests** pass. New cases verify waiting behind occupied
+capacity, holding capacity after the callback returns, exact-incarnation
+cancellation and bounded waiting-queue rejection. Existing worker isolation,
+fairness, required capacity and teardown tests also pass. The regular Tracy
+production build passes in 4m17s. `modelica_source_target` now passes **20
+authored checks** at tick 84, including source rejection, replacement, recovery
+and participant cleanup. Its validation waits approximately **3,237 ms** in the
+queue and starts with all three optional slots occupied, without resubmission.
+`rhai_lint_policy` passes its **three checks** against the invalid authored
+program and its owning rule. APIs 4980/4981 and PIDs 1949112/1950084 are closed.
+
+Raw evidence remains ignored and local under
+`.cache/codex-evidence/performance-20261023/`: `validation-queue-core-tests.log`,
+`validation-queue-build-final.log`, and `validation-queue/{source-target,rhai-lint-policy}.{log,json}`.
+This closes the validation gate; it does not establish a product loading,
+physics or graphics gain. All original targets remain open. Continue with
+Modelica constructor CPU attribution and USD fact extraction. The additional
+preview/world-hold report in the parallel Griffin handoff still needs a current
+owned-runtime reproduction; its reported image predates these fixes.
+
 ## Modelica immutable-cache recency — 2026-10-23
 
 `lunco-modelica-worker` uses the existing `linked-hash-map` dependency for its
@@ -44,14 +85,14 @@ and `native-cache-lru-{baseline-test,owner-tests,build}.log` under
 `.cache/codex-evidence/performance-20261023/`; captures remain ignored in
 `scripts/perf/captures/`.
 
-The broader `modelica_source_target` gate currently fails before its cache
-assertions: `ValidateAsset` rejects with `QueueFull` while preparation capacity
-is occupied. The preflight helper's diagnostic now exposes that owner error;
-the admission repair remains open. API 4977 and both diagnostic runs are closed;
+The earlier `modelica_source_target` attempts reject before their cache
+assertions because immediate validation admission has no free slot. The native
+queued transport above repairs that boundary, and the current gate passes all
+20 checks. API 4977 and both diagnostic runs are closed;
 their `lru-source-target*.log` files are in the local
-`static-disabled-collider/` evidence directory. Keep this gate unaccepted and
-repair shared admission rather than adding a scenario retry. All original
-loading, physics and graphics targets remain open.
+`static-disabled-collider/` evidence directory. They record the rejected
+admission; use the fresh validation-queue gate for current acceptance. All
+original loading, physics and graphics targets remain open.
 
 ## Standalone collision admission and reload retirement — 2026-10-23
 

@@ -213,12 +213,19 @@ serially by default, and Twin preparation passes the remaining aggregate byte
 budget into every recipe before dependency allocation. USD crate bytes still
 fail the current text-layer dependency inspector explicitly.
 
-The shared `AsyncWorkAdmission` permit lasts through the running task and its
-unconsumed result. Retirement drops the owning task/result. Publication checks
+Native requests use `AsyncWorkAdmission::submit_transport`: temporary worker
+occupancy leaves the operation pending in the shared bounded priority queue.
+A full waiting queue rejects admission. The scoped request cancels its exact
+queued incarnation on retirement; a dispatched worker checks the owner's lease
+before reading sources and sends its typed result through a one-slot channel.
+The shared permit lasts through running work and its unconsumed result, including
+the retained Twin lint continuation. Retirement drops the result receiver, so
+late immutable completions cannot publish. Publication checks
 exact document runtime ownership, mount incarnation, indexed source input,
 and policy identity; the report identifies the bytes actually read. Pure facts prepare asynchronously;
 policy hooks run serially after the operation-state lock is released. Browser
-preparation uses Bevy's cooperative executor, without an off-main CPU guarantee.
+preparation reserves immediate shared capacity on Bevy's cooperative executor,
+without an off-main CPU guarantee.
 Native CLI and bounded native SysML constructors retain their synchronous
 contract over the shared validators. Browser synchronous constructors require
 an already-prepared exact mounted snapshot or reject visibly.

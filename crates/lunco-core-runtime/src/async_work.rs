@@ -148,7 +148,12 @@ pub struct AsyncWorkSnapshot {
     pub capacity_revision: u64,
 }
 
-type AsyncWork = Box<dyn FnOnce() + Send + 'static>;
+type AsyncWork = Box<dyn FnOnce(ExternalWorkPermit) + Send + 'static>;
+
+struct QueuedWork {
+    job: AsyncWork,
+    request: Option<Arc<()>>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct QueueKey {
@@ -175,7 +180,7 @@ struct QueuedWorkState {
     max_queued: usize,
     max_in_flight: usize,
     stopped: bool,
-    jobs: BTreeMap<QueueKey, AsyncWork>,
+    jobs: BTreeMap<QueueKey, QueuedWork>,
     keys: HashSet<AsyncWorkKey>,
     #[cfg(not(target_arch = "wasm32"))]
     required_streak: u8,
@@ -209,7 +214,7 @@ impl QueuedWorkState {
     }
 }
 
-/// Shared admission queue for CPU preparation running on Bevy's async pool.
+/// Shared bounded admission for preparation and asynchronous transports.
 ///
 /// Submissions are bounded and sorted by semantic priority, owner-selected
 /// order, then stable operation identity. A reserved lower-priority share
@@ -314,9 +319,43 @@ impl AsyncWorkAdmission {
         order: u64,
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), AsyncWorkRejection> {
+        self.enqueue(priority, key, order, None, move |permit| {
+            let _permit = permit;
+            job();
+        })
+    }
+
+    /// Queue a native transport whose capacity remains owned after its start
+    /// callback returns. Keep the request until consumption or retirement, and
+    /// transfer the permit through running work and its unconsumed result.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn submit_transport(
+        &self,
+        priority: AsyncWorkPriority,
+        key: AsyncWorkKey,
+        start: impl FnOnce(ExternalWorkPermit) + Send + 'static,
+    ) -> Result<QueuedWorkRequest, AsyncWorkRejection> {
+        let request = Arc::new(());
+        self.enqueue(priority, key, 0, Some(Arc::clone(&request)), start)?;
+        Ok(QueuedWorkRequest {
+            key,
+            request,
+            queued: Arc::downgrade(&self.queued),
+            shared: Arc::clone(&self.shared),
+        })
+    }
+
+    fn enqueue(
+        &self,
+        priority: AsyncWorkPriority,
+        key: AsyncWorkKey,
+        order: u64,
+        request: Option<Arc<()>>,
+        job: impl FnOnce(ExternalWorkPermit) + Send + 'static,
+    ) -> Result<(), AsyncWorkRejection> {
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (priority, key, order, job);
+            let _ = (priority, key, order, request, job);
             self.shared.rejected.fetch_add(1, Ordering::Relaxed);
             self.shared.revision.fetch_add(1, Ordering::Release);
             return Err(AsyncWorkRejection::NativeDispatcherUnavailable);
@@ -351,24 +390,27 @@ impl AsyncWorkAdmission {
                     order,
                     key,
                 },
-                Box::new(move || {
-                    let _span = bevy::log::debug_span!(
-                        "async_preparation_job",
-                        kind = ?key.kind,
-                        priority = ?priority
-                    )
-                    .entered();
-                    if let Some(queued_at) = queued_at {
-                        bevy::log::debug!(
+                QueuedWork {
+                    request,
+                    job: Box::new(move |permit| {
+                        let _span = bevy::log::debug_span!(
+                            "async_preparation_job",
                             kind = ?key.kind,
-                            priority = ?priority,
-                            key = ?key,
-                            queue_wait_ms = queued_at.elapsed().as_secs_f64() * 1000.0,
-                            "[async-work] preparation started"
-                        );
-                    }
-                    job();
-                }),
+                            priority = ?priority
+                        )
+                        .entered();
+                        if let Some(queued_at) = queued_at {
+                            bevy::log::debug!(
+                                kind = ?key.kind,
+                                priority = ?priority,
+                                key = ?key,
+                                queue_wait_ms = queued_at.elapsed().as_secs_f64() * 1000.0,
+                                "[async-work] preparation started"
+                            );
+                        }
+                        job(permit);
+                    }),
+                },
             );
             queued.keys.insert(key);
             self.shared.submitted.fetch_add(1, Ordering::Relaxed);
@@ -415,25 +457,7 @@ impl AsyncWorkAdmission {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
-            let queue_key = queued
-                .jobs
-                .keys()
-                .find(|queue_key| queue_key.key == key)
-                .copied();
-            let Some(queue_key) = queue_key else {
-                return false;
-            };
-            let abandoned = queued.jobs.remove(&queue_key);
-            queued.keys.remove(&key);
-            self.shared.cancelled.fetch_add(1, Ordering::Relaxed);
-            self.shared.revision.fetch_add(1, Ordering::Release);
-            self.shared
-                .capacity_revision
-                .fetch_add(1, Ordering::Release);
-            drop(queued);
-            drop(abandoned);
-            true
+            cancel_queued_work(&self.queued, &self.shared, key, None)
         }
     }
 
@@ -588,7 +612,7 @@ fn pop_next_queued(
             queued.admissions_since_background = 0;
         }
     }
-    Some((queue_key.priority, queue_key.key, job))
+    Some((queue_key.priority, queue_key.key, job.job))
 }
 
 struct WorkCompletionGuard {
@@ -617,9 +641,62 @@ impl Drop for WorkCompletionGuard {
     }
 }
 
-/// Capacity owned by an external preparation transport until its result retires.
+/// Shared capacity retained through preparation and unconsumed transport results.
 pub struct ExternalWorkPermit {
     _completion: WorkCompletionGuard,
+}
+
+/// Owns one queued native transport request. Dropping it withdraws work that
+/// has not dispatched. Running immutable work remains fenced by its domain.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use = "retain the request until its result is consumed or retired"]
+pub struct QueuedWorkRequest {
+    key: AsyncWorkKey,
+    request: Arc<()>,
+    queued: Weak<Mutex<QueuedWorkState>>,
+    shared: Arc<SharedWorkState>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for QueuedWorkRequest {
+    fn drop(&mut self) {
+        if let Some(queued) = self.queued.upgrade() {
+            cancel_queued_work(&queued, &self.shared, self.key, Some(&self.request));
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn cancel_queued_work(
+    state: &Mutex<QueuedWorkState>,
+    shared: &SharedWorkState,
+    key: AsyncWorkKey,
+    request: Option<&Arc<()>>,
+) -> bool {
+    let mut queued = state.lock().unwrap_or_else(PoisonError::into_inner);
+    let queue_key = queued
+        .jobs
+        .iter()
+        .find(|(entry, work)| {
+            entry.key == key
+                && request.is_none_or(|expected| {
+                    work.request
+                        .as_ref()
+                        .is_some_and(|actual| Arc::ptr_eq(expected, actual))
+                })
+        })
+        .map(|(entry, _)| *entry);
+    let Some(queue_key) = queue_key else {
+        return false;
+    };
+    let abandoned = queued.jobs.remove(&queue_key);
+    queued.keys.remove(&key);
+    shared.cancelled.fetch_add(1, Ordering::Relaxed);
+    shared.revision.fetch_add(1, Ordering::Release);
+    shared.capacity_revision.fetch_add(1, Ordering::Release);
+    drop(queued);
+    drop(abandoned);
+    true
 }
 
 /// Install the initial PostUpdate dispatch and completion-driven worker refill.
@@ -704,8 +781,9 @@ fn refill_async_work(shared: &Arc<SharedWorkState>) {
             "[async-work] preparation dispatched"
         );
         pool.spawn(async move {
-            let _completion = completion;
-            job();
+            job(ExternalWorkPermit {
+                _completion: completion,
+            });
         })
         .detach();
     }
@@ -715,6 +793,93 @@ fn refill_async_work(shared: &Arc<SharedWorkState>) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn queued_transport_waits_for_capacity_and_retains_its_result_permit() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AsyncWorkAdmissionPlugin));
+        app.world_mut()
+            .resource_mut::<AsyncWorkAdmission>()
+            .set_limits(8, 1)
+            .unwrap();
+        let blocker = app
+            .world()
+            .resource::<AsyncWorkAdmission>()
+            .admit_external(AsyncWorkPriority::Interactive, key(1))
+            .unwrap();
+        let (first_tx, first_rx) = mpsc::channel();
+        let _first = app
+            .world()
+            .resource::<AsyncWorkAdmission>()
+            .submit_transport(AsyncWorkPriority::Interactive, key(2), move |permit| {
+                first_tx.send(permit).unwrap();
+            })
+            .unwrap();
+        app.world_mut().run_schedule(PostUpdate);
+        assert!(matches!(
+            first_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            app.world()
+                .resource::<AsyncWorkAdmission>()
+                .snapshot()
+                .queued,
+            [0, 1, 0]
+        );
+        drop(blocker);
+        let first_result = first_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (second_tx, second_rx) = mpsc::channel();
+        let _second = app
+            .world()
+            .resource::<AsyncWorkAdmission>()
+            .submit_transport(AsyncWorkPriority::Interactive, key(3), move |permit| {
+                second_tx.send(permit).unwrap();
+            })
+            .unwrap();
+        app.world_mut().run_schedule(PostUpdate);
+        assert!(matches!(
+            second_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            app.world()
+                .resource::<AsyncWorkAdmission>()
+                .snapshot()
+                .in_flight,
+            [0, 1, 0]
+        );
+        drop(first_result);
+        drop(second_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        let snapshot = app.world().resource::<AsyncWorkAdmission>().snapshot();
+        assert_eq!(snapshot.in_flight, [0, 0, 0]);
+        assert_eq!(snapshot.finished, 3);
+    }
+
+    #[test]
+    fn retired_transport_request_cannot_cancel_a_reused_operation_key() {
+        let mut admission = AsyncWorkAdmission::default();
+        admission.set_limits(1, 1).unwrap();
+        let old = admission
+            .submit_transport(AsyncWorkPriority::Interactive, key(1), |_| {})
+            .unwrap();
+        assert!(admission.cancel_queued(key(1)));
+        let current = admission
+            .submit_transport(AsyncWorkPriority::Interactive, key(1), |_| {})
+            .unwrap();
+        drop(old);
+        assert_eq!(admission.snapshot().queued, [0, 1, 0]);
+        assert!(matches!(
+            admission.submit_transport(AsyncWorkPriority::Background, key(2), |_| {}),
+            Err(AsyncWorkRejection::QueueFull)
+        ));
+        drop(current);
+        assert_eq!(admission.snapshot().queued, [0, 0, 0]);
+        assert_eq!(admission.snapshot().cancelled, 2);
+    }
 
     #[test]
     fn native_asset_work_cannot_block_admitted_preparation() {
@@ -908,7 +1073,7 @@ mod tests {
             (priority, identity),
             (AsyncWorkPriority::SimulationRequired, key(3))
         );
-        job();
+        drop(job);
         assert!(admission.pop_next().is_none());
         let required = admission
             .admit_external(AsyncWorkPriority::SimulationRequired, key(4))
@@ -943,49 +1108,30 @@ mod tests {
     #[test]
     fn class_order_and_owner_identity_make_dispatch_stable() {
         let mut admission = AsyncWorkAdmission::default();
-        let seen = Arc::new(Mutex::new(Vec::new()));
         for (priority, identity) in [
             (AsyncWorkPriority::Background, 1),
             (AsyncWorkPriority::Interactive, 8),
             (AsyncWorkPriority::Interactive, 2),
             (AsyncWorkPriority::SimulationRequired, 9),
         ] {
-            let seen = Arc::clone(&seen);
-            admission
-                .submit(priority, key(identity), move || {
-                    seen.lock().unwrap().push(identity);
-                })
-                .unwrap();
+            admission.submit(priority, key(identity), || {}).unwrap();
         }
 
-        for _ in 0..4 {
-            let (_, _, job) = admission.pop_next().unwrap();
-            job();
-        }
-        assert_eq!(*seen.lock().unwrap(), [9, 2, 8, 1]);
+        let seen: Vec<_> = (0..4).map(|_| admission.pop_next().unwrap().1).collect();
+        assert_eq!(seen, [key(9), key(2), key(8), key(1)]);
     }
 
     #[test]
     fn owner_order_precedes_operation_identity_within_a_priority_class() {
         let mut admission = AsyncWorkAdmission::default();
-        let seen = Arc::new(Mutex::new(Vec::new()));
         for (order, identity) in [(8, 1), (2, 9), (2, 3), (5, 4)] {
-            let seen = Arc::clone(&seen);
             admission
-                .submit_ordered(
-                    AsyncWorkPriority::Interactive,
-                    key(identity),
-                    order,
-                    move || seen.lock().unwrap().push(identity),
-                )
+                .submit_ordered(AsyncWorkPriority::Interactive, key(identity), order, || {})
                 .unwrap();
         }
 
-        for _ in 0..4 {
-            let (_, _, job) = admission.pop_next().unwrap();
-            job();
-        }
-        assert_eq!(*seen.lock().unwrap(), [3, 9, 4, 1]);
+        let seen: Vec<_> = (0..4).map(|_| admission.pop_next().unwrap().1).collect();
+        assert_eq!(seen, [key(3), key(9), key(4), key(1)]);
     }
 
     #[test]
@@ -1073,7 +1219,7 @@ mod tests {
         assert_eq!(admission.capacity_revision(), initial_capacity_revision);
 
         let (_, _, job) = admission.pop_next().unwrap();
-        job();
+        drop(job);
         assert_eq!(admission.capacity_revision(), initial_capacity_revision + 1);
         admission.set_limits(128, 3).unwrap();
         assert_eq!(admission.capacity_revision(), initial_capacity_revision + 2);
