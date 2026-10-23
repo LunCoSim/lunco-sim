@@ -23,17 +23,6 @@ fn assemble(facts) {
             scene_visible: true, restore: false,
         });
     }
-    if has_panel(facts, "spawn_palette") && has_panel(facts, "entity_list")
-        && has_panel(facts, "sandbox_inspector") && has_panel(facts, "lunco.workbench.twin_browser")
-        && has_panel(facts, "sandbox_environment") && has_panel(facts, "workbench::viewport") {
-        result.push(#{
-            id: "rover_build", title: "⚒ Build", interaction: "editor", revision: 4,
-            description: "Compose the live scene from reusable assemblies. Browse Entities and Twin sources, place objects with Spawn and edit their properties in Inspector. Use Editor for internal assembly parts and Analyze for live signals.",
-            left: ["entity_list"], left_bottom: ["lunco.workbench.twin_browser"],
-            center: ["workbench::viewport"],
-            right: ["sandbox_inspector", "sandbox_environment"], right_bottom: ["spawn_palette"],
-        });
-    }
     let plots = canonical_plot(facts, "center");
     if plots.len() > 0 && has_panel(facts, "telemetry_browser") {
         let analysis = #{
@@ -44,6 +33,17 @@ fn assemble(facts) {
         if has_panel(facts, "entity_list") { analysis.left_bottom = ["entity_list"]; }
         if has_panel(facts, "port_inspector") { analysis.right = ["port_inspector"]; }
         result.push(analysis);
+    }
+    if has_panel(facts, "spawn_palette") && has_panel(facts, "entity_list")
+        && has_panel(facts, "sandbox_inspector") && has_panel(facts, "lunco.workbench.twin_browser")
+        && has_panel(facts, "sandbox_environment") && has_panel(facts, "workbench::viewport") {
+        result.push(#{
+            id: "rover_build", title: "⚒ Build", interaction: "editor", revision: 4,
+            description: "Compose the live scene from reusable assemblies. Browse Entities and Twin sources, place objects with Spawn and edit their properties in Inspector. Use Editor for internal assembly parts and Analyze for live signals.",
+            left: ["entity_list"], left_bottom: ["lunco.workbench.twin_browser"],
+            center: ["workbench::viewport"],
+            right: ["sandbox_inspector", "sandbox_environment"], right_bottom: ["spawn_palette"],
+        });
     }
     if has_panel(facts, "usd_prim_tree") && has_panel(facts, "usd::viewport")
         && has_panel(facts, "lunco.workbench.twin_browser") && has_panel(facts, "sandbox_inspector") {

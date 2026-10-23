@@ -399,8 +399,8 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | Perspective | Task | Initial presentation |
 |---|---|---|
 | View (`sandbox_view`) | Observe and operate a mission | Full-window live scene |
-| Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Analyze (`analysis`) | Inspect and compare simulation signals | Telemetry above Entities; Graphs center; Ports right |
+| Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Editor (`editor`) | Edit an explicitly opened document | Prim/Twin tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
 | Lunica (`modelica_analyze`) | Engineer continuous models | Twin/Files browser; Welcome or open model views center |
 
