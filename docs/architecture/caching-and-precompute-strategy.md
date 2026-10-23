@@ -346,7 +346,7 @@ the integrator state.
    contract in [the Modelica architecture](20-domain-modelica.md).
    The worker keeps the per-entity `CachedModel` for instant Reset and a worker-owned
    exact source-unit artifact cache that shares immutable DAE compilation
-   across identical admissions. Both RAM caches follow the bounded FIFO entry contract in
+   across identical admissions. Both RAM caches follow the bounded least-recently-used entry contract in
    [the Modelica architecture](20-domain-modelica.md). The prepared live solve IR is reused by exact participating-source
    identity in RAM and persisted by exact participating-source key plus the compiler-owned library
    admission revision, solver, and parameter overrides. The persistent key

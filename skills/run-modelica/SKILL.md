@@ -470,7 +470,8 @@ Shared immutable RAM caches use the captured
 prepared entry capacities, each defaulting to 64 per worker, plus native compiler
 artifact limits of 32,768 entries and 64 MiB. All limits must be positive. Follow the
 [Modelica cache contract](../../docs/architecture/20-domain-modelica.md) for
-configuration timing, FIFO reuse, and browser startup/respawn admission. Entry
+configuration timing, least-recently-used retention, and browser startup/respawn
+admission. Entry
 caps bound graph count rather than heap bytes; eviction preserves live owners.
 Run the generic `immutable_reuse_cache_` tests and compile the browser worker
 bundle when changing configuration transport. Do not infer Twin teardown from

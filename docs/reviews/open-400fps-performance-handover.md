@@ -1,5 +1,58 @@
 # High-quality realtime performance handover
 
+## Modelica immutable-cache recency — 2026-10-23
+
+`lunco-modelica-worker` uses the existing `linked-hash-map` dependency for its
+shared bounded immutable caches. Successful lookups and replacements refresh
+recency; eviction removes the least recently used key. The separate admission
+deque and its cloned keys are removed. Compiled graphs, prepared FMI components
+and native compiler artifacts share this mechanism. Startup capacities,
+native count/byte accounting, exact keys, active `Arc` ownership, numerical
+initialization and live-state retirement are unchanged. This is an internal
+hot-path retention mechanism, without scenario policy or a new hook surface.
+
+The recency regression fails on the prior implementation. All **16 relevant
+cache tests** pass with the cutover, including native artifact accounting and
+invalid persistence records. The regular Tracy production build passes in
+2m02s after integration through `f736291e4`.
+
+| Griffin capture | Physics admission | Native compilations / evictions | Coupled initializer construction |
+| --- | ---: | ---: | ---: |
+| FIFO baseline | 20.70 s | 2,019 / 2,019 | 5.397 s |
+| LRU | 19.28 s | 136 / 136 | 4.937 s |
+| LRU process restart | 19.40 s | 136 / 136 | 4.830 s |
+
+All three retain the same 199 recorded Twin source identities, unchanged within
+each run. Cache contents are not frozen between runs, and foreign graphical
+workloads remain active. These observations do not isolate a causal whole-load
+speedup or establish cold-load acceptance. The repeated constructor still takes
+seconds despite almost all native artifact lookups hitting; trace its remaining
+work rather than treating cache retention as the complete loading solution.
+
+Additional LRU observations admit Tesla in 4.43 s and Summer in 6.35 s, with
+110/72 unchanged source hashes and clear retained runtime/script diagnostics.
+Their final images and all Griffin final images were inspected. Tesla remains
+stationary with its known unavailable frame/datum HUD; Griffin camera views
+differ between runs. These are short initialization observations, not completed
+mission, fixed-camera graphics, or settled-terrain acceptance.
+
+All five captures pass native framing, payload, owned-PID, 1,000,000 ns sampling
+and terminal inclusive CSV export checks. APIs 4974–4976 and 4978–4979, apps,
+collectors and exporters are closed. Raw evidence is ignored and local in
+`{griffin,tesla,summer}-native-cache-*-profile/`, `native-cache-lru-summary.json`
+and `native-cache-lru-{baseline-test,owner-tests,build}.log` under
+`.cache/codex-evidence/performance-20261023/`; captures remain ignored in
+`scripts/perf/captures/`.
+
+The broader `modelica_source_target` gate currently fails before its cache
+assertions: `ValidateAsset` rejects with `QueueFull` while preparation capacity
+is occupied. The preflight helper's diagnostic now exposes that owner error;
+the admission repair remains open. API 4977 and both diagnostic runs are closed;
+their `lru-source-target*.log` files are in the local
+`static-disabled-collider/` evidence directory. Keep this gate unaccepted and
+repair shared admission rather than adding a scenario retry. All original
+loading, physics and graphics targets remain open.
+
 ## Standalone collision admission and reload retirement — 2026-10-23
 
 The Griffin handoff identifies a real application projection omission:
@@ -1036,7 +1089,7 @@ The approved Rumoca worktree now exposes an explicit synchronous native-cache
 scope through its curated simulation facade. Cranelift owns function-stencil,
 version, ISA and flag identity; current module relocations and host addresses
 are rebound for each new executable arena. The Modelica worker owns a bounded
-application-lived FIFO of immutable artifacts and coalesces persistence on a
+application-lived least-recently-used cache of immutable artifacts and coalesces persistence on a
 separate I/O owner. Live FMI state remains thread-affine and retires normally.
 The canonical owner/API/lifetime contract is in architecture 20's cache section.
 

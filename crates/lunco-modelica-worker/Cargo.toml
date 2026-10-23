@@ -36,6 +36,7 @@ rumoca-ir-solve.workspace = true
 rumoca-sim.workspace = true
 serde.workspace = true
 web-time.workspace = true
+linked-hash-map.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rumoca-eval-solve.workspace = true

@@ -312,7 +312,7 @@ impl CacheKvStore for Adapter {
     fn get(&self, key: &[u8]) -> Option<Cow<'_, [u8]>> {
         let key = self.key(key)?;
         match self.cache.lock() {
-            Ok(data) => data.entries.get(&key).map(|code| Cow::Owned(code.to_vec())),
+            Ok(mut data) => data.entries.get(&key).map(|code| Cow::Owned(code.to_vec())),
             Err(error) => {
                 *self.fault.borrow_mut() = Some(error);
                 None
@@ -351,12 +351,13 @@ mod tests {
         };
         data.insert([1; 32], vec![1; 8].into());
         data.insert([2; 32], vec![2; 8].into());
-        // Replacing the oldest entry must account for its previous bytes.
+        // Replacement refreshes recency and accounts for the previous bytes.
         assert_eq!(data.insert([1; 32], vec![3; 28].into()), 0);
         assert_eq!(data.bytes, 100);
         assert_eq!(data.insert([3; 32], vec![4; 8].into()), 1);
-        assert!(!data.entries.contains_key(&[1; 32]));
-        assert_eq!(data.bytes, 80);
+        assert!(!data.entries.contains_key(&[2; 32]));
+        assert!(data.entries.contains_key(&[1; 32]));
+        assert_eq!(data.bytes, 100);
         assert_eq!(data.insert([4; 32], vec![5; 68].into()), 2);
         assert_eq!(data.entries.len(), 1);
         assert_eq!(data.bytes, 100);

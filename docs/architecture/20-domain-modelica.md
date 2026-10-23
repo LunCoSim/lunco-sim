@@ -804,9 +804,10 @@ defaults retain at most 64 compiled artifacts and 64 prepared FMI components per
 worker. Insert the resource before `ModelicaExecutionPlugin` to change its
 immutable snapshot. Native compiler retention additionally defaults to 32,768
 entries and 64 MiB, counting each key and artifact's bytes.
-`worker/cache.rs` owns one bounded FIFO mechanism for these
-caches: distinct insertions evict the oldest admitted key, while hits and
-same-key replacement preserve order. Compiled-closure/solver/parameter identity
+`worker/cache.rs` owns one bounded least-recently-used mechanism over
+`linked-hash-map` for these caches. Successful lookups and same-key replacements
+refresh recency in constant time; distinct insertions evict the least recently
+used key. Compiled-closure/solver/parameter identity
 controls prepared-model reuse. Prepared solve results are shared through `Arc`, including native
 preparation followers; lookup and retention do not deep-copy the model.
 
@@ -825,7 +826,7 @@ steppers and in-flight preparations retain their own valid references; Twin
 close continues to retire their exact mutable owners. These entry caps bound
 the number of retained immutable graphs, not bytes per graph, total live model
 memory, or persistent disk-cache retention. Generic `immutable_reuse_cache_`
-tests cover FIFO bounds, replacement, exact solve keys, live-reference survival
+tests cover recency, bounds, replacement, exact solve keys, live-reference survival
 and invalid admission. Browser configuration also requires a worker-bundle
 compile check.
 

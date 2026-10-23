@@ -9801,6 +9801,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "crossbeam-channel",
+ "linked-hash-map",
  "log",
  "lunco-assets-core",
  "lunco-assets-runtime",

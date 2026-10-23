@@ -474,6 +474,7 @@ bincode = { version = "2", features = ["serde"] }
 tar = "0.4"
 zstd = "0.13"
 rayon = "1"
+linked-hash-map = "0.5.6"
 base64 = "0.22"
 # Pure-Rust SHA-256 — works on native AND wasm32-unknown-unknown (no
 # getrandom / no C). Used by lunco-assets (asset verify) and

@@ -612,6 +612,12 @@ communication points, backend numerical profiles, metadata and generation
 retirement. The native
 compiler already shares its DAE and source map; additional metadata caches do
 not address dominant native construction cost.
+Inspect native artifact attempts, hits, compilations and evictions together
+with session construction time. Shared immutable caches refresh recency on
+successful lookup and replacement; both native artifact bounds remain active.
+Compare recorded source/solver identities and cache starting conditions before
+attributing a loading gain. Retain complete initialization and checked outputs;
+only relocatable compiler artifacts belong in the native code cache.
 For source parsing, compare the logged queue `wait` against parse/install time.
 The engine-sync driver submits documents linked to non-editor scene participants
 at `SimulationRequired`, the focused editor document at `Interactive`, and

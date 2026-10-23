@@ -7,31 +7,29 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::PREPARED_SOLVE_CACHE_VERSION;
 use super::solver;
+use linked_hash_map::LinkedHashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::modelica_dir;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_storage::{FileStorage, Storage, StorageError, StorageHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-/// Count-bounded FIFO reuse. Only distinct insertions change admission order;
-/// replacing or reading a key does not reorder it. Values are owned once and
+/// Count-bounded least-recently-used retention. Successful reads and
+/// replacements refresh recency. Values are owned once and
 /// borrowed on lookup, so eviction releases only the cache's reference.
 pub(super) struct BoundedReuseCache<K, V> {
-    entries: HashMap<K, V>,
-    admission_order: VecDeque<K>,
+    entries: LinkedHashMap<K, V>,
     capacity: NonZeroUsize,
 }
 
-impl<K: Clone + Eq + Hash, V> BoundedReuseCache<K, V> {
+impl<K: Eq + Hash, V> BoundedReuseCache<K, V> {
     pub(super) fn new(capacity: NonZeroUsize) -> Self {
         Self {
-            entries: HashMap::new(),
-            admission_order: VecDeque::new(),
+            entries: LinkedHashMap::new(),
             capacity,
         }
     }
@@ -40,40 +38,25 @@ impl<K: Clone + Eq + Hash, V> BoundedReuseCache<K, V> {
         self.entries.contains_key(key)
     }
 
-    pub(super) fn get(&self, key: &K) -> Option<&V> {
-        self.entries.get(key)
+    pub(super) fn get(&mut self, key: &K) -> Option<&V> {
+        self.entries.get_refresh(key).map(|value| &*value)
     }
 
     pub(super) fn insert(&mut self, key: K, value: V) -> Option<V> {
         let mut evicted = None;
-        if !self.entries.contains_key(&key) {
-            if self.entries.len() == self.capacity.get() {
-                evicted = self.pop_oldest();
-            }
-            self.admission_order.push_back(key.clone());
+        if self.entries.len() == self.capacity.get() && !self.entries.contains_key(&key) {
+            evicted = self.pop_oldest();
         }
         self.entries.insert(key, value).or(evicted)
     }
 
     pub(super) fn pop_oldest(&mut self) -> Option<V> {
-        let oldest = self.admission_order.pop_front()?;
-        Some(
-            self.entries
-                .remove(&oldest)
-                .expect("admitted cache key has its owned value"),
-        )
+        self.entries.pop_front().map(|(_, value)| value)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn ordered_entries(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.admission_order.iter().map(|key| {
-            (
-                key,
-                self.entries
-                    .get(key)
-                    .expect("admitted cache key has its owned value"),
-            )
-        })
+        self.entries.iter()
     }
 
     pub(super) fn len(&self) -> usize {
@@ -82,7 +65,6 @@ impl<K: Clone + Eq + Hash, V> BoundedReuseCache<K, V> {
 
     pub(super) fn clear(&mut self) {
         self.entries.clear();
-        self.admission_order.clear();
     }
 }
 
@@ -320,7 +302,7 @@ impl PreparedSolveCache {
     }
 
     pub(super) fn get(
-        &self,
+        &mut self,
         key: &PreparedSolveKey,
     ) -> Option<&Arc<rumoca_ir_solve::fmi::FmiComponent>> {
         self.models.get(key)
@@ -1238,27 +1220,27 @@ mod reuse_tests {
     use lunco_modelica_runtime::ModelicaCacheLimits;
 
     #[test]
-    fn immutable_reuse_cache_bounds_entries_and_preserves_fifo_on_reads_and_replacement() {
+    fn immutable_reuse_cache_bounds_entries_and_refreshes_hits_and_replacement() {
         let mut cache = BoundedReuseCache::new(NonZeroUsize::new(2).unwrap());
         cache.insert(1, "first");
         cache.insert(2, "second");
         assert_eq!(cache.get(&1), Some(&"first"));
-        cache.insert(1, "replacement");
         assert_eq!(cache.len(), 2);
         cache.insert(3, "third");
-        assert!(!cache.contains_key(&1));
-        assert_eq!(cache.get(&2), Some(&"second"));
+        assert!(!cache.contains_key(&2));
         assert_eq!(cache.get(&3), Some(&"third"));
+        cache.insert(1, "replacement");
+        cache.insert(4, "fourth");
+        assert!(!cache.contains_key(&3));
+        assert_eq!(cache.get(&1), Some(&"replacement"));
         for key in 4..1000 {
             cache.insert(key, "new graph");
         }
         assert_eq!(cache.len(), 2);
-        assert_eq!(cache.admission_order.len(), 2);
         assert!(cache.contains_key(&998));
         assert!(cache.contains_key(&999));
         cache.clear();
         assert_eq!(cache.len(), 0);
-        assert!(cache.admission_order.is_empty());
         cache.insert(7, "fresh admission");
         cache.insert(8, "second admission");
         cache.insert(9, "third admission");
