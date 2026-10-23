@@ -82,6 +82,15 @@ impl Data {
         }
         self.bytes += weight;
         self.revision += 1;
+        bevy::log::trace!(
+            operation = "insert",
+            key = ?key,
+            code_bytes = weight - key.len(),
+            evictions,
+            retained_entries = self.entries.len(),
+            retained_bytes = self.bytes,
+            "native-code-cache-operation"
+        );
         evictions
     }
 
@@ -125,6 +134,12 @@ impl SharedNativeCodeCache {
                     .join("stencils.json.zst"),
             ),
         };
+        bevy::log::debug!(
+            path = ?cache.path,
+            capacity_entries = capacities.native_code_entries.get(),
+            capacity_bytes = capacities.native_code_bytes.get(),
+            "native code cache admission"
+        );
         let loading = cache.clone();
         cache.io.submit(move |_| {
             if let Err(error) = loading.load() {
@@ -312,7 +327,18 @@ impl CacheKvStore for Adapter {
     fn get(&self, key: &[u8]) -> Option<Cow<'_, [u8]>> {
         let key = self.key(key)?;
         match self.cache.lock() {
-            Ok(mut data) => data.entries.get(&key).map(|code| Cow::Owned(code.to_vec())),
+            Ok(mut data) => {
+                let code: Option<Cow<'_, [u8]>> =
+                    data.entries.get(&key).map(|code| Cow::Owned(code.to_vec()));
+                bevy::log::trace!(
+                    operation = "get",
+                    key = ?key,
+                    hit = code.is_some(),
+                    code_bytes = code.as_ref().map_or(0, |code| code.len()),
+                    "native-code-cache-operation"
+                );
+                code
+            }
             Err(error) => {
                 *self.fault.borrow_mut() = Some(error);
                 None

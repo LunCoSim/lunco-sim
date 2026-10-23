@@ -616,6 +616,18 @@ warm and new-process loading. The worker's application-lived cache retains only
 relocatable compiler artifacts, under `ModelicaCacheLimits` entry/byte budgets;
 it does not retain live FMI state. Cache I/O is asynchronous, so report observed
 hits rather than assuming that a disk snapshot was ready before construction.
+For key-level attribution, enable
+`RUST_LOG=info,lunco_modelica_worker::worker::native_code_cache=trace`.
+The cache admission event identifies the actual storage path and entry/byte
+limits. `native-code-cache-operation` events record gets and inserts under the
+same cache lock, with compiler keys, hit flags, code sizes and post-insert
+eviction/retention counters. Replay that order to distinguish keys absent from
+the loaded snapshot from keys evicted before reuse. These events are disabled
+by the normal info filter; use a separate run for timing acceptance.
+Fingerprint the actual file before and after each process. Concurrent LunCoSim
+sessions can use the same cache root and publish complete snapshots to it;
+matching model sources alone does not establish matching cache starting state
+or prove that another process caused a miss.
 Check `evictions`, `retained_entries` and `retained_bytes` alongside the admitted
 byte/entry limits. A repeated load whose working set exceeds retention can evict
 the next functions before they are reused; a cache file alone proves no benefit.

@@ -1,5 +1,45 @@
 # High-quality realtime performance handover
 
+## Native compiler cache attribution
+
+Opt-in trace events in `worker/native_code_cache.rs` expose the actual cache
+path, limits and serialized get/insert order. They retain compiler keys and byte
+counts, without artifact contents or simulation state. Normal info-level runs
+do not emit them. The existing native-cache owner test passes; the regular
+Tracy production rebuild passes in 2m 34s.
+
+Exact LRU replay of `griffin-native-cache-key-profile` verifies every recorded
+hit, eviction, retained count and byte total. All 32,768 disk entries load before
+the first constructor lookup. The run requests 28,289 distinct keys occupying
+38,244,875 bytes, within both existing limits. Its coupled initializer has
+8,894 misses for keys never admitted in that process and 2,168 misses for
+previously evicted keys. There are no concurrent duplicate misses. The saved
+record contains every key requested by this run, so its publication completes.
+These results do not justify increasing retention or adding single-flight
+compilation for this workload.
+
+A subsequent new-process run, `griffin-native-cache-key-warm-rebuilt-profile`,
+reuses 36,904 of 37,040 lookups across all constructors. The coupled initializer
+reuses 16,414 of 16,482 lookups, compiles 68 artifacts and rejects none. Its
+session construction takes 8.307 s, versus 13.027 s in the preceding key trace;
+end-to-end physics admission is 32.755 s versus 36.194 s. Sources remain stable
+within and between these runs. Their requested key sets differ by 136 additions
+and 140 removals. The shared cache file also changes between the first owned
+exit and the second launch, so this is not a controlled cache-identical timing
+comparison. Another LunCoSim session from the `tutorials` worktree uses the same
+absolute default cache path; the writer of each intervening change is not
+identified. Snapshot replacement can discard another process's additions, but
+its contribution to the original miss surge is unproven.
+
+Both captures have terminal native CSV exports, verified framing, owned PIDs
+and 1 ms CPU sampling periods. Runtime diagnostics are clear and final images
+show Griffin above lunar terrain; they do not establish landing acceptance.
+Both owned applications and collectors are closed. Raw captures, operation
+logs, cache fingerprints and replay summaries remain ignored. Native-cache
+reuse is confirmed; sub-second loading and sub-millisecond coupled ticks remain
+open. The remaining initializer CPU samples include symbolic proof construction
+and Debug formatting even with almost all native artifacts reused.
+
 ## Unified live port declarations and slots
 
 `lunco-port-core::PortDeclarationQuery` publishes a borrowed name, direction and
@@ -35,7 +75,7 @@ panic. Gate receipts remain ignored in `port-declaration-gates/`.
 The `*-port-declaration-profile/` diagnostic runs have stable sources, clear
 retained diagnostics, inspected final images, and verified native capture
 framing, owned PIDs, 1 ms sampling periods and terminal CSV exports. Sources also
-match their preceding captured Twin cohorts. Foreign builds and simulator
+match their preceding captured Twin cohorts. Concurrent builds and LunCoSim
 sessions remain active; cache contents and compilation counts differ.
 
 | Twin | Admission (s) | Complete FixedMain median/p95 (ms) |
@@ -48,12 +88,10 @@ No controlled scene speedup follows from these captures. Griffin's write span
 averages 2.072 ms; its coupled initializer takes 29.790 s with 5,499 hits and
 10,983 compilations/evictions out of 16,482 requests. The source key remains
 `9cf16dad6cc36d49`. Native artifacts load 32,768 entries occupying 61,070,501
-bytes; the owner limits are 32,768 entries and 64 MiB. Investigate the admitted
-working set, cache keys and eviction before tuning these budgets. Each
-application publishes its complete native-artifact snapshot to the cache-relative
-`native-code-v1/stencils.json.zst` path; the older USD checkout uses that same
-relative path. The effect of cross-process publication on this miss surge is not
-established; record actual cache roots and artifact provenance next.
+bytes; the owner limits are 32,768 entries and 64 MiB. The key-level attribution
+above establishes the requested working set and subsequent process reuse;
+cross-process publication has not been established as the cause of this miss
+surge.
 
 The images show Griffin above the terrain, Summer's distant rover/terrain,
 and stationary Tesla with its existing frame/datum-unavailable HUD. They do not
