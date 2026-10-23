@@ -25,7 +25,7 @@
 //! **The two cameras must share one main texture.** Bevy keys a target's main
 //! textures by `(target, usages, format, msaa)`. The scene camera clears that
 //! texture; egui paints on the cleared scene pixels. The host therefore follows
-//! the active scene camera's MSAA and HDR format, and the sync is change-driven
+//! the active scene camera's usages, MSAA and HDR format, and the sync is change-driven
 //! across camera replacement, settings changes, resize, and scene teardown.
 //! A private host texture with `ClearColorConfig::None` is an accumulation
 //! buffer: panels removed by a perspective switch remain baked into it.
