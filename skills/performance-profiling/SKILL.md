@@ -1158,9 +1158,9 @@ When a worker prepares facts for a composed plan, result commit must use the
 same prepared-plan identity for any derived cache. If the canonical owner
 records that exact plan as the source of the current live-stage generation,
 prepared facts remain valid at that nonzero generation until a live edit
-advances it. Later generations require complete change history or
-generation-keyed main-thread extraction. Otherwise a cache-key mismatch can
-repeat a full-stage scan during result publication.
+advances it. Later generations require complete change history or topology
+extraction from that exact generation's recipe snapshot on a worker. Otherwise a
+cache-key mismatch can repeat a full-stage scan during result publication.
 For dependent-stage refresh, pair `usd_canonical_stage_asset_sync` with
 `usd_sim_prepared_topology_cache` and `usd_sim_joint_topology_scan` to verify
 that publishing the new asset plan neither reopens the canonical stage nor
@@ -1175,9 +1175,12 @@ classification does not repeat native schema reads. Build per-prim candidate
 sets and authored vehicle-port lists from the prepared snapshot; skip extraction
 for unrelated entities while preserving their readiness marker. Do
 not materialize every prim path on the UI thread to find a small set of joints,
-attachments, vehicle roots, or policy prims. Live canonical edits keep using
-their owning-thread reader. Invalidate cached topology from
-`UsdSceneChangeBatch`: resynced paths that match an indexed source or currently
+attachments, vehicle roots, or policy prims. A canonical topology refresh encodes
+its captured recipe, composes a worker-local stage and reads topology directly
+through `StageView`; only topology facts return to the World. It does not build
+the visual projection snapshot or extract material and animation facts.
+The live canonical stage stays on its owning thread. Invalidate cached topology
+from `UsdSceneChangeBatch`: resynced paths that match an indexed source or currently
 carry a relevant schema, and info changes on indexed source prims, require
 refresh; unrelated paths only advance the cached generation. Transform-only
 info changes on topology source paths also advance the generation without a

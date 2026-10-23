@@ -1567,10 +1567,17 @@ fn process_usd_sim_prims(
                         let snapshot = snapshot.map_err(|error| {
                             format!("cannot snapshot current canonical stage layers: {error}")
                         })?;
-                        let plan = snapshot.prepare_projection_plan().map_err(|error| {
-                            format!("cannot prepare current canonical stage facts: {error}")
+                        let recipe = snapshot.into_recipe().map_err(|error| {
+                            format!("cannot encode current canonical stage layers: {error}")
                         })?;
-                        Ok(build_joint_topology(&plan))
+                        let (stage, _) =
+                            lunco_usd_bevy_stage::compose::build_stage_with_resolver(&recipe)
+                                .map_err(|error| {
+                                    format!("cannot compose current canonical topology: {error}")
+                                })?;
+                        Ok(build_joint_topology(&lunco_usd_bevy_stage::StageView::new(
+                            &stage,
+                        )))
                     },
                     &mut topology_tasks,
                     &mut async_work,

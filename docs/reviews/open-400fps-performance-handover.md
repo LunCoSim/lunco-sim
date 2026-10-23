@@ -1,5 +1,37 @@
 # High-quality realtime performance handover
 
+## Direct canonical topology preparation — 2026-10-23
+
+`lunco-usd-sim` composes the exact captured canonical recipe on its admitted
+worker and runs the existing topology extractor through `StageView`. It returns
+owned topology without extracting material, transform or animation snapshots.
+`CanonicalStageRecipeSnapshot::into_recipe`, composition and the shared
+composed-read interface keep their existing owners. Asset-plan topology, stable admission order, generation
+validation, error publication, progress holds and teardown are unchanged. This
+is a reader composition change, with no new cache, policy hook or dependency.
+
+Two regular Tracy builds use identical Summer source hashes, unchanged within
+each run. Generation-one `usd_sim_canonical_topology_prepare` self time is
+480.19 ms before and 28.42 ms after. The earlier run also prepares generation
+two (445.70 ms); the later run does not need that additional preparation.
+Physics admission is 2.57 s before and 2.30 s after. These single diagnostic
+windows overlap the foreign USD application, so they do not establish clean FPS
+acceptance or an end-to-end percentage improvement. The loading target remains
+open. Both runs reach 256/256 requested terrain tiles with zero pending,
+completed derived maps and clear runtime diagnostics; final images were
+inspected. They do not qualify the full mission.
+
+The final artifact is SHA-256
+`9ea706d21df9620625e99b186548cea070becf78ad324039d467613a212d6dd0`, built
+with `cargo build -p lunco-luncosim --features tracy -j 4`. The production
+`wheel_attachment_contract` gate passes on the baseline and final artifact;
+`invalid_joint_endpoints` on the final artifact diagnoses the aliased self-joint
+and terminates with expected `usd-physics-joint-invalid`, exit zero.
+Owned APIs 4887/4888/4889/4890/4891 are closed. Both native captures verify
+framing, payload size, owned PID, 1,000,000 ns sampling period and CPU CSV export.
+Evidence is under `.cache/codex-evidence/performance-20261023/topology-direct-*`;
+captures are `scripts/perf/captures/default-summer-topology-direct-{baseline,profile}-20261023.tracy`.
+
 ## Coupled initialization worker wait — 2026-10-23
 
 The coupled-initialization run condition reads its transient actor's native

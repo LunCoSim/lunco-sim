@@ -845,7 +845,11 @@ non-transform info changes to indexed topology paths. Transform-only info
 changes advance the cached generation without rebuilding joint topology;
 structural resyncs and mixed edits still refresh it. Live USD invalidation
 requeues the affected prim, while `SceneTeardown` retires the scene-owned work
-and cache. A completed prepared-plan task uses a nonzero canonical generation
+and cache. A live refresh encodes the exact canonical recipe snapshot and opens
+its composed stage on the worker. The shared `StageView` read interface extracts
+only simulation topology; material, animation and visual snapshot preparation
+are outside that operation. Only the owned topology crosses back to the World.
+A completed prepared-plan task uses a nonzero canonical generation
 without rescanning only when the canonical owner confirms that exact plan is
 still the live stage's recorded snapshot. Otherwise it needs complete change
 history or the conservative live refresh. A task is discarded when the live

@@ -116,11 +116,6 @@ pub struct CanonicalStageRecipeSnapshot {
 }
 
 impl CanonicalStageRecipeSnapshot {
-    /// Prepare the shared composed read plan from this exact layer snapshot.
-    pub fn prepare_projection_plan(self) -> anyhow::Result<UsdStageProjectionPlan> {
-        UsdStageProjectionPlan::from_recipe(&self.into_recipe()?)
-    }
-
     /// Encode captured authored layers with their native codecs on a worker.
     pub fn into_recipe(mut self) -> anyhow::Result<StageRecipe> {
         for (identifier, data) in self.authored_layers {
