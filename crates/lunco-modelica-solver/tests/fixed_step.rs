@@ -53,6 +53,59 @@ fn fixed_rk4_reads_inputs_and_algebraic_values_from_checked_runtime() {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn fixed_rk4_native_and_reference_agree_for_nonlinear_array_inputs() {
+    let compiled = compile(
+        "NonlinearArray",
+        r#"model NonlinearArray
+  input Real command = 0;
+  Real x[16](each start=1, each fixed=true);
+  output Real observed;
+equation
+  observed = sum(x .* x);
+  for i in 1:16 loop
+    der(x[i]) = command - sin(x[i]) * (0.5 + i / 32.0);
+  end for;
+end NonlinearArray;"#,
+        "nonlinear_array.mo",
+    )
+    .unwrap();
+    let mut native = FixedStepSession::new(&compiled.dae, options()).unwrap();
+    let mut reference_options = options();
+    reference_options.execution_policy = rumoca_solver::SimExecutionPolicy::Interpreter;
+    let mut reference = FixedStepSession::new(&compiled.dae, reference_options).unwrap();
+    let mut native_time = std::time::Duration::ZERO;
+    let mut reference_time = std::time::Duration::ZERO;
+    for step in 0..100 {
+        let command = (f64::from(step % 7) - 3.0) * 0.125;
+        let started = std::time::Instant::now();
+        native.set_inputs(&[("command", command)]).unwrap();
+        native.step(0.01).unwrap();
+        let actual = native.state().unwrap();
+        native_time += started.elapsed();
+        let started = std::time::Instant::now();
+        reference.set_inputs(&[("command", command)]).unwrap();
+        reference.step(0.01).unwrap();
+        let expected = reference.state().unwrap();
+        reference_time += started.elapsed();
+        assert_eq!(actual.time.to_bits(), expected.time.to_bits());
+        assert_eq!(actual.values.len(), expected.values.len());
+        for ((name, value), (expected_name, expected_value)) in
+            actual.values.iter().zip(&expected.values)
+        {
+            assert_eq!(name, expected_name);
+            assert!(
+                (value - expected_value).abs() <= 1.0e-12,
+                "step {step}, {name}: native={value}, reference={expected_value}"
+            );
+        }
+    }
+    println!(
+        "nonlinear array diagnostic service: native={native_time:?}, reference={reference_time:?}"
+    );
+}
+
 #[test]
 fn fixed_rk4_uses_exactly_the_configured_step_lattice() {
     let compiled =

@@ -11,7 +11,6 @@ use rumoca_sim::{SessionState, SimOptions, SimulationDiagnosticError};
 use rumoca_solver::fmi_me::{
     MeAdvanceRequest, MeContinuousPoint, MeDerivativeHandle, MeInstanceConfig, MeIntegrationError,
     MeIntegratorBackend, MeModelSource, MeStepCandidate, accepted_interval_contains,
-    admit_execution_backend,
     driver::{advance_live_session, live_session_options},
     integrator::canonical_coordinate,
     session::{MeRetainedComponent, MeSimulationSession},
@@ -54,8 +53,7 @@ impl FixedStepSession {
             options.t_end,
         )
         .map_err(solver_error)?;
-        let execution =
-            admit_execution_backend(options.execution_policy, None).map_err(solver_error)?;
+        let execution = rumoca_sim::fmi_execution_backend(component, &options);
         let retained =
             MeRetainedComponent::instantiate(MeModelSource::new(component), &config, execution)
                 .map_err(solver_error)?;

@@ -295,10 +295,13 @@ integer **value references** once, then reads/writes by reference. Substrate D
 uses the same split: strings remain the external identity; the simulation data
 plane uses process-local slots.
 
-- A backend may expose an **optional** fast path on `PortBackend`:
-  `resolve_output`/`resolve_input` (name → opaque `u64` **slot**) and
-  `read_slot`/`read_input_slot`/`write_slot` (exchange by slot). `None` ⇒ no
-  fast path.
+- A backend publishes each port's direction and optional opaque `u64` slot
+  through `PortBackend::declare_ports`. The declaration query selects the
+  first matching name and causality in one owner traversal. Slot readers and
+  writers (`read_slot`/`read_input_slot`/`write_slot`) exchange values through
+  that declared identity. A declaration without a slot still owns its name;
+  it cannot be shadowed by a lower-precedence slotted owner. Every writable
+  input provides a slot and its owner writer.
 - The registry resolves an endpoint to a `ResolvedPort` carrying its backend,
   slot, side, revision, direction, and metadata. Reads dispatch by slot. Writes
   discover the live declaration through a borrowed exact-name
@@ -380,14 +383,14 @@ per-backend duplication" endgame, applied where it pays.
   - Input writes and input reads have separate resolution paths. Writes may
     target a **write-only** port (avian `force_y` reads `None`), so
     `resolve_input` accepts the backend's declared write ownership. A source
-    reading `inputs:*` instead uses `resolve_input_read`: it follows the first
-    readable-input owner and caches its input slot when available. This keeps a
+    reading `inputs:*` instead uses `resolve_input_read`: it selects the declared
+    input owner and issues its readable slot when a current sample is available. This keeps a
   same-named input and output on one entity distinct and avoids per-tick
   registry/name scans for readable map-backed input sources.
-- Port-presence probes try the backend's resolver before building a full port
-  listing. Map-backed, Avian, scene-property, shader, and catalogued link ports
-  answer existence without allocating rows for every sibling port; list-based
-  ownership remains only for surfaces without a slot resolver. Shader authored
+- Port-presence probes use the same borrowed, exact-name declaration query as
+  live write admission. Map-backed, Avian, scene-property and shader ports
+  answer existence without allocating rows for every sibling port. A declared
+  slot is independent of whether its value has been sampled. Shader authored
   shape fingerprints are refreshed by setters, while live samples keep the
   cached fingerprint unchanged.
 - **No stale-name retry.** A resolved locator that no longer belongs to its

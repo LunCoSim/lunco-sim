@@ -621,7 +621,7 @@ mod tests {
             _entity: Entity,
             out: &mut PortDeclarationQuery<'_>,
         ) {
-            out.declare("throttle", PortDirection::In);
+            out.declare("throttle", PortDirection::In, Some(0));
         }
 
         let mut world = World::new();
@@ -652,15 +652,9 @@ mod tests {
             },
             read_output: |_world, _entity, _name| None,
             read_input: |_world, _entity, _name| None,
-            resolve_input: Some(|world, entity, name| {
-                (name == "throttle"
-                    && world
-                        .get::<ModelicaModel>(entity)
-                        .is_some_and(|model| model.inputs.contains_key(name)))
-                .then_some(0)
-            }),
+
             initial_expression: None,
-            resolve_output: None,
+
             read_slot: None,
             read_input_slot: None,
             write_slot: None,

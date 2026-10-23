@@ -82,6 +82,17 @@ fn requirement_coverage_from_records(
 ) -> Result<SysmlRequirementCoverageValue, Box<rhai::EvalAltResult>> {
     let mut links = HashSet::new();
     for verification in verifications {
+        if verification.is::<SysmlVerificationValue>() {
+            let record = verification.cast::<SysmlVerificationValue>();
+            links.extend(
+                record
+                    .inner
+                    .verified_requirements
+                    .iter()
+                    .map(|requirement| (record.inner.element.handle, *requirement)),
+            );
+            continue;
+        }
         let record = verification
             .try_cast::<Map>()
             .ok_or_else(|| coverage_value_error("verification record is not a map"))?;
@@ -361,6 +372,52 @@ fn model_verifications(model: &mut SysmlModelValue) -> Dynamic {
             .map(|inner| Dynamic::from(SysmlVerificationValue { inner }))
             .collect(),
     )
+}
+
+// Pagination slices the immutable snapshot before cloning source-backed native
+// records. Their metadata is projected only when a policy reads a property.
+fn model_page_bounds(offset: i64, limit: i64) -> Result<(usize, usize), Box<rhai::EvalAltResult>> {
+    let offset = usize::try_from(offset)
+        .map_err(|_| coverage_value_error("SysML page offset must be non-negative"))?;
+    let limit = usize::try_from(limit)
+        .ok()
+        .filter(|limit| *limit > 0)
+        .ok_or_else(|| coverage_value_error("SysML page limit must be positive"))?;
+    Ok((offset, limit))
+}
+
+fn model_requirements_page(
+    model: &mut SysmlModelValue,
+    offset: i64,
+    limit: i64,
+) -> Result<Array, Box<rhai::EvalAltResult>> {
+    let (offset, limit) = model_page_bounds(offset, limit)?;
+    Ok(model
+        .analysis
+        .requirements()
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .cloned()
+        .map(|inner| Dynamic::from(SysmlRequirementValue { inner }))
+        .collect())
+}
+
+fn model_verifications_page(
+    model: &mut SysmlModelValue,
+    offset: i64,
+    limit: i64,
+) -> Result<Array, Box<rhai::EvalAltResult>> {
+    let (offset, limit) = model_page_bounds(offset, limit)?;
+    Ok(model
+        .analysis
+        .verifications()
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .cloned()
+        .map(|inner| Dynamic::from(SysmlVerificationValue { inner }))
+        .collect())
 }
 
 pub fn constraint_ir_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
@@ -2241,7 +2298,15 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("requirement", model_requirement)
         .register_fn("verification", model_verification)
         .register_fn("requirements", model_requirements)
+        .register_fn("requirements", model_requirements_page)
+        .register_get("requirement_count", |model: &mut SysmlModelValue| {
+            model.analysis.requirements().len() as i64
+        })
         .register_fn("verifications", model_verifications)
+        .register_fn("verifications", model_verifications_page)
+        .register_get("verification_count", |model: &mut SysmlModelValue| {
+            model.analysis.verifications().len() as i64
+        })
         .register_fn("constraint_ir", constraint_ir_value)
         .register_fn("required_constraint_irs", required_constraint_irs_value)
         .register_fn("modelica_constraint", modelica_constraint_value)
@@ -2340,6 +2405,12 @@ pub fn register_sysml_types(engine: &mut Engine) {
             |left: RequirementAuditSeverity, right: RequirementAuditSeverity| left == right,
         )
         .register_type_with_name::<SysmlRequirementValue>("SysmlRequirement")
+        .register_get("element", |record: &mut SysmlRequirementValue| {
+            element_dynamic(&record.inner.element)
+        })
+        .register_get("kind", |record: &mut SysmlRequirementValue| {
+            record.inner.element.kind.clone()
+        })
         .register_get(
             "qualified_name",
             |requirement: &mut SysmlRequirementValue| {
@@ -2364,6 +2435,21 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("attribute", requirement_attribute)
         .register_fn("has_attribute", requirement_has_attribute)
         .register_type_with_name::<SysmlVerificationValue>("SysmlVerification")
+        .register_get("element", |record: &mut SysmlVerificationValue| {
+            element_dynamic(&record.inner.element)
+        })
+        .register_get(
+            "verified_requirements",
+            |record: &mut SysmlVerificationValue| {
+                record
+                    .inner
+                    .verified_requirements
+                    .iter()
+                    .copied()
+                    .map(Dynamic::from)
+                    .collect::<Array>()
+            },
+        )
         .register_get(
             "qualified_name",
             |verification: &mut SysmlVerificationValue| {
@@ -3430,6 +3516,90 @@ mod tests {
                 .to_string()
                 .contains("no supported resolved value: Runtime::Rover::invalid")
         );
+    }
+
+    #[test]
+    fn native_pages_keep_large_source_reports_bounded_and_complete() {
+        let mut source = String::from("package Mission { requirement def Envelope {} ");
+        let documentation = "source-backed engineering detail ".repeat(128);
+        for index in 0..72 {
+            source.push_str(&format!(
+                "requirement <'R-{index}'> r{index} : Envelope {{ doc /* {documentation} */ }} "
+            ));
+        }
+        source.push_str("verification def VerifyAll { ");
+        for index in 0..72 {
+            source.push_str(&format!("verify r{index}; "));
+        }
+        source.push_str("} }");
+        let analysis = Arc::new(SysmlAnalysis::from_files([(
+            "large.sysml",
+            source.as_str(),
+        )]));
+        assert!(!analysis.has_errors(), "{:?}", analysis.diagnostics());
+        let expected_count = analysis.requirements().len();
+        assert_eq!(expected_count, 73);
+        let mut engine = Engine::new();
+        engine.set_max_string_size(64 * 1024);
+        engine.set_max_array_size(10_000);
+        register_sysml_types(&mut engine);
+        let mut scope = rhai::Scope::new();
+        scope.push(
+            "model",
+            SysmlModelValue::new("large.sysml", analysis.clone()),
+        );
+        assert!(
+            engine
+                .ensure_data_size_within_limits(&semantic_snapshot_dynamic(&analysis))
+                .unwrap_err()
+                .to_string()
+                .contains("Length of string too large")
+        );
+        let result = engine
+            .eval_with_scope::<Array>(
+                &mut scope,
+                r#"
+            let records = [];
+            let cases = [];
+            let offset = 0;
+            while offset < model.requirement_count || offset < model.verification_count {
+                for record in model.requirements(offset, 8) { records.push(record); }
+                for record in model.verifications(offset, 8) { cases.push(record); }
+                offset += 8;
+            }
+            let report = #{requirements: records, verifications: cases};
+            let coverage = sysml_requirement_coverage(report.verifications);
+            let matched = 0;
+            for record in report.requirements {
+                if coverage.covers(cases[0].element.handle, record.element.handle) {
+                    matched += 1;
+                }
+            }
+            [report.requirements.len(), report.verifications.len(), matched,
+             report.requirements[1].element.short_name,
+             report.requirements[1].element.handle.source_revision == model.source_revision,
+             report.requirements[1].documentation[0].len(),
+             model.requirements(1000, 8).len()]
+        "#,
+            )
+            .unwrap();
+        assert_eq!(result[0].as_int().unwrap(), expected_count as i64);
+        assert_eq!(result[1].as_int().unwrap(), 1);
+        assert_eq!(result[2].as_int().unwrap(), 72);
+        assert_eq!(result[3].clone().into_string().unwrap(), "R-0");
+        assert!(result[4].as_bool().unwrap());
+        assert!(result[5].as_int().unwrap() > 4000);
+        assert_eq!(result[6].as_int().unwrap(), 0);
+        for (expression, diagnostic) in [
+            ("model.requirements(-1, 8)", "offset must be non-negative"),
+            ("model.verifications(0, 0)", "limit must be positive"),
+            ("model.requirements(0, -2)", "limit must be positive"),
+        ] {
+            let error = engine
+                .eval_with_scope::<Dynamic>(&mut scope, expression)
+                .unwrap_err();
+            assert!(error.to_string().contains(diagnostic), "{error}");
+        }
     }
 
     #[test]

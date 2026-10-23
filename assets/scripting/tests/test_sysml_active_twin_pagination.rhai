@@ -23,20 +23,24 @@ if contract.open == true {
         largest_table = source.source_fact_totals.verifications;
     }
     let expected_page_count = 1;
-    let covered = 16;
+    let covered = 8;
     while covered < largest_table {
-        covered += 16;
+        covered += 8;
         expected_page_count += 1;
     }
-    checks.push(t_true(largest_table > 16
+    checks.push(t_true(largest_table > 8
         && source.source_page_count > 1
         && source.source_page_count == expected_page_count,
         "the large active-Twin source reader traverses every bounded fact page"));
 
     let names = #{};
     let unique_requirement_identities = true;
+    let pinned_identities = true;
     for record in source.requirement_records {
         let name = record.qualified_name;
+        if record.element.handle.source_revision != source.source_revision {
+            pinned_identities = false;
+        }
         if name == () || name == "" {
             unique_requirement_identities = false;
         } else if names[name] == true {
@@ -47,17 +51,34 @@ if contract.open == true {
     }
     checks.push(t_true(unique_requirement_identities
         && source.requirement_records.len() > 0,
-        "the compact Rhai requirement index preserves every qualified identity exactly once"));
+        "the native Rhai requirement index preserves every qualified identity exactly once"));
+
+    checks.push(t_true(type_of(source.requirement_records[0]) == "SysmlRequirement"
+        && type_of(source.verification_records[0]) == "SysmlVerification",
+        "full source records stay native rather than accumulating flattened strings"));
 
     let linked_verification = false;
+    let complete_coverage = true;
+    let coverage_edges = 0;
     for record in source.verification_records {
+        if record.element.handle.source_revision != source.source_revision {
+            pinned_identities = false;
+        }
+        for target in record.verified_requirements {
+            coverage_edges += 1;
+            if !source.requirement_coverage.covers(record.element.handle, target) {
+                complete_coverage = false;
+            }
+        }
         if record.qualified_name != () && record.verifies != ()
             && record.verifies.len() > 0 {
             linked_verification = true;
         }
     }
     checks.push(t_true(linked_verification,
-        "the compact Rhai verification index retains source-backed requirement links"));
+        "the native Rhai verification index retains source-backed requirement links"));
+    checks.push(t_true(pinned_identities && complete_coverage && coverage_edges > 0,
+        "every identity and resolved coverage edge belongs to the pinned source"));
 }
 
 t_report(checks);

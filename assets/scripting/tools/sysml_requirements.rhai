@@ -146,6 +146,23 @@ fn verification_name(report, expected) {
 // times, and copying a qualified name into every record can exceed Rhai's
 // string/value budget.  Evaluation stamps the canonical names on emitted
 // evidence instead.
+fn _identity_index(records) {
+    let identities = #{};
+    if records == () { return identities; }
+    for record in records {
+        let name = _record_name(record);
+        if name == "" { continue; }
+        let aliases = [name];
+        let short = _short_name(name);
+        if short != name { aliases.push(short); }
+        for alias in aliases {
+            if identities[alias] == () { identities[alias] = name; }
+            else { identities[alias] = "<ambiguous>"; }
+        }
+    }
+    identities
+}
+
 fn _resolve_indexed_identity(index, expected, kind) {
     if expected == () || expected == "" {
         return #{ok: false, error: "SysML " + kind + " identity is missing"};
@@ -443,7 +460,7 @@ fn text(report, name) {
 // quadratic and can exhaust Rhai's per-tick operation budget.
 fn _indexes(report) {
     let requirements = #{};
-    let requirement_identities = #{};
+    let requirement_identities = _identity_index(report.requirement_records);
     let requirement_handles = #{};
     let requirement_handle_ambiguities = #{};
     if report.requirement_records != () {
@@ -464,19 +481,10 @@ fn _indexes(report) {
                 } else if requirement_handles[handle_short] != handle {
                     requirement_handle_ambiguities[handle_short] = true;
                 }
-                if requirement_identities[name] == () {
-                    requirement_identities[name] = name;
-                }
-                let short = _short_name(name);
-                if requirement_identities[short] == () {
-                    requirement_identities[short] = name;
-                } else if requirement_identities[short] != name {
-                    requirement_identities[short] = "<ambiguous>";
-                }
             }
         }
     }
-    let verification_identities = #{};
+    let verification_identities = _identity_index(report.verification_records);
     let verification_handles = #{};
     let verification_handle_ambiguities = #{};
     if report.verification_records != () {
@@ -489,19 +497,11 @@ fn _indexes(report) {
             } else if verification_handles[name] != handle {
                 verification_handle_ambiguities[name] = true;
             }
-            if verification_identities[name] == () {
-                verification_identities[name] = name;
-            }
             let short = _short_name(name);
             if verification_handles[short] == () {
                 verification_handles[short] = handle;
             } else if verification_handles[short] != handle {
                 verification_handle_ambiguities[short] = true;
-            }
-            if verification_identities[short] == () {
-                verification_identities[short] = name;
-            } else if verification_identities[short] != name {
-                verification_identities[short] = "<ambiguous>";
             }
         }
     }
@@ -1908,87 +1908,51 @@ fn source_with_constraints(names) {
     _source_projection(names, [], [], true, false)
 }
 
-// Full Twin reports use a small bounded query window and retain only the
-// source identities and verification links needed by this policy. Rich
-// requirement details remain available through source_with_selection().
-fn _compact_requirement_identity(record) {
-    let name = _record_name(record);
-    #{element: #{qualified_name: name, short_name: record.element.short_name,
-          handle: record.element.handle}, qualified_name: name,
-      kind: record.kind}
-}
-
-fn _compact_verification_identity(record) {
-    let name = _record_name(record);
-    #{element: #{qualified_name: name, handle: record.element.handle},
-      qualified_name: name, verifies: record.verifies,
-      verified_requirements: record.verified_requirements}
-}
-
-fn _paged_twin_source(path, tables) {
-    // Keep each returned Dynamic comfortably below Rhai's aggregate string
-    // budget. The limit is transport batching, not model or requirement policy.
-    let page_limit = 16;
+// Read metadata once, then traverse the same immutable native snapshot in
+// small pages. Keep records native: reassembling flattened map identities
+// would accumulate all their strings against Rhai's aggregate value limit.
+fn _paged_twin_source(path) {
+    let assembled = _source_set_query(#{path: path, tables: []});
+    if assembled == () || assembled.analysis == () || assembled.ok != true {
+        return assembled;
+    }
+    let snapshot = sysml_model(path);
+    if !sysml_model_is(snapshot) {
+        return #{ok: false, path: path,
+            error: "SysML source snapshot is unavailable"};
+    }
+    if assembled.analysis.source_revision != snapshot.source_revision {
+        return #{ok: false, path: path,
+            error: "SysML source revision changed before paged analysis"};
+    }
+    let page_limit = 8;
     let offset = 0;
     let page_count = 0;
-    let revision = ();
-    let requirement_total = ();
-    let verification_total = ();
-    let assembled = ();
     let requirements = [];
     let verifications = [];
     loop {
-        let page = _source_set_query(#{path: path, tables: tables,
-            offset: offset, limit: page_limit});
-        if page == () || page.analysis == () {
-            return #{ok: false, path: path, error: _report_error(page,
-                "AnalyzeSysml page omitted its semantic facts")};
+        for record in snapshot.requirements(offset, page_limit) {
+            requirements.push(record);
         }
-        let page_revision = page.analysis.source_revision;
-        if page_revision == () {
-            return #{ok: false, path: path,
-                error: "AnalyzeSysml page omitted its source revision"};
-        }
-        if revision == () {
-            revision = page_revision;
-            assembled = page;
-        } else if revision != page_revision {
-            return #{ok: false, path: path,
-                error: "SysML source revision changed during paged analysis"};
+        for record in snapshot.verifications(offset, page_limit) {
+            verifications.push(record);
         }
         page_count += 1;
-        for record in page.analysis.requirements {
-            requirements.push(_compact_requirement_identity(record));
-        }
-        for record in page.analysis.verifications {
-            verifications.push(_compact_verification_identity(record));
-        }
-        let page_tables = page.analysis.page.tables;
-        if page_tables == () || page_tables.requirements == ()
-            || page_tables.verifications == () {
-            return #{ok: false, path: path,
-                error: "AnalyzeSysml page omitted table pagination metadata"};
-        }
-        if requirement_total == () {
-            requirement_total = page_tables.requirements.total;
-            verification_total = page_tables.verifications.total;
-        } else if requirement_total != page_tables.requirements.total
-            || verification_total != page_tables.verifications.total {
-            return #{ok: false, path: path,
-                error: "SysML fact-table totals changed during paged analysis"};
-        }
-        if page_tables.requirements.has_more != true
-            && page_tables.verifications.has_more != true {
+        offset += page_limit;
+        if offset >= snapshot.requirement_count && offset >= snapshot.verification_count {
             break;
         }
-        offset += page_limit;
     }
-    assembled.analysis = #{source_files: assembled.analysis.source_files,
-        source_revision: revision,
-        requirements: requirements, verifications: verifications};
+    if requirements.len() != snapshot.requirement_count
+        || verifications.len() != snapshot.verification_count {
+        return #{ok: false, path: path,
+            error: "SysML source pagination omitted semantic records"};
+    }
+    assembled.analysis.requirements = requirements;
+    assembled.analysis.verifications = verifications;
     assembled.source_page_count = page_count;
-    assembled.source_fact_totals = #{requirements: requirement_total,
-        verifications: verification_total};
+    assembled.source_fact_totals = #{requirements: snapshot.requirement_count,
+        verifications: snapshot.verification_count};
     assembled
 }
 
@@ -2024,7 +1988,7 @@ fn _source_projection(names, requirement_names, verification_names,
     if requirement_names.len() > 0 { request.requirement_names = requirement_names; }
     if verification_names.len() > 0 { request.verification_names = verification_names; }
     let analyzed = if include_twin_contract {
-        _paged_twin_source(request.path, tables)
+        _paged_twin_source(request.path)
     } else {
         _source_set_query(request)
     };
@@ -2099,8 +2063,10 @@ fn _source_projection(names, requirement_names, verification_names,
     for error in report.component_registry_errors {
         report.errors.push("Twin component registry: " + error);
     }
+    let verification_identities = _identity_index(report.verification_records);
     for candidate_case in report.verification_registry {
-        let resolved = verification_name(report, candidate_case.name);
+        let resolved = _resolve_indexed_identity(verification_identities,
+            candidate_case.name, "verification");
         if resolved.ok != true {
             report.verification_registry_errors.push(resolved.error);
         }

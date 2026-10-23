@@ -150,9 +150,26 @@ include its first complete observation. Zero native compilations do not prove
 faster admission: reference evaluation can dominate a large coupled initializer
 even when it avoids JIT work. Keep an evaluator change only when the actual
 scene improves with its numerical contract intact.
+Shared-value construction also pays for source discovery and symbolic proofs.
+Its read collector shares the exhaustive Solve operand checks in one traversal;
+preserve range/context checks and whole-program equivalence when optimizing it.
+The symbolic term table interns complete operation keys once; each scalar output
+uses the table-local ID and output ordinal. Retain full structural equality and
+the shared table lifetime across segments and both sides of a check.
 Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.
+
+For fixed RK4, verify that its ME component receives the opaque execution
+backend issued by `rumoca_sim::fmi_execution_backend`. Selecting a fixed
+integrator does not itself install compiled evaluation. Keep the same lattice,
+input transaction and complete checked observation when comparing native and
+reference execution. The nonlinear-array differential test qualifies numerical
+agreement; its small diagnostic timing does not certify whole coupled ticks.
+Use actual compiler-cache accounting on nontrivial production models to verify
+native work. A local dependency path patch can disable prepared-model disk
+caching; record that state and reject it as final loading acceptance for a
+portable Git pin.
 
 ## Architecture checks
 
@@ -685,10 +702,10 @@ For fixed-step port costs, the exchange exposes `cosim_exchange_topology`,
 `cosim_exchange_holds`, `cosim_exchange_write` and `cosim_exchange_diagnostics`
 inside the single propagation owner. Attribute these phases before changing
 lookup or validation; do not add their nested duration to the parent.
-Backend `declare_ports` uses `PortDeclarationQuery`
+Backend `declare_ports` publishes direction and optional slot in one `PortDeclarationQuery`
 for both full inspection and exact-name, direction-constrained discovery.
 Map-backed owners query the requested name directly; named queries retain only
-the first matching direction without constructing owned rows. Preserve the
+the first matching direction and slot without constructing owned rows. Preserve the
 same declaration order and live metadata checks; topology publication alone
 cannot guard an owner edit before its scheduled publication pass.
 Avian resolution, named declarations and metadata selection share immutable

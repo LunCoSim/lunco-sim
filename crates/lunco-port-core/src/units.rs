@@ -20,6 +20,7 @@ pub enum EngineUnit {
     Second,
     Watt,
     Kelvin,
+    Lumen,
 }
 
 impl EngineUnit {
@@ -58,6 +59,7 @@ impl EngineUnit {
             Self::Second => reference!("s", Dimension([0, 0, 1, 0, 0, 0, 0]), 0),
             Self::Watt => reference!("W", Dimension([2, 1, -3, 0, 0, 0, 0]), 0),
             Self::Kelvin => reference!("K", Dimension([0, 0, 0, 0, 1, 0, 0]), 0),
+            Self::Lumen => reference!("lm", Dimension([0, 0, 0, 0, 0, 0, 1]), 0),
         }
     }
 }

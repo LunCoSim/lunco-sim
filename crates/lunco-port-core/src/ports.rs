@@ -1017,10 +1017,11 @@ pub struct PortDeclaration {
     pub name: String,
     /// Causality.
     pub direction: PortDirection,
+    slot: Option<u64>,
 }
 
 /// One backend declaration query. Inspection collects owned rows; a named
-/// query borrows its name and records only the first matching direction.
+/// query borrows its name and records the first matching direction and slot.
 /// Both paths consume the same owner declarations, independent of live samples.
 pub struct PortDeclarationQuery<'a> {
     target: PortDeclarationTarget<'a>,
@@ -1031,7 +1032,7 @@ enum PortDeclarationTarget<'a> {
     Named {
         name: &'a str,
         side: ResolvedPortSide,
-        direction: Option<PortDirection>,
+        declaration: Option<(PortDirection, Option<u64>)>,
     },
 }
 
@@ -1048,7 +1049,7 @@ impl<'a> PortDeclarationQuery<'a> {
             target: PortDeclarationTarget::Named {
                 name,
                 side,
-                direction: None,
+                declaration: None,
             },
         }
     }
@@ -1078,7 +1079,9 @@ impl<'a> PortDeclarationQuery<'a> {
     }
 
     /// Publish a borrowed declaration. Only an inspection query copies its name.
-    pub fn declare(&mut self, name: &str, direction: PortDirection) {
+    /// `slot` is the owner's process-local value reference, independent of sample
+    /// availability. A declaration without a slot still wins name precedence.
+    pub fn declare(&mut self, name: &str, direction: PortDirection, slot: Option<u64>) {
         if !self.accepts_direction(direction) {
             return;
         }
@@ -1086,23 +1089,24 @@ impl<'a> PortDeclarationQuery<'a> {
             PortDeclarationTarget::All(out) => out.push(PortDeclaration {
                 name: name.to_owned(),
                 direction,
+                slot,
             }),
             PortDeclarationTarget::Named {
                 name: requested,
-                direction: found,
+                declaration: found,
                 ..
             } => {
                 if name == *requested && found.is_none() {
-                    *found = Some(direction);
+                    *found = Some((direction, slot));
                 }
             }
         }
     }
 
-    fn direction(&self) -> Option<PortDirection> {
+    fn declaration(&self) -> Option<(PortDirection, Option<u64>)> {
         match &self.target {
             PortDeclarationTarget::All(_) => None,
-            PortDeclarationTarget::Named { direction, .. } => *direction,
+            PortDeclarationTarget::Named { declaration, .. } => *declaration,
         }
     }
 }
@@ -1114,12 +1118,12 @@ pub fn declare_map(out: &mut PortDeclarationQuery<'_>, map: &PortMap<f64>, dir: 
         return;
     }
     if let Some(name) = out.requested_name() {
-        if map.contains_key(name) {
-            out.declare(name, dir);
+        if let Some(slot) = map.resolve_slot(name) {
+            out.declare(name, dir, Some(slot));
         }
     } else {
         for name in map.keys() {
-            out.declare(name, dir);
+            out.declare(name, dir, map.resolve_slot(name));
         }
     }
 }
@@ -1191,7 +1195,8 @@ pub struct PortBackend {
     pub topology_key: fn(&World, Entity) -> u64,
     /// Publish this backend's live declarations (outputs then inputs) through
     /// the query. Use its requested name for indexed discovery; never infer a
-    /// declaration from the presence of a numeric sample.
+    /// declaration from the presence of a numeric sample. Publish direction and
+    /// optional slot together; writable inputs require a slot and `write_slot`.
     pub declare_ports: fn(&World, Entity, &mut PortDeclarationQuery<'_>),
     /// Describe every port published by `declare_ports`. This callback is mandatory so
     /// the owning backend, rather than a registry fallback, defines each port's
@@ -1204,19 +1209,6 @@ pub struct PortBackend {
     /// Algebraic relation active during consistent initialization. The same
     /// declared owner selects this relation; it never supplies a guessed sample.
     pub initial_expression: Option<PortInitialExpressionReader>,
-    // ── Optional resolve→slot fast path (the FMI valueReference model) ──────────
-    //
-    // A backend with dynamic names or a multi-owner presence scan resolves an
-    // endpoint to a process-local slot once. Input write ownership and readable
-    // input-side sources are resolved separately. Every writable input provides
-    // an input resolver and slot writer. See [`PortRegistry::resolve_output`].
-    /// Resolve an **output** name to a backend-private `slot` (opaque `u64`),
-    /// or `None` if this backend doesn't own it. Encodes causality: only an
-    /// `Out`/`InOut` port resolves here.
-    pub resolve_output: Option<fn(&World, Entity, &str) -> Option<u64>>,
-    /// Resolve an **input** name to a backend-private `slot`, or `None`. Only an
-    /// `In`/`InOut` port resolves here.
-    pub resolve_input: Option<fn(&World, Entity, &str) -> Option<u64>>,
     /// Read the value at a previously-resolved `slot`. `None` if the slot no
     /// longer backs a live value. The shared port-topology revision requires
     /// compiled consumers to rebuild locators at their next deterministic
@@ -1306,8 +1298,6 @@ enum ResolvedPortSide {
 pub enum PortWriteErrorKind {
     /// No backend owns this input name on the target.
     UnknownInput,
-    /// An owning backend did not declare the resolved port row.
-    MetadataUnavailable,
     /// The owner explicitly marked the input as non-writable.
     NotWritable,
     /// The owner did not provide a resolved slot writer for this input.
@@ -1353,11 +1343,6 @@ impl fmt::Display for PortWriteError {
             PortWriteErrorKind::UnknownInput => {
                 write!(formatter, "unknown input port `{}`", self.port)
             }
-            PortWriteErrorKind::MetadataUnavailable => write!(
-                formatter,
-                "input port `{}` has no owner metadata{owner}",
-                self.port
-            ),
             PortWriteErrorKind::NotWritable => write!(
                 formatter,
                 "input port `{}` is not writable{owner}",
@@ -1515,6 +1500,7 @@ impl InputWriteTransaction<'_> {
 struct PortOwner {
     backend: usize,
     slot: Option<u64>,
+    direction: PortDirection,
 }
 
 /// The single registry of port-bearing backends — **the** read/write/list surface
@@ -1584,10 +1570,7 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
             .and_then(|inputs| inputs.values.get(name).copied())
     },
     initial_expression: None,
-    resolve_output: None,
-    resolve_input: Some(|world, entity, name| {
-        world.get::<InputPorts>(entity)?.values.resolve_slot(name)
-    }),
+
     read_slot: None,
     read_input_slot: Some(|world, entity, slot| {
         world
@@ -1616,19 +1599,18 @@ impl PortRegistry {
         &self,
         world: &World,
         entity: Entity,
-        backend: usize,
         name: &str,
-        slot: u64,
+        owner: PortOwner,
         side: ResolvedPortSide,
     ) -> Option<ResolvedPort> {
-        let (direction, metadata) =
-            self.port_metadata_for_backend(world, entity, backend, name, side)?;
+        let metadata =
+            (self.backends[owner.backend].metadata)(world, entity, name, owner.direction);
         let revision = world.get_resource::<PortTopologyRevision>()?.0;
         Some(ResolvedPort {
-            backend,
-            slot,
+            backend: owner.backend,
+            slot: owner.slot?,
             name: Arc::from(name),
-            direction,
+            direction: owner.direction,
             metadata,
             revision,
             side,
@@ -1756,27 +1738,15 @@ impl PortRegistry {
                 {
                     continue;
                 }
-                let (slot, reader) = match port.direction {
-                    PortDirection::In => backend
-                        .resolve_input
-                        .and_then(|resolve| resolve(world, entity, &port.name))
-                        .zip(backend.read_input_slot),
-                    PortDirection::Out => backend
-                        .resolve_output
-                        .and_then(|resolve| resolve(world, entity, &port.name))
-                        .zip(backend.read_slot),
-                    PortDirection::InOut => backend
-                        .resolve_output
-                        .and_then(|resolve| resolve(world, entity, &port.name))
-                        .zip(backend.read_slot)
-                        .or_else(|| {
-                            backend
-                                .resolve_input
-                                .and_then(|resolve| resolve(world, entity, &port.name))
-                                .zip(backend.read_input_slot)
-                        }),
-                }
-                .map_or((None, None), |(slot, reader)| (Some(slot), Some(reader)));
+                let reader = match port.direction {
+                    PortDirection::In => backend.read_input_slot,
+                    PortDirection::Out => backend.read_slot,
+                    PortDirection::InOut => backend.read_slot.or(backend.read_input_slot),
+                };
+                let (slot, reader) = port
+                    .slot
+                    .zip(reader)
+                    .map_or((None, None), |(slot, reader)| (Some(slot), Some(reader)));
                 let handle = PortHandle {
                     backend: backend_index,
                     slot,
@@ -2064,8 +2034,12 @@ impl PortRegistry {
         side: ResolvedPortSide,
     ) -> Option<PortMetadata> {
         let owner = self.port_owner(world, entity, name, side)?;
-        self.port_metadata_for_backend(world, entity, owner.backend, name, side)
-            .map(|(_, metadata)| metadata)
+        Some((self.backends[owner.backend].metadata)(
+            world,
+            entity,
+            name,
+            owner.direction,
+        ))
     }
 
     fn port_owner(
@@ -2076,22 +2050,13 @@ impl PortRegistry {
         side: ResolvedPortSide,
     ) -> Option<PortOwner> {
         for (index, backend) in self.backends.iter().enumerate() {
-            let resolver = match side {
-                ResolvedPortSide::Input => backend.resolve_input,
-                ResolvedPortSide::Output => backend.resolve_output,
-            };
-            if let Some(slot) = resolver.and_then(|resolve| resolve(world, entity, name)) {
-                return Some(PortOwner {
-                    backend: index,
-                    slot: Some(slot),
-                });
-            }
             let mut query = PortDeclarationQuery::named(name, side);
             (backend.declare_ports)(world, entity, &mut query);
-            if query.direction().is_some() {
+            if let Some((direction, slot)) = query.declaration() {
                 return Some(PortOwner {
                     backend: index,
-                    slot: None,
+                    slot,
+                    direction,
                 });
             }
         }
@@ -2133,13 +2098,8 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::UnknownInput,
             });
         };
-        let (direction, metadata) = self
-            .port_metadata_for_backend(world, entity, owner.backend, &name, ResolvedPortSide::Input)
-            .ok_or_else(|| PortWriteError {
-                port: name.to_string(),
-                owner: None,
-                kind: PortWriteErrorKind::MetadataUnavailable,
-            })?;
+        let direction = owner.direction;
+        let metadata = (self.backends[owner.backend].metadata)(world, entity, &name, direction);
         metadata
             .validate_contract()
             .map_err(|error| PortWriteError {
@@ -2302,15 +2262,13 @@ impl PortRegistry {
         if owner.backend != prepared.backend {
             return Err(stale());
         }
-        let Some((direction, metadata)) = self.port_metadata_for_backend(
+        let direction = owner.direction;
+        let metadata = (self.backends[owner.backend].metadata)(
             world,
             prepared.entity,
-            prepared.backend,
             &prepared.name,
-            ResolvedPortSide::Input,
-        ) else {
-            return Err(stale());
-        };
+            direction,
+        );
         if direction != prepared.direction || metadata != prepared.metadata {
             return Err(stale());
         }
@@ -2363,9 +2321,9 @@ impl PortRegistry {
     /// as its canonical access path.
     ///
     /// **Precedence-correct:** walks backends in registration order and stops at
-    /// the FIRST that owns `name`. A resolver can establish ownership before a
-    /// value is sampled; otherwise a readable name-only backend stops lookup so
-    /// a lower-precedence slot backend cannot shadow it.
+    /// the FIRST that declares `name`, independently of its current sample.
+    /// A declaration without a slot still stops lookup, so a lower-precedence
+    /// slotted owner cannot shadow it.
     pub fn resolve_output(
         &self,
         world: &World,
@@ -2373,15 +2331,7 @@ impl PortRegistry {
         name: &str,
     ) -> Option<ResolvedPort> {
         let owner = self.port_owner(world, entity, name, ResolvedPortSide::Output)?;
-        let slot = owner.slot?;
-        self.resolved_port(
-            world,
-            entity,
-            owner.backend,
-            name,
-            slot,
-            ResolvedPortSide::Output,
-        )
+        self.resolved_port(world, entity, name, owner, ResolvedPortSide::Output)
     }
 
     /// Resolve the precedence-winning declared input endpoint to a
@@ -2389,27 +2339,17 @@ impl PortRegistry {
     /// [`resolve_output`](Self::resolve_output).
     ///
     /// Input ownership comes from the same public port list used by
-    /// [`write_port`](Self::write_port). If the winning owner has no slot
-    /// resolver, this returns `None`; the caller must use the named write path,
-    /// which addresses that same owner and never falls through to a shadowed
-    /// input.
+    /// [`write_port`](Self::write_port). If the winning declaration has no slot,
+    /// no handle is issued. The registry never selects a shadowed input.
     pub fn resolve_input(&self, world: &World, entity: Entity, name: &str) -> Option<ResolvedPort> {
         let owner = self.port_owner(world, entity, name, ResolvedPortSide::Input)?;
-        let slot = owner.slot?;
-        self.resolved_port(
-            world,
-            entity,
-            owner.backend,
-            name,
-            slot,
-            ResolvedPortSide::Input,
-        )
+        self.resolved_port(world, entity, name, owner, ResolvedPortSide::Input)
     }
 
     /// Resolve a readable **input-side** source to a slot. This is distinct
     /// from [`resolve_input`](Self::resolve_input), which resolves write
     /// ownership and may legitimately select a write-only port. Resolution
-    /// follows the same first-readable-owner precedence as
+    /// follows the same declared-owner precedence as
     /// [`read_input_port`](Self::read_input_port).
     pub fn resolve_input_read(
         &self,
@@ -2421,15 +2361,7 @@ impl PortRegistry {
         let backend = &self.backends[owner.backend];
         (backend.read_input)(world, entity, name)?;
         backend.read_input_slot?;
-        let slot = owner.slot?;
-        self.resolved_port(
-            world,
-            entity,
-            owner.backend,
-            name,
-            slot,
-            ResolvedPortSide::Input,
-        )
+        self.resolved_port(world, entity, name, owner, ResolvedPortSide::Input)
     }
 
     /// Read the value at a resolved port. `None` if the slot no longer backs a
@@ -2506,24 +2438,6 @@ impl PortRegistry {
         }
         Ok(prepared)
     }
-
-    fn port_metadata_for_backend(
-        &self,
-        world: &World,
-        entity: Entity,
-        backend_index: usize,
-        name: &str,
-        side: ResolvedPortSide,
-    ) -> Option<(PortDirection, PortMetadata)> {
-        let backend = self.backends.get(backend_index)?;
-        let mut query = PortDeclarationQuery::named(name, side);
-        (backend.declare_ports)(world, entity, &mut query);
-        let direction = query.direction()?;
-        Some((
-            direction,
-            (backend.metadata)(world, entity, name, direction),
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -2535,6 +2449,41 @@ mod tests {
         PortNameSetKey, PortRegistry, PortTopologyRevision, PortValueType, ScalarPortMap,
         port_name_set_key,
     };
+
+    #[test]
+    fn live_resolved_input_admission_benchmark() {
+        let mut world = test_world();
+        let entity = world.spawn(InputPorts::new(&["signal"])).id();
+        let mut registry = PortRegistry::default();
+        for _ in 0..16 {
+            registry.register(PortBackend {
+                list_entities: |_, _| {},
+                topology_key: |_, _| 0,
+                declare_ports: |_, _, out| out.declare("other", PortDirection::In, Some(0)),
+                metadata: test_metadata,
+                read_output: no_read,
+                read_input: no_read,
+                initial_expression: None,
+
+                read_slot: None,
+                read_input_slot: None,
+                write_slot: None,
+            });
+        }
+        registry.register(super::INPUT_PORTS_BACKEND);
+        let locator = registry.resolve_input(&world, entity, "signal").unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..131_072 {
+            let prepared = registry
+                .prepare_resolved_input_write(std::hint::black_box(&world), entity, &locator, 0.5)
+                .unwrap();
+            std::hint::black_box(prepared);
+        }
+        println!(
+            "LIVE_INPUT_ADMISSION_BENCH elapsed_ns={} writes=131072 preceding_owners=16",
+            start.elapsed().as_nanos()
+        );
+    }
 
     #[test]
     fn declared_scalar_accepts_first_sample_without_changing_its_slot() {
@@ -2648,39 +2597,44 @@ mod tests {
     #[test]
     fn declaration_queries_preserve_order_and_require_exact_name_and_side() {
         let publish = |query: &mut PortDeclarationQuery<'_>| {
-            query.declare("other", PortDirection::In);
-            query.declare("signal", PortDirection::Out);
-            query.declare("signal", PortDirection::InOut);
-            query.declare("signal", PortDirection::In);
+            query.declare("other", PortDirection::In, None);
+            query.declare("signal", PortDirection::Out, Some(7));
+            query.declare("signal", PortDirection::InOut, Some(9));
+            query.declare("signal", PortDirection::In, Some(11));
         };
         let mut rows = Vec::new();
         publish(&mut PortDeclarationQuery::all(&mut rows));
         assert_eq!(rows.len(), 4);
         let mut input = PortDeclarationQuery::named("signal", super::ResolvedPortSide::Input);
         publish(&mut input);
-        assert_eq!(input.direction(), Some(PortDirection::InOut));
+        assert_eq!(input.declaration(), Some((PortDirection::InOut, Some(9))));
         let mut output = PortDeclarationQuery::named("signal", super::ResolvedPortSide::Output);
         publish(&mut output);
-        assert_eq!(output.direction(), Some(PortDirection::Out));
+        assert_eq!(output.declaration(), Some((PortDirection::Out, Some(7))));
+        assert_eq!(rows[1].slot, Some(7));
+        assert_eq!(rows[2].slot, Some(9));
         let mut absent = PortDeclarationQuery::named("missing", super::ResolvedPortSide::Input);
         publish(&mut absent);
-        assert_eq!(absent.direction(), None);
+        assert_eq!(absent.declaration(), None);
 
         let mut ports = ScalarPortMap::default();
         ports.insert("signal".into(), 0.0);
         let mut query = PortDeclarationQuery::named("signal", super::ResolvedPortSide::Input);
         super::declare_map(&mut query, &ports, PortDirection::Out);
-        assert_eq!(query.direction(), None);
+        assert_eq!(query.declaration(), None);
         super::declare_map(&mut query, &ports, PortDirection::In);
-        assert_eq!(query.direction(), Some(PortDirection::In));
+        assert_eq!(
+            query.declaration().map(|(direction, _)| direction),
+            Some(PortDirection::In)
+        );
         let mut missing = PortDeclarationQuery::named("missing", super::ResolvedPortSide::Input);
         super::declare_map(&mut missing, &ports, PortDirection::In);
-        assert_eq!(missing.direction(), None);
+        assert_eq!(missing.declaration(), None);
     }
 
     fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut PortDeclarationQuery<'_>) {
-        out.declare("release", PortDirection::In);
-        out.declare("release", PortDirection::In);
+        out.declare("release", PortDirection::In, Some(0));
+        out.declare("release", PortDirection::In, Some(0));
     }
 
     #[test]
@@ -2838,8 +2792,8 @@ mod tests {
     }
 
     fn duplicate_inout_list(_world: &World, _entity: Entity, out: &mut PortDeclarationQuery<'_>) {
-        out.declare("release", PortDirection::InOut);
-        out.declare("release", PortDirection::InOut);
+        out.declare("release", PortDirection::InOut, Some(0));
+        out.declare("release", PortDirection::InOut, Some(0));
     }
 
     fn owner_a_metadata(
@@ -2878,10 +2832,6 @@ mod tests {
         )
     }
 
-    fn resolve_release_slot(_world: &World, _entity: Entity, name: &str) -> Option<u64> {
-        (name == "release").then_some(0)
-    }
-
     fn accept_release_slot(_world: &mut World, _entity: Entity, slot: u64, _value: f64) {
         assert_eq!(slot, 0, "prepared release slot is valid");
     }
@@ -2902,10 +2852,10 @@ mod tests {
         metadata: owner_a_metadata,
         read_output: no_read,
         read_input: no_read,
-        resolve_input: Some(resolve_release_slot),
+
         write_slot: Some(accept_release_slot),
         initial_expression: None,
-        resolve_output: None,
+
         read_slot: None,
         read_input_slot: None,
     };
@@ -2917,10 +2867,10 @@ mod tests {
         metadata: owner_b_metadata,
         read_output: no_read,
         read_input: no_read,
-        resolve_input: Some(resolve_release_slot),
+
         write_slot: Some(accept_release_slot),
         initial_expression: None,
-        resolve_output: None,
+
         read_slot: None,
         read_input_slot: None,
     };
@@ -2932,10 +2882,10 @@ mod tests {
         metadata: owner_a_metadata,
         read_output: no_read,
         read_input: no_read,
-        resolve_input: Some(resolve_release_slot),
+
         write_slot: Some(accept_release_slot),
         initial_expression: None,
-        resolve_output: None,
+
         read_slot: None,
         read_input_slot: None,
     };
@@ -2947,10 +2897,10 @@ mod tests {
         metadata: owner_b_metadata,
         read_output: no_read,
         read_input: no_read,
-        resolve_input: Some(resolve_release_slot),
+
         write_slot: Some(accept_release_slot),
         initial_expression: None,
-        resolve_output: None,
+
         read_slot: None,
         read_input_slot: None,
     };
@@ -2996,7 +2946,7 @@ mod tests {
             topology_key: |_world, _entity| 1,
             declare_ports: |world, entity, out| {
                 if world.get::<StatePort>(entity).is_some() {
-                    out.declare("shared", PortDirection::InOut);
+                    out.declare("shared", PortDirection::InOut, None);
                 }
             },
             metadata: read_only_test_metadata,
@@ -3011,8 +2961,7 @@ mod tests {
                     .flatten()
             },
             initial_expression: None,
-            resolve_output: None,
-            resolve_input: None,
+
             read_slot: None,
             read_input_slot: None,
             write_slot: None,
@@ -3022,7 +2971,7 @@ mod tests {
             topology_key: |_world, _entity| 1,
             declare_ports: |world, entity, out| {
                 if world.get::<ShadowedInput>(entity).is_some() {
-                    out.declare("shared", PortDirection::In);
+                    out.declare("shared", PortDirection::In, Some(0));
                 }
             },
             metadata: test_metadata,
@@ -3033,10 +2982,7 @@ mod tests {
                     .flatten()
             },
             initial_expression: None,
-            resolve_output: None,
-            resolve_input: Some(|world, entity, name| {
-                (name == "shared" && world.get::<ShadowedInput>(entity).is_some()).then_some(0)
-            }),
+
             read_slot: None,
             read_input_slot: Some(|world, entity, slot| {
                 (slot == 0)
@@ -3158,7 +3104,11 @@ mod tests {
                 topology_key: |_, _| 0,
                 declare_ports: |world, entity, ports| {
                     if world.get::<Input>(entity).is_some() {
-                        ports.declare("signal", PortDirection::In);
+                        world
+                            .resource::<SlotResolutions>()
+                            .0
+                            .fetch_add(1, Ordering::Relaxed);
+                        ports.declare("signal", PortDirection::In, Some(7));
                     }
                 },
                 metadata: |world, entity, _, direction| {
@@ -3180,14 +3130,7 @@ mod tests {
                 read_output: no_read,
                 read_input: no_read,
                 initial_expression: None,
-                resolve_output: None,
-                resolve_input: Some(|world, entity, name| {
-                    world
-                        .resource::<SlotResolutions>()
-                        .0
-                        .fetch_add(1, Ordering::Relaxed);
-                    (name == "signal" && world.get::<Input>(entity).is_some()).then_some(7)
-                }),
+
                 read_slot: None,
                 read_input_slot: None,
                 write_slot: Some(|world, entity, slot, value| {
@@ -3526,7 +3469,7 @@ mod tests {
             topology_key: |world, entity| u64::from(world.get::<ProbeInput>(entity).is_some()),
             declare_ports: |world, entity, out| {
                 if world.get::<ProbeInput>(entity).is_some() {
-                    out.declare("shared", PortDirection::In);
+                    out.declare("shared", PortDirection::In, Some(0));
                 }
             },
             metadata: read_only_test_metadata,
@@ -3537,10 +3480,7 @@ mod tests {
                     .flatten()
             },
             initial_expression: None,
-            resolve_output: None,
-            resolve_input: Some(|world, entity, name| {
-                (name == "shared" && world.get::<ProbeInput>(entity).is_some()).then_some(0)
-            }),
+
             read_slot: Some(|_, _, _| Some(-1.0)),
             read_input_slot: Some(|world, entity, slot| {
                 (slot == 0)
@@ -3569,13 +3509,18 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 0,
-            declare_ports: |_, _, _| panic!("resolved presence must not enumerate port rows"),
+            declare_ports: |_, _, out| {
+                assert!(
+                    out.requested_name().is_some(),
+                    "presence uses an indexed named query"
+                );
+                out.declare("signal", PortDirection::InOut, Some(0));
+            },
             metadata: read_only_test_metadata,
             read_output: |_, _, _| None,
             read_input: |_, _, _| None,
             initial_expression: None,
-            resolve_output: Some(|_, _, name| (name == "signal").then_some(0)),
-            resolve_input: Some(|_, _, name| (name == "signal").then_some(0)),
+
             read_slot: Some(|_, _, _| None),
             read_input_slot: Some(|_, _, _| None),
             write_slot: None,
@@ -3596,17 +3541,16 @@ mod tests {
         registry.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
-            declare_ports: |_, _, out| {
-                out.declare("signal", PortDirection::Out);
+            declare_ports: |world, entity, out| {
+                if world.get::<DeclaredOutput>(entity).is_some() {
+                    out.declare("signal", PortDirection::Out, Some(7));
+                }
             },
             metadata: test_metadata,
             read_output: |_, _, _| None,
             read_input: |_, _, _| None,
             initial_expression: None,
-            resolve_output: Some(|world, entity, name| {
-                (name == "signal" && world.get::<DeclaredOutput>(entity).is_some()).then_some(7)
-            }),
-            resolve_input: None,
+
             read_slot: Some(|world, entity, slot| {
                 (slot == 7 && world.get::<DeclaredOutput>(entity).is_some()).then_some(2.5)
             }),
@@ -3623,13 +3567,12 @@ mod tests {
         precedence.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
-            declare_ports: |_, _, _| {},
+            declare_ports: |_, _, out| out.declare("signal", PortDirection::Out, None),
             metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(1.0),
             read_input: |_, _, _| None,
             initial_expression: None,
-            resolve_output: None,
-            resolve_input: None,
+
             read_slot: None,
             read_input_slot: None,
             write_slot: None,
@@ -3637,13 +3580,12 @@ mod tests {
         precedence.register(PortBackend {
             list_entities: |_, _| {},
             topology_key: |_, _| 1,
-            declare_ports: |_, _, _| {},
+            declare_ports: |_, _, out| out.declare("signal", PortDirection::Out, Some(8)),
             metadata: read_only_test_metadata,
             read_output: |_, _, name| (name == "signal").then_some(2.0),
             read_input: |_, _, _| None,
             initial_expression: None,
-            resolve_output: Some(|_, _, name| (name == "signal").then_some(8)),
-            resolve_input: None,
+
             read_slot: Some(|_, _, slot| (slot == 8).then_some(2.0)),
             read_input_slot: None,
             write_slot: None,
@@ -3677,8 +3619,7 @@ mod tests {
             read_output: no_read,
             read_input: no_read,
             initial_expression: None,
-            resolve_output: None,
-            resolve_input: None,
+
             read_slot: None,
             read_input_slot: None,
             write_slot: None,
@@ -3780,10 +3721,10 @@ mod tests {
             metadata: owner_a_metadata,
             read_output: no_read,
             read_input: no_read,
-            resolve_input: Some(resolve_release_slot),
+
             write_slot: None,
             initial_expression: None,
-            resolve_output: None,
+
             read_slot: None,
             read_input_slot: None,
         });
@@ -3794,10 +3735,10 @@ mod tests {
             metadata: owner_b_metadata,
             read_output: no_read,
             read_input: |_, _, name| (name == "release").then_some(0.75),
-            resolve_input: Some(resolve_release_slot),
+
             write_slot: Some(trace_release_slot),
             initial_expression: None,
-            resolve_output: None,
+
             read_slot: None,
             read_input_slot: None,
         });

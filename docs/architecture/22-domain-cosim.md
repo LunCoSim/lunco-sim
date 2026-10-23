@@ -60,7 +60,8 @@ bounds, update at contract mutation, and exclude changing scalar samples.
 `UnitReference` shares its immutable identity and complete definition across
 metadata clones. Equality and serialized values retain the full unit contract;
 owner replacement creates a distinct reference. Fixed engine endpoint units
-come from `lunco-port-core::EngineUnit`; authored participants retain their own
+come from `lunco-port-core::EngineUnit`, including scene-property metre,
+lumen and dimensionless contracts; authored participants retain their own
 resolved unit definitions. Owner precedence, group
 membership, direction, bounds, frame and topology are still checked live.
 FMI unit lowering retains the separate radian exponent and relative-quantity
@@ -379,9 +380,12 @@ available ports:
 The registry resolves each named write from the owners' live declarations.
 `PortBackend::declare_ports` receives a `PortDeclarationQuery`: inspection
 collects every row, while a named query borrows one exact name and causality
-side. Indexed owners query that name directly; static owners publish borrowed
-names through the same boundary. Named validation does not materialize or copy
-the complete surface. Metadata still comes from the live owner at admission;
+side. Each declaration includes its optional process-local slot; this single
+query supplies ownership, direction and slot together. Indexed owners query
+that name directly; static owners publish borrowed names through the same
+boundary. Inspection retains the declared slot in its owner handle. Named
+validation does not materialize or copy the complete surface, and metadata
+comes from the selected live owner without another declaration lookup;
 a pending topology-publication pass cannot conceal changed bounds, direction,
 writability or a removed port.
 `write_port`, direction-constrained writes, and `resolve_input` share that

@@ -558,7 +558,12 @@ before awaiting results. It transfers the complete owned input vector, retaining
 the requested communication point and checked observation path. The selected
 numerical backend owns internal steps through `LiveStepper::advance_to`:
 Rumoca drives adaptive Model Exchange, and fixed prediction validates its
-configured lattice before integrating. Independent owners can execute
+configured lattice before integrating. Both obtain their opaque native
+execution backend from Rumoca's simulation facade; fixed RK4 passes
+`fmi_execution_backend(component, options)` into the shared retained ME
+component. Numerical integration, execution policy and complete checked
+observations keep their existing owners. The application does not implement a
+second Cranelift adapter. Independent owners can execute
 concurrently. The command owner admits results in its
 existing round order, validates session/library-generation fences before
 construction commit, and retains per-entity command order. Repeated commands

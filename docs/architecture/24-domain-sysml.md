@@ -461,9 +461,13 @@ Rhai. `source_with_attributes()` is value-only and intentionally omits
 requirement/verification identity tables; any observer that emits
 requirement-linked evidence must use `source_with_selection()` with explicit
 identity selectors. For Twin-scale sources, use selected `AnalyzeSysml` pages or
-`sysml_requirements::source()`, which pages the requirement/verification facts
-and keeps only compact identities and coverage links. Detailed records remain
-available through `source_with_selection()`. `sysml_attribute(path, qualified_name)` is the
+`sysml_requirements::source()`, which reads requirements and verifications in
+eight-record pages from one immutable `SysmlModel`. Full reports retain native
+`SysmlRequirement`/`SysmlVerification` objects; reading a property projects only
+that record's metadata. Reassembling flattened maps would count every copied
+string against Rhai's aggregate value limit even when each query page fits.
+Selected language-neutral facts remain available through
+`source_with_selection()`. `sysml_attribute(path, qualified_name)` is the
 exact-identity accessor for a single source-backed `SysmlAttribute`;
 `sysml_value` is its typed-literal convenience view. These direct Rhai values
 retain native `SysmlType`, `SysmlTypeRef`, and f64 spatial/quantity values
@@ -483,9 +487,13 @@ selection and rules while sharing the same typed SysML facts. The requirement
 policy preserves qualified attribute identity and reports collisions rather
 than silently choosing one. It can request selected attributes instead of
 projecting every literal on each pass. `source()` reads the complete Twin
-identity/coverage set in bounded pages and rejects a source-revision change
-during assembly; parameter values and detailed requirement attributes remain
-selected on demand.
+identity/coverage set in bounded native pages after checking the metadata
+query and model session have the same source revision. `SysmlModel` owns the
+immutable snapshot, `requirement_count`/`verification_count` expose table totals,
+and `requirements(offset, limit)`/`verifications(offset, limit)` slice before
+cloning. Negative offsets and non-positive limits fail explicitly. Rhai owns
+page size, completeness checks, registry joins and acceptance policy; native
+record metadata and parameter values remain selected on demand.
 
 Keep project-specific parameter acceptance in Rhai: dimensional limits,
 component counts, acceptable material choices, and geometry rules should be

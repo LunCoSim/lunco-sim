@@ -1515,7 +1515,7 @@ mod tests {
         out: &mut lunco_port_core::ports::PortDeclarationQuery<'_>,
     ) {
         if world.get::<TestOutput>(entity).is_some() {
-            out.declare("value", PortDirection::Out);
+            out.declare("value", PortDirection::Out, None);
         }
     }
 
@@ -1550,8 +1550,7 @@ mod tests {
             read_output: read_test_output,
             read_input: |_, _, _| None,
             initial_expression: None,
-            resolve_output: None,
-            resolve_input: None,
+
             read_slot: None,
             read_input_slot: None,
             write_slot: None,
@@ -1563,7 +1562,7 @@ mod tests {
         out: &mut lunco_port_core::ports::PortDeclarationQuery<'_>,
     ) {
         if world.get::<TestDeclaredOutput>(entity).is_some() {
-            out.declare("value", PortDirection::Out);
+            out.declare("value", PortDirection::Out, None);
         }
     }
 
@@ -1582,8 +1581,7 @@ mod tests {
             read_output: read_test_declared_output,
             read_input: |_, _, _| None,
             initial_expression: None,
-            resolve_output: None,
-            resolve_input: None,
+
             read_slot: None,
             read_input_slot: None,
             write_slot: None,

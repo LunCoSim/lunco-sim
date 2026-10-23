@@ -629,10 +629,16 @@ snapshot and reject other file sources explicitly. Ready file reports already
 contain the requested semantic facts: consume those fields rather than issuing
 an implicit synchronous file query. For Twin-scale sources use selected
 `AnalyzeSysml` pages or `sysml_requirements::source()`, which pages the
-requirement/verification tables, checks revision consistency, and retains only
-the compact identities and verification links needed for policy joins.
-Detailed selected requirement records remain available through
-`source_with_selection()`. Use
+requirement/verification tables in eight-record native pages. It checks the
+metadata query against one immutable `SysmlModel` revision and retains native
+`SysmlRequirement`/`SysmlVerification` records with their resolved coverage
+links. Do not flatten and concatenate every page: Rhai applies its string limit
+to the aggregate strings nested in a value, so smaller query pages alone do not
+bound an assembled map. Native records project metadata only when read.
+`model.requirements(offset, limit)` and `model.verifications(offset, limit)`
+provide bounded slices; `requirement_count` and `verification_count` give totals.
+Offsets must be non-negative and limits positive. Selected language-neutral
+requirement facts remain available through `source_with_selection()`. Use
 `sysml_attribute(path, qualified_name)` when the policy needs the native
 `SysmlAttribute` object for one exact-name source read, and `sysml_value` only
 when it needs the typed literal rather than the attribute metadata. Keep
@@ -670,9 +676,10 @@ ambiguous short selectors remain an explicit error.
 `sysml_requirements::source()` is read-only. It fails visibly when there is no
 active Twin, no indexed SysML source, a parser diagnostic, a registry error, or
 a verification name that does not resolve in the source set, or when the
-source revision changes during page assembly. It joins the
-`AnalyzeSysml` result with `ReadActiveTwinContract` in Rhai; neither generic
-query implements that policy. Use native typed Rhai maps inside the workflow;
+metadata query and native source session revisions differ. All record pages
+come from that immutable session. It joins the `AnalyzeSysml` metadata with
+`ReadActiveTwinContract` in Rhai; neither generic query implements that policy.
+Use native typed Rhai values inside the workflow;
 JSON is reserved for explicit external transport/logging boundaries. Never
 reconstruct a short-name map that could silently collapse colliding component
 attributes.

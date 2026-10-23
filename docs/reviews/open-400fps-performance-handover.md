@@ -1,5 +1,142 @@
 # High-quality realtime performance handover
 
+## Unified live port declarations and slots
+
+`lunco-port-core::PortDeclarationQuery` publishes a borrowed name, direction and
+optional process-local slot together. The same owner callback supplies full
+inspection and exact-name discovery; inspection retains that slot in its handle.
+Live write admission queries each candidate once and consumes the winning
+direction without another declaration lookup. Metadata, bounds, writability,
+revision, slot identity and atomic commit retain their existing checks. Every
+backend and caller uses this contract. It adds no cache, clock or Rhai policy;
+this is generic engine dispatch and validation.
+
+All 24 port-core tests pass. The diagnostic admission benchmark measures
+131,072 writes through sixteen preceding owners at 20.996 ms before and
+13.811 ms after. This is not a whole-tick result. The five affected caller test
+packages compile, including the corrected Avian native-velocity fixtures with
+explicit f32-to-f64 expectations. The regular Tracy production build passes in
+3m 58s with the same pre-existing USD unused-import warning.
+
+Local main's independent diagram navigation/presentation change (`faf8b1132`)
+is fast-forwarded without overlapping these owners. The integrated regular
+production rebuild passes in 5m 01s. An owned schema session verifies all 275
+settled commands, including `ConfigureDiagramPresentation` and both optional
+boolean fields; the generated command reference consumes that runtime schema.
+The physics gates and captures in this section precede that UI integration;
+their coupling code and inputs are unchanged.
+
+The authored ownership gate passes all twelve checks, including refusal to
+invent a `piloted` sample on a root without an input surface. The same negative
+check fails on the previous binary. The drivetrain passes eight checks and the
+non-finite observation reaches its expected terminal fault without a process
+panic. Gate receipts remain ignored in `port-declaration-gates/`.
+
+The `*-port-declaration-profile/` diagnostic runs have stable sources, clear
+retained diagnostics, inspected final images, and verified native capture
+framing, owned PIDs, 1 ms sampling periods and terminal CSV exports. Sources also
+match their preceding captured Twin cohorts. Foreign builds and simulator
+sessions remain active; cache contents and compilation counts differ.
+
+| Twin | Admission (s) | Complete FixedMain median/p95 (ms) |
+|---|---:|---:|
+| Tesla | 3.242 | 4.009 / 5.278 |
+| Summer | 7.944 | 9.296 / 21.575 |
+| Griffin | 61.790 | 11.891 / 23.805 |
+
+No controlled scene speedup follows from these captures. Griffin's write span
+averages 2.072 ms; its coupled initializer takes 29.790 s with 5,499 hits and
+10,983 compilations/evictions out of 16,482 requests. The source key remains
+`9cf16dad6cc36d49`. Native artifacts load 32,768 entries occupying 61,070,501
+bytes; the owner limits are 32,768 entries and 64 MiB. Investigate the admitted
+working set, cache keys and eviction before tuning these budgets. Each
+application publishes its complete native-artifact snapshot to the cache-relative
+`native-code-v1/stencils.json.zst` path; the older USD checkout uses that same
+relative path. The effect of cross-process publication on this miss surge is not
+established; record actual cache roots and artifact provenance next.
+
+The images show Griffin above the terrain, Summer's distant rover/terrain,
+and stationary Tesla with its existing frame/datum-unavailable HUD. They do not
+qualify landing, settled terrain, driving or complete missions. Raw evidence is
+ignored under `.cache/codex-evidence/performance-20261023/`. All owned sessions,
+collectors and exporters are closed. Loading below one second, complete ticks
+below one millisecond, graphics below ten milliseconds and the full mission and
+platform requirements remain open.
+
+## Native execution and shared-value proof construction
+
+LunCoSim pins published Rumoca `b972002340d180034151207b7e2776a8c3c069f0`
+across all consumers. The source checkout is `../rumoca`, branch
+`fix/luncosim-native-execution`; its original stream-semantics branch is
+preserved. The local path override is removed. The lockfile retains the same
+package versions, checksums and dependencies, with all 29 Rumoca-owned source
+identities pointing to the published revision.
+
+`FixedStepSession` obtains its opaque component execution handle from
+`rumoca_sim::fmi_execution_backend`, sharing the native-admission owner used by
+the built-in solvers. Its integrator, exact lattice, input transactions and
+complete checked observation retain their owners. All seven fixed-step tests
+pass against the published Git dependency, including the nonlinear-array
+native/reference differential and deterministic input replay.
+
+Rumoca collects an operation's read registers in one traversal of the same
+exhaustive structural operand checks used by whole-program dominance
+validation. It retains all range/context checks and ordered shared-value
+output/final-slot proofs. All 420 Solve IR tests pass. The isolated 64-operation
+range-discovery benchmark measures 36,838,415 ns before and 227,143 ns after;
+this is not a whole-simulation speedup.
+
+The term table interns complete operation keys once, retaining full structural
+equality. Each output term holds that table-local ID and output ordinal; the
+builder keeps its table across segments and the checker uses one table for both
+sequences. Register normalization uses one operation clone. Eight paired matrix
+derivations/checks with 512 inputs and 256 outputs measure 37.768 ms before and
+6.114 ms after. Corrupt operand order and output selection are both rejected.
+These are isolated proof-construction results, not a whole-scene speedup claim.
+
+The fixed twenty-model Tier 1 canary has exactly the same band and diagnostic
+rows as the native-factory baseline: twenty parse/flatten, fourteen DAE/solve
+and twelve initialized, simulated and compared high-band traces. Six DAE and
+two solve refusals remain visible. It is a zero-delta canary, not full-cohort
+qualification. Raw results and timings remain ignored under
+`.cache/codex-evidence/performance-20261023/shared-{proof,value-key}-*`.
+
+The regular Tracy production build passes in 5m 58s. The drivetrain production
+scene passes all eight authored checks, and the non-finite-observation scene reaches
+the expected terminal `modelica-step-failed` fault without a process panic.
+Both owned API sessions are closed; receipts are in `shared-value-key-portable-gates/`.
+The diagnostic unit-optimization capture is rejected as an A/B measurement
+because two Twin tool sources changed during its window; no whole-tick gain is
+claimed from it.
+All original loading, coupled-tick, graphics, complete-mission and platform
+acceptance targets remain open.
+
+The preceding `affb2057` diagnostic runs in `*-portable-proof-profile/` retain
+unchanged source hashes, clear retained diagnostics, inspected final images and verified
+native capture/CSV output. Tesla admission is 5.455 s, Summer 5.899 s and Griffin
+57.028 s; Griffin's subsequent cache-populated run remains 53.926 s. Final
+240-tick median/p95 service times are 6.126/8.353 ms for Tesla, 9.769/15.161 ms
+for Summer and 10.936/16.437 ms for the first Griffin run. These instrumented,
+contention-affected observations are not clean performance or mission acceptance.
+That coupled initializer takes 12.510 s with 16,414 native-cache hits out
+of 16,482 requests. No whole-scene speedup follows from the read-discovery
+microbenchmark. Continue profiling constructor term/key work and live port-write
+preflight; all owned sessions, collectors and exporters are closed.
+
+The `b9720023` run in `griffin-operation-key-profile/` reaches usable physics in
+26.748 s. The same coupled source key `9cf16dad6cc36d49` constructs in 6.804 s
+with 16,414 native-cache hits out of 16,482 requests and 68 compilations.
+Its final 240-tick complete FixedMain median/p95 is 6.580/7.731 ms. Sources remain
+unchanged throughout that run, retained diagnostics and script-error checks are
+clear, the final image is inspected, and native capture framing, owned PID,
+1 ms sampling period and terminal CSV exports are verified. The lander is still
+above the terrain in this bounded observation; landing and settled terrain are
+not qualified. Five authored Twin sources changed since the preceding capture,
+and foreign simulator workloads remain active, so this is diagnostic evidence
+with no controlled A/B or clean graphics claim. All owned sessions and capture
+tools are closed. Loading, complete coupled ticks and every original acceptance
+target remain open.
+
 ## Native surface-terminal reuse during projection
 
 The stage owner reuses each prim's resolved render binding and resolves its
@@ -37,6 +174,31 @@ definitions and non-finite rejection. The ignored diagnostic benchmark measures
 after. Logs are ignored `shared-unit-equality-{baseline,qualified}.log` under
 `.cache/codex-evidence/performance-20261023/`. This isolates one contract cost;
 it does not qualify a whole-tick improvement or any original performance target.
+
+## Scene-property metadata uses the shared engine units
+
+The scene-property port backend uses `EngineUnit` for its fixed metre,
+dimensionless and lumen definitions. It derives current bounds and frames as
+before, without rebuilding unit strings and allocations for every metadata
+read. The three duplicate unit constructors are removed. All nine owner tests
+pass. Its ignored contract-construction benchmark measures 1,441,792 calls at
+182,788,120 ns before and 71,478,902 ns after; logs remain ignored under
+`.cache/codex-evidence/performance-20261023/scene-unit-metadata-*.log`.
+These are isolated diagnostic timings, not a measured whole-tick improvement.
+
+The mounted Griffin stage inspection in `griffin-live-composed-wiring-qualified/`
+finds 1,197 authored plume/light input connections across 57 visual entities,
+with unchanged source hashes and clear runtime diagnostics. This is an authored
+graph count, not a measured compiled-wire count. A separate diagnostic capture
+in `griffin-write-stage-baseline/` exposes the existing transaction spans:
+preflight averages 1,926.855 us and commit 88.346 us across 482 transactions,
+including startup writes; the exchange write parent averages 2,828.390 us across
+337 exchanges. Different cohorts and event populations must not be subtracted
+as an A/B comparison. The capture has verified framing, owned PID, native CSV
+export, inspected final image and terminal shutdown. Its production binary
+predates the two unit optimizations, and terrain preparation is still visible;
+it does not qualify their whole-tick gain, a completed mission or any original
+performance target. All sessions and collectors are closed; raw data is ignored.
 
 ## Native validation joins shared preparation admission — 2026-10-23
 
@@ -1055,10 +1217,11 @@ API reports, native exports, checks and screenshots are under
 
 ## Native Modelica stack commitment — 2026-10-21
 
-LunCoSim pins Rumoca `09bdd3034633cf971e4404f9ef0efbf65485a66a` across
-all consumers. Its shared Cranelift builder emits inline stack probes, so
-large native frames touch Windows guard pages in order. The fresh-thread
-768 KiB regression and all 112 native execution tests passed on Linux.
+The native stack-probe qualification used Rumoca ancestor
+`09bdd3034633cf971e4404f9ef0efbf65485a66a`: the fresh-thread 768 KiB regression
+and all 112 native execution tests passed on Linux. The current pin retains
+the same shared Cranelift builder probes, so large native frames touch Windows
+guard pages in order.
 The Windows handoff reports the same configuration correction taking the
 regression from access violation to success and allowing Griffin initialization.
 Fresh Windows acceptance of this exact fork revision remains open: workflow
@@ -6207,7 +6370,7 @@ raw physics cost, full replay and Apollo measurement admission remain open.
 `lunco-port-core` owns `PortDeclarationQuery`, consumed by every backend's
 `declare_ports` callback. Inspection collects the complete declaration rows in
 their existing order. A named query borrows the exact name and causality side,
-retaining only its first matching direction; map-backed owners use their name
+retaining only its first matching direction and slot; map-backed owners use their name
 index directly. The fixed propagation consumer no longer builds and copies the
 owner's complete surface to validate one resolved target. Live owner precedence,
 metadata, writability, bounds, revision and slot validation still run before the
