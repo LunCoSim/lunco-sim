@@ -379,11 +379,17 @@ available ports:
 
 The registry resolves each named write from the owners' live declarations.
 `PortBackend::declare_ports` receives a `PortDeclarationQuery`: inspection
-collects every row, while a named query borrows one exact name and causality
-side. Each declaration includes its optional process-local slot; this single
-query supplies ownership, direction and slot together. Indexed owners query
+collects every row or an exact-name selection, while a named query borrows one
+exact name and causality side. Each declaration includes its optional
+process-local slot; this single query supplies ownership, direction and slot
+together. Indexed owners query
 that name directly; static owners publish borrowed names through the same
-boundary. Inspection retains the declared slot in its owner handle. Named
+boundary. Inspection retains the declared slot in its owner handle. Selected
+inspection filters declarations before copying names or sampling metadata and
+values. Selections through `declare_map` use the existing name index, then
+publish in live slot order so request/hash iteration cannot change the
+backend's row order.
+Every declared direction and owner of a selected name remains visible. Named
 validation does not materialize or copy the complete surface, and metadata
 comes from the selected live owner without another declaration lookup;
 a pending topology-publication pass cannot conceal changed bounds, direction,

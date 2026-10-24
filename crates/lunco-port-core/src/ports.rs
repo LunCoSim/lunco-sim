@@ -1020,7 +1020,7 @@ pub struct PortDeclaration {
     slot: Option<u64>,
 }
 
-/// One backend declaration query. Inspection collects owned rows; a named
+/// One backend declaration query. Inspection collects selected owned rows; a named
 /// query borrows its name and records the first matching direction and slot.
 /// Both paths consume the same owner declarations, independent of live samples.
 pub struct PortDeclarationQuery<'a> {
@@ -1028,7 +1028,10 @@ pub struct PortDeclarationQuery<'a> {
 }
 
 enum PortDeclarationTarget<'a> {
-    All(&'a mut Vec<PortDeclaration>),
+    All {
+        out: &'a mut Vec<PortDeclaration>,
+        names: Option<&'a HashSet<&'a str>>,
+    },
     Named {
         name: &'a str,
         side: ResolvedPortSide,
@@ -1039,8 +1042,12 @@ enum PortDeclarationTarget<'a> {
 impl<'a> PortDeclarationQuery<'a> {
     /// Collect every declaration in the backend's enumeration order.
     pub fn all(out: &'a mut Vec<PortDeclaration>) -> Self {
+        Self::matching(out, None)
+    }
+
+    fn matching(out: &'a mut Vec<PortDeclaration>, names: Option<&'a HashSet<&'a str>>) -> Self {
         Self {
-            target: PortDeclarationTarget::All(out),
+            target: PortDeclarationTarget::All { out, names },
         }
     }
 
@@ -1058,7 +1065,7 @@ impl<'a> PortDeclarationQuery<'a> {
     /// Owners with indexed storage can query it without traversing their surface.
     pub fn requested_name(&self) -> Option<&'a str> {
         match &self.target {
-            PortDeclarationTarget::All(_) => None,
+            PortDeclarationTarget::All { .. } => None,
             PortDeclarationTarget::Named { name, .. } => Some(name),
         }
     }
@@ -1066,7 +1073,7 @@ impl<'a> PortDeclarationQuery<'a> {
     /// Whether this query can consume a declaration with this causality.
     pub fn accepts_direction(&self, direction: PortDirection) -> bool {
         match &self.target {
-            PortDeclarationTarget::All(_) => true,
+            PortDeclarationTarget::All { .. } => true,
             PortDeclarationTarget::Named { side, .. } => match side {
                 ResolvedPortSide::Input => {
                     matches!(direction, PortDirection::In | PortDirection::InOut)
@@ -1086,11 +1093,15 @@ impl<'a> PortDeclarationQuery<'a> {
             return;
         }
         match &mut self.target {
-            PortDeclarationTarget::All(out) => out.push(PortDeclaration {
-                name: name.to_owned(),
-                direction,
-                slot,
-            }),
+            PortDeclarationTarget::All { out, names } => {
+                if names.as_ref().is_none_or(|names| names.contains(name)) {
+                    out.push(PortDeclaration {
+                        name: name.to_owned(),
+                        direction,
+                        slot,
+                    });
+                }
+            }
             PortDeclarationTarget::Named {
                 name: requested,
                 declaration: found,
@@ -1105,7 +1116,7 @@ impl<'a> PortDeclarationQuery<'a> {
 
     fn declaration(&self) -> Option<(PortDirection, Option<u64>)> {
         match &self.target {
-            PortDeclarationTarget::All(_) => None,
+            PortDeclarationTarget::All { .. } => None,
             PortDeclarationTarget::Named { declaration, .. } => *declaration,
         }
     }
@@ -1120,6 +1131,19 @@ pub fn declare_map(out: &mut PortDeclarationQuery<'_>, map: &PortMap<f64>, dir: 
     if let Some(name) = out.requested_name() {
         if let Some(slot) = map.resolve_slot(name) {
             out.declare(name, dir, Some(slot));
+        }
+    } else if let PortDeclarationTarget::All {
+        names: Some(names), ..
+    } = &out.target
+    {
+        let mut selected: Vec<_> = names
+            .iter()
+            .filter_map(|&name| map.by_name.get(name).map(|&index| (index, name)))
+            .collect();
+        // Inspection order belongs to the map, independent of request/hash order.
+        selected.sort_unstable_by_key(|(index, _)| *index);
+        for (_, name) in selected {
+            out.declare(name, dir, map.resolve_slot(name));
         }
     } else {
         for name in map.keys() {
@@ -1694,8 +1718,9 @@ impl PortRegistry {
     /// Sample only the exposed ports whose exact names are requested.
     ///
     /// Every declared direction and backend owner row for a selected name is
-    /// retained. Unselected ports are listed for discovery but their metadata
-    /// and live values are not resolved or sampled.
+    /// retained in backend declaration order. The declaration query excludes
+    /// unselected identities before allocating names or reading owner metadata
+    /// and samples; [`declare_map`] uses the existing name index.
     pub fn entity_port_infos_for_names(
         &self,
         world: &World,
@@ -1731,13 +1756,12 @@ impl PortRegistry {
         let mut out = Vec::new();
         for (backend_index, backend) in self.backends.iter().enumerate() {
             let mut ports = Vec::new();
-            (backend.declare_ports)(world, entity, &mut PortDeclarationQuery::all(&mut ports));
+            (backend.declare_ports)(
+                world,
+                entity,
+                &mut PortDeclarationQuery::matching(&mut ports, requested_names),
+            );
             for port in ports {
-                if let Some(names) = requested_names
-                    && !names.contains(port.name.as_str())
-                {
-                    continue;
-                }
                 let reader = match port.direction {
                     PortDirection::In => backend.read_input_slot,
                     PortDirection::Out => backend.read_slot,
@@ -2595,6 +2619,42 @@ mod tests {
     }
 
     #[test]
+    fn selected_port_inspection_benchmark() {
+        let mut world = test_world();
+        let mut inputs = InputPorts::new(&[]);
+        for index in 0..8192 {
+            inputs
+                .values
+                .insert(format!("port{index:05}"), index as f64 * 0.25);
+        }
+        let entity = world.spawn(inputs).id();
+        let registry = PortRegistry::default();
+        let names = vec![
+            "port08191".to_owned(),
+            "missing".to_owned(),
+            "port00002".to_owned(),
+        ];
+        let started = std::time::Instant::now();
+        for _ in 0..512 {
+            let rows = registry.entity_port_infos_for_names(
+                std::hint::black_box(&world),
+                entity,
+                std::hint::black_box(&names),
+            );
+            assert_eq!(rows.len(), 2);
+            assert_eq!((&*rows[0].name, rows[0].value), ("port00002", Some(0.5)));
+            assert_eq!(
+                (&*rows[1].name, rows[1].value),
+                ("port08191", Some(2047.75))
+            );
+        }
+        println!(
+            "selected_port_inspection 512_reads 8192_ports elapsed_ns={}",
+            started.elapsed().as_nanos()
+        );
+    }
+
+    #[test]
     fn declaration_queries_preserve_order_and_require_exact_name_and_side() {
         let publish = |query: &mut PortDeclarationQuery<'_>| {
             query.declare("other", PortDirection::In, None);
@@ -2613,6 +2673,30 @@ mod tests {
         assert_eq!(output.declaration(), Some((PortDirection::Out, Some(7))));
         assert_eq!(rows[1].slot, Some(7));
         assert_eq!(rows[2].slot, Some(9));
+        let selected_names = super::HashSet::from(["signal"]);
+        let mut selected = Vec::new();
+        publish(&mut PortDeclarationQuery::matching(
+            &mut selected,
+            Some(&selected_names),
+        ));
+        assert_eq!(
+            selected
+                .iter()
+                .map(|row| (row.direction, row.slot))
+                .collect::<Vec<_>>(),
+            [
+                (PortDirection::Out, Some(7)),
+                (PortDirection::InOut, Some(9)),
+                (PortDirection::In, Some(11))
+            ]
+        );
+        let missing_names = super::HashSet::from(["missing"]);
+        let mut selected = Vec::new();
+        publish(&mut PortDeclarationQuery::matching(
+            &mut selected,
+            Some(&missing_names),
+        ));
+        assert!(selected.is_empty());
         let mut absent = PortDeclarationQuery::named("missing", super::ResolvedPortSide::Input);
         publish(&mut absent);
         assert_eq!(absent.declaration(), None);

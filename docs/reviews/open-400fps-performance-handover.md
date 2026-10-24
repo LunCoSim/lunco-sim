@@ -1,5 +1,45 @@
 # High-quality realtime performance handover
 
+## Selected port inspection
+
+`lunco-port-core` carries exact-name selections into `PortDeclarationQuery`.
+Declarations exclude unrequested identities before copying names or sampling
+metadata and values. The map-backed owner uses its existing name index and
+sorts selected entries by live slot order. Every direction and backend row for
+a selected name remains visible; ordinary full inspection and named write
+admission retain their contracts. No additional index or retained cache is added.
+
+All 25 port-owner tests pass. The isolated diagnostic performs 512 reads,
+selecting two live values and one absent name from an 8,192-port surface. It
+measures 324.813 ms before and 0.214 ms after, preserving declaration order and
+exact values. The regular production rebuild passes in 2m 52s, with the existing
+USD unused-import warning. The production port-ownership gate passes all twelve
+checks, including its negative cases. Its owned API session is closed.
+
+The regular build without Tracy establishes this baseline and candidate:
+
+| Twin | Admission before/after (s) | Complete tick median before/after (ms) | Candidate tick p95 (ms) | Frame median before/after (ms) |
+|---|---:|---:|---:|---:|
+| Tesla | 3.699 / 2.974 | 3.311 / 2.695 | 3.570 | 10.009 / 8.455 |
+| Summer | 6.129 / 5.009 | 5.819 / 5.429 | 6.614 | 16.043 / 14.643 |
+| Griffin | 25.074 / 21.166 | 8.704 / 8.401 | 9.944 | 24.597 / 22.855 |
+
+Each complete-tick result is the owner's final 240-sample window. Authored
+source hashes match within and between each pair, retained diagnostics and
+script-error checks are clear, and final images are inspected. DEM stream and
+derived work are settled at the final snapshots. These are short admission
+observations, not completed mission or exact native-state replay. Another
+LunCoSim graphics session remains active, and native cache contents are not
+frozen; startup differences cannot be attributed solely to this reader change.
+All six owned applications are closed. All strict loading, tick, graphics and
+mission targets remain open. Continue profiling the consuming query/behavior
+path and native construction rather than extrapolating the isolated benchmark.
+
+Raw receipts remain ignored under
+`.cache/codex-evidence/performance-20261023/`: `*-structural-shape-unprofiled/`,
+`*-selected-port-inspection-unprofiled/`, `selected-port-inspection-gates/`,
+`selected-port-inspection-comparison.json` and `native-cache-audit/`.
+
 ## Exact proof shape keys
 
 The published Rumoca `d47a5bf3` change moves shared-value operation identity
@@ -33,7 +73,17 @@ and contact pass fourteen checks at tick 8103; scoped escape containment passes
 five checks. The negative observation fixture reaches the expected terminal
 `modelica-step-failed` fault without a process panic. All four owned test
 sessions are closed; their receipts remain ignored in `structural-shape-gates/`.
-Production captures and clean performance qualification remain open.
+The three `*-structural-shape-profile/` Tracy captures have terminal native
+total/self/unwrapped/GPU exports, matching compressed framing, owned PIDs and
+1 ms sampling periods. Their source hashes remain unchanged, retained diagnostics
+are clear, and final images are inspected. Admission takes 3.908 s for Tesla,
+5.880 s for Summer and 31.387 s for Griffin. Complete-tick medians are
+4.900/7.266/11.087 ms. Griffin's coupled constructor still takes 8.384 s with
+16,414 native hits out of 16,482 requests, so no construction gain is established.
+Its exact constructor CPU window contains 4,541 stack samples and one matched
+zone. Symbolic key/term work and operation cloning remain visible.
+All owned applications, collectors and exporters are closed. Clean performance
+and completed-mission qualification remain open.
 The integrated base at `9d90d03d1`
 includes the offline renderer, shared plot time axes and planetary-flight
 contact support; preserve these changes and treat the next capture as a fresh

@@ -723,6 +723,10 @@ Map-backed owners query the requested name directly; named queries retain only
 the first matching direction and slot without constructing owned rows. Preserve the
 same declaration order and live metadata checks; topology publication alone
 cannot guard an owner edit before its scheduled publication pass.
+For `ReadPorts` and `ReadPortsBatch`, carry the name selection into declaration
+collection. Scalar-map selections query the existing index and retain native
+slot order; verify every direction/owner row and missing-name rejection. Measure
+selected reads on a large surface and the consuming production behavior tree.
 Avian resolution, named declarations and metadata selection share immutable
 name candidates derived from `AVIAN`. Preserve candidate order and live group
 membership on removal, re-admission and mobility edits; full inspection retains
