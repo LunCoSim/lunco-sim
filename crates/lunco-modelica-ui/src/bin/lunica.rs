@@ -474,7 +474,7 @@ fn setup_web_workbench(
                 Name::new(model_name.clone()),
                 ModelicaModel {
                     model_name,
-                    parameters: initial_params,
+                    parameters: initial_params.into_iter().collect(),
                     paused: true,
                     document: doc_id,
                     ..default()

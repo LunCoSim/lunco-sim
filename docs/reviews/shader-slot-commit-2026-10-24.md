@@ -81,10 +81,9 @@ indexes and PIE mappings resolve 163 executable leaves and 57 external leaves;
 live admission, name indexes and repeated ECS lookups remain prominent. The
 response selection has 440 samples across 478 invocations: 42 executable leaves
 in SipHash, sixteen in standard-map membership and ten in its random-state
-hasher. `ModelicaModel.inputs` and `.parameters` still use standard maps, whereas
-the observable store uses Bevy's native map. This identifies a first-party
-lookup lead. Any replacement must retain complete live classification and audit
-all consumers; the worker already sorts input names before dispatch.
+hasher. The input and parameter lookup costs motivate the subsequent
+Modelica live-map change, which retains complete live classification and audits
+all consumers. The worker sorts input names before dispatch.
 
 Per-process pressure telemetry records peak resident sizes of 5,218,732 KiB for
 the app and 1,753,148 KiB for the collector, with about 0.223 seconds of global

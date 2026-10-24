@@ -618,8 +618,8 @@ pub struct ModelicaModel {
     pub last_step_time: f64,
     pub session_id: u64,
     pub paused: bool,
-    pub parameters: HashMap<String, f64>,
-    pub inputs: HashMap<String, f64>,
+    pub parameters: bevy::platform::collections::HashMap<String, f64>,
+    pub inputs: bevy::platform::collections::HashMap<String, f64>,
     /// Inputs latched at the start of the current communication interval.
     /// Slower participants retain this sample across intervening master ticks.
     #[reflect(ignore)]
@@ -674,8 +674,8 @@ impl Default for ModelicaModel {
             last_step_time: 0.0,
             session_id: 0,
             paused: false,
-            parameters: HashMap::new(),
-            inputs: HashMap::new(),
+            parameters: Default::default(),
+            inputs: Default::default(),
             pending_step_inputs: None,
             compiled_input_names: BTreeSet::new(),
             last_error: None,

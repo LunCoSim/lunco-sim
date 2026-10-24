@@ -139,7 +139,7 @@ impl Panel for TelemetryPanel {
                 if let Some(model) = ctx.get::<ModelicaModel>(entity) {
                     (model.paused, model.current_time, model.inputs.clone())
                 } else {
-                    (true, 0.0, std::collections::HashMap::new())
+                    (true, 0.0, Default::default())
                 }
             };
 

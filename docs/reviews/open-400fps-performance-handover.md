@@ -1,5 +1,16 @@
 # High-quality realtime performance handover
 
+## Modelica live name indexes
+
+Input and parameter maps use Bevy's reflected native storage. Compile and step
+admission share one sorted input sampler, and the USD bridge uses borrowed entry
+lookup with command-surface precedence. [The focused review](modelica-live-map-admission-2026-10-24.md)
+records a 99.499 to 80.044 ms response diagnostic, fourteen owner checks, the
+projection/fault/35-check metadata production gates and three inspected normal
+Twin windows. Current loading and complete coupled-tick targets remain unmet;
+contention and a newer Tesla source limit performance comparisons. All native
+captures remain ignored; regenerable older CSV exports are removed.
+
 ## Shader slot commit
 
 The shader port backend retains one native component borrow through scalar

@@ -267,7 +267,7 @@ pub fn reconcile_modelica_preparation_progress(
 #[cfg(test)]
 mod compile_admission_tests {
     use super::*;
-    use std::collections::HashMap;
+    use bevy::platform::collections::HashMap;
 
     #[derive(Resource, Default)]
     struct CapturedCompileRequests(Vec<CompileRequested>);
@@ -403,7 +403,9 @@ mod compile_admission_tests {
     }
 }
 
-fn ordered_modelica_inputs(inputs: &HashMap<String, f64>) -> Vec<(String, f64)> {
+pub(super) fn ordered_modelica_inputs(
+    inputs: &bevy::platform::collections::HashMap<String, f64>,
+) -> Vec<(String, f64)> {
     let mut ordered = inputs
         .iter()
         .map(|(name, value)| (name.clone(), *value))
@@ -1481,7 +1483,7 @@ pub fn handle_modelica_responses(
                 // from the worker's initialized solver observation. Library
                 // member defaults are already applied there; inventing zeros
                 // here would overwrite them on the first simulation step.
-                let ui_inputs: HashMap<String, f64> = std::mem::take(&mut model.inputs);
+                let ui_inputs = std::mem::take(&mut model.inputs);
                 model.compiled_input_names = result.detected_input_names.iter().cloned().collect();
                 for name in &result.detected_input_names {
                     if let Some(value) = ui_inputs.get(name).copied().or_else(|| {

@@ -398,10 +398,7 @@ fn dispatch_one(
         .unwrap_or_default();
 
     inputs.extend(connected_inputs);
-    let initial_inputs = inputs
-        .iter()
-        .map(|(name, value)| (name.clone(), *value))
-        .collect();
+    let initial_inputs = super::bridge::ordered_modelica_inputs(&inputs);
 
     let previous_session = existing
         .as_ref()
@@ -466,7 +463,10 @@ fn dispatch_one(
         last_step_time: 0.0,
         session_id,
         paused: true,
-        parameters: parameters.clone(),
+        parameters: parameters
+            .iter()
+            .map(|(name, value)| (name.clone(), *value))
+            .collect(),
         inputs,
         pending_step_inputs: None,
         compiled_input_names: BTreeSet::new(),

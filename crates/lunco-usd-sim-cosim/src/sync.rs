@@ -140,26 +140,32 @@ pub(crate) fn copy_modelica_input_values(
     component: &SimComponent,
     command_surface: Option<&lunco_port_core::InputPorts>,
 ) -> bool {
-    let mut changed = false;
-    for (name, value) in &component.inputs {
-        let name = name.as_ref();
-        if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
-            changed |= upsert_value(&mut model.inputs, name, *value);
-        }
-    }
+    use bevy::platform::collections::hash_map::EntryRef;
 
+    let mut changed = false;
     // `InputPorts` is the authored command surface and is registered before the
     // Modelica backend. When a generated domain root carries both components,
     // SetPorts therefore writes the command there; mirror that authoritative
     // value into the solver buffer instead of leaving Modelica on its bind-time
     // default. This is the generic bridge for a shared endpoint, not a vehicle
     // or tutorial-specific path.
-    if let Some(command_surface) = command_surface {
-        for (name, value) in &command_surface.values {
-            let name = name.as_ref();
-            if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
-                changed |= upsert_value(&mut model.inputs, name, *value);
+    for (name, value) in component.inputs.iter().chain(
+        command_surface
+            .into_iter()
+            .flat_map(|surface| surface.values.iter()),
+    ) {
+        match model.inputs.entry_ref(name) {
+            EntryRef::Occupied(mut entry) => {
+                if entry.get().to_bits() != value.to_bits() {
+                    entry.insert(*value);
+                    changed = true;
+                }
             }
+            EntryRef::Vacant(entry) if model.compiled_input_names.contains(name) => {
+                entry.insert(*value);
+                changed = true;
+            }
+            EntryRef::Vacant(_) => {}
         }
     }
     changed

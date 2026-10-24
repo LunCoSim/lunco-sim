@@ -2080,8 +2080,8 @@ fn dispatch_admitted_modelica_sources(
         commands.entity(entity).try_insert(ModelicaModel {
             model_name: model_name.clone(),
             source_uri: pending.asset_path.clone(),
-            parameters,
-            inputs,
+            parameters: parameters.into_iter().collect(),
+            inputs: inputs.into_iter().collect(),
             communication_period_secs: schedule.communication_period_secs,
             // Durable verdict: `modelica_status` reads this first, so the
             // component reports `Error` on every subsequent tick instead of
@@ -2302,7 +2302,11 @@ pub(crate) fn wrap_modelica_into_simcomponent(
 
     for (entity, model, variables, contract) in candidates {
         let mut entity_commands = commands.entity(entity);
-        let mut shared_inputs: lunco_cosim_core::ScalarPortMap = model.inputs.clone().into();
+        let mut shared_inputs: lunco_cosim_core::ScalarPortMap = model
+            .inputs
+            .iter()
+            .map(|(name, value)| (name.clone(), *value))
+            .collect();
         if let Some(contract) = contract {
             for name in &contract.inputs {
                 shared_inputs.declare(name.clone());
@@ -2310,7 +2314,11 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         }
         entity_commands.try_insert(SimComponent {
             model_name: model.model_name.clone(),
-            parameters: model.parameters.clone(),
+            parameters: model
+                .parameters
+                .iter()
+                .map(|(name, value)| (name.clone(), *value))
+                .collect(),
             inputs: shared_inputs,
             // Publish the admitted observation; live synchronization owns
             // subsequent snapshots and status transitions.

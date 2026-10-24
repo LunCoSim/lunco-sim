@@ -983,7 +983,12 @@ co-simulation and API readers consume this one map. External API variable fields
 retain their existing shape. `ResetActiveModel` completes through command-result
 admission and rejects missing runtime state visibly.
 
-The observable name index uses Bevy's `HashMap` and remains a reflected map.
+Observable, input and parameter name indexes use Bevy's reflected `HashMap`.
+Live observation classification still checks current input and parameter
+membership. Compile admission and fixed-step dispatch share the worker's
+name-sorted input sampler; hash-table iteration never chooses solver input
+order. The USD input bridge uses native borrowed entry lookup and applies the
+authored command surface after connected samples, preserving its precedence.
 Worker admission retains existing keys and compares f64 bits before marking the
 snapshot changed. Regular development builds optimize `lunco-modelica-worker`
 at level 3 with assertions enabled. Causal wire ordering comes from the existing
