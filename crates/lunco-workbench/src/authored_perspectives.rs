@@ -713,6 +713,26 @@ impl lunco_api::ApiQueryProvider for InspectWorkbench {
                 .map_or(HookValue::Unit, |id| HookValue::str(id.as_str())),
         ));
         values.push((
+            "docked_instance_tabs".into(),
+            HookValue::Array(
+                layout
+                    .dock
+                    .iter_all_tabs()
+                    .filter_map(|(_, tab)| {
+                        let TabId::Instance { kind, instance } = tab else {
+                            return None;
+                        };
+                        let panel = layout.instance_panels.get(kind)?;
+                        Some(HookValue::map([
+                            ("kind", HookValue::str(kind.as_str())),
+                            ("instance", HookValue::UInt(*instance)),
+                            ("title", HookValue::str(panel.title(world, *instance))),
+                        ]))
+                    })
+                    .collect(),
+            ),
+        ));
+        values.push((
             "docked_panels".into(),
             HookValue::Array(
                 layout

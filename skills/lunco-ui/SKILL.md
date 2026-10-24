@@ -257,8 +257,10 @@ remain authored Rhai over typed USD queries.
 
 Use the `workbench.perspectives.defaults` and `workbench.perspectives.twin`
 hooks to assemble task layouts in Rhai. Read `InspectWorkbench` for exact
-registered panels, instance kinds and canonical instance ids. Rust validates
-and applies `PerspectiveLayoutPlan`; do not add a Rust preset for changeable
+registered panels, instance kinds and canonical instance ids.
+For additional named plots, resolve their actual ids and titles through
+`InspectWorkbench.docked_instance_tabs`; do not infer the next plot number.
+Rust validates and applies `PerspectiveLayoutPlan`; do not add a Rust preset for changeable
 presentation policy. See [Twin perspectives](../../docs/tutorials/05-twin-perspectives.md)
 for the return schema, namespace, lifecycle and production acceptance. Policy
 updates preserve visited user layouts; explicit Reset Layout uses the new plan.

@@ -427,7 +427,11 @@ the docking library owns the tree, tab movement and split interaction.
 `InspectWorkbench` exposes the actual registered singleton panels, instance
 kinds and canonical instance identities, plus admitted perspective definitions,
 active identity, docked panels, preparation state and errors. Use these facts
-instead of inventing panel names or plot instance numbers. `OpenTab` and
+instead of inventing panel names or plot instance numbers. Its
+`docked_instance_tabs` collection carries each open instance's registered
+`kind`, exact `instance` id and native `title`. A script can create a named
+plot, resolve that actual tab, and compose it without assuming allocation order.
+`OpenTab` and
 `CloseTab` accept `{ kind: String, instance: u64 }` through the same reflected
 command bus used by Rhai. The shell resolves the exact registered instance kind;
 unknown kinds reject with a terminal diagnostic. Requests received while the
