@@ -167,6 +167,11 @@ can publish runtime values or a presentation stream. See the
 [checked Rumoca runtime contract](29-rumoca-runtime-contracts.md) for ownership
 and its production negative gate.
 
+The response bridge changes document diagnostics only when their contents or
+compile lifecycle change. Successful live steps with no diagnostics do not mark
+that resource changed; status-bar consumers retain their native Bevy change
+gate. A successful reset still marks the document ready and clears its errors.
+
 Rumoca owns source class identity. `rumoca_core::qualified_name_segments`
 borrows quoted and bracketed path segments without splitting identifier dots.
 `StoredDefinition::relative_class_name` removes only the document's actual

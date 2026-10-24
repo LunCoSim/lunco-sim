@@ -1434,7 +1434,11 @@ pub fn handle_modelica_responses(
                 model.last_error = Some(detail);
             } else {
                 model.last_error = None;
-                if let Some(cs) = compile_states.as_mut() {
+                if let Some(cs) = compile_states.as_mut()
+                    && cs
+                        .get(model.document)
+                        .is_some_and(|entry| !entry.diagnostics.is_empty())
+                {
                     cs.clear_error(model.document);
                 }
             }
@@ -1955,7 +1959,12 @@ mod compile_fault_tests {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
             .add_message::<ModelicaSessionStarted>()
+            .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .add_systems(First, handle_modelica_responses);
+        let document = lunco_doc::DocumentId::new(1);
+        app.world_mut()
+            .resource_mut::<lunco_doc_bevy::DocumentDiagnostics>()
+            .set_ok(document);
         let (results, received) = crossbeam_channel::unbounded();
         let (commands, _requests) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
@@ -1968,6 +1977,7 @@ mod compile_fault_tests {
             .world_mut()
             .spawn((
                 ModelicaModel {
+                    document,
                     session_id: 1,
                     is_compiled: true,
                     is_stepping: true,
@@ -2036,7 +2046,14 @@ mod compile_fault_tests {
                 ..Default::default()
             })
             .unwrap();
+        app.world_mut().clear_trackers();
         app.world_mut().run_schedule(First);
+        assert!(
+            !app.world()
+                .resource_ref::<lunco_doc_bevy::DocumentDiagnostics>()
+                .is_changed(),
+            "successful live steps must not invalidate unchanged document diagnostics"
+        );
         let model = app.world().get::<ModelicaModel>(entity).unwrap();
         let variables = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
         assert_eq!(
@@ -2053,6 +2070,10 @@ mod compile_fault_tests {
         assert!(model.in_flight_step.is_none());
         assert_eq!(accepted.outputs[0].0.as_ptr(), output_key);
         let retained_outputs = accepted.outputs.clone();
+        app.world_mut()
+            .resource_mut::<lunco_doc_bevy::DocumentDiagnostics>()
+            .set_error_message(document, "previous run failed");
+        app.world_mut().clear_trackers();
         results
             .send(ModelicaResult {
                 entity,
@@ -2070,6 +2091,13 @@ mod compile_fault_tests {
         assert_eq!(variables["x"], 3.0);
         assert!(model.last_accepted_step.is_none());
         assert_eq!(&*retained_outputs, expected);
+        let diagnostics = app
+            .world()
+            .resource_ref::<lunco_doc_bevy::DocumentDiagnostics>();
+        assert!(diagnostics.is_changed());
+        let entry = diagnostics.get(document).unwrap();
+        assert_eq!(entry.state, lunco_doc::CompileState::Ready);
+        assert!(entry.diagnostics.is_empty());
     }
 
     #[test]
