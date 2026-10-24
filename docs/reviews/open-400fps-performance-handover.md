@@ -13,6 +13,14 @@ coupled medians are 3.505/3.275/1.731 ms. Source/workload limits and existing
 strict-Clippy warnings are recorded in the review. All original targets remain
 open.
 
+The source-matched native capture is qualified, with screenshot/shutdown ticks
+excluded and its PID, 1 kHz samples and native framing verified. A concurrent
+`tutorials` build qualifies the slower diagnostic timings: response median is
+0.657 ms versus 0.614 ms baseline, while complete FixedMain is 6.933 versus
+4.242 ms. This does not establish a scene-level gain. The paired consumer is the
+isolated timing evidence. The canonical normal executable is restored; all
+owned apps, collectors and ports are closed.
+
 ## Native celestial operand sharing
 
 [The current settled capture and source audit](celestial-shared-operands-2026-10-24.md)

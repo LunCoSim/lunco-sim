@@ -82,3 +82,54 @@ are ignored in `{griffin,summer,tesla}-observation-indexmap-normal/`; production
 gate records are in `observation-indexmap-production-gates/`. The task-created
 baseline test hard link is removed, preserving normal Cargo outputs and shared
 caches.
+
+## Native capture qualification
+
+The separate regular Tracy build passes in 2m15s, SHA-256
+`6249fc0de41bf1c85fdc1bcb5b5468e089967ba1eec97888cd6871283995ab86`.
+The qualified capture uses owned app PID 1760008/API 5228 and collector
+1759949/8435, with the same 1 kHz sampling and executor filter as the baseline.
+All 271 recorded Twin sources match the baseline and remain unchanged. Nominal
+touchdown/handoff, complete terrain readiness, clear diagnostics and the final
+image are checked. Both final capture images show the landed view from above.
+App and collector exit normally and release their ports.
+
+Native framing contains 16,925 blocks, 388,243,947 compressed payload bytes and
+388,311,653 file bytes. Native FixedMain and response-zone exports return zero.
+The CPU reader verifies PID 1760008, 1,000,000 ns sampling, 334,600 capture
+samples, 1,102 selected main-thread samples, no missing stacks and 240 matching
+FixedMain zones. This selection excludes concurrent worker-thread CPU.
+
+The comparison selects 240 complete schedules ending at each cohort's last
+measured API tick, excluding fourteen baseline and twelve candidate ticks after
+measurement. Native schedule durations are checked against every retained API
+observation (seventeen baseline, thirteen candidate). Candidate indices
+1715–1954 lie wholly within its measured window (first observed tick 1626).
+
+| Instrumented response handler | Baseline | Candidate |
+| --- | ---: | ---: |
+| Complete invocations | 478 | 471 |
+| Median / p95 | 0.614 / 0.796 ms | 0.657 / 1.196 ms |
+| Total | 291.453 ms | 334.291 ms |
+| Complete FixedMain median | 4.242 ms | 6.933 ms |
+
+The candidate overlaps a substantial `tutorials` Cargo build and other foreign
+work. Its first physics readiness is 28.201 s and API coupled median/p95 is
+6.844/10.976 ms with Tracy. This uncontrolled cohort does not establish a
+scene-level improvement; the paired consumer remains the isolated timing
+evidence. Normal-build measurements above are separate.
+
+The first capture loses a qualification condition despite clear global
+readiness and is excluded. Its exact disqualifying fact was not retained; no
+root cause is claimed. The qualified driver records individual body, terrain
+and handoff facts. An intermediate harness syntax error occurs before app
+launch; its owned unconnected collector is stopped and its scratch removed.
+All raw data remains ignored in `griffin-observation-indexmap-*profile/` and
+`scripts/perf/captures/`.
+
+The final normal build is restored with the canonical locked build command,
+passing in 3m22s, SHA-256
+`a0699ae1f72ef546e1b4938a3e2644373051b62fcb862487d2a82cc5667fd1ef`.
+Application commit `1ff56b52c` is integrated into local `main`, not pushed.
+All original acceptance targets remain open. The next startup proposal remains
+native Rumoca schedule-proof sharing, pending explicit dependency approval.
