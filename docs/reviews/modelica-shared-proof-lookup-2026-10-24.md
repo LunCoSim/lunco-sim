@@ -104,10 +104,16 @@ The constructor comparison has different native-cache conditions:
 | Hits | 16,414 | 5,501 |
 | Compilations / evictions | 68 / 68 | 10,981 / 10,981 |
 
-The cache reaches its 32,768-entry limit while retaining 52,340,944 bytes,
-below its 64 MiB byte budget. The receipts demonstrate capacity pressure;
-they do not identify which missing keys were evicted versus absent at startup.
-A key-level cache trace is needed before choosing a retention change.
+The current key-level trace reconstructs every lookup, insertion and recorded
+entry/byte count. It loads 32,768 entries before the first lookup, then observes
+28,314 distinct keys occupying 38,250,071 bytes. That working set fits the existing
+32,768-entry/64 MiB limits. The coupled initializer records 16,414 hits in 16,482
+attempts, 68 cold keys and no duplicate pending compilation. Its constructor is
+4.356 s. Increasing cache limits is not justified by this trace; the cause of the
+earlier capture's different startup cache contents remains unproven.
+The trace's graphics window loses terrain qualification and is excluded from
+performance acceptance. Its completed constructor and exact cache replay remain
+valid diagnostic evidence under `griffin-native-cache-current-keys/`.
 
 The matching-version saved-sample reader selects 7,288 constructor CPU samples,
 versus 3,463 previously, with no missing stacks. Identified SipHash leaf samples

@@ -124,6 +124,10 @@ mass properties. The nested solver consumes that same prepared geometry and
 COM. Collider insertion retains the constructor's shape and scale; it never
 rescales geometry from a presentation `GlobalTransform`. Native transform-driven
 scale changes enter through the ordered preparation consumer.
+That consumer independently drains `Transform`, `RigidBody` and `ChildOf`
+removals. A removed parent invalidates the relative collider transform even
+when its local transform stays unchanged, so the next preparation pass must
+recompose it before native collision and mass consumers run.
 
 Presentation systems that solve a pose repeatedly must compare each derived
 `Transform` and `CellCoord` value before mutating it. Bevy change detection is

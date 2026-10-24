@@ -1849,16 +1849,10 @@ fn position_to_pose(
 /// the canonical BigSpace root is. Cell offsets are irrelevant here: nodes
 /// between root and body only ever contribute SCALE, and cells do not scale.
 ///
-/// Change-gated at the WALK, not just the write: the composition below is a
-/// pure function of the ancestor chain's `Transform`s, the chain topology
-/// (`ChildOf`), and which nodes are bodies. Recomputing every collider's full
-/// chain every physics tick with only the final write compare-gated was
-/// O(colliders × depth) even when nothing moved — a static terrain scene paid
-/// the whole walk per tick for nothing. Now a collider recomputes only when it
-/// is new (`is_added`) or some node on its path changed; component REMOVALS
-/// (a `Transform` or `RigidBody` taken off a chain node) are not per-entity
-/// attributable, so any removal marks everything dirty for one tick — removal
-/// is spawn-shaped, so that full pass is rare.
+/// Ancestor paths are checked when relevant nodes change. Composition runs
+/// for new colliders and changed ancestors. Removing a `Transform`, `RigidBody`
+/// or `ChildOf` invalidates every collider once because the previous ancestor
+/// chain may no longer exist. Each removal stream is drained independently.
 ///
 /// The final write stays compare-gated too: values derive from `Transform`s
 /// deterministically, so an unchanged chain recomputes bit-identical and
@@ -1884,6 +1878,7 @@ fn propagate_collider_transforms_rootless(
     >,
     mut removed_tf: RemovedComponents<Transform>,
     mut removed_rb: RemovedComponents<RigidBody>,
+    mut removed_parent: RemovedComponents<ChildOf>,
     mut q_colliders: Query<(
         Entity,
         &mut ColliderTransform,
@@ -1897,7 +1892,10 @@ fn propagate_collider_transforms_rootless(
 ) {
     // DRAIN, don't peek (see `escape.rs`): un-drained removal events re-fire
     // for their whole retention window.
-    let all_dirty = removed_tf.read().count() > 0 || removed_rb.read().count() > 0;
+    let removed_transforms = removed_tf.read().count() > 0;
+    let removed_bodies = removed_rb.read().count() > 0;
+    let removed_parents = removed_parent.read().count() > 0;
+    let all_dirty = removed_transforms || removed_bodies || removed_parents;
     dirty.clear();
     if !all_dirty {
         dirty.extend(q_dirty_nodes.iter());
@@ -2125,6 +2123,37 @@ mod tests {
             .unwrap();
         assert_eq!(proxy.collider, collider);
         assert_eq!(proxy.body, None);
+    }
+
+    #[test]
+    fn rootless_collider_transform_tracks_parent_removal() {
+        let mut app = App::new();
+        app.add_systems(Update, propagate_collider_transforms_rootless);
+        let parent = app
+            .world_mut()
+            .spawn(Transform::from_scale(Vec3::splat(2.0)))
+            .id();
+        let collider = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::X),
+                ColliderTransform::default(),
+                ChildOf(parent),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<ColliderTransform>(collider)
+                .unwrap()
+                .translation,
+            Vec3::X * 2.0
+        );
+        app.world_mut().entity_mut(collider).remove::<ChildOf>();
+        app.update();
+        let transform = app.world().get::<ColliderTransform>(collider).unwrap();
+        assert_eq!(transform.translation, Vec3::X);
+        assert_eq!(transform.scale, Vec3::ONE);
     }
 
     #[test]

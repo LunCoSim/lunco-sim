@@ -593,6 +593,10 @@ opt-level = 3
 [profile.dev.package.lunco-physics]
 opt-level = 3
 
+# Fixed-step frame conversion and collider admission retain development checks.
+[profile.dev.package.lunco-usd-avian-core]
+opt-level = 3
+
 # Live scalar-port admission and exchange kernels retain development assertions.
 [profile.dev.package.lunco-port-core]
 opt-level = 3

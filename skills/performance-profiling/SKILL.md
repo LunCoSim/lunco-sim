@@ -188,6 +188,13 @@ or graphics acceptance.
 
 ## Architecture checks
 
+Frame-conversion and collider-admission kernels are owned by
+`lunco-usd-avian-core`; its regular development build uses optimization level
+three with development checks retained. Follow the actual owning package when
+profiling moved kernels. Collider propagation must independently drain parent,
+transform and body removals before comparing performance; a stale relative
+transform invalidates a faster result.
+
 When comparing native CPU/GPU instance preparation, retain the same PBR,
 shadows, meshes and quality. Device capability is not active-path evidence:
 camera `NoCpuCulling` requires native `RenderMeshInstances::GpuBuilding` and

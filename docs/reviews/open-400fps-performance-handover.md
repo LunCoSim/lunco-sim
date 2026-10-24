@@ -1,5 +1,16 @@
 # High-quality realtime performance handover
 
+## Collider frame preparation
+
+Collider preparation independently consumes parent, transform and rigid-body
+removals before native scale/mass consumers. Its regular development owner uses
+optimization level three with checks retained. [The focused review](collider-frame-preparation-2026-10-24.md)
+records the failing-before/passing-after owner regression, production physics
+gates, three normal Twin observations and native Tracy attribution. Port writes
+remain a major coupled-tick cost; 1,197 of Griffin's 1,412 bindings feed exhaust
+visuals, making their actual consumers the next profiling target. Complete
+loading, tick and graphics targets remain open.
+
 ## Shared-value proof lookup
 
 The application pins the published Rumoca private-table optimization while
@@ -10,8 +21,10 @@ the packaging admission observation and three regular Twin runs. These first
 runs include new-compiler prepared-cache misses; the complete targets remain
 open. A valid landed Tracy capture reduces identified SipHash leaf samples
 from 224 to 26, but its initializer compiles 10,981 native artifacts versus 68
-previously. This is not a matched constructor-speed comparison. Native-cache
-retention and the remaining proof/evaluation work require further attribution.
+previously. This is not a matched constructor-speed comparison. The current
+key-level replay fits the existing cache limits and restores 16,414 hits in
+16,482 initializer attempts. A capacity increase is not justified. Remaining
+constructor and complete-observation work require further attribution.
 
 ## Scoped transaction storage
 
