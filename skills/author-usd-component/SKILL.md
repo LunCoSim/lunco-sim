@@ -246,6 +246,12 @@ USD array literals in model-specific scripts. These helpers serialize only at
 the standard USD attribute boundary and leave material, purpose, and physics
 metadata untouched.
 
+For authored shading, pass numeric normals and two-component texture coordinates
+to `assembly_builder::mesh_surface_attributes_plan`. Either array can be omitted
+with `()`. It rejects zero normals, malformed vectors and non-finite values;
+the mesh owner must supply vertex or face-varying cardinality as described below.
+Apply these operations with the geometry in the same document batch.
+
 - Output is unindexed triangles; n-gons are **fan-triangulated**, so author
   convex faces or triangulate yourself.
 - `orientation = "leftHanded"` flips winding; default is right-handed/CCW.

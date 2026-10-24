@@ -1189,6 +1189,51 @@ fn mesh_points_update_plan(edit_target, path, points) {
       }}]}
 }
 
+/// Standard mesh surface attributes, kept numeric until the USD wire boundary.
+/// Cardinality/interpolation is selected by the mesh owner (vertex or face-varying).
+fn mesh_surface_attributes_plan(edit_target, path, normals, texcoords) {
+    if edit_target==() || path==() || !path.starts_with("/") || path=="/" || path.ends_with("/") {
+        return plan_error("mesh surface attributes require an edit target and mesh path");
+    }
+    let ops=[];
+    if normals!=() {
+        let encoded=_mesh_points_value(normals,"mesh normals");
+        if !encoded.ok {return encoded;}
+        for n in normals {
+            if n[0]==0.0 && n[1]==0.0 && n[2]==0.0 {
+                return plan_error("mesh normals must be nonzero");
+            }
+        }
+        ops.push(#{SetAttribute:#{edit_target:edit_target,path:path,name:"normals",
+            type_name:"normal3f[]",value:encoded.value}});
+    }
+    if texcoords!=() {
+        if type_of(texcoords)!="array" || texcoords.is_empty() {
+            return plan_error("mesh texture coordinates must be a non-empty array");
+        }
+        let literal="[";
+        for i in 0..texcoords.len() {
+            let uv=texcoords[i];
+            if type_of(uv)!="array" || uv.len()!=2 {
+                return plan_error("mesh texture coordinates must have two components");
+            }
+            for v in uv {
+                if type_of(v)!="i64" && type_of(v)!="f64" {
+                    return plan_error("mesh texture coordinates must be numeric");
+                }
+                if type_of(v)=="f64" && !v.is_finite() {
+                    return plan_error("mesh texture coordinates must be finite");
+                }
+            }
+            if i>0 {literal+=", ";}
+            literal+="("+uv[0]+", "+uv[1]+")";
+        }
+        ops.push(#{SetAttribute:#{edit_target:edit_target,path:path,name:"primvars:st",
+            type_name:"texCoord2f[]",value:literal+"]"}});
+    }
+    #{ok:true,kind:"mesh_surface_attributes",path:path,ops:ops}
+}
+
 /// Update a UsdGeomMesh point array and face topology together while preserving
 /// its material, purpose, and physics metadata.
 fn mesh_geometry_update_plan(edit_target, path, points, face_counts,
