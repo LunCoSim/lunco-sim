@@ -84,6 +84,10 @@ pub struct LinePlotStyle {
     /// Curve thickness in logical display pixels; independent of UI zoom.
     #[serde(default = "default_line_width")]
     pub line_width: f32,
+    /// Optional authored colour for this plot, including experiment curves.
+    /// Individual live binding colours take precedence.
+    #[serde(default)]
+    pub series_color: Option<[u8; 3]>,
     /// Plot ticks, titles, legend and hover text in logical pixels. None
     /// inherits the theme without changing surrounding UI controls.
     #[serde(default)]
@@ -140,6 +144,7 @@ impl Default for LinePlotStyle {
             y_reference_range: None,
             log_y: false,
             line_width: default_line_width(),
+            series_color: None,
             text_size: None,
             show_controls: true,
             show_hover_values: true,
@@ -717,7 +722,11 @@ impl LinePlot {
         // Taken after the toolbar so it matches the space `plot.show`
         // gets below.
         if !style.compact_layout {
-            crate::multi_series_plot::render_plot_caption(ctx.ui, style.caption.as_deref(), style.text_size);
+            crate::multi_series_plot::render_plot_caption(
+                ctx.ui,
+                style.caption.as_deref(),
+                style.text_size,
+            );
         }
         let remaining = ctx.ui.available_size_before_wrap();
 
@@ -772,6 +781,11 @@ impl LinePlot {
                     let label = binding_label(ctx.wb, b, meta);
                     let color = b
                         .color
+                        .or_else(|| {
+                            style
+                                .series_color
+                                .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                        })
                         .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
                     Some((series, label, color))
                 })
@@ -866,7 +880,8 @@ impl LinePlot {
             });
         let shared_time = ctx.time_axis.filter(|_| style.x_signal.is_none());
         if let Some(axis) = shared_time {
-            plot = plot.link_axis(axis.group, [true, false])
+            plot = plot
+                .link_axis(axis.group, [true, false])
                 .link_cursor(axis.group, [true, false]);
         }
         if let Some(label) = x_label.filter(|_| !style.compact_layout) {
@@ -899,12 +914,20 @@ impl LinePlot {
             plot = plot.reset();
         }
 
-        if style.compact_layout { plot = plot.show_axes(false); }
+        if style.compact_layout {
+            plot = plot.show_axes(false);
+        }
         if style.simplified_grid || style.compact_layout {
             plot = crate::multi_series_plot::simplify_grid(plot);
         }
-        let latest_value = (style.show_latest_value && series_to_plot.len()==1)
-            .then(|| series_to_plot[0].0.1.last().map(|point| if log_y {10_f64.powf(point.y)} else {point.y}))
+        let latest_value = (style.show_latest_value && series_to_plot.len() == 1)
+            .then(|| {
+                series_to_plot[0]
+                    .0
+                    .1
+                    .last()
+                    .map(|point| if log_y { 10_f64.powf(point.y) } else { point.y })
+            })
             .flatten();
         let endpoints = series_to_plot
             .iter()
@@ -941,8 +964,16 @@ impl LinePlot {
             })
         });
         if style.compact_layout {
-            crate::multi_series_plot::render_compact_labels(ctx.ui, &response.transform,
-                style.x_label.as_deref(), style.y_label.as_deref(), style.caption.as_deref(), style.text_size, style.log_y, latest_value);
+            crate::multi_series_plot::render_compact_labels(
+                ctx.ui,
+                &response.transform,
+                style.x_label.as_deref(),
+                style.y_label.as_deref(),
+                style.caption.as_deref(),
+                style.text_size,
+                style.log_y,
+                latest_value,
+            );
         }
         response.response.context_menu(|ui| {
             render_appearance_menu(
@@ -992,11 +1023,17 @@ pub fn render_appearance_menu(
         request.simplified_grid = Some(grid);
     }
     let mut latest = style.show_latest_value;
-    if ui.checkbox(&mut latest, "Show latest single-trace value").changed() {
+    if ui
+        .checkbox(&mut latest, "Show latest single-trace value")
+        .changed()
+    {
         request.show_latest_value = Some(latest);
     }
     let mut inside = style.compact_layout;
-    if ui.checkbox(&mut inside, "Compact title and horizontal axis labels").changed() {
+    if ui
+        .checkbox(&mut inside, "Compact title and horizontal axis labels")
+        .changed()
+    {
         request.compact_layout = Some(inside);
     }
     let mut caption = style.caption.clone().unwrap_or_default();
@@ -1105,6 +1142,8 @@ pub struct ConfigureLinePlot {
     /// finite values in the plotted signal's units. Autoscaling can expand it.
     pub y_reference_range: Option<Vec<f64>>,
     pub line_width: Option<f32>,
+    /// Empty restores automatic colours; otherwise exactly three RGB bytes.
+    pub series_color: Option<Vec<u8>>,
     /// 8–64 logical pixels for plot text only; zero restores the theme.
     pub text_size: Option<f32>,
     pub show_controls: Option<bool>,
@@ -1125,6 +1164,13 @@ fn configure_line_plot(
     registry: &mut VisualizationRegistry,
     request: &ConfigureLinePlot,
 ) -> Result<(), String> {
+    if request
+        .series_color
+        .as_ref()
+        .is_some_and(|color| !color.is_empty() && color.len() != 3)
+    {
+        return Err("plot colour must be empty or three RGB bytes".into());
+    }
     if request
         .text_size
         .is_some_and(|size| !size.is_finite() || (size != 0.0 && !(8.0..=64.0).contains(&size)))
@@ -1175,6 +1221,12 @@ fn configure_line_plot(
     if let Some(width) = request.line_width {
         style.line_width = width;
     }
+    if let Some(color) = request.series_color.as_deref() {
+        style.series_color = match color {
+            [r, g, b] => Some([*r, *g, *b]),
+            _ => None,
+        };
+    }
     if let Some(size) = request.text_size {
         style.text_size = (size > 0.0).then_some(size);
     }
@@ -1184,10 +1236,18 @@ fn configure_line_plot(
     if let Some(hover) = request.show_hover_values {
         style.show_hover_values = hover;
     }
-    if let Some(legend) = request.show_legend { style.show_legend = legend; }
-    if let Some(grid) = request.simplified_grid { style.simplified_grid = grid; }
-    if let Some(latest) = request.show_latest_value { style.show_latest_value = latest; }
-    if let Some(inside) = request.compact_layout { style.compact_layout = inside; }
+    if let Some(legend) = request.show_legend {
+        style.show_legend = legend;
+    }
+    if let Some(grid) = request.simplified_grid {
+        style.simplified_grid = grid;
+    }
+    if let Some(latest) = request.show_latest_value {
+        style.show_latest_value = latest;
+    }
+    if let Some(inside) = request.compact_layout {
+        style.compact_layout = inside;
+    }
     if let Some(caption) = &request.caption {
         style.caption = (!caption.trim().is_empty()).then(|| caption.clone());
     }
@@ -1211,7 +1271,66 @@ fn on_configure_line_plot(
     Ok(Ack::new(OpId::new()))
 }
 
-register_commands!(on_configure_line_plot);
+/// Edit an existing live signal binding's presentation. Source identity and
+/// samples stay unchanged; the ordinary binding persists the label and colour.
+#[Command(default)]
+pub struct ConfigurePlotBinding {
+    pub plot: u64,
+    pub signal: String,
+    /// Empty restores the shared telemetry label.
+    pub label: Option<String>,
+    /// Empty restores the theme; otherwise exactly three RGB bytes.
+    pub color: Option<Vec<u8>>,
+}
+
+fn configure_plot_binding(
+    registry: &mut VisualizationRegistry,
+    request: &ConfigurePlotBinding,
+) -> Result<(), String> {
+    let color = match request.color.as_deref() {
+        None => None,
+        Some([]) => Some(None),
+        Some([r, g, b]) => Some(Some(egui::Color32::from_rgb(*r, *g, *b))),
+        Some(_) => return Err("binding colour must be empty or three RGB bytes".into()),
+    };
+    let config = registry
+        .get_mut(lunco_viz_core::VizId(request.plot))
+        .ok_or_else(|| format!("plot {} does not exist", request.plot))?;
+    if config.kind != LINE_PLOT_KIND {
+        return Err("visualization is not a line plot".into());
+    }
+    if !config
+        .inputs
+        .iter()
+        .any(|b| b.source.path == request.signal)
+    {
+        return Err(format!("plot has no live binding for {}", request.signal));
+    }
+    for binding in config
+        .inputs
+        .iter_mut()
+        .filter(|b| b.source.path == request.signal)
+    {
+        if let Some(label) = &request.label {
+            binding.label = (!label.trim().is_empty()).then(|| label.clone());
+        }
+        if let Some(color) = color {
+            binding.color = color;
+        }
+    }
+    Ok(())
+}
+
+#[on_command(ConfigurePlotBinding)]
+fn on_configure_plot_binding(
+    trigger: On<ConfigurePlotBinding>,
+    mut registry: ResMut<VisualizationRegistry>,
+) -> Result<Ack, String> {
+    configure_plot_binding(&mut registry, trigger.event())?;
+    Ok(Ack::new(OpId::new()))
+}
+
+register_commands!(on_configure_line_plot, on_configure_plot_binding);
 
 // ── Per-plot toolbar + editing ──────────────────────────────────────
 
@@ -1462,6 +1581,63 @@ fn pair_by_time(xs: &[ScalarSample], ys: impl IntoIterator<Item = ScalarSample>)
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binding_presentation_is_persistent_and_rejects_invalid_edits_atomically() {
+        let mut registry = VisualizationRegistry::default();
+        let id = lunco_viz_core::VizId(42);
+        let signal = SignalRef::new(Entity::PLACEHOLDER, "velocity");
+        registry.insert(VisualizationConfig {
+            id,
+            title: "Measured motion".into(),
+            kind: LINE_PLOT_KIND,
+            view: crate::view::ViewTarget::Panel2D,
+            inputs: vec![SignalBinding::live(signal.clone(), "y")],
+            style: serde_json::Value::Null,
+        });
+        let request = ConfigurePlotBinding {
+            plot: id.0,
+            signal: "velocity".into(),
+            label: Some("Speed [m/s]".into()),
+            color: Some(vec![120, 180, 255]),
+        };
+        configure_plot_binding(&mut registry, &request).unwrap();
+        let serialized = serde_json::to_value(registry.get(id).unwrap()).unwrap();
+        let restored: VisualizationConfig = serde_json::from_value(serialized.clone()).unwrap();
+        assert_eq!(restored.inputs[0].source, signal);
+        assert_eq!(restored.inputs[0].label.as_deref(), Some("Speed [m/s]"));
+        assert_eq!(
+            restored.inputs[0].color,
+            Some(egui::Color32::from_rgb(120, 180, 255))
+        );
+        for invalid in [
+            ConfigurePlotBinding {
+                signal: "missing".into(),
+                ..request.clone()
+            },
+            ConfigurePlotBinding {
+                color: Some(vec![255]),
+                ..request.clone()
+            },
+        ] {
+            assert!(configure_plot_binding(&mut registry, &invalid).is_err());
+            assert_eq!(
+                serde_json::to_value(registry.get(id).unwrap()).unwrap(),
+                serialized
+            );
+        }
+        configure_plot_binding(
+            &mut registry,
+            &ConfigurePlotBinding {
+                label: Some(String::new()),
+                color: Some(vec![]),
+                ..request
+            },
+        )
+        .unwrap();
+        let restored = registry.get(id).unwrap();
+        assert!(restored.inputs[0].color.is_none() && restored.inputs[0].label.is_none());
+    }
+
     use super::*;
 
     fn s(time: f64, value: f64) -> ScalarSample {
@@ -1529,6 +1705,7 @@ mod tests {
             y_reference_range: Some([-10.0, 10.0]),
             log_y: true,
             line_width: 4.0,
+            series_color: Some([120, 180, 255]),
             text_size: Some(24.0),
             show_controls: false,
             show_hover_values: false,
@@ -1556,7 +1733,10 @@ mod tests {
         assert!(roundtrip.simplified_grid);
         assert!(roundtrip.compact_layout);
         assert!(roundtrip.show_latest_value);
-        assert_eq!(roundtrip.caption.as_deref(), Some("Two identical valve pulses"));
+        assert_eq!(
+            roundtrip.caption.as_deref(),
+            Some("Two identical valve pulses")
+        );
         assert!(roundtrip.follow_latest);
         assert_eq!(roundtrip.time_window_s, Some(5.0));
     }
@@ -1585,6 +1765,7 @@ mod tests {
                 y_label: Some("Temperature [K]".into()),
                 y_reference_range: Some(vec![190.0, 310.0]),
                 line_width: Some(4.0),
+                series_color: Some(vec![255, 195, 105]),
                 text_size: Some(24.0),
                 show_controls: Some(false),
                 show_hover_values: Some(false),

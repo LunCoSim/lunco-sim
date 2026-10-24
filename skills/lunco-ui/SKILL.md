@@ -48,6 +48,20 @@ are not linked. `ConfigureSignalGrid.sync_time_axes:false` opts out.
 For captured charts, `show_hover_values:false` hides hover readouts and
 crosshairs without hiding axes or changing the recorded samples.
 
+Give simultaneous quantities distinct, consistent colours. Set
+`ConfigureLinePlot.series_color:[r,g,b]` for a single-quantity live or historical
+plot. For multiple live bindings on one plot, use `ConfigurePlotBinding` with
+the existing `plot`, `signal`, `label` and `color:[r,g,b]`. An empty colour array
+restores automatic colours; omitted fields preserve the existing presentation.
+These settings change presentation only, never the measured source or units.
+
+`SetTelemetryBrowserView` can pin `target_gid` independently of editor selection,
+select and reveal a `signal`, and set `show_internal` or `show_preview`. Hide the
+inline preview when the main Graphs panel already shows that channel. An empty
+signal leaves list navigation to the operator. A missing pinned owner is
+reported visibly. The browser's Display menu controls its inline preview height
+without changing stored history or global UI scale.
+
 Use the native line plot toolbar's `Line` control to set curve thickness from
 0.5 to 8 logical pixels. It is saved per visualization in `LinePlotStyle` and
 uses the existing typed edit observer. Keep global UI zoom at the operator's

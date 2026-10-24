@@ -204,6 +204,9 @@ and `caption` for the quantity title. `compact_layout=true` places title and
 horizontal units at the native plot edges, with numeric ticks inside too, reclaiming the outer axis margins.
 Use `show_hover_values=false` to hide pointer crosshairs and value tooltips in
 a presentation while retaining axes and ordinary plot navigation.
+Use `series_color:[r,g,b]` for a single-quantity plot's persisted curve colour,
+including completed experiment results. An empty array restores automatic
+colours. Give small multiples distinct colours and retain them across views.
 Use short labels and keep the explanatory narrative separate. Keep source context
 explicit when historical bench results accompany a different live scene. Read back the actual experiment/series selection and
 inspect the image before recording; labels never convert units or samples.

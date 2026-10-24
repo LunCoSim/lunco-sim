@@ -2114,6 +2114,11 @@ fn render_experiments_plot_inner(
             scrub_time,
             scrub_color: col_accent,
         };
+        if let Some([r, g, b]) = style.series_color {
+            for line in &mut series {
+                line.color = egui::Color32::from_rgb(r, g, b);
+            }
+        }
         let plot_response = render_multi_series_plot(ui, &series, overlays, &options);
         plot_response.response.context_menu(|ui| {
             lunco_viz::kinds::line_plot::render_appearance_menu(ui, ctx, viz_id.0, &style, plot_response.time_span_s);

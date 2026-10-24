@@ -521,67 +521,143 @@ fn major_grid_marks(input: egui_plot::GridInput) -> Vec<egui_plot::GridMark> {
         return Vec::new();
     }
     let scale = 10_f64.powf(raw.log10().floor());
-    if !scale.is_finite() || scale <= 0.0 { return Vec::new(); }
+    if !scale.is_finite() || scale <= 0.0 {
+        return Vec::new();
+    }
     let fraction = raw / scale;
-    let multiple = if fraction <= 1.0 { 1.0 } else if fraction <= 2.0 { 2.0 }
-        else if fraction <= 5.0 { 5.0 } else { 10.0 };
+    let multiple = if fraction <= 1.0 {
+        1.0
+    } else if fraction <= 2.0 {
+        2.0
+    } else if fraction <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
     let step = scale * multiple;
     let first = (low / step).ceil() * step;
-    (0..=12).map(|i| first + f64::from(i) * step)
+    (0..=12)
+        .map(|i| first + f64::from(i) * step)
         .take_while(|value| value.is_finite() && *value <= high)
-        .map(|value| egui_plot::GridMark { value, step_size: step }).collect()
+        .map(|value| egui_plot::GridMark {
+            value,
+            step_size: step,
+        })
+        .collect()
 }
 
 /// Compact axis typography uses the same native transform and major grid marks.
 /// Hiding outer axis widgets reclaims their margins; values and units remain
 /// bound to the plot's actual bounds, including zoom, following and log-Y.
 pub(crate) fn render_compact_labels(
-    ui: &egui::Ui, transform: &PlotTransform, x: Option<&str>, y: Option<&str>,
-    title: Option<&str>, size: Option<f32>, log_y: bool, latest_value: Option<f64>,
+    ui: &egui::Ui,
+    transform: &PlotTransform,
+    x: Option<&str>,
+    y: Option<&str>,
+    title: Option<&str>,
+    size: Option<f32>,
+    log_y: bool,
+    latest_value: Option<f64>,
 ) {
     let frame = transform.frame();
     let mut font = egui::TextStyle::Body.resolve(ui.style());
-    if let Some(size) = size { font.size = size; }
+    if let Some(size) = size {
+        font.size = size;
+    }
     let painter = ui.painter().with_clip_rect(*frame);
     let color = ui.visuals().strong_text_color();
     let mut occupied = Vec::new();
     let mut label = |text: &str, pos: egui::Pos2, anchor: egui::Align2, required: bool| {
         let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), color);
         let rect = anchor.anchor_rect(egui::Rect::from_min_size(pos, galley.size()));
-        if !required && (!frame.shrink(3.0).contains_rect(rect)
-            || occupied.iter().any(|other: &egui::Rect| other.expand(6.0).intersects(rect))) { return; }
+        if !required
+            && (!frame.shrink(3.0).contains_rect(rect)
+                || occupied
+                    .iter()
+                    .any(|other: &egui::Rect| other.expand(6.0).intersects(rect)))
+        {
+            return false;
+        }
         painter.galley(rect.min, galley, color);
         occupied.push(rect);
+        true
     };
     if let Some(y) = y {
-        label(y, frame.left_top() + egui::vec2(10.0,8.0), egui::Align2::LEFT_TOP, true);
+        label(
+            y,
+            frame.left_top() + egui::vec2(10.0, 8.0),
+            egui::Align2::LEFT_TOP,
+            true,
+        );
     }
     if let Some(title) = title {
-        label(title, frame.center_top() + egui::vec2(0.0,8.0), egui::Align2::CENTER_TOP, true);
+        label(
+            title,
+            frame.center_top() + egui::vec2(0.0, 8.0),
+            egui::Align2::CENTER_TOP,
+            true,
+        );
     }
     if let Some(value) = latest_value.filter(|value| value.is_finite()) {
-        let value = format!("{value:.1} {}",y.unwrap_or_default());
-        label(&value,frame.right_top()+egui::vec2(-10.0,8.0),egui::Align2::RIGHT_TOP,true);
+        let value = format!("{value:.1} {}", y.unwrap_or_default());
+        label(
+            &value,
+            frame.right_top() + egui::vec2(-10.0, 8.0),
+            egui::Align2::RIGHT_TOP,
+            true,
+        );
     }
     if let Some(x) = x {
-        label(x, frame.right_bottom() - egui::vec2(10.0,8.0), egui::Align2::RIGHT_BOTTOM, true);
+        label(
+            x,
+            frame.right_bottom() - egui::vec2(10.0, 8.0),
+            egui::Align2::RIGHT_BOTTOM,
+            true,
+        );
     }
     let bounds = transform.bounds();
-    let marks = |axis: usize| major_grid_marks(egui_plot::GridInput {
-        bounds: (bounds.min()[axis],bounds.max()[axis]),base_step_size:0.0,
-    });
-    let format_tick = |mark: egui_plot::GridMark| {
-        let decimals = (-mark.step_size.log10().floor()).clamp(0.0,12.0) as usize;
-        egui::emath::format_with_decimals_in_range(mark.value,decimals..=decimals)
+    let marks = |axis: usize| {
+        major_grid_marks(egui_plot::GridInput {
+            bounds: (bounds.min()[axis], bounds.max()[axis]),
+            base_step_size: 0.0,
+        })
     };
+    let format_tick = |mark: egui_plot::GridMark| {
+        let decimals = (-mark.step_size.log10().floor()).clamp(0.0, 12.0) as usize;
+        egui::emath::format_with_decimals_in_range(mark.value, decimals..=decimals)
+    };
+    let mut painted_y_zero = None;
     for mark in marks(1) {
-        let value = if log_y { crate::plot_fmt::log_y_tick(mark.value) } else { format_tick(mark) };
-        let pos = transform.position_from_point(&PlotPoint::new(bounds.min()[0],mark.value));
-        label(&value,egui::pos2(frame.left()+10.0,pos.y),egui::Align2::LEFT_CENTER,false);
+        let value = if log_y {
+            crate::plot_fmt::log_y_tick(mark.value)
+        } else {
+            format_tick(mark)
+        };
+        let pos = transform.position_from_point(&PlotPoint::new(bounds.min()[0], mark.value));
+        let anchor = egui::pos2(frame.left() + 10.0, pos.y);
+        if label(&value, anchor, egui::Align2::LEFT_CENTER, false)
+            && !log_y
+            && mark.value.abs() < mark.step_size * 1.0e-9
+        {
+            painted_y_zero = Some(anchor);
+        }
     }
     for mark in marks(0) {
-        let pos = transform.position_from_point(&PlotPoint::new(mark.value,bounds.min()[1]));
-        label(&format_tick(mark),egui::pos2(pos.x,frame.bottom()-8.0),egui::Align2::CENTER_BOTTOM,false);
+        let pos = transform.position_from_point(&PlotPoint::new(mark.value, bounds.min()[1]));
+        // A single zero identifies the shared corner. Keep both zero ticks
+        // when their axes cross well inside the chart (e.g. temperature).
+        let anchor = egui::pos2(pos.x, frame.bottom() - 8.0);
+        if mark.value.abs() < mark.step_size * 1.0e-9
+            && painted_y_zero.is_some_and(|y| y.distance(anchor) < font.size * 2.5)
+        {
+            continue;
+        }
+        label(
+            &format_tick(mark),
+            anchor,
+            egui::Align2::CENTER_BOTTOM,
+            false,
+        );
     }
 }
 
@@ -636,21 +712,39 @@ pub fn render_multi_series_plot(
             };
             Some(crate::plot_fmt::hover_label(name, point, options.log_y))
         });
-    if options.show_legend { plot = plot.legend(Legend::default()); }
-    plot = plot.show_x(options.show_hover_values).show_y(options.show_hover_values);
-    if options.simplified_grid || options.compact_layout { plot = simplify_grid(plot); }
-    if options.compact_layout { plot = plot.show_axes(false); }
-    if !options.compact_layout { render_plot_caption(ui, options.caption.as_deref(), options.text_size); }
+    if options.show_legend {
+        plot = plot.legend(Legend::default());
+    }
+    plot = plot
+        .show_x(options.show_hover_values)
+        .show_y(options.show_hover_values);
+    if options.simplified_grid || options.compact_layout {
+        plot = simplify_grid(plot);
+    }
+    if options.compact_layout {
+        plot = plot.show_axes(false);
+    }
+    if !options.compact_layout {
+        render_plot_caption(ui, options.caption.as_deref(), options.text_size);
+    }
     if options.reset_bounds {
         plot = plot.reset();
     }
     if options.log_y {
         plot = plot.y_axis_formatter(|mark, _range| crate::plot_fmt::log_y_tick(mark.value));
     }
-    if let Some(label) = options.y_axis_label.as_deref().filter(|_| !options.compact_layout) {
+    if let Some(label) = options
+        .y_axis_label
+        .as_deref()
+        .filter(|_| !options.compact_layout)
+    {
         plot = plot.y_axis_label(label.to_owned());
     }
-    if let Some(label) = options.x_axis_label.as_deref().filter(|_| !options.compact_layout) {
+    if let Some(label) = options
+        .x_axis_label
+        .as_deref()
+        .filter(|_| !options.compact_layout)
+    {
         plot = plot.x_axis_label(label.to_owned());
     }
     if let Some(range) = options.y_reference_range {
@@ -678,12 +772,16 @@ pub fn render_multi_series_plot(
                 pixel_width,
             )?;
             // With one trace there is no run identity to encode as a dash.
-            let style = if item_count == 1 { LineStyle::Solid } else { match line.style {
-                MultiSeriesStyle::Solid => LineStyle::Solid,
-                MultiSeriesStyle::Dashed => LineStyle::dashed_dense(),
-                MultiSeriesStyle::Dotted => LineStyle::dotted_dense(),
-                MultiSeriesStyle::DashDot => LineStyle::dashed_loose(),
-            }};
+            let style = if item_count == 1 {
+                LineStyle::Solid
+            } else {
+                match line.style {
+                    MultiSeriesStyle::Solid => LineStyle::Solid,
+                    MultiSeriesStyle::Dashed => LineStyle::dashed_dense(),
+                    MultiSeriesStyle::Dotted => LineStyle::dotted_dense(),
+                    MultiSeriesStyle::DashDot => LineStyle::dashed_loose(),
+                }
+            };
             Some((line.label.clone(), line.color, style, points))
         })
         .collect();
@@ -759,11 +857,24 @@ pub fn render_multi_series_plot(
         })
     });
     if options.compact_layout {
-        render_compact_labels(ui, &response.transform,
-            options.x_axis_label.as_deref(), options.y_axis_label.as_deref(), options.caption.as_deref(), options.text_size, options.log_y,
-            (options.show_latest_value && item_count==1).then(|| series.first()
-                .and_then(|line|line.points.last()).or_else(||overlays.first().and_then(|line|line.points.last()))
-                .map(|point| point[1])).flatten());
+        render_compact_labels(
+            ui,
+            &response.transform,
+            options.x_axis_label.as_deref(),
+            options.y_axis_label.as_deref(),
+            options.caption.as_deref(),
+            options.text_size,
+            options.log_y,
+            (options.show_latest_value && item_count == 1)
+                .then(|| {
+                    series
+                        .first()
+                        .and_then(|line| line.points.last())
+                        .or_else(|| overlays.first().and_then(|line| line.points.last()))
+                        .map(|point| point[1])
+                })
+                .flatten(),
+        );
     }
     MultiSeriesPlotResponse {
         clicked_x,
@@ -898,44 +1009,148 @@ mod follow_tests {
         let ctx = egui::Context::default();
         let mut frame = None;
         let mut transform = None;
-        let mut output = ctx.run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(880.0, 400.0))),
-            ..Default::default()
-        }, |ui| {
-            let response = Plot::new("compact-labels").show_axes(false).show(ui, |plot| {
-                plot.line(Line::new("native samples", vec![[0.0,20.0],[5.0,-107.0]]));
-            });
-            frame = Some(*response.transform.frame());
-            transform = Some(response.transform.clone());
-            super::render_compact_labels(ui, &response.transform, Some("Time (s)"),
-                Some("°C"), Some("Air temperature"), Some(28.0), false, Some(-107.4));
-        });
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(880.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let response = Plot::new("compact-labels")
+                    .show_axes(false)
+                    .show(ui, |plot| {
+                        plot.line(Line::new(
+                            "native samples",
+                            vec![[0.0, 20.0], [5.0, -107.0]],
+                        ));
+                    });
+                frame = Some(*response.transform.frame());
+                transform = Some(response.transform.clone());
+                super::render_compact_labels(
+                    ui,
+                    &response.transform,
+                    Some("Time (s)"),
+                    Some("°C"),
+                    Some("Air temperature"),
+                    Some(28.0),
+                    false,
+                    Some(-107.4),
+                );
+            },
+        );
         output.textures_delta.clear();
         let frame = frame.unwrap();
         for label in ["°C", "Time (s)", "Air temperature", "-107.4 °C"] {
-            let text = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == label => Some(text), _ => None,
-            }).unwrap();
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                    _ => None,
+                })
+                .unwrap();
             assert_eq!(text.angle, 0.0);
-            assert!(frame.contains_rect(text.visual_bounding_rect()), "{label} must stay inside the native frame");
+            assert!(
+                frame.contains_rect(text.visual_bounding_rect()),
+                "{label} must stay inside the native frame"
+            );
         }
         let transform = transform.unwrap();
         for (label, axis, value) in [("2", 0, 2.0), ("-50", 1, -50.0)] {
-            let text = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == label => Some(text), _ => None,
-            }).expect("readable native tick must be painted");
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                    _ => None,
+                })
+                .expect("readable native tick must be painted");
             let center = text.pos + text.galley.size() * 0.5;
-            let expected = transform.position_from_point(&egui_plot::PlotPoint::new(value,value));
-            assert!((center[axis]-expected[axis]).abs()<0.01);
+            let expected = transform.position_from_point(&egui_plot::PlotPoint::new(value, value));
+            assert!((center[axis] - expected[axis]).abs() < 0.01);
             assert!(frame.contains_rect(text.visual_bounding_rect()));
         }
     }
 
     #[test]
+    fn compact_origin_uses_one_zero_without_hiding_separate_zero_ticks() {
+        for (samples, expected) in [
+            (vec![[0.0, 0.0], [5.0, 437.0]], 1),
+            (vec![[0.0, 20.0], [5.0, -107.0]], 2),
+        ] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1240.0, 720.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let plot = Plot::new("origin").show_axes(false);
+                    let plot = if expected == 2 {
+                        plot.include_x(-1.0)
+                    } else {
+                        plot
+                    };
+                    let response = plot.show(ui, |plot| {
+                        plot.line(Line::new("samples", samples.clone()));
+                    });
+                    super::render_compact_labels(
+                        ui,
+                        &response.transform,
+                        Some("sec"),
+                        Some("unit"),
+                        Some("Quantity"),
+                        Some(42.0),
+                        false,
+                        None,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            let zero_count = output.shapes.iter().filter(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "0")
+            }).count();
+            assert_eq!(
+                zero_count,
+                expected,
+                "{:?}",
+                output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape {
+                            Some(text.galley.text())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn simplified_grid_has_only_readable_major_marks() {
-        let marks = super::major_grid_marks(egui_plot::GridInput { bounds: (-140.0, 30.0), base_step_size: 1.0 });
-        assert_eq!(marks.iter().map(|m| m.value).collect::<Vec<_>>(), vec![-100.0, -50.0, 0.0]);
-        assert!(super::major_grid_marks(egui_plot::GridInput { bounds: (0.0, f64::INFINITY), base_step_size: 1.0 }).is_empty());
+        let marks = super::major_grid_marks(egui_plot::GridInput {
+            bounds: (-140.0, 30.0),
+            base_step_size: 1.0,
+        });
+        assert_eq!(
+            marks.iter().map(|m| m.value).collect::<Vec<_>>(),
+            vec![-100.0, -50.0, 0.0]
+        );
+        assert!(
+            super::major_grid_marks(egui_plot::GridInput {
+                bounds: (0.0, f64::INFINITY),
+                base_step_size: 1.0
+            })
+            .is_empty()
+        );
     }
     #[test]
     fn following_preserves_span_before_and_after_the_window_fills() {

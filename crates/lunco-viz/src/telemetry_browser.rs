@@ -87,6 +87,7 @@ pub const TELEMETRY_BROWSER_PANEL_ID: PanelId = PanelId("telemetry_browser");
 pub struct TelemetryBrowserView {
     pub filter: String,
     pub signal: String,
+    pub target_gid: Option<lunco_core::GlobalEntityId>,
 }
 
 impl lunco_core::SceneResource for TelemetryBrowserView {}
@@ -114,6 +115,19 @@ pub struct TelemetryDisplaySettings {
     /// through the explicit telemetry/API history surfaces.
     #[serde(default)]
     pub show_archived: bool,
+    /// Height in logical pixels for the selected channel's inline graph.
+    #[serde(default = "default_preview_height")]
+    pub preview_height: f32,
+    /// Hide the inline graph when a separate plot already presents the signal.
+    #[serde(default = "default_show_preview")]
+    pub show_preview: bool,
+}
+
+fn default_preview_height() -> f32 {
+    200.0
+}
+fn default_show_preview() -> bool {
+    true
 }
 
 impl Default for TelemetryDisplaySettings {
@@ -123,6 +137,8 @@ impl Default for TelemetryDisplaySettings {
             zero_threshold: 1.0e-4,
             show_generated_names: false,
             show_archived: false,
+            preview_height: default_preview_height(),
+            show_preview: default_show_preview(),
         }
     }
 }
@@ -136,16 +152,32 @@ impl SettingsSection for TelemetryDisplaySettings {
 pub struct SetTelemetryBrowserView {
     pub filter: String,
     pub signal: String,
+    /// Pin this view to one live owner independently of editor selection.
+    pub target_gid: Option<lunco_core::GlobalEntityId>,
+    /// Omission preserves the operator's internal-variable checkbox.
+    pub show_internal: Option<bool>,
+    /// Omission preserves the operator's inline preview preference.
+    pub show_preview: Option<bool>,
 }
 
 #[on_command(SetTelemetryBrowserView)]
 fn on_set_telemetry_browser_view(
     trigger: On<SetTelemetryBrowserView>,
     mut view: ResMut<TelemetryBrowserView>,
+    mut state: ResMut<TelemetryBrowserState>,
+    mut display: ResMut<TelemetryDisplaySettings>,
 ) {
     let request = trigger.event();
     view.filter = request.filter.clone();
     view.signal = request.signal.clone();
+    view.target_gid = request.target_gid;
+    if let Some(show) = request.show_internal {
+        state.show_model_variables = show;
+        state.visible_rows_dirty = true;
+    }
+    if let Some(show) = request.show_preview {
+        display.show_preview = show;
+    }
 }
 
 register_commands!(on_set_telemetry_browser_view);
@@ -1554,6 +1586,29 @@ fn display_roots(root: &TreeNode) -> impl Iterator<Item = &TreeNode> {
     root.children.values()
 }
 
+/// Reveal the requested native signal through the same collapsing-tree IDs
+/// used by normal pointer navigation. Do this only when selection changes.
+fn reveal_telemetry_channel(
+    ctx: &egui::Context,
+    node: &TreeNode,
+    parent_scope: egui::Id,
+    signal: &SignalRef,
+) -> bool {
+    let branch_id = parent_scope.with(("tb_entity", &node.id));
+    let child_scope = parent_scope.with(branch_id);
+    let mut found = node.rows.iter().any(|row| &row.sig == signal);
+    for child in node.children.values() {
+        found |= reveal_telemetry_channel(ctx, child, child_scope, signal);
+    }
+    if found {
+        let mut state =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ctx, branch_id, true);
+        state.set_open(true);
+        state.store(ctx);
+    }
+    found
+}
+
 enum VisibleTelemetryRow {
     Group {
         display_label: Arc<str>,
@@ -2193,6 +2248,7 @@ pub(crate) struct TelemetryBrowserState {
     visible_rows_dirty: bool,
     row_text_cache: TelemetryRowTextCache,
     selected: Option<SignalRef>,
+    selection_to_reveal: Option<SignalRef>,
     requested_selection: Option<RequestedSignalSelection>,
     preview: Option<PreviewCache>,
     /// Narrow the list to [`TelemetryFocus`] — the selected vessel and everything
@@ -2212,6 +2268,7 @@ pub(crate) struct TelemetryBrowserState {
 /// if the user selects another row while an external view request is active.
 struct RequestedSignalSelection {
     signal: String,
+    target_gid: Option<lunco_core::GlobalEntityId>,
     catalog_key: u64,
     resolved: Option<SignalRef>,
 }
@@ -2226,6 +2283,7 @@ impl Default for TelemetryBrowserState {
             visible_rows_dirty: true,
             row_text_cache: TelemetryRowTextCache::default(),
             selected: None,
+            selection_to_reveal: None,
             requested_selection: None,
             preview: None,
             focus_only: true,
@@ -2365,19 +2423,43 @@ impl TelemetryBrowserState {
         // The focus resource is written by whichever app owns selection
         // (`lunco-scene-selection` mirrors `SelectedEntities` into it); absent ⇒ a host
         // with no selection concept at all, and the toggle simply has nothing to do.
-        let has_focus = ctx
+        let mut source_roots = ctx
             .resource::<TelemetryFocus>()
-            .is_some_and(|focus| !focus.roots.is_empty());
-        let focus_key = FocusInputs::capture(
-            ctx.resource::<TelemetryFocus>()
-                .map(|focus| focus.roots.as_slice())
-                .unwrap_or_default(),
-            |root| ctx.get::<UsdPrimPath>(root).map(|path| path.path.clone()),
-        );
-        ui.horizontal(|ui| {
+            .map(|focus| focus.roots.clone())
+            .unwrap_or_default();
+        let pinned = ctx
+            .resource::<TelemetryBrowserView>()
+            .and_then(|view| view.target_gid);
+        if let Some(gid) = pinned {
+            let owner = ctx
+                .resource::<lunco_api::registry::ApiEntityRegistry>()
+                .and_then(|registry| registry.resolve(&gid));
+            let Some(owner) = owner else {
+                ui.label("Pinned telemetry source is unavailable.");
+                return;
+            };
+            source_roots = vec![owner];
+            let name = ctx
+                .get::<UsdPrimPath>(owner)
+                .map(|path| path.path.rsplit('/').next().unwrap_or(&path.path))
+                .unwrap_or("source");
+            ui.label(format!("Source: {name}"));
+        }
+        let has_focus = !source_roots.is_empty();
+        let focus_key = FocusInputs::capture(&source_roots, |root| {
+            ctx.get::<UsdPrimPath>(root).map(|path| path.path.clone())
+        });
+        ui.horizontal_wrapped(|ui| {
             ui.add_enabled(
                 has_focus,
-                egui::Checkbox::new(&mut self.focus_only, "Selected only"),
+                egui::Checkbox::new(
+                    &mut self.focus_only,
+                    if pinned.is_some() {
+                        "Source only"
+                    } else {
+                        "Selected only"
+                    },
+                ),
             )
             .on_hover_text(
                 "Show only the selected vessel's channels — including every part \
@@ -2401,6 +2483,11 @@ impl TelemetryBrowserState {
                 );
             ui.menu_button("Display", |ui| {
                 ui.label("Latest-value formatting");
+                ui.checkbox(&mut display_settings.show_preview, "Inline graph preview");
+                ui.add(
+                    egui::Slider::new(&mut display_settings.preview_height, 80.0..=400.0)
+                        .text("Preview height (px)"),
+                );
                 ui.add(
                     egui::Slider::new(&mut display_settings.significant_digits, 1..=8)
                         .text("significant digits"),
@@ -2450,18 +2537,26 @@ impl TelemetryBrowserState {
             if view.signal.is_empty() {
                 self.requested_selection = None;
             } else {
-                let refresh = self
-                    .requested_selection
-                    .as_ref()
-                    .is_none_or(|cached| cached.signal != view.signal || cached.catalog_key != key);
+                let refresh = self.requested_selection.as_ref().is_none_or(|cached| {
+                    cached.signal != view.signal
+                        || cached.target_gid != view.target_gid
+                        || cached.catalog_key != key
+                });
                 if refresh {
                     let resolved = registry
                         .iter_scalar()
                         .map(|(signal, _)| signal)
-                        .find(|signal| signal.path == view.signal)
+                        .find(|signal| {
+                            signal.path == view.signal
+                                && (pinned.is_none()
+                                    || entity_in_focus(signal.entity, &source_roots, |entity| {
+                                        ctx.get::<ChildOf>(entity).map(ChildOf::parent)
+                                    }))
+                        })
                         .cloned();
                     self.requested_selection = Some(RequestedSignalSelection {
                         signal: view.signal.clone(),
+                        target_gid: view.target_gid,
                         catalog_key: key,
                         resolved,
                     });
@@ -2471,6 +2566,7 @@ impl TelemetryBrowserState {
                     .as_ref()
                     .expect("the active telemetry selection request is cached");
                 if self.selected.as_ref() != requested.resolved.as_ref() {
+                    self.selection_to_reveal.clone_from(&requested.resolved);
                     self.selected.clone_from(&requested.resolved);
                 }
             }
@@ -2483,6 +2579,13 @@ impl TelemetryBrowserState {
         };
         let scoped = self.focus_only && has_focus;
         let catalog = &build.catalog;
+        if let Some(signal) = &self.selection_to_reveal {
+            let scope = egui::Id::new("telemetry_browser_tree");
+            for node in display_roots(&catalog.root) {
+                reveal_telemetry_channel(ui.ctx(), node, scope, signal);
+            }
+            self.visible_rows_dirty = true;
+        }
 
         // Cache rows by the published tree, not the pending registry revision.
         let key = catalog.key;
@@ -2517,10 +2620,7 @@ impl TelemetryBrowserState {
         }) {
             let mut counts = HashMap::new();
             let normalized_filter = self.filter.to_lowercase();
-            let focus_roots = ctx
-                .resource::<TelemetryFocus>()
-                .map(|focus| focus.roots.as_slice())
-                .unwrap_or_default();
+            let focus_roots = source_roots.as_slice();
             let focused_owners = catalog.focused_owners(focus_roots, |root| {
                 focus_key
                     .0
@@ -2640,28 +2740,53 @@ impl TelemetryBrowserState {
         }
 
         // ── Channel list ─────────────────────────────────────────
-        let detail_reserve = if self.selected.is_some() { 150.0 } else { 0.0 };
+        let preview_height = if display_settings.preview_height.is_finite() {
+            display_settings.preview_height.clamp(80.0, 400.0)
+        } else {
+            default_preview_height()
+        };
+        // Reserve the whole detail block, including metadata, axes and button.
+        // The old 150 px budget was smaller than the graph plus its labels.
+        let detail_reserve = if self.selected.is_some() {
+            (if display_settings.show_preview {
+                preview_height
+            } else {
+                0.0
+            }) + 6.0 * ui.spacing().interact_size.y
+                + 8.0 * ui.spacing().item_spacing.y
+        } else {
+            0.0
+        };
         let row_height = ui.spacing().interact_size.y;
         let mut tree_changed = false;
-        egui::ScrollArea::vertical()
+        let mut channel_scroll = egui::ScrollArea::vertical()
             .id_salt("telemetry_browser_list")
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - detail_reserve).max(60.0))
-            .show_rows(ui, row_height, self.visible_rows.len(), |ui, range| {
-                for row_index in range {
-                    render_visible_telemetry_row(
-                        ui,
-                        &self.visible_rows[row_index],
-                        registry,
-                        &theme,
-                        &display_settings,
-                        &mut self.row_text_cache,
-                        self.selected.as_ref(),
-                        &mut clicked,
-                        &mut tree_changed,
-                    );
-                }
-            });
+            .max_height((ui.available_height() - detail_reserve).max(60.0));
+        if let Some(signal) = &self.selection_to_reveal {
+            if let Some(index) = self.visible_rows.iter().position(
+                |row| matches!(row, VisibleTelemetryRow::Channel { row, .. } if &row.sig == signal),
+            ) {
+                channel_scroll = channel_scroll
+                    .vertical_scroll_offset(index.saturating_sub(2) as f32 * row_height);
+                self.selection_to_reveal = None;
+            }
+        }
+        channel_scroll.show_rows(ui, row_height, self.visible_rows.len(), |ui, range| {
+            for row_index in range {
+                render_visible_telemetry_row(
+                    ui,
+                    &self.visible_rows[row_index],
+                    registry,
+                    &theme,
+                    &display_settings,
+                    &mut self.row_text_cache,
+                    self.selected.as_ref(),
+                    &mut clicked,
+                    &mut tree_changed,
+                );
+            }
+        });
         if tree_changed {
             self.visible_rows_dirty = true;
         }
@@ -2697,14 +2822,14 @@ impl TelemetryBrowserState {
         let description = metadata.and_then(|m| m.description.as_deref());
         let hist = registry.scalar_history(sel);
         let latest = hist.and_then(ScalarHistory::back).copied();
-        ui.horizontal(|ui| {
+        ui.vertical(|ui| {
             ui.label(
                 egui::RichText::new(&sel.path)
                     .strong()
                     .monospace()
                     .color(theme.text),
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.horizontal_wrapped(|ui| {
                 // Time is always SECONDS here — it is the channel's own clock
                 // reading (`lunco_time::domain_time`), not a wall-clock stamp, so
                 // it is labelled with its unit like any other quantity.
@@ -2740,7 +2865,7 @@ impl TelemetryBrowserState {
 
         // Preview points: re-copied + re-decimated only when the
         // history fingerprint moved (idle sim = fingerprint compare).
-        if let Some(h) = hist {
+        if let Some(h) = hist.filter(|_| display_settings.show_preview) {
             let fp = hist_fingerprint(h);
             let stale = !matches!(&self.preview, Some(p) if &p.sig == sel && p.fp == fp);
             if stale {
@@ -2766,7 +2891,7 @@ impl TelemetryBrowserState {
                     &sel.path,
                 );
                 Plot::new(ui.id().with("tb_preview"))
-                    .height(120.0)
+                    .height(preview_height)
                     .show_axes([true, true])
                     .show_grid(true)
                     .allow_drag(false)

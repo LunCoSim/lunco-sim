@@ -173,7 +173,14 @@ fn seed_state_from_latest_experiment(
         .unwrap_or_default()
         .or_default(crate::ui::viz::DEFAULT_MODELICA_GRAPH);
     let plot_states = ctx.resource::<lunco_experiments_ui::PlotPanelStates>();
-    let visible_in_active = plot_states.map(|s| s.visible(active_plot));
+    // A plot's selection belongs to its document. A newly opened diagram
+    // must not inherit an empty/uninitialized or another document's selection
+    // simply because that graph has not been painted yet. Once initialized
+    // for this document, explicit hidden-run choices remain authoritative.
+    let visible_in_active = plot_states
+        .and_then(|states| states.get(active_plot))
+        .filter(|plot| plot.last_twin.as_ref() == Some(&twin) && plot.auto_show_attempted)
+        .map(|plot| &plot.visible_experiments);
     let Some(registry) = ctx.resource::<ExperimentRegistry>() else {
         return;
     };
