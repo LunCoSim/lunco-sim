@@ -452,6 +452,12 @@ vocabulary. `info:implementationSource` selects exactly one implementation arm;
 populating another arm is an authoring error. The LunCo runtime dispatches
 file-backed programs by their source extension.
 
+Each projected owner admits one generic executable supervisor. Compose related
+Rhai reactions through that supervisor's imports; continuous Modelica programs
+retain their own participants. Multiple generic candidates raise the named
+`usd-program-activation-failed` runtime fault. Check the source owner and its
+existing program before adding another policy Scope.
+
 ```usda
 def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
     uniform token info:implementationSource = "sourceAsset"
@@ -474,10 +480,11 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
   on its `LunCoProgramAPI` prim. Connections must target that declared endpoint;
   check the generated network's public interface and the composed connection
   source before relying on it in a material, light, or another program.
-- For a precise change to an existing authored `.usda` layer, use the explicit
-  Twin Source Editor workflow (`OpenTwinSource`, then `SaveSourceText`). It
-  saves the selected layer's authored text. Keep routine stage edits on the
-  typed USD operation and document-journal path.
+- For an authored USD change, open the exact source with `OpenFile`, inspect its
+  document and edit target, apply schema-aware commands or typed `ApplyUsdOp(s)`,
+  then `SaveDocument` and read the result back. Save an untitled document into
+  its Twin before composing Twin-relative dependencies; a runtime owner alone
+  does not establish a source-file composition origin.
 - Apply `LunCoProgramAPI` directly when the program *is* intrinsic to the thing
   (a vessel's flight control); apply it to a child `Scope` for a separable guidance
   law or patrol tree, so deleting that prim deletes the behaviour. Both placements

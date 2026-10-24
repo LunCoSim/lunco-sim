@@ -904,6 +904,13 @@ A program that is bolted onto a thing — a guidance law, a battery, a superviso
 that IS a program — a vessel's own flight-control system, inseparable from the airframe
 — authors the `info:*` properties on itself instead.
 
+One projected owner admits one generic executable supervisor (Rhai or a built-in
+driver), alongside its continuous Modelica participants. Compose related event
+reactions through that supervisor's imports. Multiple generic program candidates
+raise `usd-program-activation-failed` through the runtime-fault boundary before
+an ambiguous policy can run. `authored_program_ambiguity` exercises a live atomic
+edit that creates the invalid topology and expects this terminal diagnostic.
+
 A wire is a native USD connection, authored on the prim that CONSUMES the value. The
 same form serves within one prim (a model's output driving the body's force input) and
 *between* prims (the target path simply names another one):

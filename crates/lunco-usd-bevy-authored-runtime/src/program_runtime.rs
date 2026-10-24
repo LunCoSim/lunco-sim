@@ -175,12 +175,11 @@ pub(crate) fn resolve_program_owner(
         programs.push((child.to_string(), resolved, params));
     }
     if programs.len() > 1 {
-        warn!(
-            "[usd] {} has {} generic executable program children; none was attached",
+        return Err(format!(
+            "{} has {} generic executable program children; an owner requires one executable supervisor",
             owner.as_str(),
             programs.len()
-        );
-        return Ok(None);
+        ));
     }
     Ok(programs
         .into_iter()
