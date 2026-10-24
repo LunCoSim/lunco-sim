@@ -225,9 +225,10 @@ second name heuristic: declarations without it remain in the full telemetry cata
 catalog's labels still use `display_channel_label`.
 
 Browser rows allocate the latest value and unit from the right edge before
-the channel name and tree indentation. That edge follows the visible clip,
-including when toolbar controls widen the scroll content. Each row owns an
-explicit rectangle so parent justification cannot widen or shift its cells.
+the channel name and tree indentation. The value column keeps the theme's
+window padding inside the visible clip, including when toolbar controls widen
+the scroll content. Each row owns an explicit rectangle so parent justification
+cannot widen or shift its cells.
 Values stay on one line when the panel narrows; names truncate and indentation
 is bounded by the remaining label area. Long units truncate before consuming
 the value's measured width.
