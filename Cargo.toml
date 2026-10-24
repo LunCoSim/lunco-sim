@@ -601,6 +601,10 @@ opt-level = 3
 [profile.dev.package.lunco-cosim]
 opt-level = 3
 
+# Named observation admission runs on the authoritative application boundary.
+[profile.dev.package.lunco-modelica-worker]
+opt-level = 3
+
 # Certified f64 surface queries instantiate their map and polynomial kernels here.
 [profile.dev.package.lunco-terrain-surface]
 opt-level = 3

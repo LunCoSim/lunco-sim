@@ -596,6 +596,13 @@ For Modelica response retention, reuse observable-variable keys and move the
 worker's input/output buffers into the accepted record after transaction
 validation. Preserve detected-symbol/output precedence and verify reset
 isolation, signed-zero values and stale-result rejection at the owner seam.
+The reflected observable store uses Bevy's `HashMap`; keep public reflected
+reads and filtered `SnapshotVariables` results consistent with the accepted
+step. The ignored `named_observation_admission_benchmark` exercises 512 accepted
+steps with 2304 named observables and excludes input/parameter fields. Compare
+the same fixture and retain its exact-value and clock checks. Qualify the
+`modelica_variable_projection` and `modelica_variables_missing` production gates
+and the compiled-metadata editor scenario after changing this boundary.
 Immutable live solver facts share one `Arc` across the cache, receipt and model;
 do not clone their parameter/input strings on every step. The bridge ownership
 regression checks shared storage as well as terminal metadata rejection.

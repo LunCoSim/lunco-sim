@@ -983,6 +983,12 @@ co-simulation and API readers consume this one map. External API variable fields
 retain their existing shape. `ResetActiveModel` completes through command-result
 admission and rejects missing runtime state visibly.
 
+The observable name index uses Bevy's `HashMap` and remains a reflected map.
+Worker admission retains existing keys and compares f64 bits before marking the
+snapshot changed. Regular development builds optimize `lunco-modelica-worker`
+at level 3 with assertions enabled. Causal wire ordering comes from the existing
+connection comparator, independently of the observable map's iteration order.
+
 Production gates `modelica_variable_projection` and `modelica_variables_missing`
 cover retained publication while paused, resumed solver replacement,
 and the required-state fault. Exact multi-rover replay checks the fixed-step

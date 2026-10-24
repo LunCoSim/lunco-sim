@@ -2100,6 +2100,88 @@ mod compile_fault_tests {
         assert!(entry.diagnostics.is_empty());
     }
 
+    /// Measures stable-name publication through real step-transaction fences.
+    #[test]
+    #[ignore = "manual named-observation admission measurement"]
+    fn named_observation_admission_benchmark() {
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .add_message::<ModelicaSessionStarted>()
+            .add_systems(First, handle_modelica_responses);
+        let (results, received) = crossbeam_channel::unbounded();
+        let (commands, _requests) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx: commands,
+            rx: received,
+        });
+        let entity = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                document: lunco_doc::DocumentId::new(1),
+                session_id: 1,
+                is_compiled: true,
+                inputs: [("command".to_owned(), 0.25)].into(),
+                parameters: [("gain".to_owned(), 2.0)].into(),
+                ..Default::default()
+            })
+            .id();
+        let names = (0..2304)
+            .map(|index| format!("subsystem.feed.branches[{index}].pressure"))
+            .collect::<Vec<_>>();
+        let began = std::time::Instant::now();
+        for step_id in 1..=512 {
+            let start_time = (step_id - 1) as f64 / 60.0;
+            let stop_time = step_id as f64 / 60.0;
+            let mut model = app.world_mut().get_mut::<ModelicaModel>(entity).unwrap();
+            model.is_stepping = true;
+            model.in_flight_step = Some(lunco_modelica_runtime::InFlightModelicaStep {
+                step_id,
+                stop_tick: step_id,
+                start_time,
+                stop_time,
+                sampled_inputs: vec![("command".to_owned(), 0.25)],
+                submitted_at: web_time::Instant::now(),
+            });
+            let mut outputs = names
+                .iter()
+                .map(|name| (name.clone(), step_id as f64))
+                .collect::<Vec<_>>();
+            outputs.extend([("command".to_owned(), 0.25), ("gain".to_owned(), 2.0)]);
+            results
+                .send(ModelicaResult {
+                    entity,
+                    session_id: 1,
+                    step_id: Some(step_id),
+                    new_time: stop_time,
+                    outputs,
+                    ..Default::default()
+                })
+                .unwrap();
+            app.world_mut().run_schedule(First);
+        }
+        let elapsed = began.elapsed();
+        let variables = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
+        assert_eq!(variables.len(), names.len());
+        assert!(
+            variables
+                .values()
+                .all(|value| value.to_bits() == 512.0_f64.to_bits())
+        );
+        assert_eq!(
+            app.world()
+                .get::<ModelicaModel>(entity)
+                .unwrap()
+                .current_time
+                .to_bits(),
+            (512.0_f64 / 60.0).to_bits()
+        );
+        println!(
+            "NAMED_OBSERVATION_ADMISSION elapsed_ns={} steps=512 variables=2304 final_bits={:016x}",
+            elapsed.as_nanos(),
+            512.0_f64.to_bits()
+        );
+    }
+
     #[test]
     fn checked_solver_facts_are_fenced_and_missing_metadata_is_terminal() {
         let mut app = App::new();

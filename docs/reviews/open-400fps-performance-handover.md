@@ -1,5 +1,15 @@
 # High-quality realtime performance handover
 
+## Modelica observation admission
+
+The reflected observable store uses Bevy's name index, and regular development
+builds optimize the worker/admission package with assertions enabled.
+[The current review](modelica-observation-admission-2026-10-24.md) records owner
+checks, positive/negative production gates, the 35-check metadata editor case,
+three regular Twin observations and the native landed Griffin comparison.
+One rejected Griffin measurement remains explicitly excluded. The complete
+loading, coupled-tick and graphics targets remain open.
+
 ## Scalar-port exchange
 
 The current application uses Bevy's hasher for private port-name and duplicate

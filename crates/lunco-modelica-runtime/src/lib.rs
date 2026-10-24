@@ -592,7 +592,7 @@ impl ModelicaStepDiagnostics {
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct ModelicaVariables {
-    pub values: HashMap<String, f64>,
+    pub values: bevy::platform::collections::HashMap<String, f64>,
 }
 
 /// Component attached to every live Modelica participant.

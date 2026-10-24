@@ -1501,14 +1501,18 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
                 .as_ref()
                 .is_none_or(|f| f.iter().any(|n| n == name))
         };
-        let project = |map: &std::collections::HashMap<String, f64>| -> ApiValue {
+        /// Project borrowed scalars through the external API's shared name filter.
+        fn project<'a>(
+            map: impl IntoIterator<Item = (&'a String, &'a f64)>,
+            in_filter: impl Fn(&str) -> bool,
+        ) -> ApiValue {
             let inner: Vec<(String, ApiValue)> = map
-                .iter()
+                .into_iter()
                 .filter(|(k, _)| in_filter(k))
                 .map(|(k, v)| (k.clone(), api_value!(*v)))
                 .collect();
             ApiValue::Map(inner)
-        };
+        }
 
         let metadata = ApiValue::Map(
             model
@@ -1535,9 +1539,9 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             "compiled": model.is_compiled,
             "model_name": model.model_name.clone(),
             "paused": model.paused || world.get::<lunco_core::SimulationObjectPaused>(entity).is_some(),
-            "parameters": project(&model.parameters),
-            "inputs": project(&model.inputs),
-            "variables": project(&variables.values),
+            "parameters": project(&model.parameters, &in_filter),
+            "inputs": project(&model.inputs, &in_filter),
+            "variables": project(&variables.values, &in_filter),
             "metadata": metadata,
         }))
     }

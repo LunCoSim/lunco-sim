@@ -2312,9 +2312,13 @@ pub(crate) fn wrap_modelica_into_simcomponent(
             model_name: model.model_name.clone(),
             parameters: model.parameters.clone(),
             inputs: shared_inputs,
-            // Outputs are the SOLUTION — empty until the worker answers.
-            // `sync_modelica_outputs` fills them and flips the status.
-            outputs: variables.values.clone().into(),
+            // Publish the admitted observation; live synchronization owns
+            // subsequent snapshots and status transitions.
+            outputs: variables
+                .values
+                .iter()
+                .map(|(name, value)| (name.clone(), *value))
+                .collect(),
             status: sync::modelica_status(model),
             is_stepping: model.is_stepping,
         });
