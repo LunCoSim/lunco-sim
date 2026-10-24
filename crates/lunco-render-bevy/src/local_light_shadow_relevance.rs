@@ -291,12 +291,10 @@ mod tests {
             visibility::RenderLayers,
         },
         ecs::system::RunSystemOnce,
-        math::{
-            Vec3,
-            primitives::{HalfSpace, ViewFrustum},
-        },
+        math::Vec3,
         prelude::{GlobalTransform, Transform},
         render::{Render, camera::ExtractedCamera},
+        shape::{HalfSpace, ViewFrustum},
     };
 
     use super::{
@@ -485,7 +483,6 @@ mod tests {
             sorted_camera_index_for_target: 0,
             exposure: 1.0,
             hdr: false,
-            compositing_space: None,
         }
     }
 

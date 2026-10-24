@@ -191,10 +191,14 @@ Custom schedule labels, output cameras and directional cascades retain their
 existing schedules. This continuous render mechanism requires no Rhai policy
 hook and does not change simulation admission or authoritative state.
 
-The shared schedule composes Bevy's native metadata clearing, bin unpacking,
+The shared schedule composes Bevy's native uniform allocation, bin unpacking,
 early/late GPU preprocessing, indirect preparation and shared shadow systems.
+Uniform allocation runs before bin unpacking, establishing each batch's output
+offset and clearing its indirect instance counts before preprocessing writes
+mesh uniforms. Local-light roots require this stage independently of camera
+and directional-cascade preparation.
 GPU passes use the native plugin setting and device capability admission, with
-the native global prepass query conditions. The eight admitted GPU systems form
+the native global prepass query conditions. The admitted GPU systems form
 a dependency chain, so this schedule uses Bevy's `SingleThreadedExecutor`
 without worker dispatch between stages. The two-pass CPU preparation mode uses
 the same executor and native early-before-late order. Frame-level Render and
@@ -203,6 +207,11 @@ frame-level Render schedule. Automatic intermediate deferred flushes are off,
 as in native Core3d; final buffer application retains the preparation and draw
 order. Camera passes and post-processing do not enter this schedule. Shadow
 draws, maps, resolutions, visibility and quality settings remain native-owned.
+The `shared_shadow_allocation` graphics fixture uses one point light and
+different caster meshes. Its lit and shadowed probes must both appear, with no
+red disagreement pixels; the authored camera also enables all three native
+prepasses. The schedule test checks native system identities and execution order
+without relying on optional debug names.
 Production pass inventory, visible shadows and a normal artifact comparison
 are required to establish correctness and a performance gain.
 

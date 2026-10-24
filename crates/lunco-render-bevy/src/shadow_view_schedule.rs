@@ -18,9 +18,10 @@ use bevy::{
     pbr::{
         EARLY_SHADOW_PASS, GpuMeshPreprocessPlugin, LATE_SHADOW_PASS, LightEntity,
         PreprocessBindGroups, Shadow, ShadowView, SkipGpuPreprocess, ViewLightEntities,
-        early_gpu_preprocess, early_prepass_build_indirect_parameters, late_gpu_preprocess,
-        late_prepass_build_indirect_parameters, main_build_indirect_parameters,
-        per_view_shadow_pass, prepare_lights, shared_shadow_pass, unpack_bins,
+        allocate_uniforms, early_gpu_preprocess, early_prepass_build_indirect_parameters,
+        late_gpu_preprocess, late_prepass_build_indirect_parameters,
+        main_build_indirect_parameters, per_view_shadow_pass, prepare_lights, shared_shadow_pass,
+        unpack_bins,
     },
     prelude::{App, Entity, Has, IntoScheduleConfigs, IntoSystem, Or, Query, Res, With, Without},
     render::{
@@ -87,6 +88,7 @@ fn shared_shadow_schedule(gpu_preprocessing: bool) -> Schedule {
     if gpu_preprocessing {
         schedule.add_systems((
             (
+                allocate_uniforms,
                 unpack_bins,
                 early_gpu_preprocess,
                 early_prepass_build_indirect_parameters
@@ -284,6 +286,7 @@ mod tests {
     use std::{sync::Mutex, thread::ThreadId};
 
     use bevy::{
+        ecs::system::System,
         pbr::LightEntity,
         prelude::{
             App, Commands, Component, Entity, IntoScheduleConfigs, IntoSystem, Res, Resource,
@@ -296,10 +299,32 @@ mod tests {
 
     #[test]
     fn shared_schedule_retains_native_gpu_admission_and_final_buffer_flush() {
-        for (gpu_preprocessing, systems) in [(false, 2), (true, 8)] {
-            let schedule = shared_shadow_schedule(gpu_preprocessing);
-            assert_eq!(schedule.systems_len(), systems);
+        for gpu_preprocessing in [false, true] {
+            let mut schedule = shared_shadow_schedule(gpu_preprocessing);
             assert!(!schedule.get_build_settings().auto_insert_apply_deferred);
+            schedule.initialize(&mut World::new()).unwrap();
+            let systems: Vec<_> = schedule
+                .systems()
+                .unwrap()
+                .map(|(_, system)| system.system_type())
+                .collect();
+            let allocation = systems.iter().position(|kind| {
+                *kind == IntoSystem::into_system(bevy::pbr::allocate_uniforms).system_type()
+            });
+            let unpacking = systems.iter().position(|kind| {
+                *kind == IntoSystem::into_system(bevy::pbr::unpack_bins).system_type()
+            });
+            let preprocessing = systems.iter().position(|kind| {
+                *kind == IntoSystem::into_system(bevy::pbr::early_gpu_preprocess).system_type()
+            });
+            if gpu_preprocessing {
+                let allocation = allocation
+                    .expect("native uniform allocation precedes shared-shadow bin unpacking");
+                assert!(allocation < unpacking.unwrap());
+                assert!(unpacking.unwrap() < preprocessing.unwrap());
+            } else {
+                assert!(allocation.is_none() && unpacking.is_none() && preprocessing.is_none());
+            }
         }
     }
 

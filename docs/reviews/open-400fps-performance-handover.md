@@ -1,5 +1,16 @@
 # High-quality realtime performance handover
 
+## Native shared-shadow allocation
+
+[The allocation repair](shared-shadow-allocation-2026-10-25.md) restores Bevy's
+required native stage before bin unpacking for point/spot shadow roots. The
+baseline passes authored setup but fails its GPU shadow probe; the corrected
+normal build passes both positive probes without red pixels. Native ordering
+and the owned production pixel gate pass. Griffin lands with clear diagnostics;
+concurrent Tesla video rendering qualifies its slower frame timings. This is
+a correctness prerequisite for further native-builder comparisons, not a timing
+gain. All original targets remain open.
+
 ## Ordered Modelica observation publication
 
 [The current owner review](modelica-ordered-observation-publication-2026-10-24.md)

@@ -1,0 +1,111 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    doc = "Native point-light shadows require uniform allocation before bin unpacking for differently sized caster meshes."
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461302.91528
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/shared_shadow_allocation.rhai@
+    }
+    def Scope "Looks"
+    {
+        def Material "Caster"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </World/Looks/Caster/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wesl@
+                custom float3 inputs:offset = (3.0, 0.0, 0.0)
+                custom asset info:wesl:vertexAsset = @lunco://shaders/tests/vertex_shadow_alignment.wesl@
+            }
+        }
+        def Material "Receiver"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </World/Looks/Receiver/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/shared_shadow_allocation.wesl@
+            }
+        }
+    }
+    def Cube "Caster" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (0.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom rel material:binding = </World/Looks/Caster>
+    }
+    def Cube "OtherCaster" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double size = 0.5
+        custom double3 xformOp:translate = (-3.0, 2.0, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom rel material:binding = </World/Looks/Caster>
+    }
+    def Plane "Receiver" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double width = 12.0
+        double length = 12.0
+        custom bool primvars:doNotCastShadows = true
+        custom rel material:binding = </World/Looks/Receiver>
+    }
+    def SphereLight "Bulb" (
+        prepend apiSchemas = ["ShadowAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (3.0, 8.0, 6.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:intensity = 1000.0
+        float inputs:radius = 0.009999999776482582
+        bool inputs:shadow:enable = true
+    }
+    def Camera "Camera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (1.5, 9.0, -10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (1.5, 0.0, -1.0)
+        float focalLength = 24.0
+    }
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera = "Camera"
+        token lunco:activeCamera.timeSamples = {
+            0.0: "Camera",
+        }
+    }
+    def DistantLight "Sun" (
+        prepend apiSchemas = ["ShadowAPI"]
+    )
+    {
+        float inputs:intensity = 0.0
+        bool inputs:shadow:enable = false
+    }
+}
