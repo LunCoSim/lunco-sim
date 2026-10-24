@@ -783,9 +783,10 @@ fn scalar_endpoint_metadata(
     world
         .get::<lunco_port_core::ScalarPortContracts>(endpoint)
         .and_then(|contracts| contracts.get(PORT_NAME))
-        .cloned()
-        .unwrap_or_default()
-        .metadata(direction, source, authority)
+        .map(|contract| contract.metadata(direction, source, authority))
+        .unwrap_or_else(|| {
+            lunco_port_core::ScalarPortContract::default().metadata(direction, source, authority)
+        })
 }
 
 fn scalar_endpoint_contract_key(world: &World, endpoint: Entity) -> u64 {
@@ -1484,7 +1485,7 @@ mod tests {
         }
     }
 
-    /// Measures live resolved writes through the registered backend precedence.
+    /// Measures atomic resolved writes with live units, frame and bounds.
     #[test]
     #[ignore = "manual resolved-write performance measurement"]
     fn resolved_surface_write_benchmark() {
@@ -1494,7 +1495,20 @@ mod tests {
         register_builtin_port_backends(&mut registry);
         let mut targets = Vec::new();
         for _ in 0..128 {
-            let endpoint = world.spawn(Port::default()).id();
+            let endpoint = world
+                .spawn(
+                    Port::with_contract(
+                        0.0,
+                        lunco_port_core::ScalarPortContract {
+                            unit: Some(EngineUnit::Newton.reference()),
+                            min: Some(0.0),
+                            max: Some(6000.0),
+                            frame: Some(CoordinateFrameId::new("benchmark/body").unwrap()),
+                        },
+                    )
+                    .unwrap(),
+                )
+                .id();
             let surface = world
                 .spawn(PortSurface::new(std::collections::HashMap::from([(
                     "command".into(),
@@ -1504,14 +1518,18 @@ mod tests {
             let resolved = registry.resolve_input(&world, surface, "command").unwrap();
             targets.push((surface, endpoint, resolved));
         }
+        let mut buffer = lunco_port_core::ports::InputWriteBuffer::default();
         let began = std::time::Instant::now();
         for tick in 1..=6000 {
             let value = f64::from(tick);
-            for (surface, _, resolved) in &targets {
-                registry
-                    .write_resolved(&mut world, *surface, resolved, value)
-                    .unwrap();
-            }
+            registry
+                .input_transaction(&mut world, &mut buffer, |transaction| {
+                    for (surface, _, resolved) in &targets {
+                        transaction.stage_resolved(*surface, resolved, value)?;
+                    }
+                    Ok::<_, lunco_port_core::ports::PortWriteError>(())
+                })
+                .unwrap();
         }
         let elapsed = began.elapsed();
         for (_, endpoint, _) in targets {

@@ -413,6 +413,17 @@ source and every distinct target once; the accumulate/write phases exchange by
 handle. One-shot name callers (API `Get`/`SetPorts`, scripting, the inspector) are
 unchanged — they don't need resolution and pay no migration cost.
 
+Private port-name indexes and transaction duplicate sets use Bevy's
+`FixedHasher`. Public enumeration follows the existing slot sequence; hash-table
+iteration does not select write order, and complete key equality still resolves
+collisions. The persisted topology fingerprints retain their owning algorithms.
+Scalar endpoint metadata borrows its admitted contract before copying the
+requested metadata, avoiding an intermediate unit/frame copy. Regular development
+builds optimize `lunco-port-core` and `lunco-cosim` at level 3 with assertions
+enabled. The manual resolved-surface benchmark exercises atomic batches with
+live units, frames and bounds; production ownership checks remain the behavior
+gate.
+
 ### Registration invariant
 
 - `ResolvedPort.backend` is an index into the

@@ -1,5 +1,15 @@
 # High-quality realtime performance handover
 
+## Scalar-port exchange
+
+The current application uses Bevy's hasher for private port-name and duplicate
+indexes, borrows scalar contracts before copying metadata, and optimizes the two
+exchange packages in regular development builds with assertions enabled.
+[The current review](scalar-port-exchange-2026-10-24.md) records owner tests,
+production ownership checks, the three regular Twin runs and a separate landed
+Griffin native Tracy comparison. Raw profiling data remains ignored. All original
+performance targets remain open.
+
 ## Indexed runtime output endpoints
 
 `declare_map` now accepts the map's stored type and an owning backend's

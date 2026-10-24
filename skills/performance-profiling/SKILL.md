@@ -1699,6 +1699,12 @@ valid-source reload and inactive-path rejection through the production API.
 Resolved port writes validate the live owner and metadata before committing.
 When profiling co-simulation exchange, preserve those checks and the all-or-none
 preflight for retained batches; single exclusive writes need one validation pass.
+The ignored `lunco-cosim` `resolved_surface_write_benchmark` measures 6000 atomic
+batches of 128 resolved surface writes with live unit, frame and range metadata.
+Use the same fixture for comparisons, retain its exact final-value checks, and
+qualify the production port-ownership scene afterward. Private name/duplicate
+tables use Bevy's `FixedHasher`; slot order and full key equality retain their
+contracts. Do not change persisted topology fingerprints to tune lookup cost.
 For initialization stalls, inspect each wire's selected source backend and its
 actual sample. A compiling Modelica participant can share an entity with ready
 native pose/control ports. Initialization reads the registered owner; only the

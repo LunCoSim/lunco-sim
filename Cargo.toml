@@ -594,6 +594,13 @@ opt-level = 3
 [profile.dev.package.lunco-physics]
 opt-level = 3
 
+# Live scalar-port admission and exchange kernels retain development assertions.
+[profile.dev.package.lunco-port-core]
+opt-level = 3
+
+[profile.dev.package.lunco-cosim]
+opt-level = 3
+
 # Certified f64 surface queries instantiate their map and polynomial kernels here.
 [profile.dev.package.lunco-terrain-surface]
 opt-level = 3

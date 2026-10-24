@@ -37,6 +37,7 @@
 //! by **registering** it — no consumer changes. Registration order *is*
 //! resolution precedence (first match wins).
 
+use bevy::platform::hash::FixedHasher;
 use bevy::prelude::*;
 use std::any::TypeId;
 use std::borrow::Cow;
@@ -132,7 +133,7 @@ fn next_port_map_layout_id() -> u32 {
 /// A process-local layout id rejects handles from a clone, clear, or compaction.
 #[derive(Debug)]
 pub struct PortMap<T: Copy> {
-    by_name: HashMap<Arc<str>, usize>,
+    by_name: HashMap<Arc<str>, usize, FixedHasher>,
     slots: Vec<PortMapSlot<T>>,
     retired_slots: usize,
     names: PortNameSetKey,
@@ -156,7 +157,7 @@ impl<T: Copy> Clone for PortMap<T> {
 impl<T: Copy> Default for PortMap<T> {
     fn default() -> Self {
         Self {
-            by_name: HashMap::new(),
+            by_name: HashMap::default(),
             slots: Vec::new(),
             retired_slots: 0,
             names: PortNameSetKey::default(),
@@ -307,7 +308,7 @@ impl<T: Copy> PortMap<T> {
 
     fn compact(&mut self) {
         let mut slots = Vec::with_capacity(self.by_name.len());
-        let mut by_name = HashMap::with_capacity(self.by_name.len());
+        let mut by_name = HashMap::with_capacity_and_hasher(self.by_name.len(), FixedHasher);
         for slot in self.slots.drain(..) {
             if let Some(name) = slot.name {
                 let index = slots.len();
@@ -1470,7 +1471,7 @@ impl PreparedPortWrite {
 #[derive(Default)]
 pub struct InputWriteBuffer {
     writes: Vec<PreparedPortWrite>,
-    unique: HashSet<(Entity, Arc<str>)>,
+    unique: HashSet<(Entity, Arc<str>), FixedHasher>,
 }
 
 /// Input staging with an immutable view of the transaction's exclusive world.
@@ -2238,7 +2239,7 @@ impl PortRegistry {
         world: &mut World,
         prepared: &[PreparedPortWrite],
     ) -> Result<(), PortWriteError> {
-        let mut unique = std::collections::HashSet::with_capacity(prepared.len());
+        let mut unique = HashSet::with_capacity_and_hasher(prepared.len(), FixedHasher);
         let mut writers = Vec::with_capacity(prepared.len());
         for write in prepared {
             if !unique.insert((write.entity, Arc::clone(&write.name))) {
