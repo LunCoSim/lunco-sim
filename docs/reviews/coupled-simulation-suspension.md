@@ -31,9 +31,13 @@ the authored 5 m/s test envelope, both joined bodies and their Modelica observer
 stop, one sourced warning retains the measured limit, and a lower-speed
 independent contact and model keep running. The impacted body also carries a
 continuous model, qualifying independent native port ownership through startup
-and suspension. The graphical host's eight-check observation passes its
-authored verdict and shows the warning in the status strip. Expanding the
-history through synthetic pointer input was not qualified in that run.
+and suspension. The current regular desktop build passes all ten checks.
+Native injected window input opens Recent Events and closes it through the
+empty summary strip; inspected captures show the complete measured-speed,
+limit and coupled-pause warning. The status summary uses native egui buttons,
+while its enclosing layout response anchors the popup. Current desktop evidence
+is `.cache/codex-evidence/performance-20261023/celestial-impact-headful-buttons/`;
+the binary SHA-256 is `fbe1161b180a140aa85c5b99d94cc139264ed76dfcb2372f695e283c60d7115b`.
 These gates do not qualify complete vehicle driving or impact behavior.
 FMI compilation is covered by the production build;
 the new suspension behavior has no external-FMU runtime qualification yet.

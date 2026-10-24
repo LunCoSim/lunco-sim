@@ -1352,6 +1352,7 @@ pub(crate) fn render_status_bar_inner(
             .as_ref()
             .is_some_and(|event| event.level == StatusLevel::Attention);
         let mut attention_clicked = false;
+        let mut history_clicked = false;
         let response = ui
             .allocate_ui_with_layout(
                 egui::vec2(status_width, 18.0),
@@ -1417,11 +1418,13 @@ pub(crate) fn render_status_bar_inner(
                                 l.progress_pct.is_some(),
                                 ui.spacing().item_spacing.x,
                             );
-                            ui.add_sized(
-                                [notification_width, 18.0],
-                                egui::Label::new(notification).truncate(),
-                            )
-                            .on_hover_text(&l.message);
+                            history_clicked = ui
+                                .add_sized(
+                                    [notification_width, 18.0],
+                                    egui::Button::new(notification).frame(false).truncate(),
+                                )
+                                .on_hover_text(&l.message)
+                                .clicked();
                             if l.level == StatusLevel::Progress {
                                 if let Some(pct) = l.progress_pct {
                                     ui.add(
@@ -1434,16 +1437,35 @@ pub(crate) fn render_status_bar_inner(
                                 }
                             }
                         }
-                    } else if matches!(&notification, StatusBarNotificationSnapshot::Ready) {
-                        ui.label(
-                            egui::RichText::new("ready")
-                                .text_style(lunco_theme::TypographyRole::Caption.text_style())
-                                .weak(),
-                        );
+                    } else {
+                        let text = if matches!(&notification, StatusBarNotificationSnapshot::Ready)
+                        {
+                            "ready"
+                        } else {
+                            ""
+                        };
+                        history_clicked = ui
+                            .add_sized(
+                                [ui.available_width(), 18.0],
+                                egui::Button::new(
+                                    egui::RichText::new(text)
+                                        .text_style(
+                                            lunco_theme::TypographyRole::Caption.text_style(),
+                                        )
+                                        .weak(),
+                                )
+                                .frame(false),
+                            )
+                            .clicked();
                     }
                 },
             )
-            .response;
+            .response
+            .on_hover_text(if history_surface_open {
+                "Click to close recent status events"
+            } else {
+                "Click to view recent status events"
+            });
 
         // Keep the notification compact without pulling the right-hand
         // controls away from the edge of the status bar. Mark the end of the
@@ -1465,16 +1487,7 @@ pub(crate) fn render_status_bar_inner(
             } else {
                 unreachable!("attention status button rendered without an attention event");
             }
-        } else if !latest_attention
-            && response
-                .interact(egui::Sense::click())
-                .on_hover_text(if history_surface_open {
-                    "Click to close recent status events"
-                } else {
-                    "Click to view recent status events"
-                })
-                .clicked()
-        {
+        } else if !latest_attention && history_clicked {
             if egui::Popup::is_id_open(ui.ctx(), popup_id) {
                 egui::Popup::close_id(ui.ctx(), popup_id);
             } else {

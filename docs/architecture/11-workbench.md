@@ -227,8 +227,10 @@ private dock layout.
    strip open the recent-history popup, which replaces the notice while it is open. History renders discrete events only; it
    never inserts live progress rows. While history is open, the strip hides its entire
    event summary, including discrete-history fallback, so the event list stays stable;
-   the empty strip area remains clickable to close the popup. Terrain streaming, derived
-   terrain, and post-projection scene-visual progress remain on StatusBus for
+   the empty strip area remains clickable to close the popup.
+   The summary and empty history strip use native egui buttons for their click
+   ownership; the enclosing layout response supplies the popup anchor.
+   Terrain streaming, derived terrain, and post-projection scene-visual progress remain on StatusBus for
    visual-readiness consumers, but drive the loading notice only while a scene
    transition is admitted or active. This prevents camera-driven terrain streaming from
    reopening the scene-loading notice after the scene has loaded. Completion removes the

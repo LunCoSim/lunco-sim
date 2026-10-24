@@ -334,6 +334,11 @@ which stays open when work completes. The compact notice disappears on
 completion; do not stack it with the history view or auto-close a history view
 the user expanded.
 
+Use native egui buttons for the clickable status summary and its empty
+history-open state. The enclosing layout response anchors the popup; it does
+not own the click. Verify both opening the complete warning and closing history
+through injected window input in a production desktop session.
+
 Stack application surfaces through `lunco-theme`, top to bottom: menus and
 popups (egui `Foreground`), UI windows/dialogs/notices (`UI_ORDER`), the
 general HUD (`HudTier::General`: sky clock, toasts, global notices), and the
