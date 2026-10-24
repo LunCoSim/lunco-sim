@@ -46,3 +46,37 @@ Prefixes are `summer-cell-key-{baseline,candidate}-current`,
 `native-cache-audit/solar-cell-key-` and `solar-cell-key-gates/`.
 Both applications, collectors, native readers and all three gate processes
 terminated successfully; owned API/profiler ports were released.
+
+## Regular build across the three Twins
+
+The production build without Tracy completes in 2m02s. Binary SHA-256 is
+`04c7dd3040b923c64ba9d3179bdcbf5766dbd631fbd7a66271c5726fe858f5ed`.
+Each owned graphical session opens its default Twin from the same empty
+replacement scene. Qualification requires the intended physical body, native
+integration, complete terrain residency and derived maps, followed by five
+seconds of sustained readiness. A separate ten-second window records complete
+coupled ticks and unique frame samples before the final screenshot. Source
+hashes remain stable, diagnostics are clear, and final images were inspected.
+These are startup/settled observations, not completed-mission verdicts.
+
+| Twin | Observed fully-ready time | Coupled tick p50 / p95 | Frame p50 / p95 |
+| --- | ---: | ---: | ---: |
+| Summer Space School | 4.162 s | 5.284 / 6.313 ms | 13.103 / 16.582 ms |
+| Griffin / lunar-base-model | 36.932 s | 8.195 / 10.467 ms | 22.445 / 32.184 ms |
+| Tesla Roadster | 2.943 s | 2.542 / 3.450 ms | 7.171 / 10.427 ms |
+
+The other Tesla session remains active, so these are contention-affected
+observations. All requested thresholds remain unqualified. The exact source
+cohorts, native timings, frame counts and lifecycle receipts are in ignored
+`{summer,griffin,tesla}-cell-key-normal-settled/` and
+`normal-three-twin-current.json`. Owned PIDs 468419, 469355 and 470245 exit, and
+API ports 5111–5113 are released.
+
+Griffin needs broader attribution. Its native Avian median is 2.415 ms, with
+20 dynamic bodies, 638 total bodies, 777 colliders, 31 joints and 315 retained
+contact pairs at the last observation. Its main-propulsion Modelica participant
+reports 7.898 ms mean worker service across 1468 samples and 4.612 ms on its
+last step. During loading, the coupled initializer's cache lookup takes 0.963 s
+and live construction 4.598 s despite predominantly native-code cache hits.
+These owner timings identify investigation targets; they do not establish
+which internal operation or pair category is responsible.
