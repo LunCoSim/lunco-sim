@@ -234,6 +234,11 @@ built-in unit references. This storage sharing never caches the live port
 owner, bounds, frame or permission. The bounded debug spans
 `port_input_transaction_stage` and `port_input_transaction_commit` separate
 validation from application when `lunco_port_core::ports=debug` is enabled.
+When reducing shader commit lookups, retain Bevy change detection: borrow the
+component once, inspect through its shared dereference and mutate only a changed
+slot. The owner diagnostic measures both constant and changing transactions;
+`lander_plume_activity` verifies connected shader delivery and rejected scalar
+range writes through the production scene-test host.
 
 Before a wheel-shape comparison, verify the coordinate contract in
 `docs/architecture/21-domain-usd.md`. Compare the native collider's axial and

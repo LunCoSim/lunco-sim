@@ -1,5 +1,15 @@
 # High-quality realtime performance handover
 
+## Shader slot commit
+
+The shader port backend retains one native component borrow through scalar
+commit, preserving no-op change detection. [The focused review](shader-slot-commit-2026-10-24.md)
+records eight owner checks, the six-check production plume gate and the inspected
+landed Griffin window. Complete diagnostic transactions improve in both constant
+and changing phases. Griffin's coupled tick remains 3.966 ms despite native Avian
+steps around 0.35 ms; the application bridge remains the profiling priority.
+All original timing targets remain open.
+
 ## Native GPU allocation and scalar output ownership
 
 The desktop uses native PBR instance preparation with a published shader-array

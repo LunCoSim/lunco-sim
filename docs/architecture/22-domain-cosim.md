@@ -232,6 +232,11 @@ hold that world borrow. No target or successful-publication acknowledgement chan
 when another target rejects the communication point. Cached locators keep the
 same live-owner and metadata validation as named writes.
 
+The shader backend retains one `Mut<ShaderLook>` through scalar commit. Reading
+through its shared dereference preserves unchanged-value tracking; only a changed
+live slot uses the mutable dereference and schedules material rebinding. Port
+admission, scalar-range validation and topology ownership remain unchanged.
+
 A rejected live input latches `cosim-input-write-rejected` even after earlier
 successful exchanges. The co-simulation failure owner retains the actual value
 and reason, raises the shared runtime fault and safety hold, and pauses/zeros

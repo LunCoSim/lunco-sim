@@ -114,15 +114,17 @@ fn write_shader_slot(world: &mut World, entity: Entity, slot: u64, value: f64) {
         shader_value_f32.is_finite(),
         "validated shader scalar must fit f32"
     );
-    let (original, current_live) = world
-        .get::<ShaderLook>(entity)
-        .and_then(|look| {
-            let (name, live) = look.live().get_slot_entry(slot)?;
-            let current_live = *live;
-            let original = current_live.or_else(|| look.values().get(name).copied())?;
-            Some((original, current_live))
-        })
+    let mut look = world
+        .get_mut::<ShaderLook>(entity)
+        .expect("prepared shader input retains its ShaderLook");
+    let (name, live) = look
+        .live()
+        .get_slot_entry(slot)
         .expect("prepared shader input slot remains live through commit");
+    let current_live = *live;
+    let original = current_live
+        .or_else(|| look.values().get(name).copied())
+        .expect("prepared shader input retains its authored scalar");
     assert!(
         matches!(original, ParamValue::F32(_)),
         "only authored f32 shader parameters accept scalar input writes"
@@ -131,9 +133,6 @@ fn write_shader_slot(world: &mut World, entity: Entity, slot: u64, value: f64) {
     if current_live == Some(live_value) {
         return;
     }
-    let mut look = world
-        .get_mut::<ShaderLook>(entity)
-        .expect("prepared shader input retains its ShaderLook");
     look.set_live_slot(slot, live_value)
         .expect("prepared shader input slot remains live through commit");
 }
