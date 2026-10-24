@@ -1,5 +1,17 @@
 # High-quality realtime performance handover
 
+## Physical solar lookup attribution
+
+[The exact-zone lookup audit](terrain-occlusion-lookup-2026-10-25.md) resolves
+96 of 237 physical-solar CPU samples to native table lookup and key comparison;
+the key's derive line alone did not establish hashing cost. Five alternating
+consumer pairs show no benefit from prehashed keys, and a compact-storage probe
+does not establish a gain. Both runtime experiments are removed. Ten numerical
+mechanism checks pass; the retained bounded moving-ray diagnostic supports the
+next algorithm comparison. Larger-region conservative bounds require proper
+asynchronous preparation, including the web worker boundary. Production behavior
+and the normal executable remain unchanged; all targets remain open.
+
 ## Native CPU instance preparation
 
 [The source-matched native-builder comparison](native-instance-builder-2026-10-25.md)

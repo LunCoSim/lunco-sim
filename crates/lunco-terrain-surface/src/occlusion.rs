@@ -952,6 +952,56 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "bounded moving-ray cache timing diagnostic"]
+    fn certified_cache_moving_ray_diagnostic() {
+        let surface = SurfaceOracle::new(
+            Arc::new(HeightGrid::new_flat(257, 128.0)),
+            vec![HeightContribution {
+                modifier: Arc::new(lunco_terrain_core::Overzoom::default()),
+                content_key: 7,
+            }],
+        );
+        let direction = DVec3::new(0.0, 0.163, 0.987).normalize();
+        for capacity in [256, 65536] {
+            let budget = SurfaceOcclusionBudget {
+                max_cached_cells: capacity,
+                ..Default::default()
+            };
+            let mut cache = SurfaceOcclusionCache::default();
+            let mut intervals = 0;
+            let started = std::time::Instant::now();
+            for tick in 0..512 {
+                let mut remaining = budget.max_tick_intervals;
+                for x in [-40.0, -20.0, 0.0, 20.0] {
+                    for z in [-1.0, 0.0, 1.0] {
+                        for dx in [-2.0, 0.0, 2.0] {
+                            let origin = DVec3::new(x + dx + tick as f64 * 0.001, 1.5, z);
+                            assert_eq!(
+                                std::hint::black_box(surface.occludes_ray(
+                                    origin,
+                                    direction,
+                                    budget,
+                                    &mut remaining,
+                                    &mut cache,
+                                )),
+                                Ok(false)
+                            );
+                        }
+                    }
+                }
+                intervals += budget.max_tick_intervals - remaining;
+                assert_eq!(cache.cells.len(), cache.order.len());
+                assert!(cache.cells.len() <= capacity);
+            }
+            eprintln!(
+                "moving-ray diagnostic: capacity={capacity}, ticks=512, rays=18432, intervals={intervals}, cached={}, elapsed_ns={}",
+                cache.cells.len(),
+                started.elapsed().as_nanos()
+            );
+        }
+    }
+
+    #[test]
     fn certified_occlusion_reuses_procedural_enclosures_for_moving_rays() {
         let surface = SurfaceOracle::new(
             Arc::new(HeightGrid::new_flat(257, 128.0)),

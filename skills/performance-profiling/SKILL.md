@@ -530,6 +530,14 @@ exact f64 coordinate bits and preserve traversal, interval budgets, unavailable
 data and fault behavior. Run the focused certified-occlusion mechanism checks
 and the production terrain solar visibility and invalid-admission gates; compare
 the unchanged solar-power observations and run a separate production Twin window.
+The ignored `occlusion::tests::certified_cache_moving_ray_diagnostic` in
+`lunco-terrain-surface` exercises 18,432 moving rays at both a thrashing and a
+resident cache capacity. Compare alternating invocations of the same built
+baseline/candidate test binaries; require identical ray verdicts, interval totals
+and final occupancy. These are cache-consumer timings, not complete fixed-tick
+or application FPS measurements. Resolve sampled instruction addresses against
+the matching executable and saved process mappings before attributing a derive
+line to hashing: that line can belong to inlined equality inside table lookup.
 For procedural synthesis, separate noise, population generation and profile
 evaluation. Reuse input-constant preparation at the existing mathematical owner
 before adding a population cache. Preserve cell hashes, f64 operation order and
