@@ -201,6 +201,8 @@ immutable staging and commit share one exclusive world borrow, so each eligible
 target is validated once. Returning an error rejects the staged batch. A
 retained command preparation has no such borrow guarantee and must still be
 revalidated at commit. Do not replace either proof with a revision-only cache.
+The scoped transaction's Bevy hash table stores indexes into its staged writes;
+duplicate checks compare full identities without cloning the port names again.
 Unit-reference clones share immutable definitions, and Avian reuses its fixed
 built-in unit references. This storage sharing never caches the live port
 owner, bounds, frame or permission. The bounded debug spans

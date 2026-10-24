@@ -224,7 +224,9 @@ named/resolved staging through the live owner validator. An error returned by
 the callback commits nothing; explicitly pending endpoints can be excluded.
 Accepted targets commit in staged order without a second preflight because the
 callback cannot mutate the world. `InputWriteBuffer` retains staging capacity,
-not write authority. Independently prepared command batches retain their
+not write authority. Its Bevy hash table indexes staged writes and compares the
+full entity/name identity without retaining a second copy of each name; table
+growth and hash collisions preserve the staged commit order. Independently prepared command batches retain their
 `apply_prepared_input_writes` revalidation because their preparation does not
 hold that world borrow. No target or successful-publication acknowledgement changes
 when another target rejects the communication point. Cached locators keep the

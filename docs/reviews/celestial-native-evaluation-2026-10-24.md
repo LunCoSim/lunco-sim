@@ -80,6 +80,24 @@ Receipts, logs, source hashes and images stay ignored under
 `*-celestial-upstream-normal/`, `celestial-clock-ui/`, and
 `instability-latest/celestial-*`.
 The under-one-second loading, under-one-millisecond coupled tick and
-under-ten-millisecond frame targets remain open. A separate post-update native
-Tracy attribution capture is still required before claiming an integrated
-CPU-owner improvement.
+under-ten-millisecond frame targets remain open.
+
+The subsequent landed native Tracy capture, `griffin-celestial-native-landed`,
+uses the same authored source hashes as `griffin-modelica-observation-landed`.
+Its regular Tracy build takes 2m43s, with binary SHA-256
+`c04a066b2941241fea69ea14f43e4a7b4a49a6d13254ce73cb28a0de3e03059b`.
+Native 0.14.1 readback verifies owned PID 1085045, 1 kHz sampling, 16,919 blocks,
+345,849,604 compressed payload bytes and 345,917,286 total bytes, followed by a
+successful native export. The last 240 complete FixedMain instances span
+66,652,893,387 through 70,558,462,746 ns. The image and diagnostics are inspected;
+21 bodies sleep, with 638 bodies, 777 colliders, 31 joints and no orphan pairs.
+
+The expensive Moon evaluation occurs once per tick. Its inclusive median drops
+from 0.693 ms to 0.464 ms; the physical endpoint median drops from 0.687 ms to
+0.456 ms. Other owners remain close to the preceding capture: propagation
+1.067 ms, per-invocation Modelica response handling 0.654 ms, and native Avian
+1.489 ms. The complete coupled-tick API median is 5.208 ms versus 5.328 ms.
+These are instrumented, contention-affected attribution observations, not
+product-performance acceptance or proof that the whole-tick difference is
+caused solely by the library update. Both owned app and collector exited,
+releasing API 5142 and Tracy port 8418.

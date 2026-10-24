@@ -1,13 +1,23 @@
 # High-quality realtime performance handover
 
+## Scoped transaction storage
+
+The input transaction's native Bevy hash table indexes its staged writes rather
+than retaining duplicate name ownership. Live write validation and atomic commit
+semantics remain intact. [The current review](port-transaction-storage-2026-10-24.md)
+records the focused negative owner test, twelve-check production ownership gate,
+three regular Twin observations and a landed native Tracy comparison. Port-write
+median is 0.860 ms versus 0.932 ms; the complete objective remains open.
+
 ## Native celestial evaluation
 
 The maintained upstream analytic provider uses position-only native evaluation;
 civil-time parsing, conversion and formatting use checked native APIs.
 [The current review](celestial-native-evaluation-2026-10-24.md) records the
 isolated 27% provider diagnostic improvement, owner/runtime gates, three
-regular desktop observations and their remaining limits. Integrated timing
-targets and post-update native Tracy attribution remain open.
+regular desktop observations and their remaining limits. Native Tracy confirms
+the expensive Moon evaluation median at 0.464 ms versus 0.693 ms; integrated
+timing targets remain open.
 
 ## Modelica observation admission
 

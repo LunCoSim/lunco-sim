@@ -37,13 +37,16 @@
 //! by **registering** it — no consumer changes. Registration order *is*
 //! resolution precedence (first match wins).
 
-use bevy::platform::hash::FixedHasher;
+use bevy::platform::{
+    collections::{HashTable, hash_table::Entry},
+    hash::FixedHasher,
+};
 use bevy::prelude::*;
 use std::any::TypeId;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::{Deref, Index, IndexMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -1471,7 +1474,8 @@ impl PreparedPortWrite {
 #[derive(Default)]
 pub struct InputWriteBuffer {
     writes: Vec<PreparedPortWrite>,
-    unique: HashSet<(Entity, Arc<str>), FixedHasher>,
+    /// Indexes into `writes`; duplicate checks borrow its admitted identities.
+    unique: HashTable<usize>,
 }
 
 /// Input staging with an immutable view of the transaction's exclusive world.
@@ -1517,16 +1521,23 @@ impl InputWriteTransaction<'_> {
     }
 
     fn stage(&mut self, write: PreparedPortWrite) -> Result<(), PortWriteError> {
-        if !self
-            .buffer
-            .unique
-            .insert((write.entity, Arc::clone(&write.name)))
-        {
-            return Err(PortWriteError {
-                port: write.name.to_string(),
-                owner: Some(write.metadata.source.to_string()),
-                kind: PortWriteErrorKind::DuplicateWrite,
-            });
+        let writes = &self.buffer.writes;
+        let hash = FixedHasher.hash_one((write.entity, write.name.as_ref()));
+        match self.buffer.unique.entry(
+            hash,
+            |&index| writes[index].entity == write.entity && writes[index].name == write.name,
+            |&index| FixedHasher.hash_one((writes[index].entity, writes[index].name.as_ref())),
+        ) {
+            Entry::Occupied(_) => {
+                return Err(PortWriteError {
+                    port: write.name.to_string(),
+                    owner: Some(write.metadata.source.to_string()),
+                    kind: PortWriteErrorKind::DuplicateWrite,
+                });
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(writes.len());
+            }
         }
         self.buffer.writes.push(write);
         Ok(())
@@ -2208,8 +2219,8 @@ impl PortRegistry {
         buffer: &mut InputWriteBuffer,
         stage: impl FnOnce(&mut InputWriteTransaction<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        buffer.writes.clear();
         buffer.unique.clear();
+        buffer.writes.clear();
         let result = {
             let _span = bevy::log::debug_span!("port_input_transaction_stage").entered();
             stage(&mut InputWriteTransaction {
@@ -2224,8 +2235,8 @@ impl PortRegistry {
                 self.commit_validated_input_write(world, write);
             }
         }
-        buffer.writes.clear();
         buffer.unique.clear();
+        buffer.writes.clear();
         result
     }
 
@@ -2486,6 +2497,44 @@ mod tests {
         PortNameSetKey, PortRegistry, PortTopologyRevision, PortValueType, ScalarPortMap,
         port_name_set_key,
     };
+
+    /// Measure complete staging and commit while reusing the transaction buffer.
+    #[test]
+    #[ignore = "manual scoped input transaction measurement"]
+    fn scoped_input_transaction_benchmark() {
+        let mut world = test_world();
+        let registry = PortRegistry::default();
+        let targets = (0..512)
+            .map(|_| {
+                let entity = world.spawn(InputPorts::new(&["signal"])).id();
+                let locator = registry.resolve_input(&world, entity, "signal").unwrap();
+                (entity, locator)
+            })
+            .collect::<Vec<_>>();
+        let mut buffer = super::InputWriteBuffer::default();
+        let began = std::time::Instant::now();
+        for _ in 0..512 {
+            registry
+                .input_transaction(&mut world, &mut buffer, |transaction| {
+                    for (entity, locator) in &targets {
+                        transaction.stage_resolved(*entity, locator, 0.5)?;
+                    }
+                    Ok::<_, super::PortWriteError>(())
+                })
+                .unwrap();
+        }
+        let elapsed = began.elapsed();
+        for (entity, _) in targets {
+            assert_eq!(
+                registry.read_input_port(&world, entity, "signal"),
+                Some(0.5)
+            );
+        }
+        println!(
+            "SCOPED_INPUT_TRANSACTION writes=262144 elapsed_ns={}",
+            elapsed.as_nanos()
+        );
+    }
 
     #[test]
     fn live_resolved_input_admission_benchmark() {
