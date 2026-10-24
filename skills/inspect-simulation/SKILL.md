@@ -85,6 +85,16 @@ shared-clock gate.
 
 ## Rigid-body acceleration
 
+For an initial-motion report, compare the composed `physics:velocity` and
+`physics:angularVelocity` with `QueryPhysicsState` immediately after scene
+admission. USD authors both vectors in the node transform space; angular values
+are degrees per second, while `angular_velocity_radps` is radians per second.
+Site mounting preserves these initial axes before native integration; later
+frame changes transport simulated state. Use `authored_initial_velocity` for
+the admission gate and `planetary_flight_surface` for subsequent frame/cell and
+surface-contact behavior. Do not infer initial-condition correctness from a
+test that injects motion after admission.
+
 Use the owning body's `acceleration_magnitude` for net `|Δv/Δt|`, and
 `specific_force_magnitude` for the accelerometer load `|Δv/Δt - g|`.
 Both are m/s². The latter reads one local g while supported and near zero in

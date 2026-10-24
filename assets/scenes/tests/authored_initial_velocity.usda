@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend references = @lunco://scenes/tests/planetary_flight_surface.usda@</World>
+)
+{
+    over "Flight"
+    {
+        vector3f physics:velocity = (0.0, 80.0, 0.0)
+    }
+    over "Companion"
+    {
+        vector3f physics:velocity = (0.0, 80.0, 0.0)
+    }
+    over "GlobeDrop"
+    {
+        vector3f physics:velocity = (0.0, -150.0, 0.0)
+        vector3f physics:angularVelocity = (0.0, 60.0, 0.0)
+    }
+    over "CollarDrop"
+    {
+        vector3f physics:velocity = (30.0, 0.0, 0.0)
+    }
+    over "Scenario"
+    {
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/authored_initial_velocity.rhai@
+    }
+}

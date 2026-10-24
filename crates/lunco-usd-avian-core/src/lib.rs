@@ -548,6 +548,8 @@ pub struct BridgeShadow {
     translation: Vec3,
     rotation: Quat,
     physics_frame: Entity,
+    /// A native physics writeback has established state beyond initialization.
+    simulated: bool,
 }
 
 impl Default for BridgeShadow {
@@ -557,6 +559,7 @@ impl Default for BridgeShadow {
             translation: Vec3::NAN,
             rotation: Quat::NAN,
             physics_frame: Entity::PLACEHOLDER,
+            simulated: false,
         }
     }
 }
@@ -1190,7 +1193,7 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
                 .iter()
                 .map(|(_, _, _, _, _, _, _, shadow, override_pose)| (shadow, override_pose)),
         );
-    // Established bodies are transported at the fixed physics boundary. A
+    // Simulated bodies are transported at the fixed physics boundary. A
     // fresh scene body can still be seeded in its already-selected frame here;
     // leave the old frame recorded so the later fixed pass can transport only
     // bodies whose shadows still identify that old frame.
@@ -1201,10 +1204,9 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
     };
     // A frame handoff normally transports Avian's existing state into a new
     // set of axes. A site mount is different: the selected frame itself has
-    // just moved in the hierarchy, so every body below it now has a new
-    // authoritative local pose in that frame. Preserve only the velocity
-    // vector rebase for those bodies and seed their positions from the live
-    // `(CellCoord, Transform)` chain below.
+    // just moved in the hierarchy, so every body below it has an authoritative
+    // local pose in that frame. Read that pose from the live spatial chain;
+    // only state already processed by the solver needs a velocity rebase.
     let frame_reanchored = q_frame_boundary_changes.contains(active_frame);
     let handoff = previous_frame.and_then(|previous| {
         // `grid_transform_between_grids(previous, active)` maps a pose in the
@@ -1338,15 +1340,9 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
             );
         }
 
-        // A scene is first projected under WorldRoot, where Avian is seeded,
-        // and is then migrated under its authored body-fixed site Grid.  The
-        // pose read below already recomputes the current position/orientation
-        // in the new frame.  Velocities need the matching rigid-vector
-        // conversion or the solver receives a mixed-frame state.  This is a
-        // frame rebase, not an impulse: preserve sleeping/contact/joint state
-        // and do not manufacture a velocity from the frame's astronomical
-        // translation. Motion above the selected frame belongs to the
-        // celestial hierarchy; it is not a local Avian displacement.
+        // A semantic frame change transports solved state rigidly. Scene
+        // mounting instead establishes the authored local pose before its
+        // first solver step; celestial translation is not a local displacement.
         let body_handoff = previous_frame
             .filter(|previous| shadow.is_seeded() && shadow.physics_frame == *previous)
             .and(handoff);
@@ -1354,7 +1350,10 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
             && frame_reanchored
             && is_below_active_frame(e, active_frame, &q_parents);
         if let Some(frame_transform) = body_handoff {
-            if shadow.is_seeded() {
+            // Mounting an unstepped scene establishes its authored local axes.
+            // Integrated state and bodies outside that mount require transport
+            // from the previous physics frame instead.
+            if shadow.simulated || !hierarchy_reanchored {
                 let old_linear = linear.0;
                 let old_angular = angular.0;
                 rot.0 = frame_transform
@@ -1473,7 +1472,10 @@ fn requires_fixed_frame_handoff<'a>(
         return false;
     };
     bodies.into_iter().any(|(shadow, override_pose)| {
-        override_pose.is_none() && shadow.is_seeded() && shadow.physics_frame == previous_frame
+        override_pose.is_none()
+            && shadow.simulated
+            && shadow.is_seeded()
+            && shadow.physics_frame == previous_frame
     })
 }
 
@@ -1598,6 +1600,7 @@ fn position_to_pose(
         &mut Transform,
         &mut BridgeShadow,
         &RigidBody,
+        Has<RigidBodyDisabled>,
         Option<&lunco_core::PhysicsPoseAuthoritative>,
     )>,
     q_metadata: Query<(Option<&Name>, Option<&UsdPrimPath>)>,
@@ -1638,7 +1641,18 @@ fn position_to_pose(
         }
     }
 
-    'writeback_body: for (e, pos, rot, cell, mut tf, mut shadow, rb, pose_override) in &mut q_dyn {
+    'writeback_body: for (
+        e,
+        pos,
+        rot,
+        cell,
+        mut tf,
+        mut shadow,
+        rb,
+        body_disabled,
+        pose_override,
+    ) in &mut q_dyn
+    {
         // Sync Position → Transform for every body avian moves via `Position`:
         // `Dynamic` (solver-integrated) AND `Kinematic` (externally seated — the
         // networked client pins replicated proxies `Kinematic` and drives their
@@ -1814,6 +1828,7 @@ fn position_to_pose(
             tf.rotation = local_rot;
         }
         shadow.capture(cell, &tf, active_frame);
+        shadow.simulated |= !body_disabled;
         if pose_override.is_some() {
             commands
                 .entity(e)
@@ -2410,7 +2425,7 @@ mod tests {
     }
 
     #[test]
-    fn admission_waits_only_for_seeded_bodies_that_still_need_the_old_frame() {
+    fn admission_waits_only_for_simulated_bodies_that_still_need_the_old_frame() {
         let old_frame = Entity::from_bits(7);
         let active_frame = Entity::from_bits(8);
         let fresh_transform = Transform::default();
@@ -2423,6 +2438,12 @@ mod tests {
 
         let mut established = BridgeShadow::default();
         established.capture(None, &fresh_transform, old_frame);
+        assert!(!requires_fixed_frame_handoff(
+            Some(old_frame),
+            active_frame,
+            [(&established, None)].into_iter(),
+        ));
+        established.simulated = true;
         assert!(requires_fixed_frame_handoff(
             Some(old_frame),
             active_frame,

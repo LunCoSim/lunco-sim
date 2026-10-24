@@ -217,14 +217,22 @@ invalidate the result. The complete validation remains at its existing
 admission and fixed-frame boundaries, with the same diagnostic and solver hold.
 When the selected site Grid itself is atomically reparented during scene
 mounting, bodies below it are reseeded from their new site-local hierarchy;
-only their velocity vectors are rotated into the new axes. A normal active-frame
-switch without frame reparenting transports the complete existing physics pose.
+their authored initial velocity vectors retain those local axes until the first
+native solver writeback. `BridgeShadow` records that writeback separately from
+admission seeding, and disabled bodies do not establish simulated state. Bodies
+that have already integrated transport their velocity vectors into the new axes.
+A normal active-frame switch without frame reparenting transports the complete
+existing physics pose.
 During admission across a frame switch, fresh bodies are seeded directly in the
 selected frame so readiness never waits for a fixed step that admission itself
-has blocked. Any established body still carrying the previous frame remains
+has blocked. Any simulated body still carrying the previous frame remains
 there until the next fixed boundary; the bridge transports only those bodies,
 then advances the recorded frame. This keeps the solver from seeing a mixed
 frame state and avoids deadlocking scene readiness on the physics clock.
+The production `authored_initial_velocity` gate checks ascent, descent, lateral
+motion, joint-connected motion and USD angular-velocity units through site
+admission. `planetary_flight_surface` covers subsequent integration across cells
+and the globe/terrain contact boundary.
 
 The shared backend admission contract lives in `lunco-physics::avian_backend`.
 In this f64-physics build Avian's OBVHS spatial-query and collider-tree
