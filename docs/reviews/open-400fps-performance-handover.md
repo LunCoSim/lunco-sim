@@ -1,5 +1,18 @@
 # High-quality realtime performance handover
 
+## Shared-value proof lookup
+
+The application pins the published Rumoca private-table optimization while
+retaining exact operation keys and independent equivalence checks.
+[The current review](modelica-shared-proof-lookup-2026-10-24.md) records eighteen
+owner tests, the unchanged twenty-model canary, five production physics gates,
+the packaging admission observation and three regular Twin runs. These first
+runs include new-compiler prepared-cache misses; the complete targets remain
+open. A valid landed Tracy capture reduces identified SipHash leaf samples
+from 224 to 26, but its initializer compiles 10,981 native artifacts versus 68
+previously. This is not a matched constructor-speed comparison. Native-cache
+retention and the remaining proof/evaluation work require further attribution.
+
 ## Scoped transaction storage
 
 The input transaction's native Bevy hash table indexes its staged writes rather

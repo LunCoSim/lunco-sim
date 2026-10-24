@@ -159,6 +159,10 @@ the shared table lifetime across segments and both sides of a check.
 Operation shapes use the complete typed IR encoding, including floating-point
 bits. A changed constant's bits must fail the checker; hash equality alone
 cannot establish operation identity.
+Private proof lookup tables use Rumoca's existing fast hasher. Preserve full
+key equality and program-order ID assignment. Qualify constructor costs with
+recorded prepared/native-cache hits and the fixed MSL canary; isolated proof
+benchmarks do not establish faster scene admission.
 Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.
