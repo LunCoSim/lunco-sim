@@ -18,7 +18,14 @@ app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
 Scene-authored spacecraft motion uses ordinary USD transform `timeSamples`
 through `lunco-usd-bevy-animation`.
 
-The astronomy crates are pinned to the LunCoSim-maintained
-[`celestial` fork](https://github.com/LunCoSim/celestial). Its workspace uses a
-pinned `celestial-eop-data` fork, which formats its build-time UTC date with
-Chrono and does not invoke a system `date` executable.
+The astronomy crates are pinned to maintained upstream
+[`Celestial`](https://github.com/gaker/celestial). Its position-only analytic
+evaluators return ICRS astronomical units, including the geocentric Moon.
+The provider converts native vectors into typed ecliptic coordinates and reuses
+results only for the exact requested epoch. Failed evaluations remain unavailable.
+
+`lunco-time` uses Celestial's checked UTC/TAI/TT/TDB conversions, leap-second
+validation and ISO 8601 formatting. UTC input requires a complete date and time,
+for example `2026-10-24T12:30:00.000Z`. The portable application clock supplies
+Unix seconds and nanoseconds; an invalid conversion remains an error at its
+policy or UI consumer.

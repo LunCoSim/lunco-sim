@@ -31,16 +31,16 @@ fn sky_clock_state(clocks: Clocks, domain: Option<TimeDomain>) -> Option<f64> {
 ///
 /// Takes the state it needs rather than queries, so the same widget serves a
 /// system (which has `Res`/`Query`) and a menu callback.
-/// Returns the [`SetCelestialClock`] the user asked for, if any — the caller owns dispatch,
-/// because triggering differs between the two contexts.
+/// Returns the requested clock command or a conversion error. The caller owns
+/// command dispatch and warning notification in its UI context.
 fn sky_clock_ui(
     ui: &mut egui::Ui,
-    utc: &str,
+    utc: &Result<String, impl std::fmt::Display>,
     epoch_jd: f64,
     scale: f64,
     scene: lunco_core::SceneTransitionId,
-) -> Option<SetCelestialClock> {
-    let mut request = None;
+) -> Result<Option<SetCelestialClock>, String> {
+    let mut request = Ok(None);
 
     ui.horizontal(|ui| {
         ui.label(
@@ -48,8 +48,12 @@ fn sky_clock_ui(
                 .weak()
                 .text_style(lunco_theme::TypographyRole::Label.text_style()),
         );
+        let label = match utc {
+            Ok(utc) => utc.clone(),
+            Err(error) => format!("UTC unavailable: {error}"),
+        };
         ui.label(
-            egui::RichText::new(utc)
+            egui::RichText::new(label)
                 .text_style(lunco_theme::TypographyRole::DenseCode.text_style()),
         )
         .on_hover_text(format!("JD {epoch_jd:.4} (TDB)"));
@@ -67,7 +71,12 @@ fn sky_clock_ui(
         .data(|d| d.get_temp::<(lunco_core::SceneTransitionId, String)>(buf_id))
         .filter(|(owner, _)| *owner == scene)
         .map(|(_, text)| text)
-        .unwrap_or_else(|| utc.trim_end_matches(" UTC").to_string());
+        .unwrap_or_else(|| match utc {
+            Ok(utc) => utc.clone(),
+            // The error is displayed above; an empty edit draft lets the user
+            // enter a valid epoch without supplying a fabricated clock value.
+            Err(_) => String::new(),
+        });
 
     ui.horizontal(|ui| {
         ui.label(
@@ -83,37 +92,32 @@ fn sky_clock_ui(
             // nothing and says nothing reads as a broken clock.
             .text_color_opt(
                 parsed
-                    .is_none()
+                    .is_err()
                     .then_some(egui::Color32::from_rgb(220, 120, 120)),
             );
         let resp = ui.add(field).on_hover_text(
-            "UTC date to put the celestial clock at — `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD HH:MM` \
-             or `YYYY-MM-DD`. All celestial consumers read this same epoch.",
+            "Complete UTC datetime: YYYY-MM-DDTHH:MM:SS.sssZ. Leap seconds are checked. All celestial consumers read this same epoch.",
         );
         let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let go = ui
-            .add_enabled(parsed.is_some(), egui::Button::new("Set"))
+            .add_enabled(parsed.is_ok(), egui::Button::new("Set"))
             .on_disabled_hover_text("Not a date this understands — see the field's tooltip.")
             .clicked();
-        if let (Some(jd), true) = (parsed, go || entered) {
-            request = Some(SetCelestialClock {
-                epoch_jd: Some(jd),
-                ..default()
-            });
+        if go || entered {
+            request = parsed.map(|jd| Some(SetCelestialClock {
+                epoch_jd: Some(jd), ..default()
+            })).map_err(|error| error.to_string());
         }
         if ui
             .button("Now")
             .on_hover_text("Seek the shared celestial clock to the current UTC date.")
             .clicked()
         {
-            let now = lunco_time::utc_now_tdb_jd();
-            buf = lunco_time::tdb_jd_to_utc_string(now)
-                .trim_end_matches(" UTC")
-                .to_string();
-            request = Some(SetCelestialClock {
-                epoch_jd: Some(now),
-                ..default()
-            });
+            request = lunco_time::utc_now_tdb_jd().and_then(|now| {
+                let display = lunco_time::tdb_jd_to_utc_string(now)?;
+                buf = display;
+                Ok(Some(SetCelestialClock {epoch_jd: Some(now), ..default()}))
+            }).map_err(|error| error.to_string());
         }
     });
     ui.data_mut(|d| d.insert_temp(buf_id, (scene, buf)));
@@ -145,10 +149,10 @@ fn sky_clock_ui(
                 )
                 .clicked()
             {
-                request = Some(SetCelestialClock {
+                request = Ok(Some(SetCelestialClock {
                     scale: Some(m),
                     ..default()
-                });
+                }));
             }
         }
     });
@@ -184,8 +188,14 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     };
 
     let utc = lunco_time::tdb_jd_to_utc_string(celestial.epoch_jd);
-    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale, scene) {
-        ctx.trigger(req);
+    match sky_clock_ui(ui, &utc, celestial.epoch_jd, scale, scene) {
+        Ok(Some(req)) => ctx.trigger(req),
+        Ok(None) => {}
+        Err(text) => ctx.trigger(lunco_notifications_core::ShowNotification {
+            text,
+            kind: "warn".into(),
+            secs: 0.0,
+        }),
     }
 }
 
@@ -227,8 +237,14 @@ pub(crate) fn draw_celestial_time(
             egui::Frame::popup(ui.style())
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale, scene) {
-                        commands.trigger(req);
+                    match sky_clock_ui(ui, &utc, celestial.epoch_jd, scale, scene) {
+                        Ok(Some(req)) => commands.trigger(req),
+                        Ok(None) => {}
+                        Err(text) => commands.trigger(lunco_notifications_core::ShowNotification {
+                            text,
+                            kind: "warn".into(),
+                            secs: 0.0,
+                        }),
                     }
                 });
         });

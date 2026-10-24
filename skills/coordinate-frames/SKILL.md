@@ -65,9 +65,12 @@ that scene Grid; a rover is never parented to terrain. Each such top-level prim
 carries its own `CellCoord`, while visual and collision descendants remain
 ordinary children rooted in `LowPrecisionRoot`. Celestial placement does not
 query or migrate an avatar/camera. If the site Grid is reparented, the physics
-bridge reseeds bodies from the new site-local hierarchy and rotates only their
-velocity vectors; a frame switch without reparenting transports the existing
-physics pose. The avatar subsystem captures a loader-relative local-camera pose
+bridge reseeds bodies from the new site-local hierarchy. An unstepped body
+retains its authored local linear/angular velocity; integrated state is
+transported from the previous frame. A frame switch without reparenting
+transports the existing physics pose and velocity. Verify the
+`authored_initial_velocity` production scene gate rather than adding a delayed
+velocity write or a direction correction. The avatar subsystem captures a loader-relative local-camera pose
 after USD projection has committed and applies it at the explicit scene-handoff
 boundary. All explicit camera frame changes stay with the camera subsystem
 through the same atomic migration helper. For a physical entity, keep it under
@@ -132,6 +135,14 @@ about 24 seconds. Test both the parent-relative `CellCoord`/`Transform` and the
 BigSpace-propagated `GlobalTransform`; local transform checks alone do not
 prove a rendered pose reached its consumer. The celestial cadence commits the
 `CelestialTime` sample it gated, and advances body position and spin together.
+
+UTC text input requires a complete ISO 8601 date and time, for example
+`2026-10-24T12:30:00.000Z`. `lunco-time` delegates parsing, leap-second checks,
+time-scale conversion and formatting to native Celestial. Propagate conversion
+errors to the clock UI or scene-time policy; never substitute another scale's
+Julian date. An authored scene epoch remains usable when the computer-clock
+candidate is unavailable. Run `test_hook_policies.rhai` for both candidate and
+error paths, and `authored_initial_velocity` for site-frame admission.
 
 For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
 `ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector

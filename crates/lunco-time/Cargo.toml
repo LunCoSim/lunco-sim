@@ -11,10 +11,7 @@ bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
-# Time-scale + sidereal math (UTC/TAI/TT/TDB/UT1, leap table, GMST). Zero-dep
-# pure-math crate; wrapped behind `scales.rs` so the rest of the workspace never
-# imports it directly (absorbs its pre-1.0 API churn). Same version the ephemeris
-# crate pins, so no extra Cargo resolution.
+# Checked civil-time conversion and formatting at the mission-time boundary.
 celestial-time = { workspace = true }
 chrono = { workspace = true }
 

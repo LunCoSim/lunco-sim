@@ -152,7 +152,9 @@ CPU-generated render meshes may continue streaming because they do not affect
 the selected epoch. A completion notification that did not enter the loading phase is
 ignored, so an idempotent load of the active scene does not select or apply time
 again. Its typed facts include the selected root path, composed epoch API and
-value status, celestial-source presence, and a fresh computer UTC→TDB candidate.
+value status, celestial-source presence, and a fresh computer UTC→TDB candidate
+or its conversion error (`computer_time_tdb_jd` and `computer_time_error`, with
+the unavailable member represented as unit).
 Rhai selects a valid non-zero root `lunco:time:epochJd` when present; otherwise
 it selects current computer time. Rust verifies that the returned epoch matches
 one of those candidates and passes the result to the time owner. The hook call
@@ -161,6 +163,15 @@ no elapsed clock. The deferred `SceneTimeSelection` carries the same id; the
 time owner ignores an apply, failure, or clear edge when it belongs to an older
 transition. One-shot policy inspection uses its separate
 `Application/Repl/Evaluation` context.
+
+`lunco-time` uses native Celestial UTC parsing, leap-second validation,
+UTC→TAI→TT→TDB conversion and ISO 8601 formatting. Enter a complete UTC date
+and time such as `2026-10-24T12:30:00.000Z`. Conversion errors stay errors:
+a valid authored epoch is independent of computer-clock availability; choosing
+computer time requires its successful checked conversion. A required policy
+failure faults scene-time admission and holds the coupled simulation. The sky
+clock displays unavailable UTC explicitly, and rejected seeks/Now actions emit
+a warning instead of committing a value from another time scale.
 
 Until the selection is installed, `SceneTimeState` holds the physical fixed
 loop and gates USD time-sample animation, celestial placement/presentation, and
@@ -188,10 +199,11 @@ launches.
 
 The hook owner is `lunco-time`; its typed input is the settled scene event, root
 path, authored epoch status/value, celestial-source presence, and sampled
-computer time. Its output is a source, the selected candidate, and an optional
+computer time or conversion error. Its output is a source, the selected candidate, and an optional
 warning. A missing or invalid policy result faults the application and leaves
 time-dependent consumers held. The production Rhai hook test checks both
-selections; `artemis_motion` and `lint_selftest` cover authored and
+selections, authored time with an unavailable computer clock, and rejection of
+unavailable computer time; `artemis_motion` and `lint_selftest` cover authored and
 computer-time scene behavior through the production scene-test runner.
 
 The rate ceiling and fixed-step catch-up budget live in `lunco-time`; consumers

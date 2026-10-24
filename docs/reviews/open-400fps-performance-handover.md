@@ -1,5 +1,14 @@
 # High-quality realtime performance handover
 
+## Native celestial evaluation
+
+The maintained upstream analytic provider uses position-only native evaluation;
+civil-time parsing, conversion and formatting use checked native APIs.
+[The current review](celestial-native-evaluation-2026-10-24.md) records the
+isolated 27% provider diagnostic improvement, owner/runtime gates, three
+regular desktop observations and their remaining limits. Integrated timing
+targets and post-update native Tracy attribution remain open.
+
 ## Modelica observation admission
 
 The reflected observable store uses Bevy's name index, and regular development

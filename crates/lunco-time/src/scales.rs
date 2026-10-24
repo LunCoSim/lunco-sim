@@ -1,272 +1,95 @@
-//! Time-scale projections (architecture doc 19 — T3).
+//! Checked civil-time projections around the canonical TDB mission epoch.
 //!
-//! The master clock epoch is **TDB** (Barycentric Dynamical Time — the ephemeris
-//! input). The civil / atomic / rotational scales (UTC, TAI, TT, UT1) and
-//! Greenwich Mean Sidereal Time are *derived* from it via the zero-dependency
-//! `celestial-time` crate, wrapped here so the rest of the workspace reads plain
-//! `f64` Julian Dates / radians and never imports `celestial-time` directly — one
-//! place to absorb its pre-1.0 API churn.
-//!
-//! Conversions: `UTC ↔ TAI` uses the leap-second table; `TAI ↔ TT` is the fixed
-//! 32.184 s; `TT ↔ TDB` uses the periodic (~1.7 ms) barycentric terms at
-//! Greenwich. `UT1` currently uses `DUT1 = 0` (no Earth-orientation data wired
-//! yet) — UT1 ≈ UTC to < 0.9 s, so GMST is good to ~15″; wiring real EOP/DUT1 is
-//! a documented follow-up.
+//! Celestial owns leap seconds, scale conversion, parsing and UTC formatting.
+//! The application supplies its portable wall clock and keeps canonical epochs
+//! in f64. Failed conversions remain errors at the consuming UI/policy boundary.
 
 use celestial_time::{
-    GMST,
-    // `UTC`/`TDB` are named directly; `TAI`/`TT`/`UT1` flow through by inference.
-    // The `To*` traits are imported for their `to_*` methods on the scale newtypes.
-    JulianDate,
-    TDB,
-    ToTAI,
-    ToTDB,
-    ToTT,
-    ToTTFromTDB,
-    ToUT1WithDUT1,
-    ToUTC,
-    UTC,
+    TimeResult,
+    julian::JulianDate,
+    scales::{
+        conversions::{
+            ToTAI, ToTT, ToUTC,
+            tt_tdb::{ToTDB, ToTTFromTDB},
+        },
+        tdb::TDB,
+        utc::UTC,
+    },
 };
 
-use crate::SECS_PER_DAY;
-
-/// Julian Date of the Unix epoch (1970-01-01T00:00:00Z), for `chrono` interop.
-const UNIX_EPOCH_JD: f64 = 2_440_587.5;
-
-/// Convert a **UTC** Julian Date to a **TDB** Julian Date (UTC→TAI→TT→TDB).
-/// Falls back to the input on the (rare) conversion error so callers never panic.
-pub fn utc_jd_to_tdb_jd(utc_jd: f64) -> f64 {
-    UTC::from_julian_date(JulianDate::from_f64(utc_jd))
-        .to_tai()
-        .and_then(|tai| tai.to_tt())
-        .and_then(|tt| tt.to_tdb_greenwich())
-        .map(|tdb| tdb.to_julian_date().to_f64())
-        .unwrap_or(utc_jd)
+/// Convert one checked native UTC value to the mission's TDB coordinate.
+fn tdb_from_utc(utc: UTC) -> TimeResult<f64> {
+    Ok(utc
+        .to_tai()?
+        .to_tt()?
+        .to_tdb_greenwich()?
+        .to_julian_date()
+        .to_f64())
 }
 
-/// The current wall-clock instant as a **TDB** Julian Date — the correct seed for
-/// the mission clock. Replaces the old "treat `Utc::now()` as a JD" seed, which
-/// was off by TT−UTC ≈ 69 s (32.184 s + leap seconds).
-pub fn utc_now_tdb_jd() -> f64 {
-    use chrono::{Datelike, Timelike, Utc};
-    let now = Utc::now();
-    let utc_jd = JulianDate::from_calendar(
-        now.year(),
-        now.month() as u8,
-        now.day() as u8,
-        now.hour() as u8,
-        now.minute() as u8,
-        now.second() as f64 + now.nanosecond() as f64 / 1.0e9,
-    )
-    .to_f64();
-    utc_jd_to_tdb_jd(utc_jd)
+/// Convert the portable application wall clock to a checked TDB epoch.
+pub fn utc_now_tdb_jd() -> TimeResult<f64> {
+    let now = chrono::Utc::now();
+    tdb_from_utc(UTC::new(now.timestamp(), now.timestamp_subsec_nanos())?)
 }
 
-/// Parse a civil **UTC** datetime into a master **TDB** Julian Date — the inverse
-/// of [`tdb_jd_to_utc_string`] for callers that accept an editable UTC date.
-///
-/// Accepts `YYYY-MM-DD HH:MM:SS`, the same with a `T` separator, `YYYY-MM-DD HH:MM`,
-/// and a bare `YYYY-MM-DD` (midnight). A trailing `UTC` is tolerated because the
-/// displayed string carries one. `None` on anything else — a caller showing a text
-/// field wants to mark it invalid, not seek the sky to a guess.
-///
-/// Goes through the leap-second-aware UTC→TDB chain, not a subtraction: typing a
-/// date is a civil-time act, and civil time is ~69 s from the ephemeris epoch.
-pub fn utc_string_to_tdb_jd(s: &str) -> Option<f64> {
-    use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
-
-    let s = s.trim().trim_end_matches("UTC").trim();
-    let dt: NaiveDateTime = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
-        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M"))
-        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M"))
-        .or_else(|_| {
-            NaiveDate::parse_from_str(s, "%Y-%m-%d").map(|d| d.and_hms_opt(0, 0, 0).unwrap())
-        })
-        .ok()?;
-
-    let utc_jd = JulianDate::from_calendar(
-        dt.year(),
-        dt.month() as u8,
-        dt.day() as u8,
-        dt.hour() as u8,
-        dt.minute() as u8,
-        dt.second() as f64,
-    )
-    .to_f64();
-    Some(utc_jd_to_tdb_jd(utc_jd))
+/// Parse a complete ISO 8601 UTC datetime with the native leap-second parser.
+pub fn utc_string_to_tdb_jd(source: &str) -> TimeResult<f64> {
+    tdb_from_utc(source.parse::<UTC>()?)
 }
 
-/// Every derived scale at a given master **TDB** epoch. Julian Dates throughout;
-/// GMST in radians `[0, 2π)`. Build with [`TimeScales::from_tdb_jd`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TimeScales {
-    /// Barycentric Dynamical Time (the master) — Julian Date.
-    pub tdb_jd: f64,
-    /// Terrestrial Time — Julian Date.
-    pub tt_jd: f64,
-    /// International Atomic Time — Julian Date.
-    pub tai_jd: f64,
-    /// Coordinated Universal Time — Julian Date.
-    pub utc_jd: f64,
-    /// Universal Time (Earth rotation) — Julian Date (DUT1 = 0 approximation).
-    pub ut1_jd: f64,
-    /// Greenwich Mean Sidereal Time — radians `[0, 2π)`.
-    pub gmst_rad: f64,
-}
-
-impl TimeScales {
-    /// Derive every scale from the master TDB epoch. Each step degrades
-    /// gracefully to the previous scale on a conversion error, so a bad epoch
-    /// yields best-effort values rather than a panic.
-    pub fn from_tdb_jd(tdb_jd: f64) -> Self {
-        let tdb = TDB::from_julian_date(JulianDate::from_f64(tdb_jd));
-
-        let tt = tdb.to_tt_greenwich().ok();
-        let tt_jd = tt.as_ref().map_or(tdb_jd, |t| t.to_julian_date().to_f64());
-
-        let tai = tt.as_ref().and_then(|t| t.to_tai().ok());
-        let tai_jd = tai.as_ref().map_or(tt_jd, |t| t.to_julian_date().to_f64());
-
-        let utc = tai.as_ref().and_then(|t| t.to_utc().ok());
-        let utc_jd = utc.as_ref().map_or(tai_jd, |u| u.to_julian_date().to_f64());
-
-        let ut1 = utc.as_ref().and_then(|u| u.to_ut1_with_dut1(0.0).ok());
-        let ut1_jd = ut1.as_ref().map_or(utc_jd, |u| u.to_julian_date().to_f64());
-
-        let gmst_rad = match (ut1.as_ref(), tt.as_ref()) {
-            (Some(u), Some(t)) => GMST::from_ut1_and_tt(u, t)
-                .map(|g| g.radians())
-                .unwrap_or(0.0),
-            _ => 0.0,
-        };
-
-        Self {
-            tdb_jd,
-            tt_jd,
-            tai_jd,
-            utc_jd,
-            ut1_jd,
-            gmst_rad,
-        }
-    }
-}
-
-/// Format a master **TDB** Julian Date as a UTC calendar string
-/// (`YYYY-MM-DD HH:MM:SS UTC`). The single canonical formatter — it derives the
-/// correct UTC instant from TDB, unlike the drifted `jd_to_utc_string` copies
-/// that wrongly treated the master epoch as UTC.
-pub fn tdb_jd_to_utc_string(tdb_jd: f64) -> String {
-    use chrono::{TimeZone, Utc};
-    let utc_jd = TimeScales::from_tdb_jd(tdb_jd).utc_jd;
-    let unix_secs = (utc_jd - UNIX_EPOCH_JD) * SECS_PER_DAY;
-    Utc.timestamp_opt(unix_secs.round() as i64, 0)
-        .single()
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("JD {tdb_jd:.5} TDB"))
+/// Format TDB as checked ISO 8601 UTC, including milliseconds and a Z suffix.
+pub fn tdb_jd_to_utc_string(epoch_jd: f64) -> TimeResult<String> {
+    let tdb = TDB::from_julian_date(JulianDate::from_f64(epoch_jd));
+    let utc = tdb.to_tt_greenwich()?.to_tai()?.to_utc()?;
+    Ok(format!("{}Z", utc.to_iso8601()?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// At a J2000-era date TAI−UTC = 32 s and TT−TAI = 32.184 s, so TT−UTC =
-    /// 64.184 s and TDB−UTC ≈ 64.184 s (the TDB−TT periodic term is ~ms). This
-    /// is the conflation the old seed missed entirely (it had TDB = UTC).
     #[test]
-    fn utc_to_tdb_applies_the_64_second_offset() {
-        // 2000-01-01 12:00:00 UTC.
-        let utc_jd = JulianDate::from_calendar(2000, 1, 1, 12, 0, 0.0).to_f64();
-        let tdb_jd = utc_jd_to_tdb_jd(utc_jd);
-        let offset_secs = (tdb_jd - utc_jd) * SECS_PER_DAY;
+    fn civil_time_applies_the_atomic_offset_and_round_trips() {
+        let utc_jd = JulianDate::from_calendar(2000, 1, 1, 12, 0, 0.0)
+            .unwrap()
+            .to_f64();
+        let tdb = utc_string_to_tdb_jd("2000-01-01T12:00:00Z").unwrap();
+        assert!(((tdb - utc_jd) * crate::SECS_PER_DAY - 64.184).abs() < 0.001);
+        let formatted = tdb_jd_to_utc_string(tdb).unwrap();
+        assert_eq!(formatted, "2000-01-01T12:00:00.000Z");
         assert!(
-            (offset_secs - 64.184).abs() < 0.5,
-            "TDB−UTC should be ≈64.184 s, got {offset_secs}"
-        );
-    }
-
-    /// UTC → TDB → (derive UTC back) round-trips to sub-millisecond.
-    #[test]
-    fn tdb_round_trips_to_utc() {
-        let utc_jd = JulianDate::from_calendar(2026, 6, 29, 18, 30, 0.0).to_f64();
-        let tdb_jd = utc_jd_to_tdb_jd(utc_jd);
-        let back = TimeScales::from_tdb_jd(tdb_jd).utc_jd;
-        let err_secs = (back - utc_jd).abs() * SECS_PER_DAY;
-        assert!(err_secs < 1.0e-3, "UTC round-trip error {err_secs} s");
-    }
-
-    /// The derived scales are ordered TDB ≳ TT > TAI > UTC (each later scale is
-    /// "behind"), and the gaps are the canonical fixed offsets.
-    #[test]
-    fn scale_ladder_has_canonical_gaps() {
-        let s = TimeScales::from_tdb_jd(JulianDate::from_calendar(2026, 1, 1, 0, 0, 0.0).to_f64());
-        // TT − TAI = 32.184 s (exact).
-        assert!(((s.tt_jd - s.tai_jd) * SECS_PER_DAY - 32.184).abs() < 1.0e-3);
-        // TAI − UTC = 37 s (current leap-second count, since 2017).
-        assert!(((s.tai_jd - s.utc_jd) * SECS_PER_DAY - 37.0).abs() < 1.0e-3);
-        // TDB − TT is a small periodic term (< ~2 ms).
-        assert!((s.tdb_jd - s.tt_jd).abs() * SECS_PER_DAY < 0.01);
-    }
-
-    /// GMST is a valid angle and advances at the sidereal rate: +1 hour of time
-    /// → +1.0027379 h of sidereal angle (≈15.0411°).
-    #[test]
-    fn gmst_is_valid_and_advances_at_sidereal_rate() {
-        use std::f64::consts::TAU;
-        // A TDB epoch away from the 24 h wrap so +1 h doesn't roll over.
-        let tdb0 = JulianDate::from_calendar(2026, 6, 29, 6, 0, 0.0).to_f64();
-        let g0 = TimeScales::from_tdb_jd(tdb0).gmst_rad;
-        assert!((0.0..TAU).contains(&g0), "GMST out of range: {g0}");
-
-        let g1 = TimeScales::from_tdb_jd(tdb0 + 1.0 / 24.0).gmst_rad;
-        let expected = TAU / 24.0 * 1.002_737_909_35; // sidereal gain over 1 solar hour
-        let delta = (g1 - g0).rem_euclid(TAU);
-        assert!(
-            (delta - expected).abs() < 1.0e-3,
-            "GMST should advance ~{expected} rad/h, got {delta}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod seek_parse_tests {
-    use super::*;
-
-    /// **Round trip.** The formatted UTC value parses back to the epoch it was
-    /// formatted from, with the precision represented by the output string.
-    #[test]
-    fn a_printed_utc_string_parses_back_to_its_own_epoch() {
-        let tdb = 2_461_010.5_f64;
-        let printed = tdb_jd_to_utc_string(tdb);
-        let back = utc_string_to_tdb_jd(&printed).expect("its own output must parse");
-        // Printing rounds to whole seconds, so the round trip is second-exact.
-        let err_secs = (back - tdb).abs() * SECS_PER_DAY;
-        assert!(
-            err_secs < 1.0,
-            "round trip drifted {err_secs} s via '{printed}'"
-        );
-    }
-
-    /// Civil time is NOT the ephemeris epoch: a naive parse that skipped the
-    /// UTC→TDB chain lands ~69 s early, which at 1000× sky rate is a visible jump.
-    #[test]
-    fn parsing_applies_the_utc_to_tdb_offset() {
-        let tdb = utc_string_to_tdb_jd("2000-01-01 12:00:00").unwrap();
-        let raw_utc_jd = 2_451_545.0;
-        let offset = (tdb - raw_utc_jd) * SECS_PER_DAY;
-        assert!(
-            (offset - 64.184).abs() < 0.5,
-            "TDB−UTC should be ≈64.184 s, got {offset}"
+            (utc_string_to_tdb_jd(&formatted).unwrap() - tdb).abs() * crate::SECS_PER_DAY < 0.001
         );
     }
 
     #[test]
-    fn shorter_forms_and_a_trailing_utc_are_accepted_and_junk_is_not() {
-        assert!(utc_string_to_tdb_jd("2026-07-22 06:00:06 UTC").is_some());
-        assert!(utc_string_to_tdb_jd("2026-07-22T06:00").is_some());
-        assert!(utc_string_to_tdb_jd("2026-07-22").is_some());
-        assert!(utc_string_to_tdb_jd("").is_none());
-        assert!(utc_string_to_tdb_jd("tomorrow").is_none());
-        assert!(utc_string_to_tdb_jd("2026-13-45 99:99:99").is_none());
+    fn fractional_civil_seconds_and_real_leap_seconds_are_preserved() {
+        for source in ["2026-07-22T06:00:06.125Z", "2016-12-31T23:59:60.500Z"] {
+            let epoch = utc_string_to_tdb_jd(source).unwrap();
+            let formatted = tdb_jd_to_utc_string(epoch).unwrap();
+            assert_eq!(formatted, source);
+        }
+        let before = utc_string_to_tdb_jd("2016-12-31T23:59:59Z").unwrap();
+        let leap = utc_string_to_tdb_jd("2016-12-31T23:59:60Z").unwrap();
+        let after = utc_string_to_tdb_jd("2017-01-01T00:00:00Z").unwrap();
+        assert!(((leap - before) * crate::SECS_PER_DAY - 1.0).abs() < 0.001);
+        assert!(((after - leap) * crate::SECS_PER_DAY - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn invalid_dates_and_nonfinite_epochs_remain_errors() {
+        for source in [
+            "",
+            "tomorrow",
+            "2026-13-45T99:99:99Z",
+            "2026-07-22T06:00:60Z",
+        ] {
+            assert!(utc_string_to_tdb_jd(source).is_err(), "{source}");
+        }
+        for epoch in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(tdb_jd_to_utc_string(epoch).is_err());
+        }
+        assert!(utc_now_tdb_jd().unwrap().is_finite());
     }
 }

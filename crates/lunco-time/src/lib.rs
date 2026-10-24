@@ -49,9 +49,7 @@ pub use interaction::{
 };
 
 pub mod scales;
-pub use scales::{
-    TimeScales, tdb_jd_to_utc_string, utc_jd_to_tdb_jd, utc_now_tdb_jd, utc_string_to_tdb_jd,
-};
+pub use scales::{tdb_jd_to_utc_string, utc_now_tdb_jd, utc_string_to_tdb_jd};
 
 /// Seconds in one day — the JD/epoch unit conversion.
 pub const SECS_PER_DAY: f64 = 86_400.0;
@@ -369,8 +367,7 @@ pub fn select_scene_time(
     let current = facts
         .get("computer_time_tdb_jd")
         .and_then(H::as_f64)
-        .filter(|value| value.is_finite() && *value != 0.0)
-        .ok_or_else(|| "scene time facts have no valid computer-time epoch".to_owned())?;
+        .filter(|value| value.is_finite() && *value != 0.0);
     let decision = lunco_hooks::invoke_with_context(
         SCENE_TIME_SELECTION_HOOK,
         std::slice::from_ref(facts),
@@ -393,7 +390,9 @@ pub fn select_scene_time(
                 && facts.get("epoch_status").and_then(H::as_str) == Some("valid")
                 && facts.get("authored_epoch_jd").and_then(H::as_f64) == Some(epoch_jd)
         }
-        "computer_time" => current == epoch_jd,
+        "computer_time" => {
+            current == Some(epoch_jd) && matches!(facts.get("computer_time_error"), Some(H::Unit))
+        }
         _ => false,
     };
     if !selected {
@@ -965,21 +964,6 @@ fn update_simulation_presentation_time(
     };
     if *presentation != next {
         *presentation = next;
-    }
-}
-
-impl WorldTime {
-    /// Derive all civil/atomic/rotational scales (UTC/TAI/TT/UT1 + GMST) from the
-    /// master TDB epoch (doc 19 — T3). See [`TimeScales`].
-    #[inline]
-    pub fn scales(&self) -> TimeScales {
-        TimeScales::from_tdb_jd(self.epoch_jd)
-    }
-
-    /// The current epoch as a `YYYY-MM-DD HH:MM:SS UTC` string.
-    #[inline]
-    pub fn utc_string(&self) -> String {
-        tdb_jd_to_utc_string(self.epoch_jd)
     }
 }
 

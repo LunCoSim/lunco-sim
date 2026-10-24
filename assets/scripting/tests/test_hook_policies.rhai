@@ -194,6 +194,7 @@ let current_time_selection = invoke_hook("scene.time.select", [#{
     authored_epoch_jd: (),
     has_celestial_source: true,
     computer_time_tdb_jd: current_time_epoch,
+    computer_time_error: (),
 }]);
 checks.push(t_true(current_time_selection.ok == true
         && current_time_selection.value.source == "computer_time"
@@ -206,13 +207,22 @@ let authored_time_selection = invoke_hook("scene.time.select", [#{
     epoch_status: "valid",
     authored_epoch_jd: authored_time_epoch,
     has_celestial_source: true,
-    computer_time_tdb_jd: current_time_epoch,
+    computer_time_tdb_jd: (),
+    computer_time_error: "computer clock unavailable",
 }]);
 checks.push(t_true(authored_time_selection.ok == true
         && authored_time_selection.value.source == "authored"
         && authored_time_selection.value.epoch_jd == authored_time_epoch
         && authored_time_selection.value.warning == (),
-    "scene time policy selects an authored root epoch when it is valid"));
+    "scene time policy selects an authored epoch independently of unavailable computer time"));
+let unavailable_time_selection = invoke_hook("scene.time.select", [#{
+    epoch_api: false, epoch_status: "not_applied", authored_epoch_jd: (),
+    has_celestial_source: true, computer_time_tdb_jd: (),
+    computer_time_error: "computer clock unavailable",
+}]);
+checks.push(t_true(unavailable_time_selection.ok == false
+        && unavailable_time_selection.error.contains("computer clock unavailable"),
+    "scene time policy rejects unavailable computer time without inventing an epoch"));
 
 let scene_composition_hook = ();
 for hook in hooks {

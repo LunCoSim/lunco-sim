@@ -33,6 +33,9 @@ fn select_scene_time(facts) {
         };
     }
 
+    if facts.computer_time_error != () {
+        throw("Computer UTC could not be converted to TDB: " + facts.computer_time_error);
+    }
     let warning = ();
     if facts.epoch_api == true {
         warning = "Scene root LunCoEpochAPI has a " + facts.epoch_status

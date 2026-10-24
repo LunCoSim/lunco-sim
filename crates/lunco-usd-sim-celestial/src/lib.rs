@@ -110,6 +110,10 @@ fn scene_time_facts(
             }
         }
     }
+    let (computer_time_tdb_jd, computer_time_error) = match lunco_time::utc_now_tdb_jd() {
+        Ok(epoch) => (H::Float(epoch), H::Unit),
+        Err(error) => (H::Unit, H::str(error.to_string())),
+    };
     H::map([
         ("event", H::str(event)),
         ("scene_path", scene_path.map_or(H::Unit, H::str)),
@@ -118,10 +122,8 @@ fn scene_time_facts(
         ("epoch_status", H::str(epoch_status)),
         ("authored_epoch_jd", authored_epoch_jd),
         ("has_celestial_source", H::Bool(has_celestial_source)),
-        (
-            "computer_time_tdb_jd",
-            H::Float(lunco_time::utc_now_tdb_jd()),
-        ),
+        ("computer_time_tdb_jd", computer_time_tdb_jd),
+        ("computer_time_error", computer_time_error),
     ])
 }
 

@@ -1437,6 +1437,13 @@ Do not add a second cache, a timer, a compatibility path, or a quality fallback.
 If the hot path is not established, stop after source inspection and capture a
 bounded profile rather than guessing.
 
+For analytic ephemeris cost, count exact body/epoch evaluations in the native
+capture before changing cache scope. Reuse maintained position-only evaluators
+and their declared units/frame through the existing typed adapter. Qualify a
+dependency update with frame/time math and production celestial/landing gates;
+an isolated evaluator benchmark does not establish a complete-tick gain. See
+[the native celestial review](../../docs/reviews/celestial-native-evaluation-2026-10-24.md).
+
 Profile the installed Avian 0.8 systems for joint preparation, native XPBD,
 contact generation, contact recycling, constraint solving and swept CCD.
 `PhysicsPerformance` exposes native solver and collision durations alongside

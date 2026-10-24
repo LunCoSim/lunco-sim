@@ -4,19 +4,19 @@
 //!
 //! This crate is the heavy half of the celestial split: it pulls in
 //! `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and
-//! `celestial-core` from the pinned LunCoSim astronomy fork. Its IERS data
-//! dependency uses Chrono for its build timestamp, without an external date
-//! executable.
+//! `celestial-core` from maintained upstream Celestial. Native positions use
+//! ICRS astronomical units; this adapter converts them into the application's
+//! typed ecliptic frame at the provider boundary.
 //!
 //! Apps that need analytic planetary positions add [`EphemerisPlugin`]. USD
 //! scene animation remains authored as ordinary xform time samples.
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use celestial_core::Vector3;
-use celestial_ephemeris::{Vsop2013Earth, Vsop2013Sun, moon::ElpMpp02Moon, planets::Vsop2013Emb};
-use celestial_time::TDB;
+use celestial_core::matrix::Vector3;
+use celestial_ephemeris::{earth::Vsop2013Earth, moon::ElpMpp02Moon, planets::Vsop2013Emb};
 use celestial_time::julian::JulianDate;
+use celestial_time::scales::tdb::TDB;
 use lunco_celestial::ephemeris_id::{EARTH, EARTH_MOON_BARYCENTER, MOON, SUN};
 use lunco_celestial::frames::{EclipticAu, IcrfAu};
 
@@ -73,7 +73,6 @@ impl EpochPositionCache {
 
 /// Concrete implementation of the analytic [`EphemerisProvider`].
 pub struct CelestialEphemerisProvider {
-    _sun: Vsop2013Sun,
     earth: Vsop2013Earth,
     emb: Vsop2013Emb,
     moon: ElpMpp02Moon,
@@ -96,7 +95,6 @@ impl CelestialEphemerisProvider {
     /// Build the analytic provider with the canonical body's parent tree.
     pub fn new() -> Self {
         Self {
-            _sun: Vsop2013Sun,
             earth: Vsop2013Earth::new(),
             emb: Vsop2013Emb,
             moon: ElpMpp02Moon::new(),
@@ -115,6 +113,55 @@ impl Default for CelestialEphemerisProvider {
 #[cfg(test)]
 mod position_cache_tests {
     use super::*;
+
+    /// Measures exact-epoch native work and the complete provider composition.
+    #[test]
+    #[ignore = "manual native ephemeris composition measurement"]
+    fn native_composition_benchmark() {
+        let provider = CelestialEphemerisProvider::new();
+        let epochs = (0..256)
+            .map(|sample| 2_461_395.5 + f64::from(sample) / 86_400.0)
+            .collect::<Vec<_>>();
+        for (name, read) in [
+            (
+                "emb",
+                CelestialEphemerisProvider::emb_heliocentric as fn(&_, &TDB) -> _,
+            ),
+            ("earth", CelestialEphemerisProvider::earth_heliocentric),
+        ] {
+            let began = std::time::Instant::now();
+            for &epoch in &epochs {
+                let tdb = TDB::from_julian_date(JulianDate::new(epoch, 0.0));
+                let _ = std::hint::black_box(read(&provider, &tdb).unwrap());
+            }
+            println!(
+                "NATIVE_EPHEMERIS owner={name} samples=256 elapsed_ns={}",
+                began.elapsed().as_nanos()
+            );
+        }
+        let began = std::time::Instant::now();
+        for &epoch in &epochs {
+            let tdb = TDB::from_julian_date(JulianDate::new(epoch, 0.0));
+            let _ = std::hint::black_box(provider.moon_geocentric_icrs_au(&tdb).unwrap());
+        }
+        println!(
+            "NATIVE_EPHEMERIS owner=moon samples=256 elapsed_ns={}",
+            began.elapsed().as_nanos()
+        );
+        let began = std::time::Instant::now();
+        let mut fingerprint = [0_u64; 3];
+        for &epoch in &epochs {
+            let moon = provider.position(MOON, epoch).unwrap().raw();
+            for (bits, value) in fingerprint.iter_mut().zip(moon.to_array()) {
+                assert!(value.is_finite());
+                *bits = bits.rotate_left(1) ^ value.to_bits();
+            }
+        }
+        println!(
+            "NATIVE_EPHEMERIS owner=provider samples=256 elapsed_ns={} fingerprint={fingerprint:?}",
+            began.elapsed().as_nanos()
+        );
+    }
 
     #[test]
     fn position_cache_reuses_exact_epoch_results_and_replaces_stale_epoch() {
@@ -187,7 +234,7 @@ mod position_cache_tests {
             "one epoch ULP invalidates native operands"
         );
         let missing = |cache: &mut EpochPositionCache| {
-            cache.heliocentric_or_evaluate(EARTH, || {
+            let _ = cache.heliocentric_or_evaluate(EARTH, || {
                 evaluations.set(evaluations.get() + 1);
                 None
             })?;
@@ -249,9 +296,9 @@ impl CelestialEphemerisProvider {
         })
     }
 
-    fn moon_geocentric_icrs(&self, tdb: &TDB) -> Option<[f64; 3]> {
+    fn moon_geocentric_icrs_au(&self, tdb: &TDB) -> Option<Vector3> {
         let _span = bevy::log::info_span!("celestial_ephemeris_elp_mpp02").entered();
-        self.moon.geocentric_position_icrs(tdb).ok().or_else(|| {
+        self.moon.geocentric_position(tdb).ok().or_else(|| {
             bevy::log::warn_once!(
                 "[ephemeris] ELP/MPP02 Moon evaluation failed — the Moon will not be placed."
             );
@@ -319,12 +366,9 @@ impl CelestialEphemerisProvider {
                 ))))
             }
             MOON => {
-                let p_m_geo_arr = self.moon_geocentric_icrs(&tdb)?;
-                const AU_KM: f64 = 149_597_870.7;
+                let p_m_geo = self.moon_geocentric_icrs_au(&tdb)?;
                 let p_m_geo_au = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
-                    p_m_geo_arr[0] / AU_KM,
-                    p_m_geo_arr[1] / AU_KM,
-                    p_m_geo_arr[2] / AU_KM,
+                    p_m_geo.x, p_m_geo.y, p_m_geo.z,
                 )));
 
                 let p_emb = cache.heliocentric_or_evaluate(EARTH_MOON_BARYCENTER, || {

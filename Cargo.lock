@@ -3190,21 +3190,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "celestial-coords"
-version = "0.1.1-alpha.2"
-source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
-dependencies = [
- "celestial-core",
- "celestial-eop-data",
- "celestial-time",
- "libm",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "celestial-core"
 version = "0.1.1-alpha.2"
-source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
+source = "git+https://github.com/gaker/celestial?rev=609f3fa64d068fd890d713785113803f62a07b94#609f3fa64d068fd890d713785113803f62a07b94"
 dependencies = [
  "libm",
  "once_cell",
@@ -3213,30 +3201,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "celestial-eop-data"
-version = "0.1.28"
-source = "git+https://github.com/LunCoSim/celestial-eop-data?rev=3a0f7795b4be4d9965df6ec4f3b029fa1583d15e#3a0f7795b4be4d9965df6ec4f3b029fa1583d15e"
-dependencies = [
- "chrono",
- "zstd 0.13.3",
-]
-
-[[package]]
 name = "celestial-ephemeris"
 version = "0.1.1-alpha.2"
-source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
+source = "git+https://github.com/gaker/celestial?rev=609f3fa64d068fd890d713785113803f62a07b94#609f3fa64d068fd890d713785113803f62a07b94"
 dependencies = [
- "celestial-coords",
  "celestial-core",
  "celestial-time",
  "libm",
- "memmap2",
+ "thiserror 2.0.18",
+ "wide 1.7.1",
 ]
 
 [[package]]
 name = "celestial-time"
 version = "0.1.1-alpha.2"
-source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
+source = "git+https://github.com/gaker/celestial?rev=609f3fa64d068fd890d713785113803f62a07b94#609f3fa64d068fd890d713785113803f62a07b94"
 dependencies = [
  "celestial-core",
  "libm",
