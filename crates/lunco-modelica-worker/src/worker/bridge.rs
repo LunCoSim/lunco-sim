@@ -712,8 +712,8 @@ pub fn spawn_modelica_requests(
 /// Describes values that were not produced by a failed live Modelica step.
 ///
 /// The worker reports the solver cause; the main-thread model still owns the
-/// last accepted output sample. Sorting keeps this diagnostic stable across
-/// runs despite the model's hash-map storage.
+/// last accepted output sample. Sorting keeps the diagnostic order independent
+/// of the admitted observation order.
 fn failed_modelica_step_detail(
     model: &ModelicaModel,
     variables: &ModelicaVariables,
@@ -1520,17 +1520,42 @@ pub fn handle_modelica_responses(
                 // Preserve inputs and parameters
             }
 
-            // Update observable variables from detected symbols and step outputs
-            for (name, val) in result.detected_symbols.iter().chain(outputs.iter()) {
-                if !model.inputs.contains_key(name) && !model.parameters.contains_key(name) {
-                    let values = &mut variables.bypass_change_detection().values;
-                    if let Some(current) = values.get_mut(name) {
-                        if current.to_bits() != val.to_bits() {
-                            *current = *val;
-                            variables_changed = true;
+            // Align the native ordered map to each admitted observation. Check
+            // the actual name before indexed updates; reorders, omissions and
+            // duplicate samples retain ordinary named, last-write semantics.
+            let values = &mut variables.bypass_change_detection().values;
+            for samples in [&result.detected_symbols, &outputs] {
+                for (index, (name, val)) in samples
+                    .iter()
+                    .filter(|(name, _)| {
+                        !model.inputs.contains_key(name) && !model.parameters.contains_key(name)
+                    })
+                    .enumerate()
+                {
+                    let aligned = values.get_index(index).is_some_and(|(key, _)| key == name);
+                    if !aligned {
+                        let source = match values.get_index_of(name) {
+                            Some(source) => source,
+                            None => {
+                                values.insert(name.clone(), *val);
+                                variables_changed = true;
+                                values.len() - 1
+                            }
+                        };
+                        if index < values.len() {
+                            values.swap_indices(source, index);
                         }
+                    }
+                    // Duplicate names can extend the input iteration beyond
+                    // the map width; their last sample still wins by name.
+                    let current = if index < values.len() {
+                        values.get_index_mut(index).map(|(_, value)| value)
                     } else {
-                        values.insert(name.clone(), *val);
+                        values.get_mut(name)
+                    }
+                    .expect("an admitted observable remains in its map");
+                    if current.to_bits() != val.to_bits() {
+                        *current = *val;
                         variables_changed = true;
                     }
                 }
@@ -1996,7 +2021,7 @@ mod compile_fault_tests {
                     ..Default::default()
                 },
                 ModelicaVariables {
-                    values: [("x".to_owned(), 0.0)].into(),
+                    values: [("x".to_owned(), 0.0)].into_iter().collect(),
                 },
             ))
             .id();
@@ -2072,6 +2097,63 @@ mod compile_fault_tests {
         assert!(model.in_flight_step.is_none());
         assert_eq!(accepted.outputs[0].0.as_ptr(), output_key);
         let retained_outputs = accepted.outputs.clone();
+        // Admission follows names across reorders, omitted rows, duplicate
+        // writes beyond map width, and changes to live input classification.
+        for (index, (outputs, expected)) in [
+            (vec![("new", 4.0), ("x", 0.0)], [0.0_f64, 4.0_f64]),
+            (
+                vec![
+                    ("x", 1.0),
+                    ("new", 2.0),
+                    ("x", 3.0),
+                    ("new", 4.0),
+                    ("x", -0.0),
+                ],
+                [-0.0, 4.0],
+            ),
+            (vec![("x", -0.0)], [-0.0, 4.0]),
+            (vec![("extra", 7.0), ("new", 8.0), ("x", 2.0)], [2.0, 8.0]),
+            (vec![("new", 999.0), ("x", 3.0)], [3.0, 8.0]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let step_id = index as u64 + 2;
+            let start_time = (step_id - 1) as f64 * 0.05;
+            let stop_time = step_id as f64 * 0.05;
+            let mut model = app.world_mut().get_mut::<ModelicaModel>(entity).unwrap();
+            if index == 4 {
+                model.inputs.insert("new".to_owned(), 77.0);
+            }
+            model.is_stepping = true;
+            model.in_flight_step = Some(lunco_modelica_runtime::InFlightModelicaStep {
+                step_id,
+                stop_tick: step_id,
+                start_time,
+                stop_time,
+                sampled_inputs: Vec::new(),
+                submitted_at: web_time::Instant::now(),
+            });
+            results
+                .send(ModelicaResult {
+                    entity,
+                    session_id: 1,
+                    step_id: Some(step_id),
+                    new_time: stop_time,
+                    outputs: outputs
+                        .into_iter()
+                        .map(|(name, value)| (name.to_owned(), value))
+                        .collect(),
+                    ..Default::default()
+                })
+                .unwrap();
+            app.world_mut().run_schedule(First);
+            let values = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
+            assert_eq!(values["x"].to_bits(), expected[0].to_bits());
+            assert_eq!(values["new"].to_bits(), expected[1].to_bits());
+            assert!(!values.contains_key("command"));
+            assert!(!values.contains_key("gain"));
+        }
         app.world_mut()
             .resource_mut::<lunco_doc_bevy::DocumentDiagnostics>()
             .set_error_message(document, "previous run failed");

@@ -3704,7 +3704,7 @@ mod tests {
         let mut model = dispatched_but_unsolved();
         model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
         let variables = ModelicaVariables {
-            values: [("mass".to_owned(), 1.0)].into(),
+            values: [("mass".to_owned(), 1.0)].into_iter().collect(),
         };
 
         let error = modelica_port_contract_error(&contract, &model, &variables)
@@ -3722,7 +3722,7 @@ mod tests {
         let mut model = dispatched_but_unsolved();
         model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
         let variables = ModelicaVariables {
-            values: [("thrust".to_owned(), 42.0)].into(),
+            values: [("thrust".to_owned(), 42.0)].into_iter().collect(),
         };
 
         assert_eq!(
@@ -3758,7 +3758,7 @@ mod tests {
         let mut model = dispatched_but_unsolved();
         model.compiled_input_names.clear();
         let variables = ModelicaVariables {
-            values: [("force_y".to_owned(), 42.0)].into(),
+            values: [("force_y".to_owned(), 42.0)].into_iter().collect(),
         };
 
         assert_eq!(
@@ -3801,7 +3801,7 @@ mod tests {
             ..Default::default()
         };
         let variables = ModelicaVariables {
-            values: [("force_y".to_owned(), 4.0)].into(),
+            values: [("force_y".to_owned(), 4.0)].into_iter().collect(),
         };
         let component = SimComponent {
             status: SimStatus::Running,

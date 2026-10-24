@@ -488,7 +488,7 @@ mod tests {
             modelica_wait_kind(
                 &initialized,
                 Some(&ModelicaVariables {
-                    values: [("initial_output".to_owned(), 1.0)].into()
+                    values: [("initial_output".to_owned(), 1.0)].into_iter().collect()
                 }),
                 None
             ),
@@ -522,7 +522,7 @@ mod tests {
             modelica_wait_kind(
                 &invalid_time,
                 Some(&ModelicaVariables {
-                    values: [("initial_output".to_owned(), 1.0)].into()
+                    values: [("initial_output".to_owned(), 1.0)].into_iter().collect()
                 }),
                 None
             ),
@@ -540,7 +540,9 @@ mod tests {
             modelica_wait_kind(
                 &invalid_snapshot,
                 Some(&ModelicaVariables {
-                    values: [("initial_output".to_owned(), f64::NAN)].into()
+                    values: [("initial_output".to_owned(), f64::NAN)]
+                        .into_iter()
+                        .collect()
                 }),
                 None
             ),

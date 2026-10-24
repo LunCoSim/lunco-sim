@@ -1,7 +1,9 @@
 # Modelica live name indexes
 
 `ModelicaModel` owns its reflected input and parameter maps. Both use Bevy's
-maintained `HashMap`, matching the observable store. Response admission still
+maintained `HashMap`. The observable store uses native Bevy-reflected
+`IndexMap`; its ordered-publication qualification is recorded in
+[the focused review](modelica-ordered-observation-publication-2026-10-24.md). Response admission still
 checks current input and parameter membership for every observation. No cached
 classification, new state owner, missing-value default or dependency patch is
 introduced. The worker reuses its name-sorted input sampler for both compile

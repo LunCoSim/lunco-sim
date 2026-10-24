@@ -10,6 +10,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 anyhow = { workspace = true }
 bevy.workspace = true
 crossbeam-channel = { workspace = true }
+indexmap.workspace = true
 lunco-doc = { path = "../lunco-doc" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }

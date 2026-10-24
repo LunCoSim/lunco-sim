@@ -1,5 +1,18 @@
 # High-quality realtime performance handover
 
+## Ordered Modelica observation publication
+
+[The current owner review](modelica-ordered-observation-publication-2026-10-24.md)
+records native Bevy-reflected `IndexMap` storage and indexed publication with
+live name/classification checks. Five alternating consumer pairs measure
+78.453 -> 66.599 ms (15.1 percent less), with exact values and clock preserved.
+Eight focused owner checks, the seven-check production projection gate,
+missing-state negative and 35-check graphical metadata gate pass. Normal
+Griffin/Summer/Tesla windows retain clear diagnostics and inspected images;
+coupled medians are 3.505/3.275/1.731 ms. Source/workload limits and existing
+strict-Clippy warnings are recorded in the review. All original targets remain
+open.
+
 ## Native celestial operand sharing
 
 [The current settled capture and source audit](celestial-shared-operands-2026-10-24.md)

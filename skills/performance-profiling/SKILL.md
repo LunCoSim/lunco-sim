@@ -666,10 +666,13 @@ For Modelica response retention, reuse observable-variable keys and move the
 worker's input/output buffers into the accepted record after transaction
 validation. Preserve detected-symbol/output precedence and verify reset
 isolation, signed-zero values and stale-result rejection at the owner seam.
-The reflected observable, input and parameter stores use Bevy's `HashMap`; keep public reflected
-reads and filtered `SnapshotVariables` results consistent with the accepted
-step. Retain live input/parameter classification, shared name-sorted compile and
-step sampling, and command-surface precedence in the borrowed-entry input bridge.
+The observable snapshot uses native Bevy-reflected `IndexMap` storage; inputs
+and parameters use Bevy's `HashMap`. Indexed publication checks actual names,
+aligns each admitted batch, and preserves reordered, omitted and duplicate rows.
+Keep public reflected reads and filtered `SnapshotVariables` results consistent
+with the accepted step. Retain live input/parameter classification, shared
+name-sorted compile and step sampling, and command-surface precedence in the
+borrowed-entry input bridge.
 The ignored `named_observation_admission_benchmark` exercises 512 accepted
 steps with 2304 named observables and excludes input/parameter fields. Compare
 the same fixture and retain its exact-value and clock checks. Qualify the

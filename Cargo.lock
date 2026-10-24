@@ -9651,6 +9651,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "crossbeam-channel",
+ "indexmap",
  "lunco-core-runtime",
  "lunco-doc",
  "lunco-engineering-values",

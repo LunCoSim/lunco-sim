@@ -588,11 +588,13 @@ impl ModelicaStepDiagnostics {
 ///
 /// Native component change detection tracks the output snapshot independently
 /// of input and communication-clock updates. The worker commits this map and
-/// the model clock together at its serial result-admission boundary.
+/// the model clock together at its serial result-admission boundary. Native
+/// IndexMap storage retains reflected string-keyed reads and lets admission
+/// align stable observation rows without hashing each observable name.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct ModelicaVariables {
-    pub values: bevy::platform::collections::HashMap<String, f64>,
+    pub values: indexmap::IndexMap<String, f64, bevy::platform::hash::FixedHasher>,
 }
 
 /// Component attached to every live Modelica participant.

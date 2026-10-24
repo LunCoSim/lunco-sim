@@ -983,10 +983,15 @@ co-simulation and API readers consume this one map. External API variable fields
 retain their existing shape. `ResetActiveModel` completes through command-result
 admission and rejects missing runtime state visibly.
 
-Observable, input and parameter name indexes use Bevy's reflected `HashMap`.
-Live observation classification still checks current input and parameter
-membership. Compile admission and fixed-step dispatch share the worker's
-name-sorted input sampler; hash-table iteration never chooses solver input
+The observable snapshot uses Bevy-reflected native `IndexMap` storage with
+Bevy's fixed hasher. Admission aligns each detected-symbol/output batch to its
+observed order, checks the actual name before indexed updates, and resolves
+reordered, new or duplicate rows by name. Existing keys and values omitted from
+a batch remain present; later output rows take precedence. Input and parameter
+name indexes use Bevy's reflected `HashMap`, and live observation classification
+checks their current membership. This is the existing serial publication owner,
+with no separate index cache or retained classification. Compile admission and
+fixed-step dispatch share the worker's name-sorted input sampler; hash-table iteration never chooses solver input
 order. The USD input bridge uses native borrowed entry lookup and applies the
 authored command surface after connected samples, preserving its precedence.
 Worker admission retains existing keys and compares f64 bits before marking the
