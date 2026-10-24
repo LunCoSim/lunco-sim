@@ -1075,6 +1075,9 @@ fn update_runtime_ui_recording_contract(
     exposures: Res<EngineExposures>,
     manifest_state: Res<RuntimeUiManifestState>,
     recording: Option<Res<RuntimeUiCaptureState>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
+    gates: Option<Res<RuntimeUiGates>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut contract: ResMut<RuntimeUiRecordingContract>,
 ) {
     let recording_active = recording.is_some_and(|state| state.active);
@@ -1084,6 +1087,12 @@ fn update_runtime_ui_recording_contract(
         && contract.exposure_revision == exposures.revision
         && contract.hook_generation == hook_generation
         && contract.recording_active == recording_active
+        && !manifest_state.is_changed()
+        && !layout.as_ref().is_some_and(|layout| layout.is_changed())
+        && !gates.as_ref().is_some_and(|gates| gates.is_changed())
+        && !workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.is_changed())
     {
         return;
     }
@@ -1110,10 +1119,13 @@ fn update_runtime_ui_recording_contract(
         .surfaces
         .iter()
         .filter(|surface| {
-            exposures
-                .surfaces
-                .get(&surface.namespace)
-                .is_some_and(|exposure| exposure.visible)
+            capture_surface_is_visible(
+                surface,
+                &exposures,
+                layout.as_deref(),
+                gates.as_deref(),
+                workspace.as_deref(),
+            )
         })
         .map(|surface| HookValue::str(surface.id.clone()))
         .collect();
@@ -1157,11 +1169,13 @@ fn update_runtime_ui_recording_contract(
             contract.required_namespaces.clear();
             return;
         };
-        if !exposures
-            .surfaces
-            .get(&surface.namespace)
-            .is_some_and(|exposure| exposure.visible)
-        {
+        if !capture_surface_is_visible(
+            surface,
+            &exposures,
+            layout.as_deref(),
+            gates.as_deref(),
+            workspace.as_deref(),
+        ) {
             contract.error = Some(format!("recording policy selected hidden surface `{id}`"));
             contract.required_namespaces.clear();
             return;
@@ -1756,18 +1770,57 @@ fn runtime_ui_is_allowed(
     gates: Option<&RuntimeUiGates>,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> bool {
-    let perspective_visible = surface
-        .visible_in_perspective
-        .as_ref().is_none_or(|required| required.allows(layout));
-    let gate_visible = surface
-        .gate
-        .as_deref()
-        .is_none_or(|gate| gates.is_some_and(|gates| gates.allows(gate)));
-    let setting_visible = surface
-        .setting
-        .as_deref()
-        .is_none_or(|key| active_twin_setting_is_true(workspace, key, surface.setting_default));
+    runtime_ui_visibility_allows(
+        surface.visible_in_perspective.as_ref(),
+        surface.gate.as_deref(),
+        surface.setting.as_deref(),
+        surface.setting_default,
+        layout,
+        gates,
+        workspace,
+    )
+}
+
+/// One authored visibility predicate for mounting, retained rendering and the
+/// recording hook's candidate facts. Eligibility deliberately does not depend
+/// on mounting or render acknowledgement: required visible surfaces must still
+/// pass those later readiness fences before capture.
+fn runtime_ui_visibility_allows(
+    perspective: Option<&RuntimeUiPerspectiveFilter>,
+    gate: Option<&str>,
+    setting: Option<&str>,
+    setting_default: bool,
+    layout: Option<&WorkbenchSnapshot>,
+    gates: Option<&RuntimeUiGates>,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> bool {
+    let perspective_visible = perspective.is_none_or(|required| required.allows(layout));
+    let gate_visible = gate.is_none_or(|gate| gates.is_some_and(|gates| gates.allows(gate)));
+    let setting_visible =
+        setting.is_none_or(|key| active_twin_setting_is_true(workspace, key, setting_default));
     perspective_visible && gate_visible && setting_visible
+}
+
+fn capture_surface_is_visible(
+    surface: &RuntimeUiSurfaceDefinition,
+    exposures: &EngineExposures,
+    layout: Option<&WorkbenchSnapshot>,
+    gates: Option<&RuntimeUiGates>,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> bool {
+    exposures
+        .surfaces
+        .get(&surface.namespace)
+        .is_some_and(|exposure| exposure.visible)
+        && runtime_ui_visibility_allows(
+            surface.visible_in_perspective.as_ref(),
+            surface.gate.as_deref(),
+            surface.setting.as_deref(),
+            surface.setting_default,
+            layout,
+            gates,
+            workspace,
+        )
 }
 
 fn active_twin_setting_is_true(
@@ -1938,20 +1991,13 @@ fn apply_runtime_ui_exposures(
             resolve_surface_placement(&surface, &surface_layouts, rects.as_deref(), target, window);
         let placement_changed = surface.applied_placement != placement;
         let exposure = exposures.surfaces.get(&surface.namespace);
-        let perspective_visible = surface
-            .visible_in_perspective
-            .as_ref().is_none_or(|required| required.allows(layout.as_deref()));
-        let gate_visible = surface
-            .gate
-            .as_deref()
-            .is_none_or(|gate| gates.as_ref().is_some_and(|gates| gates.allows(gate)));
-        let setting_visible = surface.setting.as_deref().is_none_or(|key| {
-            active_twin_setting_is_true(workspace.as_deref(), key, surface.setting_default)
-        });
         let should_be_visible = exposure.is_some_and(|exposure| exposure.visible)
-            && perspective_visible
-            && gate_visible
-            && setting_visible
+            && runtime_ui_is_allowed(
+                &surface,
+                layout.as_deref(),
+                gates.as_deref(),
+                workspace.as_deref(),
+            )
             && placement.is_some();
         // Only recording surfaces need to wait for the cross-world render
         // acknowledgement. Ordinary runtime UI remains a live presentation
@@ -2912,14 +2958,17 @@ mod tests {
                 .ok_or_else(|| lunco_hooks::HookError("missing recording facts".into()))?;
             let recording_active = facts.get("recording_active").and_then(HookValue::as_bool);
             let visible_surface_ids = facts.get("visible_surface_ids");
-            if recording_active != Some(true)
-                || visible_surface_ids != Some(&HookValue::Array(vec![HookValue::str("capture")]))
-            {
+            if recording_active != Some(true) {
                 return Err(lunco_hooks::HookError(
-                    "runtime UI recording facts were not prepared for the active surface".into(),
+                    "runtime UI recording facts require an active recording".into(),
                 ));
             }
-            Ok(HookValue::Array(vec![HookValue::str("capture")]))
+            match visible_surface_ids {
+                Some(HookValue::Array(ids)) => Ok(HookValue::Array(ids.clone())),
+                _ => Err(lunco_hooks::HookError(
+                    "missing visible surface candidates".into(),
+                )),
+            }
         }
     }
 
@@ -2976,6 +3025,112 @@ mod tests {
             ["capture-surface".to_owned()].into()
         );
         assert!(contract.error.is_none());
+    }
+
+    #[test]
+    fn recording_candidates_follow_perspective_without_an_exposure_change() {
+        install_runtime_ui_recording_test_policy();
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{"surfaces":[{
+                "id":"capture", "namespace":"capture-surface",
+                "template":"ui/a.html", "stylesheet":"ui/a.css",
+                "placement":{"mode":"viewport"}, "visible_in_perspective":"drive"
+            }]}"#,
+        )
+        .unwrap();
+        let mut exposures = EngineExposures::default();
+        exposures.writer("capture-surface").visible(true);
+        let revision = exposures.revision;
+        let mut layout = WorkbenchSnapshot::default();
+        layout.replace(
+            Some(lunco_workbench_core::PerspectiveId::new("drive")),
+            None,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let mut app = App::new();
+        app.insert_resource(Time::<Real>::default())
+            .insert_resource(exposures)
+            .insert_resource(layout)
+            .insert_resource(RuntimeUiManifestState {
+                manifest: Some(manifest),
+                ..Default::default()
+            })
+            .insert_resource(RuntimeUiCaptureState { active: true })
+            .init_resource::<RuntimeUiRecordingContract>()
+            .add_systems(Update, update_runtime_ui_recording_contract);
+        for perspective in ["drive", "analysis", "drive"] {
+            app.world_mut().resource_mut::<WorkbenchSnapshot>().replace(
+                Some(lunco_workbench_core::PerspectiveId::new(perspective)),
+                None,
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+            );
+            app.update();
+            let contract = app.world().resource::<RuntimeUiRecordingContract>();
+            assert!(contract.error.is_none(), "{:?}", contract.error);
+            assert_eq!(
+                contract.required_namespaces.contains("capture-surface"),
+                perspective == "drive"
+            );
+            assert_eq!(app.world().resource::<EngineExposures>().revision, revision);
+        }
+    }
+
+    #[test]
+    fn recording_candidates_obey_authored_gates_and_settings_before_mounting() {
+        let mut surface: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{"id":"capture", "namespace":"capture-surface",
+                "template":"ui/a.html", "stylesheet":"ui/a.css",
+                "placement":{"mode":"viewport"}, "gate":"ready",
+                "setting":"ui.telemetry", "setting_default":true}"#,
+        )
+        .unwrap();
+        let mut exposures = EngineExposures::default();
+        exposures.writer("capture-surface").visible(true);
+        let mut gates = RuntimeUiGates::default();
+        assert!(!capture_surface_is_visible(
+            &surface, &exposures, None, None, None
+        ));
+        assert!(!capture_surface_is_visible(
+            &surface,
+            &exposures,
+            None,
+            Some(&gates),
+            None
+        ));
+        gates.set("ready", true);
+        // An eligible surface remains required before its retained root mounts.
+        assert!(capture_surface_is_visible(
+            &surface,
+            &exposures,
+            None,
+            Some(&gates),
+            None
+        ));
+        surface.setting_default = false;
+        assert!(!capture_surface_is_visible(
+            &surface,
+            &exposures,
+            None,
+            Some(&gates),
+            None
+        ));
+        surface.setting_default = true;
+        exposures.writer("capture-surface").visible(false);
+        assert!(!capture_surface_is_visible(
+            &surface,
+            &exposures,
+            None,
+            Some(&gates),
+            None
+        ));
     }
 
     #[test]

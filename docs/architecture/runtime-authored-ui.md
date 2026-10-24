@@ -390,7 +390,12 @@ withdrawn synchronously at teardown, then rebuilt from the next active scene.
 
 Offline recording is Twin-owned. While capture is active, the
 `runtime.ui.recording` policy receives typed lists of stable manifest IDs and
-currently visible IDs, and returns the IDs required in the shot. The runtime
+currently visible IDs, and returns the IDs required in the shot. Candidate
+visibility uses the same exposure, perspective, named gate and Twin setting
+predicate as mounting and rendering. A perspective or gate change refreshes
+the contract even when exposure values stay unchanged. Mounting and render
+acknowledgement are subsequent readiness checks, not candidate filters.
+The runtime
 validates that selection and acknowledges actual retained/rendered surfaces
 through the status bus. Unknown, hidden, duplicate, or malformed selections
 produce an explicit readiness error; capture selection is not stored in the
