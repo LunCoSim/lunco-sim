@@ -1,5 +1,50 @@
 # High-quality realtime performance handover
 
+## Indexed runtime output endpoints
+
+`declare_map` now accepts the map's stored type and an owning backend's
+entry predicate. Runtime output aliases use that same indexed selection and
+live-slot ordering as scalar maps; their predicate requires the selected
+endpoint's current `Port` component. The separate runtime-output enumeration
+is removed. Scalar owners retain declarations before their first sample, and
+direction rejection happens before entry validation. This is an extension of
+the existing declaration owner, with no additional lookup table or cache.
+
+All 25 port-core and eleven co-simulation port-owner tests pass. The existing
+manual write benchmark remains ignored. The actual runtime-output backend's
+diagnostic performs 512 reads on 8,192 endpoints in 219.318 ms before and
+0.374 ms after; it also checks immediate endpoint removal. Scalar selected-read
+cost remains 0.208 ms in the same owner run. The regular production build
+passes in 2m 40s, and the production port-ownership scene passes all twelve
+checks, including its negative cases.
+
+The `*-selected-endpoint-map-unprofiled/` diagnostic sessions report:
+
+| Twin | Admission (s) | Complete tick median/p95 (ms) | Frame median/p95 (ms) |
+|---|---:|---:|---:|
+| Tesla | 5.524 | 3.003 / 9.283 | 10.091 / 40.698 |
+| Summer | 3.407 | 3.987 / 4.477 | 5.460 / 10.777 |
+| Griffin | 24.741 | 8.337 / 17.077 | 27.943 / 62.828 |
+
+Authored hashes match the previous candidate within and between each run,
+retained diagnostics and script-error checks are clear, and final images are
+inspected. Each complete-tick result has 240 samples. Workloads differ: retained
+snapshots include another worktree's Cargo/Rustc activity. Griffin still has one
+pending visual tile at the final snapshot. These observations do not establish
+a causal whole-scene gain, clean graphics acceptance or completed missions.
+All owned sessions are closed, and all original targets remain open. Raw data
+and the `selected-endpoint-map-gates/` receipts remain ignored in the same
+evidence root as the preceding cohort.
+
+The retained Summer Tracy capture identifies another steady cost:
+`publish_sun_visibility` has 211 complete late-window zones with a median
+1.428 ms, p95 2.020 ms and maximum 2.534 ms. Its exact CPU export matches those
+211 zones and contains 310 samples, with 158 at array equality. The concrete
+array/key type is not resolved by those line-table samples; cache comparison
+cost is an attribution lead. No solar algorithm, precision, budgets or
+certificates have changed. Raw zone/sample exports remain ignored
+under `summer-structural-shape-profile/`.
+
 ## Selected port inspection
 
 `lunco-port-core` carries exact-name selections into `PortDeclarationQuery`.

@@ -641,7 +641,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     },
     declare_ports: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
-            declare_map(out, &c.outputs, PortDirection::Out);
+            declare_map(out, &c.outputs, PortDirection::Out, |_| true);
             if out.accepts_direction(PortDirection::Out)
                 && let Some(declared) = w.get::<DeclaredOutputPorts>(e)
             {
@@ -657,7 +657,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
                     }
                 }
             }
-            declare_map(out, &c.inputs, PortDirection::In);
+            declare_map(out, &c.inputs, PortDirection::In, |_| true);
         }
     },
     metadata: |world, entity, name, direction| {
@@ -895,25 +895,12 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             )
     },
     declare_ports: |world, entity, out| {
-        if !out.accepts_direction(PortDirection::Out) {
-            return;
-        }
         let Some(outputs) = world.get::<OutputPorts>(entity) else {
             return;
         };
-        if let Some(name) = out.requested_name() {
-            if let Some(port_entity) = outputs.ports.get(name)
-                && world.get::<Port>(*port_entity).is_some()
-            {
-                out.declare(name, PortDirection::Out, outputs.ports.resolve_slot(name));
-            }
-            return;
-        }
-        for (name, port_entity) in &outputs.ports {
-            if world.get::<Port>(*port_entity).is_some() {
-                out.declare(name, PortDirection::Out, outputs.ports.resolve_slot(name));
-            }
-        }
+        declare_map(out, &outputs.ports, PortDirection::Out, |endpoint| {
+            endpoint.is_some_and(|endpoint| world.get::<Port>(endpoint).is_some())
+        });
     },
     metadata: |world, entity, name, direction| {
         let endpoint = world
@@ -1845,6 +1832,54 @@ mod tests {
                 .is_err()
         );
         assert_eq!(world.get::<Port>(port).unwrap().value, 0.75);
+    }
+
+    #[test]
+    fn selected_runtime_output_inspection_benchmark() {
+        let mut world = World::new();
+        let mut endpoints = lunco_port_core::PortMap::default();
+        for index in 0..8192 {
+            let endpoint = world
+                .spawn(Port {
+                    value: index as f64 * 0.25,
+                })
+                .id();
+            endpoints.insert(format!("port{index:05}"), endpoint);
+        }
+        let producer = world.spawn(OutputPorts::new(endpoints)).id();
+        let mut registry = PortRegistry::default();
+        registry.register(OUTPUT_PORTS_BACKEND);
+        let names = vec![
+            "port08191".to_owned(),
+            "missing".to_owned(),
+            "port00002".to_owned(),
+        ];
+        let started = std::time::Instant::now();
+        for _ in 0..512 {
+            let rows = registry.entity_port_infos_for_names(
+                std::hint::black_box(&world),
+                producer,
+                std::hint::black_box(&names),
+            );
+            assert_eq!(rows.len(), 2);
+            assert_eq!(
+                (rows[0].name.as_str(), rows[0].value),
+                ("port00002", Some(0.5))
+            );
+            assert_eq!(
+                (rows[1].name.as_str(), rows[1].value),
+                ("port08191", Some(2047.75))
+            );
+        }
+        println!(
+            "selected_runtime_output_inspection 512_reads 8192_ports elapsed_ns={}",
+            started.elapsed().as_nanos()
+        );
+        let endpoint = world.get::<OutputPorts>(producer).unwrap().ports["port00002"];
+        world.entity_mut(endpoint).remove::<Port>();
+        let rows = registry.entity_port_infos_for_names(&world, producer, &names);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "port08191");
     }
 
     #[test]

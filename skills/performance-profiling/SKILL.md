@@ -724,8 +724,10 @@ the first matching direction and slot without constructing owned rows. Preserve 
 same declaration order and live metadata checks; topology publication alone
 cannot guard an owner edit before its scheduled publication pass.
 For `ReadPorts` and `ReadPortsBatch`, carry the name selection into declaration
-collection. Scalar-map selections query the existing index and retain native
-slot order; verify every direction/owner row and missing-name rejection. Measure
+collection. Selections through `declare_map` query the existing index, retain
+native slot order and validate the selected stored values through their owner.
+Keep declared but unsampled scalars distinct from missing runtime endpoints;
+verify every direction/owner row, endpoint removal and missing-name rejection. Measure
 selected reads on a large surface and the consuming production behavior tree.
 Avian resolution, named declarations and metadata selection share immutable
 name candidates derived from `AVIAN`. Preserve candidate order and live group

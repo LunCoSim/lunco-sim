@@ -315,7 +315,8 @@ plane uses process-local slots.
   admission before any commit. Registry snapshots share the immutable backend
   table; registration uses copy-on-write to preserve each snapshot's precedence.
 - Selected inspection uses the same declaration owner and excludes unrequested
-  identities before allocation; scalar-map selection retains native slot order.
+  identities before allocation; indexed map selection retains native slot order
+  and validates selected endpoint membership through its owning backend.
   See [the port query contract](22-domain-cosim.md).
 - Dynamic name/value surfaces use `PortMap<T>`: one shared name allocation is
   indexed by `Arc<str>` and stored beside a dense value slot. Existing-name

@@ -1123,14 +1123,26 @@ impl<'a> PortDeclarationQuery<'a> {
 }
 
 /// Declare map-backed ports through the owner's indexed name storage.
+/// The backend validates each selected entry's optional stored value before
+/// publishing it. A scalar declaration can precede its first readable sample.
 #[inline]
-pub fn declare_map(out: &mut PortDeclarationQuery<'_>, map: &PortMap<f64>, dir: PortDirection) {
+pub fn declare_map<T: Copy>(
+    out: &mut PortDeclarationQuery<'_>,
+    map: &PortMap<T>,
+    dir: PortDirection,
+    mut accept: impl FnMut(Option<T>) -> bool,
+) {
     if !out.accepts_direction(dir) {
         return;
     }
+    let mut publish = |out: &mut PortDeclarationQuery<'_>, name: &str, slot: Option<u64>| {
+        if accept(slot.and_then(|slot| map.get_slot(slot)).copied()) {
+            out.declare(name, dir, slot);
+        }
+    };
     if let Some(name) = out.requested_name() {
         if let Some(slot) = map.resolve_slot(name) {
-            out.declare(name, dir, Some(slot));
+            publish(out, name, Some(slot));
         }
     } else if let PortDeclarationTarget::All {
         names: Some(names), ..
@@ -1143,11 +1155,11 @@ pub fn declare_map(out: &mut PortDeclarationQuery<'_>, map: &PortMap<f64>, dir: 
         // Inspection order belongs to the map, independent of request/hash order.
         selected.sort_unstable_by_key(|(index, _)| *index);
         for (_, name) in selected {
-            out.declare(name, dir, map.resolve_slot(name));
+            publish(out, name, map.resolve_slot(name));
         }
     } else {
         for name in map.keys() {
-            out.declare(name, dir, map.resolve_slot(name));
+            publish(out, name, map.resolve_slot(name));
         }
     }
 }
@@ -1572,7 +1584,7 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
     },
     declare_ports: |world, entity, out| {
         if let Some(inputs) = world.get::<InputPorts>(entity) {
-            declare_map(out, &inputs.values, PortDirection::In);
+            declare_map(out, &inputs.values, PortDirection::In, |_| true);
         }
     },
     metadata: |_world, _entity, _name, direction| {
@@ -2704,16 +2716,38 @@ mod tests {
         let mut ports = ScalarPortMap::default();
         ports.insert("signal".into(), 0.0);
         let mut query = PortDeclarationQuery::named("signal", super::ResolvedPortSide::Input);
-        super::declare_map(&mut query, &ports, PortDirection::Out);
+        super::declare_map(&mut query, &ports, PortDirection::Out, |_| {
+            panic!("wrong-side entries must not be visited")
+        });
         assert_eq!(query.declaration(), None);
-        super::declare_map(&mut query, &ports, PortDirection::In);
+        super::declare_map(&mut query, &ports, PortDirection::In, |_| true);
         assert_eq!(
             query.declaration().map(|(direction, _)| direction),
             Some(PortDirection::In)
         );
         let mut missing = PortDeclarationQuery::named("missing", super::ResolvedPortSide::Input);
-        super::declare_map(&mut missing, &ports, PortDirection::In);
+        super::declare_map(&mut missing, &ports, PortDirection::In, |_| true);
         assert_eq!(missing.declaration(), None);
+
+        let mut endpoints = super::PortMap::<usize>::default();
+        endpoints.insert("live".into(), 2);
+        endpoints.insert("unselected".into(), 3);
+        endpoints.declare("pending".into());
+        let names = super::HashSet::from(["pending", "live", "absent"]);
+        let mut rows = Vec::new();
+        let mut visited = Vec::new();
+        super::declare_map(
+            &mut PortDeclarationQuery::matching(&mut rows, Some(&names)),
+            &endpoints,
+            PortDirection::Out,
+            |value| {
+                visited.push(value);
+                value == Some(2)
+            },
+        );
+        assert_eq!(visited, [Some(2), None]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "live");
     }
 
     fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut PortDeclarationQuery<'_>) {

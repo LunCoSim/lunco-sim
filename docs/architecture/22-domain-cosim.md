@@ -388,7 +388,10 @@ boundary. Inspection retains the declared slot in its owner handle. Selected
 inspection filters declarations before copying names or sampling metadata and
 values. Selections through `declare_map` use the existing name index, then
 publish in live slot order so request/hash iteration cannot change the
-backend's row order.
+backend's row order. The backend validates each selected entry's optional
+stored value through the same generic helper. Runtime output aliases require
+a live `Port` endpoint; scalar declarations remain visible before their first
+sample. Endpoint membership is checked against the current World.
 Every declared direction and owner of a selected name remains visible. Named
 validation does not materialize or copy the complete surface, and metadata
 comes from the selected live owner without another declaration lookup;
