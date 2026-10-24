@@ -604,6 +604,13 @@ opt-level = 3
 [profile.dev.package.lunco-cosim]
 opt-level = 3
 
+# Shader input validation participates in the fixed-step port transaction.
+[profile.dev.package.lunco-usd-sim-shader]
+opt-level = 3
+
+[profile.dev.package.lunco-materials]
+opt-level = 3
+
 # Named observation admission runs on the authoritative application boundary.
 [profile.dev.package.lunco-modelica-worker]
 opt-level = 3

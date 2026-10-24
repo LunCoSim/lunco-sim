@@ -15,8 +15,8 @@ appearance is stated as data instead of as a material.
 
 | | what it is | where it lives | how many |
 |---|---|---|---|
-| **Parameter** | a scalar/vector uniform the shader reads | one opaque 256-byte uniform block | ~64 `vec4`s — effectively unlimited |
-| **Texture layer** | a raster the shader samples | a bind-group entry | **6 named slots** — a real budget |
+| **Parameter** | a scalar/vector uniform the shader reads | one opaque 256-byte uniform block | up to 64 `f32` scalars or 16 `vec4`s, subject to layout alignment |
+| **Texture layer** | a raster the shader samples | a bind-group entry | **9 named roles** |
 
 Parameters are cheap and open-ended. **Texture slots are the scarce resource.** Most
 "I need another layer" instincts should be spent on a *channel*, not a slot — see
@@ -66,6 +66,13 @@ parameter name is added. USD-driven values use `ShaderLook::live()`, a shared
 `PortMap<Option<ParamValue>>` with slots seeded for connected names. Compiled wires
 resolve those slots once and update them directly; empty slots remain stable until
 the first sample, and live samples do not rehash authored names.
+
+The shader-port declaration owner borrows the same `ShaderLook` while resolving
+its input slot. Live ownership, type, bounds and metadata are still validated by
+the shared port registry on every transaction. These fixed-step consumers live
+in `lunco-usd-sim-shader` and `lunco-materials`; both use optimization level three
+in the regular development profile, with development checks retained. No shader
+wire is skipped or moved to a different clock.
 
 Parameter spelling is owned by `lunco_materials::naming::to_snake_case`, shared
 by USD material projection, live authoring and the render binder. It returns

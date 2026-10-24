@@ -195,6 +195,14 @@ profiling moved kernels. Collider propagation must independently drain parent,
 transform and body removals before comparing performance; a stale relative
 transform invalidates a faster result.
 
+Shader-port writes are fixed-step consumers even though their downstream GPU
+binding runs at presentation cadence. Measure the actual backend with the ignored
+`shader_input_transaction_benchmark` owner diagnostic, including both unchanged
+and changing values. Its declaration and material-intent packages use regular
+development optimization level three. Preserve live validation and no-op change
+detection; a large visual binding count alone does not authorize changing clocks
+or skipping writes.
+
 When comparing native CPU/GPU instance preparation, retain the same PBR,
 shadows, meshes and quality. Device capability is not active-path evidence:
 camera `NoCpuCulling` requires native `RenderMeshInstances::GpuBuilding` and

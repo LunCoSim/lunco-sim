@@ -83,8 +83,7 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f64> {
     read_look_slot(look, look.live().resolve_slot(name)?)
 }
 
-fn resolve_shader_input(world: &World, entity: Entity, name: &str) -> Option<u64> {
-    let look = world.get::<ShaderLook>(entity)?;
+fn resolve_shader_input(look: &ShaderLook, name: &str) -> Option<u64> {
     if !look.driven().contains(name) {
         return None;
     }
@@ -166,11 +165,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         };
         if let Some(name) = out.requested_name() {
             if look.driven().contains(name) || look.values().contains_key(name) {
-                out.declare(
-                    name,
-                    PortDirection::In,
-                    resolve_shader_input(world, entity, name),
-                );
+                out.declare(name, PortDirection::In, resolve_shader_input(look, name));
             }
             return;
         }
@@ -179,11 +174,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         let mut names: std::collections::BTreeSet<&String> = look.driven().iter().collect();
         names.extend(look.values().keys());
         for name in names {
-            out.declare(
-                name,
-                PortDirection::In,
-                resolve_shader_input(world, entity, name),
-            );
+            out.declare(name, PortDirection::In, resolve_shader_input(look, name));
         }
     },
     metadata: |world, entity, name, direction| {
@@ -258,6 +249,74 @@ pub fn build(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Measure live validation and commit through the actual shader backend.
+    #[test]
+    #[ignore = "manual shader input transaction measurement"]
+    fn shader_input_transaction_benchmark() {
+        use lunco_port_core::ports::{InputWriteBuffer, PortWriteError};
+
+        let mut app = app();
+        let registry = app.world().resource::<PortRegistry>().clone();
+        let names = (0..32).map(|i| format!("signal_{i}")).collect::<Vec<_>>();
+        let mut entities = Vec::new();
+        for _ in 0..48 {
+            let entity = app
+                .world_mut()
+                .spawn(
+                    ShaderLook::default()
+                        .with_values(
+                            names
+                                .iter()
+                                .cloned()
+                                .map(|name| (name, ParamValue::F32(0.0)))
+                                .collect(),
+                        )
+                        .with_driven(names.iter().cloned().collect())
+                        .unshared(),
+                )
+                .id();
+            entities.push(entity);
+        }
+        app.update();
+        let mut targets = Vec::new();
+        for entity in entities {
+            for name in &names {
+                targets.push((
+                    entity,
+                    registry.resolve_input(app.world(), entity, name).unwrap(),
+                ));
+            }
+        }
+        let mut buffer = InputWriteBuffer::default();
+        for changing in [false, true] {
+            let started = std::time::Instant::now();
+            for step in 0..256 {
+                let value = if changing { f64::from(step % 2) } else { 0.5 };
+                registry
+                    .input_transaction(app.world_mut(), &mut buffer, |transaction| {
+                        for (entity, locator) in &targets {
+                            transaction.stage_resolved(*entity, locator, value)?;
+                        }
+                        Ok::<_, PortWriteError>(())
+                    })
+                    .unwrap();
+            }
+            let elapsed = started.elapsed();
+            let expected = if changing { 1.0 } else { 0.5 };
+            for (entity, locator) in &targets {
+                assert_eq!(
+                    registry.read_resolved(app.world(), *entity, locator),
+                    Some(expected)
+                );
+            }
+            println!(
+                "SHADER_INPUT_TRANSACTION changing={changing} writes={} elapsed_ns={}",
+                targets.len() * 256,
+                elapsed.as_nanos()
+            );
+        }
+    }
 
     fn app() -> App {
         let mut app = App::new();

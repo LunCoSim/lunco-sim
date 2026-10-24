@@ -1,5 +1,15 @@
 # High-quality realtime performance handover
 
+## Shader input consumers
+
+Shader declaration reuses its existing `ShaderLook` borrow; the two fixed-step
+owning packages use optimization level three with development checks retained.
+[The focused review](shader-input-consumer-2026-10-24.md) records eight owner
+checks, the real landed Griffin run and a native write-median change from
+1.108 to 1.034 ms. Live validation and clocks remain unchanged. Saved process
+maps and the exact symbol index expose remaining resolved-write admission and
+constructor output-index/IR-clone work. The complete targets remain open.
+
 ## Collider frame preparation
 
 Collider preparation independently consumes parent, transform and rigid-body
