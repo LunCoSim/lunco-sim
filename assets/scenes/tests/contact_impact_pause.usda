@@ -1,0 +1,102 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend references = @lunco://scenes/tests/physics_object_pause.usda@</World>
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461395.5
+    over "Test"
+    {
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/contact_impact_pause.rhai@
+    }
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (0.0, -0.5, 0.0)
+        custom double3 xformOp:scale = (100.0, 1.0, 100.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    over "A" (
+        prepend apiSchemas = ["PhysxRigidBodyAPI"]
+    )
+    {
+        vector3f physics:velocity = (0.0, -30.0, 0.0)
+        custom bool physxRigidBody:enableCCD = true
+        custom double outputs:contact_approach_speed = 0.0
+        def Scope "ContactValidity" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/ContactSpeedEnvelope.mo@
+            custom double inputs:contact_speed_mps = 0.0
+            double inputs:contact_speed_mps.connect = </World/A.outputs:contact_approach_speed>
+            custom double inputs:maximum_speed_mps = 5.0
+            custom double outputs:exceedance_ratio = 0.0
+            custom double outputs:speed_limit_mps = 0.0
+            def LunCoEvent "Exceeded"
+            {
+                uniform token lunco:event:name = "test.contact-speed-limit"
+                uniform token lunco:event:severity = "warning"
+                uniform bool lunco:event:latched = true
+                uniform double lunco:event:qualificationTime = 0.0
+                float inputs:trigger
+                float inputs:trigger.connect = </World/A/ContactValidity.outputs:exceedance_ratio>
+            }
+        }
+        def Scope "ImpactPolicy" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/contact_limit_policy.rhai@
+        }
+    }
+    over "B" (
+        prepend apiSchemas = ["PhysxRigidBodyAPI"]
+    )
+    {
+        vector3f physics:velocity = (0.0, -30.0, 0.0)
+        custom bool physxRigidBody:enableCCD = true
+    }
+    over "Independent"
+    {
+        custom double outputs:contact_approach_speed = 0.0
+        def Scope "ContactValidity" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/ContactSpeedEnvelope.mo@
+            custom double inputs:contact_speed_mps = 0.0
+            double inputs:contact_speed_mps.connect = </World/Independent.outputs:contact_approach_speed>
+            custom double inputs:maximum_speed_mps = 5.0
+            custom double outputs:exceedance_ratio = 0.0
+            custom double outputs:speed_limit_mps = 0.0
+            def LunCoEvent "Exceeded"
+            {
+                uniform token lunco:event:name = "test.contact-speed-limit"
+                uniform token lunco:event:severity = "warning"
+                uniform bool lunco:event:latched = true
+                uniform double lunco:event:qualificationTime = 0.0
+                float inputs:trigger
+                float inputs:trigger.connect = </World/Independent/ContactValidity.outputs:exceedance_ratio>
+            }
+        }
+        def Scope "ImpactPolicy" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/contact_limit_policy.rhai@
+        }
+    }
+}

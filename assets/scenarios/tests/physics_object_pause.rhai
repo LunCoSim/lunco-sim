@@ -14,6 +14,7 @@ fn on_start(me, ctx) {
     this.repeated = false;
     this.events = 0;
     this.event_detail = false;
+    this.event_warning = false;
     this.a = find_path("/World/A");
     this.b = find_path("/World/B");
     this.independent = find_path("/World/Independent");
@@ -23,6 +24,7 @@ fn on_start(me, ctx) {
 fn on_event(me, evt, ctx) {
     if evt.name == "simulation-object-paused" && evt.source == this.a {
         this.events += 1;
+        this.event_warning = evt.severity == "Warning";
         this.event_detail = evt.value.contains("test:energy-capacity-exceeded")
             && evt.value.contains("12 J exceeds the 10 J test capacity");
     }
@@ -69,6 +71,7 @@ fn on_tick(me, ctx) {
             "all connected bodies expose the retained condition and explanation"),
         t_true(this.events == 1 && this.event_detail,
             "one sourced Recent Events observation explains the measured limit"),
+        t_true(this.event_warning, "the accepted object pause is a Recent Events warning"),
         t_true(ready.ready && !ready.world_hold && !ready.faulted, "object pause preserves world readiness"),
         t_true(this.repeated && this.repeat_accepted,
             "a repeated request is idempotent and preserves the original reason"),

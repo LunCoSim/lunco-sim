@@ -596,6 +596,16 @@ reaction in Rhai; do not classify a native solver failure as a crash or loosen
 nominal driving/landing checks to conceal it. See
 [coupled suspension](../../docs/architecture/22-domain-cosim.md#coupled-object-suspension).
 
+For an impact outside a contact model's validity, wire native
+`contact_approach_speed` into `LunCo.Sensors.ContactSpeedEnvelope` and author its
+positive `maximum_speed_mps` with the study's qualification scope. Its
+`exceedance_ratio` drives a latched event. Use the retained event value and
+`speed_limit_mps` for the measured explanation, then let Rhai invoke
+`PauseSimulationObject`; the accepted pause publishes a Recent Events warning.
+Do not substitute a validity speed for an absorption capacity or hardware crash
+rating. The production `contact_impact_pause` gate covers the coupled stop and a
+lower-speed negative control.
+
 | Symptom | Look at |
 |---|---|
 | `origin.is_finite()` panic in `obvhs` | a body reached ±inf; a raycast was issued from it. The *cause* is upstream — find the first `body has non-finite state` diagnostic |

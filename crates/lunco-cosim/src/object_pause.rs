@@ -178,7 +178,7 @@ fn on_pause_simulation_object(
         commands.trigger(TelemetryEvent {
             name: "simulation-object-paused".to_owned(),
             source: identity.get(),
-            severity: Severity::Error,
+            severity: Severity::Warning,
             data: TelemetryValue::String(explanation.clone()),
             timestamp: 0.0,
             sim_secs: 0.0,

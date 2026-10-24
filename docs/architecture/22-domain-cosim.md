@@ -94,8 +94,9 @@ Restart retires the scene-owned members and their suspension state together.
 
 `QueryPhysicsState` exposes `simulation_object_paused` and
 `simulation_object_pause_reason`, including the authored condition and measured
-explanation. One sourced `simulation-object-paused` telemetry event feeds Recent
-Events. Repeating a pause retains the original reason without another event.
+explanation. One sourced `simulation-object-paused` warning feeds Recent Events
+with that explanation. Repeating a pause retains the original reason without
+another event.
 Damage that can continue operating need not invoke this stop: Modelica can
 publish its state through an authored `LunCoEvent`, and Rhai can warn, suspend or
 restart according to mission policy. Numerical failure remains a distinct
@@ -1195,3 +1196,17 @@ required to consume this physical observation. A connected event retains the
 producer's value and tick. Its Rhai consumer runs on a later eligible pass; use
 that retained event fact to react to a transient boundary violation instead of
 rereading a current output that may already have cleared.
+
+`LunCo.Sensors.ContactSpeedEnvelope` compares this observation with an explicit
+positive `maximum_speed_mps`. Its `exceedance_ratio` is zero within the envelope
+and the measured speed divided by that limit outside it. Connect that output to
+a latched `LunCoEvent`; the retained event ratio and the model's admitted
+`speed_limit_mps` explain the violation even after the contact sample clears.
+This is an authored model-validity boundary, not an estimate of material damage
+or energy absorption. The Twin owns the limit and must state its qualification
+scope. A separate absorption model is needed to claim a survivable impact.
+Rhai chooses whether the event warns, pauses the coupled object or restarts the
+scene. The production `contact_impact_pause` gate uses native contact to compare
+a 30 m/s joined-body impact against a 5 m/s test limit, checks the retained
+warning and frozen Modelica clock, and keeps a lower-speed independent control
+running. No per-frame detector or speed clamp is installed in Rust.
