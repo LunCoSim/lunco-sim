@@ -401,18 +401,18 @@ lunco-web = { path = "crates/lunco-web" }
 
 # Rumoca 0.10.2 with shared native ME admission and checked source discovery.
 # Keep one exact revision for all consumers.
-rumoca-core        = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-ir-solve    = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
+rumoca-core        = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-ir-solve    = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-solver      = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
-rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "0025c074a8fed2769681d88ae4b4711144d82740" }
+rumoca-solver      = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
+rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", rev = "b825929bf32cc44797eb35a55d52d8d8af636569" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.
@@ -688,6 +688,7 @@ strip = "none"
 
 [patch.crates-io]
 bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338" }
+bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "1df9fc155f97223600ae3f3aecfeede32ab986ce" }
 # Pinned upstream source with the approved public path-tracing ordering hook.
 # See third_party/bevy_solari/VENDOR.md for identity and the exact patch.
 bevy_solari = { path = "third_party/bevy_solari" }

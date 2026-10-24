@@ -99,13 +99,19 @@ another scripting runtime.
 
 ## Visibility work follows adapter capability
 
-The desktop host selects native CPU mesh-instance preparation through the
-renderer facade's maintained `PbrPlugin` configuration. This changes preparation
-and batching, not the standard PBR materials, textures, lighting, shadows, MSAA
-or authored geometry. Windowed and offscreen hosts use the same plugin group.
-Other hosts can select the native GPU builder; the render boundary derives
-effective preparation and camera-culling eligibility from the actual native
-builder rather than assuming a particular host configuration.
+The desktop host uses the native `PbrPlugin` mesh-instance builder without a
+host override. Windowed and offscreen hosts use the same plugin group. The
+render boundary derives effective preparation and camera-culling eligibility
+from the actual native builder and device support.
+
+GPU-only output buffers allocate the shader array stride through
+`<[T; 1]>::SHADER_SIZE`, including alignment padding. Rust's native type layout
+does not determine the storage-buffer layout. This matters with scalar math,
+which remains enabled for deterministic physics: `MeshUniform` occupies 168
+native bytes but requires a 176-byte shader stride. The pinned `bevy_render`
+owner implements this allocation contract, including vector-array alignment.
+Materials, geometry, lighting, shadows, MSAA and quality settings retain their
+existing owners.
 
 The render boundary opts `SceneCamera` entities into Bevy's camera-level
 `NoCpuCulling` path only when native `RenderMeshInstances` uses its GPU builder,

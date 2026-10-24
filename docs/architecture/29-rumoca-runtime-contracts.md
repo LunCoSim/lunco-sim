@@ -157,6 +157,13 @@ construction wire through a bounded JSON persistence adapter and zstd. Loading
 replays Rumoca's checked construction; unsupported versions, malformed metadata,
 identity mismatches, and oversized records are rejected before use.
 
+Rumoca's immutable `ScalarProgramBlock` derives logical-output ownership from
+the same checked program/output bindings used by its readers. Sparse and
+repeated output identities retain their first stored occurrence. Clones share
+the index, and checked wire replay reconstructs it without adding serialized
+fields. The application consumes that owner directly; it maintains no parallel
+output-to-program map.
+
 Run inputs and tunable parameters enter `SimOptions::initial_inputs` and
 `param_overrides`. Rumoca validates targets and recomputes initialization and
 parameter dependents. The compiled DAE stays immutable across sweep points. Reset carries current

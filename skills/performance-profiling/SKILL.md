@@ -214,6 +214,13 @@ support initialization on every `RenderStartup`, including recovery. A faster
 cohort with missing geometry is a failed visual comparison, regardless of FPS
 or readiness diagnostics.
 
+For GPU-only buffer layout, preserve deterministic scalar math and validate
+shader array stride at the native allocator. `UninitBufferVec` uses encase's
+`<[T; 1]>::SHADER_SIZE`: a shader element's minimum size alone does not include
+all array alignment. Owner regressions cover both structure padding and `vec3`
+array stride. Verify the actual terrain image and retained render diagnostics
+when admitting native GPU preparation.
+
 For co-simulation input writes, preserve the port owner's live metadata and
 precedence checks. Initial handoff and live exchange use `input_transaction`:
 immutable staging and commit share one exclusive world borrow, so each eligible

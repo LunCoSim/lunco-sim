@@ -1,5 +1,17 @@
 # High-quality realtime performance handover
 
+## Native GPU allocation and scalar output ownership
+
+The desktop uses native PBR instance preparation with a published shader-array
+allocation fix; deterministic scalar math and graphics quality are retained.
+Rumoca's checked immutable block owns constant-time sparse output lookup.
+[The focused review](native-gpu-output-index-2026-10-24.md) records dependency
+regressions, the unchanged twenty-model canary, twenty production physics
+checks and three inspected desktop observations. The headless API dependency
+no longer enables document UI defaults. Contention, a Tesla admission-source
+change and an unqualified Tracy timeout limit performance conclusions. All
+original timing targets remain open.
+
 ## Shader input consumers
 
 Shader declaration reuses its existing `ShaderLook` borrow; the two fixed-step
