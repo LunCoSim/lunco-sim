@@ -1,5 +1,22 @@
 # High-quality realtime performance handover
 
+## Coupled certification readiness
+
+The coordinator's existing ECS condition now waits on participant constructor
+outcomes before running full certification. [The focused review](coupled-certification-readiness-2026-10-24.md)
+records the low-level gate, 46 authored checks, the inconsistent-equations
+negative fixture and an inspected normal Griffin touchdown/handoff. The
+source-matched startup captures observe 274 -> 19 coordinator executions and
+665.214 -> 56.500 ms of main-thread work. Certification samples and validates
+the complete current graph at final admission.
+
+Normal readiness is 17.517 s and does not establish an end-to-end speedup;
+unchanged native construction also takes longer before the changed gate can
+run. Complete coupled tick is 4.052/4.870 ms median/p95 and graphics
+11.876/15.645 ms. Source hashes remain equal and registered diagnostics are
+clear. Concurrent workloads, including video encoding in the diagnostic
+capture, qualify timing comparisons. All original targets remain open.
+
 ## Native USD path ownership
 
 The published OpenUSD fork retains immutable owning-prim nodes and reuses the

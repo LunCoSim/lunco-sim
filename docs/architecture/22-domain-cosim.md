@@ -1185,6 +1185,9 @@ Prepared graph identity includes exact initial-input bits.
 Checked Modelica initialization publishes its t=0 observation through this same
 schedule, allowing connected participants to initialize while the fixed clock is
 held. A compiled participant is Idle until its first simulation tick.
+The coupled coordinator gates sampling and certification on participant outcomes;
+its complete [admission contract](20-domain-modelica.md#coupled-initial-admission)
+retains source, wiring and physical-sample validation at final admission.
 
 ### Contact impact observation
 

@@ -1454,7 +1454,10 @@ values, physical samples and wiring. Its finite input observations enter live
 construction through one-shot `ConsistentInitialInputs`. All members remain paused
 under `CoupledInitializationPending` until their own solvers are constructed at
 `t=0` and the actual connected observations agree with the composite within the
-active solver tolerances. Certification releases the members together. A changed
+active solver tolerances. Pending participant constructors close the coordinator's
+readiness gate until every member has an outcome; errors or missing actors wake
+it immediately. Full certification then samples and validates the current graph
+before releasing the members together. A changed
 source or wire cannot release an old certificate; failed certification reports the
 same terminal runtime fault. Scene teardown retires the transient participant and
 its admission state. Settled scenes skip the preparation coordinator.

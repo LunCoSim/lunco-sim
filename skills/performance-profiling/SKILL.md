@@ -141,6 +141,12 @@ application asset policy skips those records before JSON decoding. Confirm the
 cohort. Do not hide malformed authored catalogs, change
 Rhai limits or classify sources by guessed catalog filenames.
 
+For coupled startup, distinguish the one-shot solve from participant
+certification. Pending constructors supply no certifiable observation; the owner
+waits on their outcomes and revalidates current source, wiring and physical
+samples at final admission. Include coordinator counts and main-thread time
+when measuring startup; worker timing alone misses repeated certification work.
+
 For Modelica native-construction costs, distinguish selected application work
 from whole-source preparation. Projection reuse storage is needed only for
 selected source programs and is shared across that application's issued colors.

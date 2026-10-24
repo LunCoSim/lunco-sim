@@ -949,8 +949,22 @@ pub(super) fn needed(
             model.is_compiled || model.last_error.is_some()
         });
     }
+    if let Some(certificate) = owner.as_ref().and_then(|owner| owner.certificate.as_ref()) {
+        // Certification samples and revalidates once every participant has an
+        // outcome. Pending constructors cannot yet supply a t=0 observation.
+        let mut waiting = false;
+        for member in &certificate.plan.members {
+            let Ok(model) = actors.get(member.entity) else {
+                return true;
+            };
+            if model.last_error.is_some() {
+                return true;
+            }
+            waiting |= !model.is_compiled;
+        }
+        return !waiting;
+    }
     !pending.is_empty()
-        || owner.is_some_and(|owner| owner.certificate.is_some())
         || models
             .iter()
             .any(|model| !model.is_compiled && model.last_error.is_none())
@@ -962,5 +976,59 @@ pub(super) fn retire(world: &mut World) {
         if let Some(job) = owner.job.take() {
             world.despawn(job.actor);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn certification_waits_for_participant_outcomes() {
+        let mut world = World::new();
+        let first = world.spawn(ModelicaModel::default()).id();
+        let second = world.spawn(ModelicaModel::default()).id();
+        let members = [first, second]
+            .into_iter()
+            .map(|entity| Member {
+                entity,
+                path: String::new(),
+                session: 1,
+                uri: String::new(),
+                source: String::new(),
+                class: String::new(),
+                outputs: BTreeSet::new(),
+                bindings: BTreeMap::new(),
+                handle: None,
+                authored: BTreeMap::new(),
+                resume: false,
+            })
+            .collect();
+        world.insert_resource(CoupledInitialization {
+            certificate: Some(Certificate {
+                plan: Plan {
+                    generation: 1,
+                    members,
+                    probes: Vec::new(),
+                    wires: Vec::new(),
+                },
+                values: BTreeMap::new(),
+                receipt: None,
+            }),
+            ..default()
+        });
+        assert!(!world.run_system_once(needed).unwrap());
+        world.get_mut::<ModelicaModel>(first).unwrap().is_compiled = true;
+        assert!(!world.run_system_once(needed).unwrap());
+        world.get_mut::<ModelicaModel>(second).unwrap().is_compiled = true;
+        assert!(world.run_system_once(needed).unwrap());
+
+        world.get_mut::<ModelicaModel>(first).unwrap().is_compiled = false;
+        world.get_mut::<ModelicaModel>(second).unwrap().last_error =
+            Some("construction failed".into());
+        assert!(world.run_system_once(needed).unwrap());
+        world.entity_mut(second).remove::<ModelicaModel>();
+        assert!(world.run_system_once(needed).unwrap());
     }
 }
