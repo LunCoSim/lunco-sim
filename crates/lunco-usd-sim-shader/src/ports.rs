@@ -117,18 +117,10 @@ fn write_shader_slot(world: &mut World, entity: Entity, slot: u64, value: f64) {
     let mut look = world
         .get_mut::<ShaderLook>(entity)
         .expect("prepared shader input retains its ShaderLook");
-    let (name, live) = look
+    let current_live = *look
         .live()
-        .get_slot_entry(slot)
+        .get_slot(slot)
         .expect("prepared shader input slot remains live through commit");
-    let current_live = *live;
-    let original = current_live
-        .or_else(|| look.values().get(name).copied())
-        .expect("prepared shader input retains its authored scalar");
-    assert!(
-        matches!(original, ParamValue::F32(_)),
-        "only authored f32 shader parameters accept scalar input writes"
-    );
     let live_value = ParamValue::F32(shader_value_f32);
     if current_live == Some(live_value) {
         return;
@@ -397,6 +389,30 @@ mod tests {
         // ...and never as an output. A material parameter resolving as a connection
         // SOURCE would let a wire feed back from the renderer into the simulation.
         assert_eq!(reg.read_output_port(app.world(), e, "load_frac"), None);
+    }
+
+    #[test]
+    fn authored_float_contract_can_replace_a_differently_typed_live_override() {
+        let mut app = app();
+        let entity = app.world_mut().spawn(driving("load_frac")).id();
+        let registry = app.world().resource::<PortRegistry>().clone();
+        let locator = registry
+            .resolve_input(app.world(), entity, "load_frac")
+            .unwrap();
+        app.world_mut()
+            .get_mut::<ShaderLook>(entity)
+            .unwrap()
+            .set_live("load_frac", ParamValue::I32(7));
+        registry
+            .write_resolved(app.world_mut(), entity, &locator, 0.5)
+            .unwrap();
+        assert_eq!(
+            app.world()
+                .get::<ShaderLook>(entity)
+                .unwrap()
+                .live_value("load_frac"),
+            Some(ParamValue::F32(0.5))
+        );
     }
 
     #[test]

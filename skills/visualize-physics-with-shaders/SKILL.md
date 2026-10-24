@@ -239,7 +239,9 @@ deferral with a known migration path, not the absence of a standard.
   use them without conversion. USD material parameter authoring performs its
   WESL name conversion before publishing `ShaderLook`. Scalar writes
   require a driven input with an explicitly authored `F32` value and must fit
-  its GPU storage range. Run `lander_plume_activity` through the production
+  its GPU storage range. The authored type governs admission; replacing a live
+  override of another type must still accept a valid scalar write.
+  Run `lander_plume_activity` through the production
   scene runner and repeat its authored gate in the windowed API host when changing this boundary;
   its authored checks cover declared names, slot identity, range rejection and
   next-tick release of the temporary test hold back to its connected source.

@@ -86,6 +86,9 @@ Named and resolved scalar reads share the live-slot reader and widen integer sam
 directly to `f64`; only writes to explicitly typed, driven `F32` parameters
 narrow at the validated GPU boundary. A driven name without a typed value is
 not a writable scalar declaration.
+Admission checks the authored type. The exclusive commit replaces the live
+sample even when that previous override has a different type; a sample does
+not redefine the authored input contract.
 Scene-property named declarations use their existing slot resolver and check
 native component ownership without sampling field values. Full port inspection
 still enumerates the owner's complete light/transform schema. Value reads and

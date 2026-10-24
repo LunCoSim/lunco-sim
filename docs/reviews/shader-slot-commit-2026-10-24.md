@@ -1,5 +1,52 @@
 # Shader slot commit borrow
 
+## Authored type and live samples
+
+Scalar admission uses the authored `F32` contract. The exclusive slot commit
+reads the previous live sample only for no-op change detection, then writes the
+admitted value through `set_live_slot`. The previous override's variant does
+not determine permission. This retains the registry's live ownership, metadata,
+range and atomic-preflight checks without a second, inconsistent type assertion.
+The regression reproduces a panic on the baseline by replacing an `I32` live
+override on an authored float; the admitted replacement succeeds after repair.
+
+The final focused command
+`cargo test --locked -p lunco-usd-sim-shader --lib ports::tests -j 4 -- --nocapture`
+passes eight functional checks, with one manual diagnostic ignored. The regular
+production build passes in 1m41s, SHA-256
+`7b736a03bc7951d2cd0559aa56dd811a33b0c8ce64b589473da9574acc6f0386`.
+The production plume scene passes all six authored checks on PID 1950746/API
+5230 and the windowed no-VSync host repeats all six on PID 1955005/API 5233,
+with clear registered diagnostics. Its inspected screenshot shows the success
+notification and fixture ground; that view does not establish plume appearance.
+Both processes exit normally and release their ports.
+
+The first windowed attempt, PID 1953464/API 5232, leaves VSync enabled and times
+out before the authored verdict, despite clear readiness. It closes through API
+Exit. A retained timing observation contains only 63 completed ticks and 42.832
+seconds of pending simulation time. The no-VSync rerun records timing and frame
+samples and completes the same authored contract. This isolates a presentation
+configuration difference, not the cause of the earlier pacing delay.
+
+Normal Griffin PID 1951905/API 5231 completes touchdown and four-pad handoff,
+five seconds of full terrain readiness and a measured window with at least 240
+fresh ticks. Sources stay unchanged and registered diagnostics are clear. The
+inspected image retains the landed vehicle, terrain and shadow; the app closes.
+First physics readiness is 29.612 s, landed eligibility 100.046 s, coupled
+median/p95 3.898/4.641 ms and frames 12.920/16.016 ms. A separate Tesla session
+is active during startup; these are contention-qualified observations, not a
+speedup or whole-mission acceptance claim. All performance targets remain open.
+
+A declaration-query experiment is removed after five alternating pairs measure
+less than one percent improvement. It does not justify a new helper or retained
+runtime path. The temporary baseline test hard link is removed. Raw observations
+remain ignored under `.cache/codex-evidence/performance-20261023/`, in
+`shader-declaration-comparison/`, `shader-live-contract-*` and
+`griffin-shader-live-contract-normal/`. No additional Tracy run is required for
+this correctness repair; existing qualified captures retain the attribution.
+
+## Component borrow
+
 The material port backend retains one native `Mut<ShaderLook>` from slot
 inspection through commit. Its shared dereference reads the current value
 without marking the component changed. A different scalar value reaches the

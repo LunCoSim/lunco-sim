@@ -125,6 +125,13 @@ captures remain ignored; regenerable older CSV exports are removed.
 
 ## Shader slot commit
 
+The [current admission repair](shader-slot-commit-2026-10-24.md#authored-type-and-live-samples)
+also ensures a valid authored float can replace a differently typed live
+override. Eight focused checks and both six-check production plume hosts pass;
+the VSync-enabled host timeout remains qualified separately. Griffin lands with
+clear diagnostics at 3.898 ms median coupled service. This correctness fix does
+not establish a performance gain; all timing targets remain open.
+
 The shader port backend retains one native component borrow through scalar
 commit, preserving no-op change detection. [The focused review](shader-slot-commit-2026-10-24.md)
 records eight owner checks, the six-check production plume gate and the inspected
