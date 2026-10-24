@@ -1174,6 +1174,14 @@ held. A compiled participant is Idle until its first simulation tick.
 
 ### Contact impact observation
 
+A USD program may share its prim with a rigid body. Its authored native physical
+inputs and outputs retain Avian ownership while the continuous model prepares.
+USD program projection reads the native rigid-body and collider-contact port
+groups and excludes those directions from the participant's declared interface.
+There is no second name list. A controller that needs a physical input uses a
+distinct model input and an explicit wire. This lets native contact observations
+initialize an observer independently of the model on the observed body.
+
 The native `contact_approach_speed` output is the maximum positive closing speed
 from Avian's pre-solver contact points, in m/s. It reads the retained contact graph
 on demand without allocating a debug snapshot. Separating contacts and no solid

@@ -31,6 +31,7 @@ fn on_tick(me, ctx) {
     if a.simulation_object_paused && this.paused_at == () {
         this.paused_at = sim_tick(); this.pose = world_pos(this.a);
         this.model_time = get(this.model, "ModelicaModel.current_time");
+        this.body_model_time = get(this.a, "ModelicaModel.current_time");
     }
     if sim_tick() - this.started < 150 { return; }
     this.done = true;
@@ -44,9 +45,14 @@ fn on_tick(me, ctx) {
             "an excessive impact pauses the whole joint-connected object"),
         t_true(held && get(this.model, "ModelicaModel.paused") == true,
             "the impact observer's continuous model pauses with the object"),
+        t_true(held && get(this.a, "ModelicaModel.paused") == true,
+            "a continuous model sharing the impacted rigid body pauses too"),
         t_true(held && world_pos(this.a) == this.pose
             && get(this.model, "ModelicaModel.current_time") == this.model_time,
             "pose and Modelica clock remain fixed after the accepted pause"),
+        t_true(held && this.body_model_time > 0.0
+            && get(this.a, "ModelicaModel.current_time") == this.body_model_time,
+            "native contact initializes beside a real body model and both clocks stop"),
         t_true(this.events == 1 && this.warned, "one Recent Events warning explains speed, limit and model validity"),
         t_true(!control.simulation_object_paused && contact_debug(this.control).touching_pair_count > 0,
             "the lower-speed control reaches contact without a false failure"),

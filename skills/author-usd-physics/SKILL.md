@@ -88,6 +88,13 @@ collision prim. A rigid body aggregates all attached shapes; the authored
 collision prim observes only its own cooked shapes. `part_contact_sources`
 checks sibling isolation, body aggregation and disabled shapes. Removing all
 native shapes makes the part's native contact ports unavailable.
+
+When a Modelica program shares a rigid-body prim, authored native physical ports
+remain Avian-owned during compilation and initialization. The USD projection
+uses the native port groups to split both directions from the program contract.
+Use distinct controller input names and explicit wires for physical readings.
+`contact_impact_pause` exercises a continuous model on the impacted body beside
+its native contact observation and a separate validity observer.
 Native 3D slider alignment, orientation and active travel stops are solved
 together. Inspect measured `displacement` and contact penetration when checking
 a loaded suspension; drive targets and body center height are not substitutes

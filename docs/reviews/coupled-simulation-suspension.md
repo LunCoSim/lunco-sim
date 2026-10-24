@@ -26,10 +26,12 @@ wheels, an externally connected continuous model, stopped object controllers,
 and independent systems that continue running.
 
 The contact validity gate uses the current native Avian `9097ce9` pin.
-`contact_impact_pause` passes eight checks: a native 30.13 m/s contact exceeds
+`contact_impact_pause` passes ten checks: a native 30.13 m/s contact exceeds
 the authored 5 m/s test envelope, both joined bodies and their Modelica observer
 stop, one sourced warning retains the measured limit, and a lower-speed
-independent contact and model keep running. The graphical host also passes its
+independent contact and model keep running. The impacted body also carries a
+continuous model, qualifying independent native port ownership through startup
+and suspension. The graphical host's eight-check observation passes its
 authored verdict and shows the warning in the status strip. Expanding the
 history through synthetic pointer input was not qualified in that run.
 These gates do not qualify complete vehicle driving or impact behavior.

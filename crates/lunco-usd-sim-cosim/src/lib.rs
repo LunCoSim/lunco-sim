@@ -282,39 +282,31 @@ fn declared_interface(
 }
 
 /// A prim that is both a Modelica program and a rigid body has one authored
-/// `inputs:*` namespace, but the standard Avian mass/force ports are physical
-/// sinks, not Modelica solver inputs. Keep those names out of the map-backed
-/// Modelica interface so the Avian backend remains the single writer. A
-/// controller that needs a physical value uses an explicitly distinct input
-/// (for example `controller_inertia_xx`) and a second USD connection to the
-/// same source; there is no backend-precedence alias.
-fn strip_rigid_body_inputs(
+/// `inputs:*` and `outputs:*` namespaces, but native physical ports belong to
+/// Avian. Project their directions from the native declarations so an unsolved
+/// participant cannot claim a physical observation or sink during admission.
+fn strip_rigid_body_ports(
     reader: &dyn UsdReadObject,
     sdf_path: &SdfPath,
     inputs: &mut HashMap<String, f64>,
+    outputs: &mut HashMap<String, f64>,
 ) {
     if !reader.has_api_schema(sdf_path, "PhysicsRigidBodyAPI") {
         return;
     }
-    for name in [
-        "force_x",
-        "force_y",
-        "force_z",
-        "force_local_x",
-        "force_local_y",
-        "force_local_z",
-        "torque_x",
-        "torque_y",
-        "torque_z",
-        "mass",
-        "inertia_xx",
-        "inertia_yy",
-        "inertia_zz",
-        "com_x",
-        "com_y",
-        "com_z",
+    for group in [
+        lunco_cosim::avian::RIGID_BODY_GROUP,
+        lunco_cosim::avian::COLLIDER_CONTACT_GROUP,
     ] {
-        inputs.remove(name);
+        for port in group.ports {
+            use lunco_port_core::ports::PortDirection;
+            if matches!(port.dir, PortDirection::In | PortDirection::InOut) {
+                inputs.remove(port.name);
+            }
+            if matches!(port.dir, PortDirection::Out | PortDirection::InOut) {
+                outputs.remove(port.name);
+            }
+        }
     }
 }
 
@@ -1316,7 +1308,7 @@ fn process_usd_cosim_prim_read(
         // driver) is somebody else's to run.
         _ => return,
     };
-    let (mut inputs, outputs) = declared_interface(reader, sdf_path);
+    let (mut inputs, mut outputs) = declared_interface(reader, sdf_path);
     if inputs.is_empty() && outputs.is_empty() {
         let model_name = modelica_path.as_deref().map_or_else(
             || format!("Python:{}", python_path.as_deref().unwrap_or("<source>")),
@@ -1530,7 +1522,7 @@ fn process_usd_cosim_prim_read(
     // `dispatch_loaded_{modelica,python}_sources` flips the status live once the
     // source has loaded/compiled; until then `can_step()` holds a `Compiling`
     // component.
-    strip_rigid_body_inputs(reader, sdf_path, &mut inputs);
+    strip_rigid_body_ports(reader, sdf_path, &mut inputs, &mut outputs);
     let model_name = match (&modelica_path, &python_path) {
         (Some(path), _) => {
             commands

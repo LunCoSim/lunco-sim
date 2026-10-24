@@ -11627,6 +11627,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-runtime",
  "lunco-core-session",
+ "lunco-cosim",
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",

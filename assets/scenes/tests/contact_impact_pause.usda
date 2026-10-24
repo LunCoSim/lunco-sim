@@ -25,12 +25,16 @@ def Xform "World" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
     }
     over "A" (
-        prepend apiSchemas = ["PhysxRigidBodyAPI"]
+        prepend apiSchemas = ["PhysxRigidBodyAPI", "LunCoProgramAPI"]
     )
     {
         vector3f physics:velocity = (0.0, -30.0, 0.0)
         custom bool physxRigidBody:enableCCD = true
         custom double outputs:contact_approach_speed = 0.0
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/tests/CoupledPauseProbe.mo@
+        custom double inputs:input_value = 1.0
+        custom double outputs:accumulated = 0.0
         def Scope "ContactValidity" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
