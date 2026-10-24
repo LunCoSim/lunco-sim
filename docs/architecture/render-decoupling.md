@@ -99,10 +99,14 @@ another scripting runtime.
 
 ## Visibility work follows adapter capability
 
-The desktop host uses the native `PbrPlugin` mesh-instance builder without a
-host override. Windowed and offscreen hosts use the same plugin group. The
-render boundary derives effective preparation and camera-culling eligibility
-from the actual native builder and device support.
+The desktop host selects `PbrPlugin::use_gpu_instance_buffer_builder = false`
+for native CPU mesh-instance preparation. This bounds per-view preparation
+overhead in the interactive scene workloads. Native GPU drawing, material
+shaders and shadow maps consume the prepared instance data. Windowed and
+offscreen hosts use the same plugin group. The render boundary derives effective
+preparation and camera-culling eligibility from the actual native builder and
+device support. The [source-matched comparison](../reviews/native-instance-builder-2026-10-25.md)
+records the measured scene tradeoffs and visual gates.
 
 GPU-only output buffers allocate the shader array stride through
 `<[T; 1]>::SHADER_SIZE`, including alignment padding. Rust's native type layout

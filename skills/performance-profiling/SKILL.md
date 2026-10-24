@@ -241,7 +241,11 @@ detection; a large visual binding count alone does not authorize changing clocks
 or skipping writes.
 
 When comparing native CPU/GPU instance preparation, retain the same PBR,
-shadows, meshes and quality. Device capability is not active-path evidence:
+shadows, meshes and quality. The desktop composition selects native CPU
+preparation; qualify changes with both `shared_shadow_allocation` and
+`vertex_shadow_alignment` pixel gates and source-matched normal Twin windows.
+Keep the per-scene tradeoffs visible: the GPU path can have a lower median in
+some scenes. Device capability is not active-path evidence:
 camera `NoCpuCulling` requires native `RenderMeshInstances::GpuBuilding` and
 indirect drawing. `NoIndirectDrawing` views need CPU frustum tests. Preserve
 foreign-owned markers when reconciling these structural changes.

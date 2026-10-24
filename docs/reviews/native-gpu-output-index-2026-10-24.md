@@ -4,7 +4,9 @@ The application pins published `bevy_render` revision
 `1df9fc155f97223600ae3f3aecfeede32ab986ce` and Rumoca revision
 `b825929bf32cc44797eb35a55d52d8d8af636569`. Both dependency edits and publication
 were explicitly authorized. The existing WESL `bevy_shader` pin is unchanged.
-The desktop composition uses the native PBR instance builder without an override.
+The GPU validation cohort below uses the native PBR instance builder without an
+override. The current desktop selection is recorded in the
+[native instance-builder review](native-instance-builder-2026-10-25.md).
 
 ## Allocation owner and consumer
 

@@ -1,5 +1,17 @@
 # High-quality realtime performance handover
 
+## Native CPU instance preparation
+
+[The source-matched native-builder comparison](native-instance-builder-2026-10-25.md)
+selects Bevy's CPU preparation for the desktop composition. Normal frame medians
+are 9.816 ms Griffin, 5.173 ms Summer and 5.781 ms Tesla, preserving authored
+quality and passing point-light/Sun pixel gates. Tesla's GPU median remains
+lower; both modes fit its measured frame budget. The two qualified Tracy captures
+attribute Summer's GPU overhead to native bind-group and shadow-buffer preparation.
+Normal loading and coupled-tick targets remain unmet, and Griffin's frame tail
+still exceeds 10 ms. Physical solar visibility is the next sampled first-party
+coupled-tick lead. All owned sessions close; raw data stays ignored.
+
 ## Native shared-shadow allocation
 
 [The allocation repair](shared-shadow-allocation-2026-10-25.md) restores Bevy's

@@ -735,6 +735,11 @@ fn default_plugins_with_profile(
     task_pool_options.max_total_threads = num_cpus::get_physical().max(1);
 
     let group = DefaultPlugins
+        .set(bevy::pbr::PbrPlugin {
+            // Avoid per-view GPU setup for interactive mesh-instance preparation.
+            use_gpu_instance_buffer_builder: false,
+            ..default()
+        })
         .set(bevy::app::TaskPoolPlugin { task_pool_options })
         .set(AssetPlugin {
             file_path: lunco_assets_core::assets_dir_abs()?.to_string_lossy().to_string(),

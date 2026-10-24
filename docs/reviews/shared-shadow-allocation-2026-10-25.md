@@ -10,9 +10,10 @@ setting or simulation behavior is reimplemented or changed.
 
 The initial investigation targeted the native GPU preparation costs in the
 qualified settled capture: approximately 2.075 ms for preprocess bind groups and
-1.265 ms for shadow instance-buffer preparation. A CPU/GPU builder comparison
-is deferred until the GPU path's required native stages are complete. Rendering
-without the required shadows is not a faster equivalent result.
+1.265 ms for shadow instance-buffer preparation. The
+[native builder comparison](native-instance-builder-2026-10-25.md) uses the
+complete GPU path qualified here. Rendering without the required shadows cannot
+establish an equivalent performance result.
 
 ## Verification
 
