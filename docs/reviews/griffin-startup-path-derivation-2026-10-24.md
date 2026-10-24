@@ -141,3 +141,17 @@ dependency walks, assignment-shape construction and coverage validation; JSON
 string parsing accounts for ten samples and zstd decoding for nine. Changing
 cache codecs is not supported as the next optimization by this attribution.
 Retain native checked deserialization.
+
+## Session-count audit
+
+The startup capture contains thirteen live-session constructions for thirteen
+distinct models, not two constructions of each coupled participant. Six causal
+producers initialize before the composite solve, the composite supplies the
+six blocked participants' consistent inputs, and those participants construct
+afterward. Their total construction-zone time is 7.313 s across threads; it is
+not a serial critical-path duration. The existing bounded worker pools overlap
+independent compiler, preparation and construction work while committing
+results in submission order. Removing either producer admission or the final
+participant constructors would omit required initialization, rather than remove
+duplicate work. Shared proof derivation inside each native constructor remains
+the proposed optimization owner.

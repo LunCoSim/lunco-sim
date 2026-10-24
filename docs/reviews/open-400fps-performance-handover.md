@@ -1,5 +1,17 @@
 # High-quality realtime performance handover
 
+## Native occlusion qualification
+
+[The landed Griffin off/on/off comparison](griffin-native-occlusion-2026-10-24.md)
+does not establish a native occlusion-culling benefit: median application frames
+are 23.695/24.212/21.789 ms with unchanged camera, source and quality settings.
+The lander completes touchdown and four-pad handoff, inspected images retain
+terrain and shadow, and diagnostics are clear. Another active Tesla session
+qualifies these timings. The temporary registration is removed; no rendering
+change is retained. The startup session audit also confirms thirteen distinct
+models rather than duplicate participant construction. Native schedule-proof
+sharing remains the proposed startup repair, pending dependency approval.
+
 ## Scalar port call-boundary attribution
 
 [The consumer diagnostic](port-call-boundary-attribution-2026-10-24.md) rejects
