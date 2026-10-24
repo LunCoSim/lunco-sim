@@ -55,6 +55,12 @@ Verify the saved width and rendered stroke in the actual plot panel.
 
 ## Core Principles
 
+For retained runtime UI capture, `runtime.ui.recording` receives only surfaces
+allowed by their exposure, perspective, gate and active Twin setting. Switching
+perspectives refreshes this selection without requiring an exposure change.
+Required surfaces still wait for mounting, layout and render acknowledgement;
+do not select candidates by whether their render root is already mounted.
+
 1. **UI lives in `src/ui/`** — domain crates have `src/ui/mod.rs` exporting a `*UiPlugin`. UI code never lives outside `ui/` directories.
 2. **UI never mutates state** — all interactions emit typed command events (the `#[Command]` structs, triggered via `ctx.trigger(...)`) that observers handle. This makes the UI AI-native: AI observes the same command stream as humans and can emit identical commands.
 3. **Panels are `Panel` impls** (the contract lives in `lunco_workbench_core`) — registered via `lunco_workbench_core::WorkbenchPanelAppExt::register_panel()`. The concrete shell drains that registration into its docking system.
