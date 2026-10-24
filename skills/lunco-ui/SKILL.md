@@ -29,8 +29,9 @@ and design decisions. This skill is a quick-reference summary.
 
 Telemetry browser rows reserve the measured value and unit at the right edge
 before allocating the channel name and hierarchy indentation. Bound each row
-with an explicit visible rectangle, including in justified parents. Truncate
-names and bound indentation on narrow panels; keep numeric cells on one line.
+with an explicit visible rectangle and the theme's window padding at the right
+edge, including in justified parents. Truncate names and bound indentation on
+narrow panels; keep numeric cells on one line.
 
 For small multiples, use `ConfigureSignalGrid` with an explicit source, signal
 and caption for every cell. Discover active sampled channels through

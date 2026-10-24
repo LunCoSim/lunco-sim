@@ -1435,6 +1435,7 @@ struct TelemetryTheme {
     text: egui::Color32,
     text_subdued: egui::Color32,
     warning: egui::Color32,
+    value_padding: f32,
 }
 
 impl From<&lunco_theme::Theme> for TelemetryTheme {
@@ -1443,6 +1444,7 @@ impl From<&lunco_theme::Theme> for TelemetryTheme {
             text: theme.tokens.text,
             text_subdued: theme.tokens.text_subdued,
             warning: theme.tokens.warning,
+            value_padding: theme.spacing.window_padding,
         }
     }
 }
@@ -1751,9 +1753,11 @@ fn render_visible_telemetry_row(
                 }
                 // Allocate live values before names and hierarchy indentation.
                 // Deep rows must not move measurements beyond the panel edge.
+                let mut content_rect = row_rect;
+                content_rect.max.x -= theme.value_padding.min(content_rect.width());
                 ui.scope_builder(
                     egui::UiBuilder::new()
-                        .max_rect(row_rect)
+                        .max_rect(content_rect)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                     |ui| {
                         let value = egui::WidgetText::RichText(value_text).into_galley(
@@ -3111,11 +3115,7 @@ mod tests {
         let label = telemetry_row_label(&row, false);
         let mut registry = SignalRegistry::default();
         registry.push_scalar(row.sig.clone(), 0.0, -1234.0);
-        let theme = TelemetryTheme {
-            text: egui::Color32::WHITE,
-            text_subdued: egui::Color32::GRAY,
-            warning: egui::Color32::YELLOW,
-        };
+        let theme = TelemetryTheme::from(&lunco_theme::Theme::default());
         let display_settings = TelemetryDisplaySettings::default();
         let mut row_text_cache = TelemetryRowTextCache::default();
         let mut clicked = None;
@@ -3130,6 +3130,7 @@ mod tests {
             .value_text(&row, Some(-1234.0), &display_settings, &theme)
             .text()
             .to_owned();
+        let expected_unit = pretty_unit(row.unit.as_deref());
         for width in [120.0, 180.0, 300.0, 600.0] {
             for depth in [0, 4, 12] {
                 let entry = VisibleTelemetryRow::Channel {
@@ -3186,26 +3187,37 @@ mod tests {
                     );
                 });
                 output.textures_delta.clear();
-                let values: Vec<_> = output
+                let cells: Vec<_> = output
                     .shapes
                     .iter()
                     .filter_map(|clipped| match &clipped.shape {
-                        egui::Shape::Text(text) if text.galley.text() == expected_value => {
+                        egui::Shape::Text(text)
+                            if text.galley.text() == expected_value
+                                || text.galley.text() == expected_unit =>
+                        {
                             Some((text, clipped.clip_rect))
                         }
                         _ => None,
                     })
                     .collect();
-                assert_eq!(values.len(), 4, "every row must paint its complete value");
-                for value in values {
-                    let value_rect = egui::Rect::from_min_size(value.0.pos, value.0.galley.size());
-                    assert_eq!(value.0.galley.rows.len(), 1, "numbers must not wrap");
+                assert_eq!(cells.len(), 8, "every row must paint its value and unit");
+                for cell in cells {
+                    let cell_rect = egui::Rect::from_min_size(cell.0.pos, cell.0.galley.size());
+                    assert_eq!(
+                        cell.0.galley.rows.len(),
+                        1,
+                        "measurement cells must not wrap"
+                    );
                     assert!(
                         row_rect
-                            .intersect(value.1)
+                            .intersect(cell.1)
                             .expand(0.5)
-                            .contains_rect(value_rect),
-                        "value {value_rect:?} clipped at width {width}, depth {depth}"
+                            .contains_rect(cell_rect),
+                        "cell {cell_rect:?} clipped at width {width}, depth {depth}"
+                    );
+                    assert!(
+                        cell_rect.right() <= row_rect.right() - theme.value_padding + 0.5,
+                        "measurement cell must keep the theme padding from the panel edge"
                     );
                 }
                 if depth == 0 && width == 600.0 {
