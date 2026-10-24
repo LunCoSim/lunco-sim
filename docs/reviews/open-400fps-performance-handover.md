@@ -1,5 +1,14 @@
 # High-quality realtime performance handover
 
+## Scalar port call-boundary attribution
+
+[The consumer diagnostic](port-call-boundary-attribution-2026-10-24.md) rejects
+compiler-inlining hints after five alternating comparisons: 187.855 ms baseline
+versus 189.179 ms candidate. Complete live validation remains unchanged. The
+retained test fix makes the admission benchmark actually place its owner after
+sixteen earlier backends and assert that order before timing. No application
+performance improvement is claimed; all original targets remain open.
+
 ## Coupled certification readiness
 
 The coordinator's existing ECS condition now waits on participant constructor

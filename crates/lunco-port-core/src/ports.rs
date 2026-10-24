@@ -2540,7 +2540,9 @@ mod tests {
     fn live_resolved_input_admission_benchmark() {
         let mut world = test_world();
         let entity = world.spawn(InputPorts::new(&["signal"])).id();
-        let mut registry = PortRegistry::default();
+        let mut registry = PortRegistry {
+            backends: Arc::new(Vec::new()),
+        };
         for _ in 0..16 {
             registry.register(PortBackend {
                 list_entities: |_, _| {},
@@ -2558,6 +2560,7 @@ mod tests {
         }
         registry.register(super::INPUT_PORTS_BACKEND);
         let locator = registry.resolve_input(&world, entity, "signal").unwrap();
+        assert_eq!(locator.backend, 16);
         let start = std::time::Instant::now();
         for _ in 0..131_072 {
             let prepared = registry

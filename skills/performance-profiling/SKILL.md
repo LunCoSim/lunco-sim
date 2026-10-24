@@ -88,6 +88,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   Audit a surface camera with `world_pos` and `world_rotation` in the active
   simulation frame; `visual_foci` reports composed root coordinates, which move
   with celestial ancestors even when the camera is stationary over the terrain.
+- Assert the intended fixture before timing an owner-resolution benchmark.
+  `PortRegistry::default()` installs the generic input owner first; registering
+  other backends afterward does not make them precede it. A synthetic
+  precedence fixture must verify its resolved owner index.
 - Attribute CPU, GPU, physics, terrain, and UI separately. Never disable
   shadows, lower authored terrain quality, change BigSpace, or change the
   standard substep count to make a graph look better.
