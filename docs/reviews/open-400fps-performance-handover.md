@@ -39,6 +39,12 @@ sharing remains the proposed startup repair, pending dependency approval.
 
 ## Scalar port call-boundary attribution
 
+[Source fan-out measurements](port-call-boundary-attribution-2026-10-24.md#source-fan-out-attribution)
+also retain no runtime change: source interning measures only 0.9 percent faster
+at fan-out four and 0.4 percent slower without fan-out across five alternating
+pairs. The reusable diagnostic now covers both cases and large fan-out, with
+identical exact-value checks. Production propagation remains unchanged.
+
 [The consumer diagnostic](port-call-boundary-attribution-2026-10-24.md) rejects
 compiler-inlining hints after five alternating comparisons: 187.855 ms baseline
 versus 189.179 ms candidate. Complete live validation remains unchanged. The

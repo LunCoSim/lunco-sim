@@ -43,3 +43,35 @@ candidate median (3.2 percent slower), with identical final f64 bits. The
 experiment is removed in full; no revision-retention helper or transaction
 field remains. Its baseline test hard link is removed after comparison.
 Raw comparison evidence stays ignored in `port-revision-*`.
+
+## Source fan-out attribution
+
+The current binding snapshots contain 1,412 Griffin wires / 750 distinct
+causal sources, 142 Tesla wires / 82 sources, and 30 Summer wires / 30 sources.
+Source identity includes entity, port name and input/output side. This suggests
+repeated reads, but does not establish that reading dominates the transaction.
+
+The retained `settled_diagnostic_publication_benchmark` measures the complete
+exchange and diagnostic publication with 128 targets, 6,000 transactions and
+fan-outs 128, four and one. Every case requires 768,000 writes and final exact
+f64 bits `4000000000000000`. Five alternating baseline/candidate pairs give:
+
+| Fan-out | Baseline median | Candidate median | Change |
+| --- | ---: | ---: | ---: |
+| 128 | 171.261 ms | 171.040 ms | 0.1% faster |
+| 4 | 180.801 ms | 179.250 ms | 0.9% faster |
+| 1 | 190.173 ms | 190.933 ms | 0.4% slower |
+
+Interning sources and sampling each once per transaction does not establish a
+useful gain in this consumer. The experiment and its private instrumentation
+are removed completely; production propagation remains unchanged. Its thirteen
+focused mechanism checks passed, including canonical order, missing fan-in,
+input/output identity, fresh replay samples and topology rebuilds. The diagnostic
+extension remains to prevent accepting a fan-out optimization that penalizes
+ordinary connections. No production rebuild or runtime rerun is needed for this
+test-only result. All original timing targets remain open.
+
+Logs, binary hashes and exact-value receipts stay ignored under
+`.cache/codex-evidence/performance-20261023/source-fanout-comparison/`.
+The task-created baseline hard link is removed; normal build outputs and shared
+caches are preserved.

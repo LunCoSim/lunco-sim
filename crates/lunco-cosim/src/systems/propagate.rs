@@ -843,7 +843,7 @@ mod wire_order_tests {
     use SimComponent;
     use lunco_core::GlobalEntityId;
 
-    fn diagnostic_publication_world() -> (World, Vec<Entity>) {
+    fn diagnostic_publication_world(source_count: usize, fanout: usize) -> (World, Vec<Entity>) {
         use lunco_port_core::ports::PortDirection;
         use lunco_port_core::{Port, PortSurface, PortSurfacePort};
         let mut world = World::new();
@@ -855,24 +855,26 @@ mod wire_order_tests {
         let mut registry = PortRegistry::default();
         crate::ports::register_builtin_port_backends(&mut registry);
         world.insert_resource(registry);
-        let source_port = world.spawn(Port { value: 2.0 }).id();
-        let source = world
-            .spawn(PortSurface::new(HashMap::from([(
-                "signal".into(),
-                PortSurfacePort::new(source_port, PortDirection::Out),
-            )])))
-            .id();
         let mut endpoints = Vec::new();
-        for _ in 0..128 {
-            let endpoint = world.spawn(Port::default()).id();
-            let target = world
+        for _ in 0..source_count {
+            let source_port = world.spawn(Port { value: 2.0 }).id();
+            let source = world
                 .spawn(PortSurface::new(HashMap::from([(
-                    "command".into(),
-                    PortSurfacePort::new(endpoint, PortDirection::In),
+                    "signal".into(),
+                    PortSurfacePort::new(source_port, PortDirection::Out),
                 )])))
                 .id();
-            wire(&mut world, source, "signal", target, "command");
-            endpoints.push(endpoint);
+            for _ in 0..fanout {
+                let endpoint = world.spawn(Port::default()).id();
+                let target = world
+                    .spawn(PortSurface::new(HashMap::from([(
+                        "command".into(),
+                        PortSurfacePort::new(endpoint, PortDirection::In),
+                    )])))
+                    .id();
+                wire(&mut world, source, "signal", target, "command");
+                endpoints.push(endpoint);
+            }
         }
         (world, endpoints)
     }
@@ -881,39 +883,41 @@ mod wire_order_tests {
     #[test]
     #[ignore = "manual diagnostic publication performance measurement"]
     fn settled_diagnostic_publication_benchmark() {
-        let (mut world, endpoints) = diagnostic_publication_world();
-        propagate_connections(&mut world);
-        let began = std::time::Instant::now();
-        for _ in 0..6000 {
+        for (sources, fanout) in [(1, 128), (32, 4), (128, 1)] {
+            let (mut world, endpoints) = diagnostic_publication_world(sources, fanout);
             propagate_connections(&mut world);
-        }
-        let elapsed = began.elapsed();
-        assert_eq!(
-            world.resource::<CosimDiagnostics>().landed.len(),
-            endpoints.len()
-        );
-        for endpoint in endpoints {
+            let began = std::time::Instant::now();
+            for _ in 0..6000 {
+                propagate_connections(&mut world);
+            }
+            let elapsed = began.elapsed();
             assert_eq!(
-                world
-                    .get::<lunco_port_core::Port>(endpoint)
-                    .unwrap()
-                    .value
-                    .to_bits(),
+                world.resource::<CosimDiagnostics>().landed.len(),
+                endpoints.len()
+            );
+            for endpoint in endpoints {
+                assert_eq!(
+                    world
+                        .get::<lunco_port_core::Port>(endpoint)
+                        .unwrap()
+                        .value
+                        .to_bits(),
+                    2.0f64.to_bits()
+                );
+            }
+            println!(
+                "DIAGNOSTIC_PUBLICATION_BENCH sources={sources} fanout={fanout} elapsed_ns={} writes=768000 final_bits={:016x}",
+                elapsed.as_nanos(),
                 2.0f64.to_bits()
             );
         }
-        println!(
-            "DIAGNOSTIC_PUBLICATION_BENCH elapsed_ns={} writes=768000 final_bits={:016x}",
-            elapsed.as_nanos(),
-            2.0f64.to_bits()
-        );
     }
 
     /// The private publication cursor follows the fabric and scene resource seams.
     #[test]
     fn landing_publication_acknowledgements_reset_with_fabric_and_scene() {
         use bevy::ecs::system::RunSystemOnce;
-        let (mut world, endpoints) = diagnostic_publication_world();
+        let (mut world, endpoints) = diagnostic_publication_world(1, 128);
         propagate_connections(&mut world);
         assert!(
             world

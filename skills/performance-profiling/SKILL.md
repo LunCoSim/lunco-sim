@@ -1791,6 +1791,10 @@ Use the same fixture for comparisons, retain its exact final-value checks, and
 qualify the production port-ownership scene afterward. Private name/duplicate
 tables use Bevy's `FixedHasher`; slot order and full key equality retain their
 contracts. Do not change persisted topology fingerprints to tune lookup cost.
+The ignored `settled_diagnostic_publication_benchmark` measures the complete
+exchange with 128 targets and fan-outs 128, four and one. Compare every case
+with identical exact-value checks; counting shared sources alone does not prove
+a useful speedup. Preserve wire summation order and fresh transaction samples.
 For initialization stalls, inspect each wire's selected source backend and its
 actual sample. A compiling Modelica participant can share an entity with ready
 native pose/control ports. Initialization reads the registered owner; only the
