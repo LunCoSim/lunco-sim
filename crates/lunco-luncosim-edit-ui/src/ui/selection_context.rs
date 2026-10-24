@@ -389,7 +389,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
                 .prim(&sdf)
                 .expect("validated USD path")
                 .variant_sets()
-                .get_all_variant_selections()
+                .selections()
                 .is_ok_and(|sets| !sets.is_empty());
             if let Some(item) =
                 selection_item(&view, &item, doc, preview, &edit_target, variant_sets)
@@ -411,7 +411,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
                 .prim(&sdf)
                 .expect("validated USD path")
                 .variant_sets()
-                .get_all_variant_selections()
+                .selections()
                 .is_ok_and(|sets| !sets.is_empty());
             selection_item(&view, &item, doc, preview, &edit_target, variant_sets)
         });

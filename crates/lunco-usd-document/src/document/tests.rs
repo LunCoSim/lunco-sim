@@ -300,14 +300,16 @@ fn stage_and_prim_documentation_use_typed_reversible_operations() {
         .expect("stage documentation applies");
     assert_eq!(
         doc.data()
-            .field(&root, sdf::FieldKey::Documentation.as_str()),
+            .spec(&root)
+            .and_then(|spec| spec.get(sdf::FieldKey::Documentation.as_str())),
         Some(&sdf::Value::String("Scene documentation".into()))
     );
     doc.apply(stage_inverse)
         .expect("stage documentation restores");
     assert_eq!(
         doc.data()
-            .field(&root, sdf::FieldKey::Documentation.as_str()),
+            .spec(&root)
+            .and_then(|spec| spec.get(sdf::FieldKey::Documentation.as_str())),
         None
     );
 
@@ -319,7 +321,8 @@ fn stage_and_prim_documentation_use_typed_reversible_operations() {
     .expect("prim documentation applies");
     assert_eq!(
         doc.data()
-            .field(&world, sdf::FieldKey::Documentation.as_str()),
+            .spec(&world)
+            .and_then(|spec| spec.get(sdf::FieldKey::Documentation.as_str())),
         Some(&sdf::Value::String("World documentation".into()))
     );
     doc.apply(UsdOp::SetPrimDocumentation {
@@ -330,7 +333,8 @@ fn stage_and_prim_documentation_use_typed_reversible_operations() {
     .expect("prim documentation clears");
     assert_eq!(
         doc.data()
-            .field(&world, sdf::FieldKey::Documentation.as_str()),
+            .spec(&world)
+            .and_then(|spec| spec.get(sdf::FieldKey::Documentation.as_str())),
         None
     );
 }
@@ -356,14 +360,16 @@ fn attribute_documentation_uses_a_typed_reversible_operation() {
         .expect("attribute documentation applies");
     assert_eq!(
         doc.data()
-            .field(&size, sdf::FieldKey::Documentation.as_str()),
+            .spec(&size)
+            .and_then(|spec| spec.get(sdf::FieldKey::Documentation.as_str())),
         Some(&sdf::Value::String("Authored size in metres.".into()))
     );
     doc.apply(inverse)
         .expect("attribute documentation undo applies");
     assert_eq!(
         doc.data()
-            .field(&size, sdf::FieldKey::Documentation.as_str()),
+            .spec(&size)
+            .and_then(|spec| spec.get(sdf::FieldKey::Documentation.as_str())),
         None
     );
 }
@@ -1416,7 +1422,8 @@ fn remove_relationship_preserves_layer_opinions_and_rejects_attributes() {
     let property = SdfPath::new("/World.link").unwrap();
     let prior = doc
         .data()
-        .field(&property, sdf::FieldKey::TargetPaths.as_str())
+        .spec(&property)
+        .and_then(|spec| spec.get(sdf::FieldKey::TargetPaths.as_str()))
         .cloned();
     let inverse = doc.apply(remove("link")).unwrap();
     assert!(doc.data().spec(&property).is_none());
@@ -1440,7 +1447,8 @@ fn remove_relationship_preserves_layer_opinions_and_rejects_attributes() {
     let restored_source = doc.source().unwrap();
     assert_eq!(
         doc.data()
-            .field(&property, sdf::FieldKey::TargetPaths.as_str())
+            .spec(&property)
+            .and_then(|spec| spec.get(sdf::FieldKey::TargetPaths.as_str()))
             .cloned(),
         prior
     );
@@ -1471,7 +1479,8 @@ fn remove_relationship_preserves_layer_opinions_and_rejects_attributes() {
     assert!(doc.runtime_data().spec(&property).is_none());
     assert_eq!(
         doc.data()
-            .field(&property, sdf::FieldKey::TargetPaths.as_str())
+            .spec(&property)
+            .and_then(|spec| spec.get(sdf::FieldKey::TargetPaths.as_str()))
             .cloned(),
         prior
     );
@@ -1576,14 +1585,15 @@ fn set_prim_order_authors_standard_metadata_inverts_and_rejects_invalid_children
         "a first runtime ordering opinion must invert to clearing that opinion"
     );
     assert!(matches!(
-        doc.runtime_data().field(&route, sdf::FieldKey::PrimOrder.as_str()),
+        doc.runtime_data().spec(&route).and_then(|spec| spec.get(sdf::FieldKey::PrimOrder.as_str())),
         Some(sdf::Value::TokenVec(names)) if names.iter().map(|name| name.as_str()).collect::<Vec<_>>() == ["P2", "P0", "P1"]
     ));
 
     doc.apply(inverse).expect("clear runtime child order");
     assert!(
         doc.runtime_data()
-            .field(&route, sdf::FieldKey::PrimOrder.as_str())
+            .spec(&route)
+            .and_then(|spec| spec.get(sdf::FieldKey::PrimOrder.as_str()))
             .is_none()
     );
 
@@ -1605,7 +1615,8 @@ fn set_prim_order_authors_standard_metadata_inverts_and_rejects_invalid_children
     );
     assert!(
         doc.runtime_data()
-            .field(&route, sdf::FieldKey::PrimOrder.as_str())
+            .spec(&route)
+            .and_then(|spec| spec.get(sdf::FieldKey::PrimOrder.as_str()))
             .is_none()
     );
 }
@@ -1708,8 +1719,9 @@ prepend references = @base.usda@</Base>\n\
 
     let path = SdfPath::new("/World").unwrap();
     let composed = doc.runtime_data();
-    let Some(sdf::Value::ReferenceListOp(op)) =
-        composed.field(&path, sdf::FieldKey::References.as_str())
+    let Some(sdf::Value::ReferenceListOp(op)) = composed
+        .spec(&path)
+        .and_then(|spec| spec.get(sdf::FieldKey::References.as_str()))
     else {
         panic!("expected composed reference list");
     };
@@ -1717,8 +1729,10 @@ prepend references = @base.usda@</Base>\n\
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].asset_path, "lunco://components/rover.usda");
     assert_eq!(items[0].prim_path.as_str(), "/Rover");
-    let Some(sdf::Value::ReferenceListOp(base)) =
-        doc.data().field(&path, sdf::FieldKey::References.as_str())
+    let Some(sdf::Value::ReferenceListOp(base)) = doc
+        .data()
+        .spec(&path)
+        .and_then(|spec| spec.get(sdf::FieldKey::References.as_str()))
     else {
         panic!("base reference remains authored");
     };
@@ -1735,8 +1749,9 @@ prepend references = @base.usda@</Base>\n\
     })
     .expect("reference delete applies");
     let composed = doc.runtime_data();
-    let Some(sdf::Value::ReferenceListOp(op)) =
-        composed.field(&path, sdf::FieldKey::References.as_str())
+    let Some(sdf::Value::ReferenceListOp(op)) = composed
+        .spec(&path)
+        .and_then(|spec| spec.get(sdf::FieldKey::References.as_str()))
     else {
         panic!("expected deleted reference list");
     };
@@ -1750,12 +1765,13 @@ prepend references = @base.usda@</Base>\n\
     })
     .expect("explicit empty reference list applies");
     let composed = doc.runtime_data();
-    let Some(sdf::Value::ReferenceListOp(op)) =
-        composed.field(&path, sdf::FieldKey::References.as_str())
+    let Some(sdf::Value::ReferenceListOp(op)) = composed
+        .spec(&path)
+        .and_then(|spec| spec.get(sdf::FieldKey::References.as_str()))
     else {
         panic!("expected explicit clear reference list");
     };
-    assert!(op.explicit && op.flatten().is_empty());
+    assert!(op.is_explicit() && op.flatten().is_empty());
 }
 
 #[test]
@@ -1862,7 +1878,8 @@ fn set_default_prim_authors_root_layer_and_typed_undo() {
     ));
     assert_eq!(
         doc.data()
-            .field(&root, sdf::FieldKey::DefaultPrim.as_str())
+            .spec(&root)
+            .and_then(|spec| spec.get(sdf::FieldKey::DefaultPrim.as_str()))
             .and_then(|value| match value {
                 sdf::Value::Token(token) => Some(token.to_string()),
                 _ => None,
@@ -1920,7 +1937,8 @@ fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
     ));
     assert_eq!(
         doc.runtime_data()
-            .field(&path, sdf::FieldKey::Kind.as_str())
+            .spec(&path)
+            .and_then(|spec| spec.get(sdf::FieldKey::Kind.as_str()))
             .and_then(|value| match value {
                 sdf::Value::Token(token) => Some(token.to_string()),
                 _ => None,
@@ -1929,7 +1947,8 @@ fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
     );
     assert_eq!(
         native_snapshot(&doc)
-            .field(&path, sdf::FieldKey::Kind.as_str())
+            .spec(&path)
+            .and_then(|spec| spec.get(sdf::FieldKey::Kind.as_str()))
             .and_then(|value| match value {
                 sdf::Value::Token(token) => Some(token.to_string()),
                 _ => None,
@@ -2415,11 +2434,11 @@ fn set_attribute_creates_and_records_typed_value() {
     .unwrap();
     let attr = SdfPath::new("/Ball.primvars:displayColor").unwrap();
     assert!(matches!(
-        doc.data().field(&attr, "typeName"),
+        doc.data().spec(&attr).and_then(|spec| spec.get("typeName")),
         Some(sdf::Value::Token(type_name)) if type_name.as_str() == "color3f[]"
     ));
     assert!(matches!(
-        doc.data().field(&attr, "default"),
+        doc.data().spec(&attr).and_then(|spec| spec.get("default")),
         Some(sdf::Value::Vec3fVec(values)) if values.len() == 1
     ));
 }
@@ -2608,7 +2627,7 @@ fn set_connection_authors_and_clears_connection_paths() {
             .and_then(|s| s.get("connectionPaths"))
         {
             Some(sdf::Value::PathListOp(op)) => op
-                .explicit_items
+                .explicit_items()
                 .iter()
                 .map(|p| p.as_str().to_string())
                 .collect(),
@@ -3369,7 +3388,8 @@ prepend references = @./rover.usda@</Rover>\n\
     let path = SdfPath::new("/Scene/Rover").unwrap();
     let selection = doc
         .data()
-        .field(&path, sdf::FieldKey::VariantSelection.as_str())
+        .spec(&path)
+        .and_then(|spec| spec.get(sdf::FieldKey::VariantSelection.as_str()))
         .expect("the local over carries the selection");
     assert!(matches!(
         selection,

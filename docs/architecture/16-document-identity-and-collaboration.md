@@ -423,7 +423,7 @@ still-active Twin.
 ## 10a. Remaining gaps
 
 - **Staleness stats the filesystem directly; USD would route it through the
-  resolver.** `ar::Resolver::get_modification_timestamp` is USD's canonical
+  resolver.** `ar::Resolver::modification_timestamp` is USD's canonical
   staleness primitive — it is what `SdfLayer::Reload()` consults for external
   dependencies, and per §6 the resolver is meant to be the only local/client
   seam. Ours returns `None` **by design**: `LuncoUsdResolver` is a pure in-memory
@@ -441,7 +441,7 @@ still-active Twin.
   `scenario_sync` already uses for manifests). Content ids are uniform across
   native and client, and — unlike mtime — a `touch` with no edit does not
   false-flag.
-  Note this does **not** flow back into `ar::Resolver::get_modification_timestamp`:
+  Note this does **not** flow back into `ar::Resolver::modification_timestamp`:
   that returns `SystemTime`, and it exists to drive openusd's *own* layer-reload
   decisions, which we do not use (no `find_or_open`, no layer cache). Provenance
   serves *our* staleness, and the resolver is where it belongs because it is the
@@ -449,9 +449,9 @@ still-active Twin.
   Note the layering constraint: `lunco-doc-bevy`'s watermark serves `.mo`,
   `.rhai`, and `.usda` alike and must never call a USD resolver. The generic
   registry watches paths it is *handed*; the domain decides what they are.
-- **The fork has no `find_or_open`** (a declared TODO in `sdf::LayerRegistry`,
+- **The native registry has no `find_or_open`** (a declared TODO in `sdf::LayerRegistry`,
   which today holds only a resolver and no layer cache). §5 is blocked on it.
-  When that cache lands it **must** ship with `get_modification_timestamp`
+  When that cache lands it **must** ship with `modification_timestamp`
   invalidation, or it reproduces the root-only staleness gap inside `openusd`. Note
   the C++ registry holds **weak** pointers — clients retain the strong refs.
 

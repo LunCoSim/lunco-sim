@@ -135,7 +135,7 @@ pub(super) fn read_network_with_members(
     let mut pending_sources = false;
     let _component_facts_span = bevy::log::info_span!("domain_network_component_facts").entered();
     for path in &member_paths {
-        if path.is_property_path() || path.is_prim_variant_selection_path() {
+        if path.is_property() || path.is_variant_selection() {
             continue;
         }
         if !view.has_api_schema(&path, "LunCoProgramAPI") {

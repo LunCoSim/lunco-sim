@@ -1638,7 +1638,7 @@ impl ActuatorWrenchSynthesizer {
 
         let mut actuators = BTreeMap::new();
         for path in members {
-            if path.is_property_path() || path.is_prim_variant_selection_path() {
+            if path.is_property() || path.is_variant_selection() {
                 continue;
             }
             let command_targets = view.rel_targets(&path, "lunco:forceActuator:commandSource");

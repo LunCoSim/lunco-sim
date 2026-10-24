@@ -532,7 +532,7 @@ impl<'a> ModelicaNetworkBoundaryIndex<'a> {
             root_attributes,
             component_paths: members
                 .iter()
-                .filter(|path| !path.is_property_path())
+                .filter(|path| !path.is_property())
                 .map(ToString::to_string)
                 .collect(),
         }
@@ -730,7 +730,7 @@ pub fn derive_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Resu
         .map_err(|error| format!("could not read component collection: {error}"))?;
     let roles = members
         .iter()
-        .filter(|path| !path.is_property_path())
+        .filter(|path| !path.is_property())
         .map(|member| {
             (
                 member.to_string(),

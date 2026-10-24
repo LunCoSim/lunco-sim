@@ -687,6 +687,9 @@ debug = "line-tables-only"
 strip = "none"
 
 [patch.crates-io]
+openusd = { git = "https://github.com/LunCoSim/openusd", rev = "601f034db12d75f334248d09c0d62645ee4f2f9d" }
+openusd-schemas = { git = "https://github.com/LunCoSim/openusd", rev = "601f034db12d75f334248d09c0d62645ee4f2f9d" }
+openusd-build = { git = "https://github.com/LunCoSim/openusd", rev = "601f034db12d75f334248d09c0d62645ee4f2f9d" }
 bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338" }
 bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "1df9fc155f97223600ae3f3aecfeede32ab986ce" }
 # Pinned upstream source with the approved public path-tracing ordering hook.

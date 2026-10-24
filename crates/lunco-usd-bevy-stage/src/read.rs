@@ -1645,7 +1645,7 @@ impl UsdRead for StageView<'_> {
         self.stage()
             .prim(prim)
             .ok()?
-            .get_metadata::<String>("documentation")
+            .metadata::<String>("documentation")
             .ok()
             .flatten()
     }
@@ -1732,7 +1732,7 @@ impl UsdRead for StageView<'_> {
                 .map_err(|error| error.to_string())?,
         );
         imageable
-            .compute_effective_visibility(purpose, None)
+            .effective_visibility(purpose, None)
             .map_err(|error| format!("{prim}: {error}"))
     }
 
@@ -1760,8 +1760,13 @@ impl UsdRead for StageView<'_> {
         prim: &SdfPath,
         purpose: crate::MaterialPurpose,
     ) -> Result<Option<String>, String> {
-        crate::material_binding::resolve_bound_material(self, prim, purpose)
-            .map(|path| path.map(|path| path.to_string()))
+        crate::material_binding::resolve_bound_material(
+            self,
+            prim,
+            purpose,
+            &mut openusd_schemas::shade::BindingCache::default(),
+        )
+        .map(|path| path.map(|path| path.to_string()))
     }
 
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
@@ -1964,11 +1969,9 @@ impl UsdRead for StageView<'_> {
     }
 
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
-        // The fork's full value resolution (`Attribute::get_at` →
-        // `Stage::resolve_at`): strongest value source per spec — local
-        // timeSamples, value clips, arc timeSamples, then `default` — under the
-        // stage's interpolation type, instead of a local
-        // timeSamples-then-default reimplementation.
+        // Native value resolution selects the strongest source: local samples,
+        // value clips, arc samples and defaults under the stage's interpolation
+        // type.
         self.stage()
             .prim(prim.clone())
             .expect("validated USD path")
@@ -2059,7 +2062,7 @@ impl UsdRead for StageView<'_> {
         let prim = self.stage().prim(prim).ok()?;
         let attribute = prim.attribute(name);
         if let Some(Value::Dictionary(dict)) =
-            attribute.get_metadata::<Value>("customData").ok().flatten()
+            attribute.metadata::<Value>("customData").ok().flatten()
             && let Some(hint) = AttrUiHint::from_dict(&dict)
         {
             return Some(hint);

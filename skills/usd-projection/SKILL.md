@@ -215,8 +215,10 @@ scene. Coarse composition edits and updates that span multiple changed source
 layers use the full-stage reset owner.
 
 The remaining dependent-source authored-layer transport delegates dictionary
-composition to native `sdf::dictionary_over` and list operations to native
-`ListOp::combined_with`. Preserve nested metadata and stronger scalar opinions;
+composition to native `sdf::Dictionary::over` and list operations to native
+`ListOp::combined_with`. An irreducible composition returns an error with its
+field and path before publication; never replace the weaker operation silently.
+Preserve nested metadata and stronger scalar opinions;
 do not implement a shallow map merge or substitute stage flattening, which
 consumes composition arcs.
 

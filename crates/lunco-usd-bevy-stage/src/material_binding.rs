@@ -31,6 +31,7 @@ pub(crate) fn resolve_bound_material(
     reader: &StageView<'_>,
     prim: &SdfPath,
     purpose: MaterialPurpose,
+    cache: &mut openusd_schemas::shade::BindingCache,
 ) -> Result<Option<SdfPath>, String> {
     let native = reader
         .stage()
@@ -40,14 +41,17 @@ pub(crate) fn resolve_bound_material(
         return Err(format!("{prim}: prim is absent from the live stage"));
     }
     let bound = openusd_schemas::shade::MaterialBindingAPI::from_prim_unchecked(native)
-        .compute_bound_material(purpose.token())
+        .resolve_binding(purpose.token(), cache)
         .map_err(|error| format!("{prim}: {error}"))?;
-    if let Some(path) = &bound {
-        openusd_schemas::shade::Material::get(reader.stage(), path.clone())
-            .map_err(|error| format!("{path}: {error}"))?
-            .ok_or_else(|| format!("{prim}: bound target {path} is not a Material"))?;
-    }
-    Ok(bound)
+    let Some(bound) = bound else {
+        return Ok(None);
+    };
+    let path = bound.material_path();
+    bound
+        .material()
+        .map_err(|error| format!("{path}: {error}"))?
+        .ok_or_else(|| format!("{prim}: bound target {path} is not a Material"))?;
+    Ok(Some(path.clone()))
 }
 
 /// Resolve the universal surface terminal through native UsdShade graphs.
@@ -55,7 +59,13 @@ pub(crate) fn resolve_surface_shader(
     reader: &StageView<'_>,
     prim: &SdfPath,
 ) -> Result<Option<SdfPath>, String> {
-    let Some(path) = resolve_bound_material(reader, prim, MaterialPurpose::Render)? else {
+    let Some(path) = resolve_bound_material(
+        reader,
+        prim,
+        MaterialPurpose::Render,
+        &mut openusd_schemas::shade::BindingCache::default(),
+    )?
+    else {
         return Ok(None);
     };
     resolve_material_surface_shader(reader, &path)
@@ -70,7 +80,7 @@ pub(crate) fn resolve_material_surface_shader(
         .map_err(|error| format!("{path}: {error}"))?
         .ok_or_else(|| format!("{path}: surface terminal target is not a Material"))?;
     let terminal = material
-        .compute_surface_source(&[])
+        .surface_source(&[])
         .map_err(|error| format!("{path}: {error}"))?;
     let Some(terminal) = terminal else {
         if !material

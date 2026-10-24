@@ -562,7 +562,7 @@ remain errors: physics faults and holds failed projection, while lint and
 inspection expose diagnostics.
 
 `UsdRead::effective_visibility` returns native `PurposeVisibility` for the
-prim's resolved purpose through `ImageableExt::compute_effective_visibility`.
+prim's resolved purpose through `ImageableExt::effective_visibility`.
 Overall ancestor invisibility prunes the subtree; standard `VisibilityAPI`
 opinions can show or suppress guide, proxy, and render geometry. Prepared
 plans retain the checked result. A failed live read terminates visual
@@ -686,7 +686,12 @@ The `UsdStageAsset` carries an `Arc`-shared `Send` `StageRecipe` (`recipe`), a p
 `UsdStageProjectionPlan`, and handles for the layer-read receipts that keep
 transitive source changes connected to Bevy's hot-reload graph; the live stage
 is built on the main thread from the recipe, and there is no stored `reader`
-object.
+object. The immutable snapshot shares one native `UsdShade::BindingCache` across
+prim and purpose resolution, then drops it with its worker-local stage. Live
+reads create a fresh cache; no binding cache survives an authored edit. Resolved
+bindings that target a missing or non-material prim reject admission visibly.
+Concrete authored `Sdf Data` reads borrow `SpecData::get` directly; fallible
+abstract data reads use native `AbstractData::field`/`try_field`.
 
 ## Scene ownership — Twin → active stage → Grid
 

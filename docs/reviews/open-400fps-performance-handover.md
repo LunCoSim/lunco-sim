@@ -1,5 +1,17 @@
 # High-quality realtime performance handover
 
+## Native USD path ownership
+
+The published OpenUSD fork retains immutable owning-prim nodes and reuses the
+supplied owner when constructing properties. [The focused review](griffin-startup-path-derivation-2026-10-24.md)
+records native regressions, strict linting, consumer measurements and the
+inspected normal Griffin landing. All internal callers use the current native
+SDK APIs; authored-layer transport rejects irreducible list operations visibly.
+A prior application handle cache is removed after inconclusive measurements.
+Observed readiness is 12.996 s, versus 14.036 s in the preceding source-matched
+normal observation; contention limits timing attribution. Modelica initialization
+remains the next large startup cost. All original timing targets remain open.
+
 ## Modelica live name indexes
 
 Input and parameter maps use Bevy's reflected native storage. Compile and step

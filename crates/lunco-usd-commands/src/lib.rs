@@ -2514,7 +2514,7 @@ fn composed_planned_attribute_types(
     let mut composed = planned.clone();
     for ((owner, name), type_name) in planned {
         let path = openusd::sdf::Path::new(owner).map_err(|error| error.to_string())?;
-        if !path.contains_prim_variant_selection() {
+        if !path.has_variant_selection() {
             continue;
         }
         let mut prim = openusd::sdf::Path::abs_root();
@@ -2534,7 +2534,7 @@ fn composed_planned_attribute_types(
                         .prim(prim.clone())
                         .expect("validated USD path")
                         .variant_sets()
-                        .get_all_variant_selections()
+                        .selections()
                         .map_err(|error| error.to_string())?;
                     selected &= selections
                         .iter()
@@ -2797,7 +2797,7 @@ fn validate_detach_component(
         .map_err(|error| format!("invalid component path {}: {error}", spec.component_path))?;
     let joint = openusd::sdf::Path::new(&spec.joint_path)
         .map_err(|error| format!("invalid joint path {}: {error}", spec.joint_path))?;
-    if component.is_property_path() || joint.is_property_path() {
+    if component.is_property() || joint.is_property() {
         return Err("detach paths must name prims, not properties".into());
     }
     if component == joint

@@ -108,12 +108,11 @@ pub fn changed_native_references(
     let mut references = BTreeSet::new();
     let mut structural = BTreeSet::new();
     for change in changes {
-        for property in change.info_only.iter().chain(
-            change
-                .resynced
-                .iter()
-                .filter(|path| path.is_property_path()),
-        ) {
+        for property in change
+            .info_only
+            .iter()
+            .chain(change.resynced.iter().filter(|path| path.is_property()))
+        {
             let Some((prim, name)) = property.as_str().split_once('.') else {
                 continue;
             };
@@ -122,11 +121,7 @@ pub fn changed_native_references(
             };
             collect_property(reader, &prim, name, &mut references);
         }
-        for prim in change
-            .resynced
-            .iter()
-            .filter(|path| !path.is_property_path())
-        {
+        for prim in change.resynced.iter().filter(|path| !path.is_property()) {
             structural.insert(prim.clone());
         }
     }

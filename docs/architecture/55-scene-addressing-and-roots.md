@@ -221,8 +221,9 @@ Package entry identity and provenance must reach the storage/document owner
 before USDZ can be admitted as an editable source.
 
 Dependent-source authored-layer transport preserves composition arcs and uses
-native recursive dictionary composition (`sdf::dictionary_over`) and list-op
-composition (`ListOp::combined_with`). Full-stage flattening consumes those arcs
+native recursive dictionary composition (`sdf::Dictionary::over`) and list-op
+composition (`ListOp::combined_with`). Irreducible list operations reject the
+transport with the field and path; neither source is changed. Full-stage flattening consumes those arcs
 and cannot replace the authored-layer transport.
 
 Asset values in a Twin follow OpenUSD's `ArDefaultResolver` spelling rules.

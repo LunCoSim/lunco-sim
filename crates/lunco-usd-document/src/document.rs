@@ -166,10 +166,9 @@ fn same_layer_data(left: &sdf::Data, right: &sdf::Data) -> bool {
             return false;
         }
         for field in left_fields {
-            let (Ok(left_value), Ok(right_value)) = (
-                left.get_field(&path, &field),
-                right.get_field(&path, &field),
-            ) else {
+            let (Ok(left_value), Ok(right_value)) =
+                (left.field(&path, &field), right.field(&path, &field))
+            else {
                 return false;
             };
             if left_value.as_ref() != right_value.as_ref() {
@@ -1383,7 +1382,7 @@ impl UsdDocument {
     /// it back into an equivalent layer.
     pub fn persistent_composed_data(&self) -> Result<sdf::Data, DocumentError> {
         self.ensure_parsed()?;
-        Ok(author::compose_layers(&self.base, &self.runtime))
+        author::compose_layers(&self.base, &self.runtime).map_err(author_err)
     }
 
     /// The disposable **view** layer. It composes into live reads and is
@@ -1884,7 +1883,7 @@ impl UsdDocument {
     /// that spec directly and does not need to create an over prim first.
     fn require_property_owner_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
-        let authored_variant = sdf.is_prim_variant_selection_path()
+        let authored_variant = sdf.is_variant_selection()
             && [&self.base, &self.runtime, &self.view]
                 .into_iter()
                 .any(|data| matches!(data.spec(&sdf), Some(spec) if spec.ty == SpecType::Variant));
@@ -1991,7 +1990,7 @@ fn normalize_reference_prim_path(path: Option<&str>) -> Result<Option<String>, D
         return Ok(None);
     };
     let parsed = parse_prim_path(path)?;
-    if !path.starts_with('/') || parsed.is_property_path() {
+    if !path.starts_with('/') || parsed.is_property() {
         return Err(DocumentError::ValidationFailed(format!(
             "SetReferenceArcs referenced target `{path}` must be an absolute prim path"
         )));
@@ -2011,7 +2010,7 @@ fn normalize_default_prim_path(
         format!("/{path}")
     };
     let parsed = parse_prim_path(&absolute)?;
-    if parsed.is_abs_root() || parsed.is_property_path() {
+    if parsed.is_abs_root() || parsed.is_property() {
         return Err(DocumentError::ValidationFailed(format!(
             "SetDefaultPrim target {path} must name a non-root prim"
         )));
@@ -2058,36 +2057,36 @@ fn reference_list_inverse(
     edit_target: &LayerId,
     path: &str,
 ) -> Option<UsdOp> {
-    let (list_op, items) = if op.explicit {
-        (UsdReferenceListOp::Explicit, &op.explicit_items)
-    } else if !op.prepended_items.is_empty()
-        && op.appended_items.is_empty()
-        && op.added_items.is_empty()
-        && op.deleted_items.is_empty()
-        && op.ordered_items.is_empty()
+    let (list_op, items) = if op.is_explicit() {
+        (UsdReferenceListOp::Explicit, op.explicit_items())
+    } else if !op.prepended_items().is_empty()
+        && op.appended_items().is_empty()
+        && op.added_items().is_empty()
+        && op.deleted_items().is_empty()
+        && op.ordered_items().is_empty()
     {
-        (UsdReferenceListOp::Prepend, &op.prepended_items)
-    } else if !op.appended_items.is_empty()
-        && op.prepended_items.is_empty()
-        && op.added_items.is_empty()
-        && op.deleted_items.is_empty()
-        && op.ordered_items.is_empty()
+        (UsdReferenceListOp::Prepend, op.prepended_items())
+    } else if !op.appended_items().is_empty()
+        && op.prepended_items().is_empty()
+        && op.added_items().is_empty()
+        && op.deleted_items().is_empty()
+        && op.ordered_items().is_empty()
     {
-        (UsdReferenceListOp::Append, &op.appended_items)
-    } else if !op.added_items.is_empty()
-        && op.prepended_items.is_empty()
-        && op.appended_items.is_empty()
-        && op.deleted_items.is_empty()
-        && op.ordered_items.is_empty()
+        (UsdReferenceListOp::Append, op.appended_items())
+    } else if !op.added_items().is_empty()
+        && op.prepended_items().is_empty()
+        && op.appended_items().is_empty()
+        && op.deleted_items().is_empty()
+        && op.ordered_items().is_empty()
     {
-        (UsdReferenceListOp::Add, &op.added_items)
-    } else if !op.deleted_items.is_empty()
-        && op.prepended_items.is_empty()
-        && op.appended_items.is_empty()
-        && op.added_items.is_empty()
-        && op.ordered_items.is_empty()
+        (UsdReferenceListOp::Add, op.added_items())
+    } else if !op.deleted_items().is_empty()
+        && op.prepended_items().is_empty()
+        && op.appended_items().is_empty()
+        && op.added_items().is_empty()
+        && op.ordered_items().is_empty()
     {
-        (UsdReferenceListOp::Delete, &op.deleted_items)
+        (UsdReferenceListOp::Delete, op.deleted_items())
     } else {
         return None;
     };
@@ -2122,8 +2121,8 @@ fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
     }
     data.iter().any(|(path, spec)| {
         spec.ty == SpecType::Prim
-            && path.contains_prim_variant_selection()
-            && path.strip_all_variant_selections() == *sdf
+            && path.has_variant_selection()
+            && path.strip_variant_selections() == *sdf
     })
 }
 
@@ -2149,7 +2148,11 @@ fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
     let Ok(attr) = prim.append_property("xformOpOrder") else {
         return Vec::new();
     };
-    match data.field(&attr, "default").cloned() {
+    match data
+        .spec(&attr)
+        .and_then(|spec| spec.get("default"))
+        .cloned()
+    {
         Some(sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
         Some(sdf::Value::StringVec(v)) => v,
         Some(sdf::Value::TokenListOp(op)) => op.flatten().into_iter().map(Into::into).collect(),
@@ -2786,8 +2789,14 @@ impl<'a> UsdEditSession<'a> {
                 let value_path = prim_sdf
                     .append_property(&name)
                     .map_err(|error| DocumentError::ValidationFailed(error.to_string()))?;
-                let authored_value = layer.field(&value_path, "default").is_some();
-                let authored_order = layer.field(&order_path, "default").is_some();
+                let authored_value = layer
+                    .spec(&value_path)
+                    .and_then(|spec| spec.get("default"))
+                    .is_some();
+                let authored_order = layer
+                    .spec(&order_path)
+                    .and_then(|spec| spec.get("default"))
+                    .is_some();
                 let existing_order = xform_op_order_tokens(layer, &prim_sdf);
                 let remove_order_entry = restore_order.is_some();
                 let inverse = UsdOp::RestoreXformOp {
@@ -2890,7 +2899,7 @@ impl<'a> UsdEditSession<'a> {
                         .map_err(author_err)?;
 
                 let stage = self.open_target_stage(target)?;
-                if !prim_sdf.is_prim_variant_selection_path() {
+                if !prim_sdf.is_variant_selection() {
                     stage.override_prim(&prim_sdf).map_err(author_err)?;
                 }
                 stage.remove_property(property).map_err(author_err)?;
@@ -3225,8 +3234,12 @@ impl<'a> UsdEditSession<'a> {
                 let prior_attribute_exists = prior_attribute
                     .as_ref()
                     .is_some_and(|attr| self.layer(target).spec(attr).is_some());
-                let prior = prior_attribute
-                    .and_then(|attr| self.layer(target).field(&attr, "default").cloned());
+                let prior = prior_attribute.and_then(|attr| {
+                    self.layer(target)
+                        .spec(&attr)
+                        .and_then(|spec| spec.get("default"))
+                        .cloned()
+                });
                 let recovered = if is_string {
                     match prior {
                         Some(openusd::sdf::Value::String(s)) => Some(s),
@@ -3283,7 +3296,7 @@ impl<'a> UsdEditSession<'a> {
                 ..
             } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
-                if prim_sdf.is_property_path() {
+                if prim_sdf.is_property() {
                     return Err(DocumentError::ValidationFailed(format!(
                         "SetAttributeDocumentation target {path} must name a prim"
                     )));
@@ -3301,7 +3314,8 @@ impl<'a> UsdEditSession<'a> {
                 let documentation_field = sdf::FieldKey::Documentation.as_str();
                 let prior = self
                     .layer(target)
-                    .field(&attr_sdf, documentation_field)
+                    .spec(&attr_sdf)
+                    .and_then(|spec| spec.get(documentation_field))
                     .cloned();
                 let inverse = match prior.as_ref() {
                     Some(sdf::Value::String(text)) => UsdOp::SetAttributeDocumentation {
@@ -3415,7 +3429,12 @@ impl<'a> UsdEditSession<'a> {
                 let prior_sample = prim_sdf
                     .append_property(name.as_str())
                     .ok()
-                    .and_then(|attr| self.layer(target).field(&attr, "timeSamples").cloned())
+                    .and_then(|attr| {
+                        self.layer(target)
+                            .spec(&attr)
+                            .and_then(|spec| spec.get("timeSamples"))
+                            .cloned()
+                    })
                     .and_then(|v| match v {
                         sdf::Value::TimeSamples(m) => m
                             .into_iter()
@@ -3489,13 +3508,18 @@ impl<'a> UsdEditSession<'a> {
                 // matching `SetTimeSample`'s own inverse. Missing type or a value
                 // with no single-line literal → the always-correct full-source
                 // snapshot.
-                let prior_type = match self.layer(target).field(&attr_sdf, "typeName") {
+                let prior_type = match self
+                    .layer(target)
+                    .spec(&attr_sdf)
+                    .and_then(|spec| spec.get("typeName"))
+                {
                     Some(sdf::Value::Token(t)) => Some(t.as_str().to_string()),
                     _ => None,
                 };
                 let prior_value = self
                     .layer(target)
-                    .field(&attr_sdf, "timeSamples")
+                    .spec(&attr_sdf)
+                    .and_then(|spec| spec.get("timeSamples"))
                     .cloned()
                     .and_then(|v| match v {
                         sdf::Value::TimeSamples(m) => m
@@ -3566,14 +3590,21 @@ impl<'a> UsdEditSession<'a> {
                 let prior = prim_sdf
                     .append_property(name.as_str())
                     .ok()
-                    .and_then(|rel| self.layer(target).field(&rel, "targetPaths").cloned());
+                    .and_then(|rel| {
+                        self.layer(target)
+                            .spec(&rel)
+                            .and_then(|spec| spec.get("targetPaths"))
+                            .cloned()
+                    });
                 let inverse = match prior {
-                    Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetRelationship {
-                        edit_target: id,
-                        path: path.clone(),
-                        name: name.clone(),
-                        targets: op.explicit_items.iter().map(|p| p.to_string()).collect(),
-                    },
+                    Some(sdf::Value::PathListOp(op)) if op.is_explicit() => {
+                        UsdOp::SetRelationship {
+                            edit_target: id,
+                            path: path.clone(),
+                            name: name.clone(),
+                            targets: op.explicit_items().iter().map(|p| p.to_string()).collect(),
+                        }
+                    }
                     _ => self.coarse_inverse(target, &id)?,
                 };
                 let stage = self.open_target_stage(target)?;
@@ -3594,7 +3625,7 @@ impl<'a> UsdEditSession<'a> {
                 ..
             } => {
                 let prim_sdf = parse_prim_path(&path)?;
-                if prim_sdf.contains_prim_variant_selection() {
+                if prim_sdf.has_variant_selection() {
                     self.require_property_owner_anywhere(&path)?;
                 } else {
                     let composed = self.open_composed_stage()?;
@@ -3625,14 +3656,19 @@ impl<'a> UsdEditSession<'a> {
                 let prior = prim_sdf
                     .append_property(name.as_str())
                     .ok()
-                    .and_then(|attr| self.layer(target).field(&attr, "connectionPaths").cloned());
+                    .and_then(|attr| {
+                        self.layer(target)
+                            .spec(&attr)
+                            .and_then(|spec| spec.get("connectionPaths"))
+                            .cloned()
+                    });
                 let inverse = match prior {
-                    Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetConnection {
+                    Some(sdf::Value::PathListOp(op)) if op.is_explicit() => UsdOp::SetConnection {
                         edit_target: id,
                         path: path.clone(),
                         name: name.clone(),
                         type_name: type_name.clone(),
-                        sources: op.explicit_items.iter().map(|p| p.to_string()).collect(),
+                        sources: op.explicit_items().iter().map(|p| p.to_string()).collect(),
                     },
                     _ => self.coarse_inverse(target, &id)?,
                 };
@@ -3661,7 +3697,8 @@ impl<'a> UsdEditSession<'a> {
                 }
                 let prior = self
                     .layer(target)
-                    .field(&SdfPath::abs_root(), sdf::FieldKey::DefaultPrim.as_str())
+                    .spec(&SdfPath::abs_root())
+                    .and_then(|spec| spec.get(sdf::FieldKey::DefaultPrim.as_str()))
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::Token(token)) => {
@@ -3707,9 +3744,16 @@ impl<'a> UsdEditSession<'a> {
                 }
 
                 let root = SdfPath::abs_root();
-                let prior_meters_per_unit =
-                    self.layer(target).field(&root, "metersPerUnit").cloned();
-                let prior_up_axis = self.layer(target).field(&root, "upAxis").cloned();
+                let prior_meters_per_unit = self
+                    .layer(target)
+                    .spec(&root)
+                    .and_then(|spec| spec.get("metersPerUnit"))
+                    .cloned();
+                let prior_up_axis = self
+                    .layer(target)
+                    .spec(&root)
+                    .and_then(|spec| spec.get("upAxis"))
+                    .cloned();
                 let inverse = match (prior_meters_per_unit, prior_up_axis) {
                     (Some(sdf::Value::Double(meters_per_unit)), Some(sdf::Value::Token(axis)))
                         if meters_per_unit.is_finite() && meters_per_unit > 0.0 =>
@@ -3760,7 +3804,11 @@ impl<'a> UsdEditSession<'a> {
             } => {
                 let field = sdf::FieldKey::Documentation;
                 let root = SdfPath::abs_root();
-                let prior = match self.layer(target).field(&root, field.as_str()) {
+                let prior = match self
+                    .layer(target)
+                    .spec(&root)
+                    .and_then(|spec| spec.get(field.as_str()))
+                {
                     Some(sdf::Value::String(text)) => Some(text.clone()),
                     None => None,
                     Some(_) => {
@@ -3801,7 +3849,7 @@ impl<'a> UsdEditSession<'a> {
                 ..
             } => {
                 let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(prim) if !prim.is_property() => prim,
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetPrimDocumentation target {path} must name a prim, not a property"
@@ -3811,7 +3859,8 @@ impl<'a> UsdEditSession<'a> {
                 };
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, sdf::FieldKey::Documentation.as_str())
+                    .spec(&prim_sdf)
+                    .and_then(|spec| spec.get(sdf::FieldKey::Documentation.as_str()))
                     .cloned();
                 let prior_is_absent = prior.is_none();
                 let inverse = match prior {
@@ -3858,7 +3907,7 @@ impl<'a> UsdEditSession<'a> {
 
             UsdOp::SetPrimKind { path, kind, .. } => {
                 let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(prim) if !prim.is_property() => prim,
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetPrimKind target {path} must name a prim, not a property"
@@ -3869,7 +3918,8 @@ impl<'a> UsdEditSession<'a> {
                 validate_prim_kind(kind.as_deref())?;
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, sdf::FieldKey::Kind.as_str())
+                    .spec(&prim_sdf)
+                    .and_then(|spec| spec.get(sdf::FieldKey::Kind.as_str()))
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::Token(token))
@@ -3944,8 +3994,8 @@ impl<'a> UsdEditSession<'a> {
                 let to_sdf = SdfPath::new(&to_path).map_err(author_err)?;
                 if !from_sdf.is_abs()
                     || !to_sdf.is_abs()
-                    || !from_sdf.is_property_path()
-                    || !to_sdf.is_property_path()
+                    || !from_sdf.is_property()
+                    || !to_sdf.is_property()
                 {
                     return Err(DocumentError::ValidationFailed(
                         "MoveProperty requires two absolute property paths".to_owned(),
@@ -3974,11 +4024,7 @@ impl<'a> UsdEditSession<'a> {
             } => {
                 let from = SdfPath::new(&from_path).map_err(author_err)?;
                 let to = SdfPath::new(&to_path).map_err(author_err)?;
-                if !from.is_abs()
-                    || !to.is_abs()
-                    || !from.is_property_path()
-                    || !to.is_property_path()
-                {
+                if !from.is_abs() || !to.is_abs() || !from.is_property() || !to.is_property() {
                     return Err(DocumentError::ValidationFailed(
                         "CopyProperty requires absolute property paths".into(),
                     ));
@@ -4030,7 +4076,7 @@ impl<'a> UsdEditSession<'a> {
 
             UsdOp::SetPrimOrder { path, order, .. } => {
                 let prim_sdf = parse_prim_path(&path)?;
-                if prim_sdf.is_property_path() {
+                if prim_sdf.is_property() {
                     return Err(DocumentError::ValidationFailed(format!(
                         "SetPrimOrder target {path} must name a prim, not a property"
                     )));
@@ -4074,7 +4120,8 @@ impl<'a> UsdEditSession<'a> {
 
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, sdf::FieldKey::PrimOrder.as_str())
+                    .spec(&prim_sdf)
+                    .and_then(|spec| spec.get(sdf::FieldKey::PrimOrder.as_str()))
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::TokenVec(names)) => UsdOp::SetPrimOrder {
@@ -4146,22 +4193,23 @@ impl<'a> UsdEditSession<'a> {
                 // can't reproduce, falls back to the snapshot.
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, sdf::FieldKey::ApiSchemas.as_str())
+                    .spec(&prim_sdf)
+                    .and_then(|spec| spec.get(sdf::FieldKey::ApiSchemas.as_str()))
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::TokenListOp(op))
-                        if !op.explicit
-                            && op.explicit_items.is_empty()
-                            && op.added_items.is_empty()
-                            && op.appended_items.is_empty()
-                            && op.deleted_items.is_empty()
-                            && op.ordered_items.is_empty() =>
+                        if !op.is_explicit()
+                            && op.explicit_items().is_empty()
+                            && op.added_items().is_empty()
+                            && op.appended_items().is_empty()
+                            && op.deleted_items().is_empty()
+                            && op.ordered_items().is_empty() =>
                     {
                         UsdOp::SetApiSchemas {
                             edit_target: id,
                             path: path.clone(),
                             schemas: op
-                                .prepended_items
+                                .prepended_items()
                                 .iter()
                                 .map(|t| t.as_str().to_string())
                                 .collect(),
@@ -4217,7 +4265,8 @@ impl<'a> UsdEditSession<'a> {
                 // snapshot, the only way to express "unselected" on undo.
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, sdf::FieldKey::VariantSelection.as_str())
+                    .spec(&prim_sdf)
+                    .and_then(|spec| spec.get(sdf::FieldKey::VariantSelection.as_str()))
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::VariantSelectionMap(ref m))
@@ -4261,12 +4310,13 @@ impl<'a> UsdEditSession<'a> {
                 // list op falls back to the snapshot rather than restore lossily.
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, sdf::FieldKey::Payload.as_str())
+                    .spec(&prim_sdf)
+                    .and_then(|spec| spec.get(sdf::FieldKey::Payload.as_str()))
                     .cloned();
                 let inverse = match prior {
                     Some(sdf::Value::PayloadListOp(op))
-                        if op.explicit
-                            && op.explicit_items.iter().all(|p| {
+                        if op.is_explicit()
+                            && op.explicit_items().iter().all(|p| {
                                 p.prim_path.is_empty()
                                     && p.layer_offset == sdf::LayerOffset::IDENTITY
                             }) =>
@@ -4275,7 +4325,7 @@ impl<'a> UsdEditSession<'a> {
                             edit_target: id,
                             path: path.clone(),
                             asset_paths: op
-                                .explicit_items
+                                .explicit_items()
                                 .iter()
                                 .map(|p| p.asset_path.clone())
                                 .collect(),
@@ -4312,7 +4362,7 @@ impl<'a> UsdEditSession<'a> {
                 ..
             } => {
                 let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(prim) if !prim.is_property() => prim,
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetReferenceArcs target `{path}` must name a prim, not a property"
@@ -4340,7 +4390,8 @@ impl<'a> UsdEditSession<'a> {
                 // losing authored USD information.
                 let prior = self
                     .layer(target)
-                    .field(&prim_sdf, sdf::FieldKey::References.as_str())
+                    .spec(&prim_sdf)
+                    .and_then(|spec| spec.get(sdf::FieldKey::References.as_str()))
                     .cloned();
                 let inverse = prior
                     .and_then(|value| match value {
@@ -4380,7 +4431,8 @@ impl<'a> UsdEditSession<'a> {
                 // the prim's actual active value.
                 let inverse = match self
                     .layer(target)
-                    .field(&prim_path, sdf::FieldKey::Active.as_str())
+                    .spec(&prim_path)
+                    .and_then(|spec| spec.get(sdf::FieldKey::Active.as_str()))
                     .cloned()
                 {
                     Some(sdf::Value::Bool(previous)) => UsdOp::SetActive {
@@ -4424,7 +4476,8 @@ impl<'a> UsdEditSession<'a> {
                 };
                 let inverse = match self
                     .layer(target)
-                    .field(&prim_path, sdf::FieldKey::Active.as_str())
+                    .spec(&prim_path)
+                    .and_then(|spec| spec.get(sdf::FieldKey::Active.as_str()))
                     .cloned()
                 {
                     Some(sdf::Value::Bool(previous)) => UsdOp::SetActive {

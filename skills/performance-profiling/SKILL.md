@@ -186,6 +186,18 @@ visibility, night and invalid-admission gates. Compare the actual solar zones
 in matched settled captures; a smaller synthetic lookup time is not whole-tick
 or graphics acceptance.
 
+Measure first scene readiness against the requested active Twin and spawned
+physical root. Bootstrap readiness precedes Twin admission; do not use a minimum
+elapsed-time filter to distinguish them. Record landing as a separate mission
+milestone. Preserve source hashes and native construction/cache accounting.
+
+For USD startup snapshots, attribute native path/field resolution separately from
+file loading and ECS publication. Share the library's `BindingCache` only within
+one immutable stage snapshot; preserve purpose resolution, native collection
+membership and invalid material-target errors. Qualify an SDK update against the
+same Twin revision and a regular production readiness/landing run before claiming
+a loading gain. Dependency source edits still require explicit permission.
+
 ## Architecture checks
 
 Frame-conversion and collider-admission kernels are owned by

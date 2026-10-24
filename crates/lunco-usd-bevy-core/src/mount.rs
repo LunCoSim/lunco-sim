@@ -192,7 +192,7 @@ pub fn read_sockets(reader: &lunco_usd_bevy_stage::StageView<'_>, host: &str) ->
     let mut out = Vec::new();
     let mut diagnostics = Vec::new();
     for child in reader.rel_targets(&host_path, "lunco:mount:sockets") {
-        if child.is_property_path() || !lunco_usd_bevy_stage::is_descendant_or_self(&child, host) {
+        if child.is_property() || !lunco_usd_bevy_stage::is_descendant_or_self(&child, host) {
             reject_socket(
                 &mut diagnostics,
                 host,
@@ -294,14 +294,12 @@ pub fn read_sockets(reader: &lunco_usd_bevy_stage::StageView<'_>, host: &str) ->
         }
         let part = match part_targets.into_iter().next() {
             Some(path) => {
-                if path.is_property_path()
-                    || !lunco_usd_bevy_stage::is_descendant_or_self(&path, host)
-                {
+                if path.is_property() || !lunco_usd_bevy_stage::is_descendant_or_self(&path, host) {
                     reject_socket(
                         &mut diagnostics,
                         host,
                         child.as_str(),
-                        if path.is_property_path() {
+                        if path.is_property() {
                             "part target must be a prim, not a property".to_string()
                         } else {
                             format!("part target {} is outside host", path.as_str())
@@ -370,7 +368,7 @@ pub fn read_attachment_joint(
         return None;
     }
     let targets = reader.rel_targets(&part_path, "lunco:mount:attachmentJoint");
-    if targets.len() != 1 || targets[0].is_property_path() {
+    if targets.len() != 1 || targets[0].is_property() {
         bevy::log::warn!(
             "attached component {} must have exactly one prim-valued attachment joint",
             part

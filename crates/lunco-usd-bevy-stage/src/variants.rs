@@ -1,7 +1,7 @@
 //! Enumerate the variants a layer or stage **offers**.
 //!
 //! Composition answers "which variant is selected" — [`usd::Prim::variant_sets`]
-//! → `get_all_variant_selections` gives that, correctly across reference arcs.
+//! → `selections` gives that, correctly across reference arcs.
 //! It cannot answer "which variants COULD be selected", because a composed
 //! stage only ever shows one selection at a time. Anything offering a choice —
 //! an Inspector picker, a validation pass that probes every variant — needs the

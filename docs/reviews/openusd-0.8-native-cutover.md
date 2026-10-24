@@ -321,7 +321,7 @@ Evidence is in `/tmp/luncosim-native-purpose-*.log`.
 ## Native effective visibility
 
 `UsdRead::effective_visibility` carries the SDK's checked `PurposeVisibility`
-result. Live reads use `ImageableExt::compute_effective_visibility` for the
+result. Live reads use `ImageableExt::effective_visibility` for the
 resolved purpose; prepared plans preserve that native result and reject failed
 reads before publication. The boolean helper and its error-to-visible
 substitution are removed. Standard `VisibilityAPI` guide opinions can explicitly
@@ -485,7 +485,7 @@ port release were verified. Evidence is in `/tmp/luncosim-native-reset-stack-*.l
 ## Native UsdShade surface terminals
 
 `UsdRead::bound_shader` resolves the universal surface through native
-`Material::compute_surface_source`, including NodeGraphs. Native material
+`Material::surface_source`, including NodeGraphs. Native material
 binding reads preserve errors and validate the bound Material schema. The
 preparation worker captures the Shader path and rejects malformed connected
 graphs; live consumers use the same contract. Rendering, animation, WESL
@@ -533,7 +533,7 @@ validate runtime material intent and do not establish GPU appearance.
    stages. The dependent-layer consumer must use its native owner before that
    merge and its tests can be deleted.
    Native `Stage::flatten` resolves and removes composition arcs, so it cannot replace an authored-layer merge or save.
-   Dictionary fields in the remaining transport use native `sdf::dictionary_over`
+   Dictionary fields in the remaining transport use native `sdf::Dictionary::over`
    for recursive stronger-over-weaker composition; list operations use native
    `ListOp::combined_with`. The nested dictionary regression preserves weaker
    keys and stronger scalar opinions through this pure Sdf-data seam.

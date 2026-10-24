@@ -2911,9 +2911,9 @@ pub fn resolve_member_classes(
             for member in members {
                 let is_program = view.has_api_schema(&member, "LunCoProgramAPI");
                 let is_force_actuator = !explicit_synthesizer
-                    && !member.is_property_path()
+                    && !member.is_property()
                     && view.has_api_schema(&member, "LunCoForceActuatorAPI");
-                if !member.is_property_path() {
+                if !member.is_property() {
                     member_roles.push((member.to_string(), is_force_actuator, is_program));
                 }
                 if !is_program {

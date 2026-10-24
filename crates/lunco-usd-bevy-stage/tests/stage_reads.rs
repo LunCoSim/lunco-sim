@@ -412,43 +412,10 @@ mod stage_view_tests {
     }
 
     /// A later `over` must not erase the `def` it shares a layer and a path with.
-    ///
-    /// THE ACTUAL SOLAR BUG, minimised. Not list ops, not reference depth — the
-    /// three tests above prove both of those compose correctly. Every broken
-    /// solar asset writes the panel TWICE in one layer:
-    ///
-    ///     def Xform "SolarPanel" (
-    ///         prepend references = @…/solar_panel.usda@</SolarPanel>
-    ///     ) { … }
-    ///     …
-    ///     over "SolarPanel" {
-    ///         custom token connectors:p.connect = </…/Battery.connectors:p>
-    ///     }
-    ///
-    /// Two prim specs, one path, one layer. MEASURED on the shipped
-    /// `scenes/luncosim/solar_rover_demo.usda`: the composed panel has NO children,
-    /// NO `LunCoProgramAPI`, NO `info:sourceAsset`, and exactly one attribute —
-    /// `connectors:p`, the one the `over` authored. The `over` won and the `def`,
-    /// with its reference to the whole component, was dropped.
-    ///
-    /// The downstream symptom is a lie about a different thing entirely: the panel
-    /// IS in the composed collection, but `read_network` skips members without
-    /// `LunCoProgramAPI`, so `project_domain_islands` reports it as
-    /// `outside collection` and rejects every solar rover in the repo.
-    ///
-    /// The sibling `over` is what a nearby prim is legitimately edited with, so
-    /// this shape reads as normal. It is only wrong when it names a prim the SAME
-    /// layer already `def`s — then the two opinions must merge, and the reference
-    /// must survive.
-    ///
-    /// IGNORED, and the assets were fixed instead. This is a defect in the
-    /// composition engine (the `openusd` fork), which this repo cannot fix from
-    /// here; every shipped asset has been rewritten to one spec per prim, and
-    /// The production scene/Rhai gates cover the shipped asset wiring. Run this
-    /// synthetic seam when the OpenUSD fork is touched: the day it passes, this
-    /// shape stops being a trap.
+    /// Native parser limitation: repeated same-path prim specs in one layer
+    /// replace the earlier spec. Shipped sources use one spec per prim.
     #[test]
-    #[ignore = "openusd fork: a later same-path `over` erases the `def`'s reference; assets are authored around it"]
+    #[ignore = "upstream OpenUSD parser replaces a repeated same-path prim spec"]
     fn sibling_over_does_not_erase_a_def_in_the_same_layer() {
         let part = "#usda 1.0\n\
              (\n\
@@ -930,8 +897,8 @@ def Xform "World" {
     let second = CollectionAPI::from_prim_unchecked(stage.prim("/World/Second")?, "members");
     let expression =
         CollectionAPI::from_prim_unchecked(stage.prim("/World/Expression")?, "members");
-    assert!(first.compute_membership_query()? == second.compute_membership_query()?);
-    assert!(expression.compute_membership_query()? != expression.compute_membership_query()?);
+    assert!(first.membership_query()? == second.membership_query()?);
+    assert!(expression.membership_query()? != expression.membership_query()?);
     let plan = UsdStageProjectionPlan::from_stage(&stage)?;
     let live = StageView::new(&stage);
     for name in ["First", "Second", "Expression"] {

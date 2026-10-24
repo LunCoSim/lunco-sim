@@ -8,7 +8,7 @@
 //! (`LoadContext::read_asset_bytes`, native + wasm) and hands the bytes here. The
 //! composition core never touches the filesystem (confirmed: all production
 //! `std::fs` in openusd lives in `ar::DefaultResolver`, which we don't use, and
-//! the `get_modification_timestamp` default, which we override).
+//! the `modification_timestamp` default, which we override).
 //!
 //! Identifiers and the loader's pre-fetch BFS share [`canonicalize_at`], so a
 //! fetched layer has the same identity OpenUSD later resolves. Native roots use
@@ -256,7 +256,7 @@ impl ar::Resolver for LuncoUsdResolver {
 
     /// Override the one fs-touching default (`fs::metadata`) so composition is
     /// 100% filesystem-free.
-    fn get_modification_timestamp(
+    fn modification_timestamp(
         &self,
         _asset_path: &str,
         _resolved_path: &ResolvedPath,

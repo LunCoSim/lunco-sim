@@ -153,7 +153,7 @@ fn local_to_parent_matrix_d_at(
             .prim(path.clone())
             .expect("validated USD path"),
     )
-    .local_transformation(openusd::usd::TimeCode::new(time))
+    .local_transform(openusd::usd::TimeCode::new(time))
     .map_err(|_| malformed_transform(path))?;
     // Gf matrices are row-major for row-vector transforms. Interpreting that
     // storage as Bevy columns transposes into the equivalent column-vector

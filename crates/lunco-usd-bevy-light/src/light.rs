@@ -174,7 +174,7 @@ pub fn untextured_dome_intensity_sum(
 
 fn require_static_dome_input(attribute: &openusd::usd::Attribute) -> Result<(), LightReadError> {
     if attribute
-        .value_might_be_time_varying()
+        .might_be_time_varying()
         .map_err(|_| LightReadError)?
         || !attribute
             .connections()

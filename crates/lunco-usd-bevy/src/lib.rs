@@ -683,7 +683,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         let sdf_path = match SdfPath::new(&resolved_path) {
             Ok(path)
                 if path.is_abs()
-                    && !path.is_property_path()
+                    && !path.is_property()
                     && (path.is_abs_root() || reader.has_prim(&path)) =>
             {
                 path

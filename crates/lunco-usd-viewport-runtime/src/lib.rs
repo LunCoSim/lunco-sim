@@ -289,9 +289,7 @@ fn on_set_usd_prim_display_mode(
         && !request.path.is_empty()
         && request.path.starts_with('/')
         && SdfPath::new(&request.path).is_ok_and(|path| {
-            !path.is_abs_root()
-                && !path.is_property_path()
-                && !path.is_prim_variant_selection_path()
+            !path.is_abs_root() && !path.is_property() && !path.is_variant_selection()
         });
     if !valid_prim_path {
         warn!("ignoring invalid USD prim display path `{}`", request.path);

@@ -15,7 +15,7 @@
 //! ## Where the two halves come from
 //!
 //! - **Current selection** — [`Prim::variant_sets`] →
-//!   `get_all_variant_selections`, which is the *composed* answer and therefore
+//!   `selections`, which is the *composed* answer and therefore
 //!   correct across reference arcs (a wrapper scene that references another and
 //!   pins a selection reports the pinned one).
 //! - **Available options** — composition can only ever show ONE selection at a
@@ -153,7 +153,7 @@ pub fn produce_usd_variant_view(
             .prim(&sdf)
             .expect("validated USD path")
             .variant_sets()
-            .get_all_variant_selections()
+            .selections()
         {
             Ok(s) => s,
             Err(_) => continue,

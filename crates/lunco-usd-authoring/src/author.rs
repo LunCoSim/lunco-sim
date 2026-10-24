@@ -177,7 +177,7 @@ pub fn snapshot_child_order(
     child: &str,
 ) -> Result<Vec<String>> {
     let value = data
-        .get_field(parent, field)
+        .field(parent, field)
         .map_err(|error| anyhow!("read {field} at {parent}: {error}"))?;
     let order = match value.as_ref() {
         sdf::Value::TokenVec(values) => values.iter().map(ToString::to_string).collect(),
@@ -378,7 +378,7 @@ fn remapped_snapshot_specs(
         if let Some(fields) = source.list_fields(&source_path) {
             for field in fields {
                 let value = source
-                    .get_field(&source_path, &field)
+                    .field(&source_path, &field)
                     .map_err(|error| {
                         anyhow!("read history field {field} at {source_path}: {error}")
                     })?
@@ -796,7 +796,8 @@ pub fn value_to_literal(type_name: &str, value: Value) -> Option<String> {
 /// The dependent stage retains its native composition arcs, so this transport
 /// combines local Sdf opinions while preserving reference, payload and variant
 /// specs. Runtime stage reads and document inspection use native composition.
-pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
+/// Returns an error if a composite opinion cannot be reduced losslessly.
+pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> Result<sdf::Data> {
     let mut out = base.clone();
     for (path, rspec) in runtime.iter() {
         match out.spec_mut(path) {
@@ -832,7 +833,9 @@ pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
                         // path), an `over` with no underlying `def` defines
                         // nothing, so the whole subtree would silently vanish.
                         merge_specifier(bspec, value);
-                    } else if let Some(merged) = merge_composite(bspec.get(key), value) {
+                    } else if let Some(merged) = merge_composite(bspec.get(key), value)
+                        .map_err(|error| anyhow!("compose field {key} at {path}: {error}"))?
+                    {
                         // Dictionaries merge key-wise, list-ops compose stronger-
                         // over-weaker — never wholesale replacement.
                         bspec.add(key, merged);
@@ -849,7 +852,7 @@ pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Compose the runtime `specifier` opinion onto the base spec: the composed
@@ -892,25 +895,34 @@ fn merge_specifier(bspec: &mut SpecData, rval: &Value) {
 /// op applied over the weaker (native `ListOp::combined_with`, its
 /// `SdfListOp::ComposeAndReduce`). An explicit stronger op still replaces the
 /// weaker entirely, exactly as the spec requires. Returns `None` for every
-/// other pairing — the caller then replaces plainly.
-fn merge_composite(base: Option<&Value>, runtime: &Value) -> Option<Value> {
+/// other pairing — the caller then replaces plainly. Rejects list operations
+/// whose composition cannot be represented losslessly by one layer.
+fn merge_composite(base: Option<&Value>, runtime: &Value) -> Result<Option<Value>> {
     use Value as V;
-    Some(match (runtime, base?) {
+    let Some(base) = base else {
+        return Ok(None);
+    };
+    let merged = match (runtime, base) {
         (V::Dictionary(r), V::Dictionary(b)) => {
             let mut merged = r.clone();
-            sdf::dictionary_over(&mut merged, b.clone());
-            V::Dictionary(merged)
+            merged.over(b.clone());
+            Some(V::Dictionary(merged))
         }
-        (V::TokenListOp(r), V::TokenListOp(b)) => V::TokenListOp(r.combined_with(b)),
-        (V::StringListOp(r), V::StringListOp(b)) => V::StringListOp(r.combined_with(b)),
-        (V::PathListOp(r), V::PathListOp(b)) => V::PathListOp(r.combined_with(b)),
-        (V::ReferenceListOp(r), V::ReferenceListOp(b)) => V::ReferenceListOp(r.combined_with(b)),
-        (V::PayloadListOp(r), V::PayloadListOp(b)) => V::PayloadListOp(r.combined_with(b)),
-        (V::IntListOp(r), V::IntListOp(b)) => V::IntListOp(r.combined_with(b)),
-        (V::Int64ListOp(r), V::Int64ListOp(b)) => V::Int64ListOp(r.combined_with(b)),
-        (V::UIntListOp(r), V::UIntListOp(b)) => V::UIntListOp(r.combined_with(b)),
-        (V::UInt64ListOp(r), V::UInt64ListOp(b)) => V::UInt64ListOp(r.combined_with(b)),
-        _ => return None,
+        (V::TokenListOp(r), V::TokenListOp(b)) => r.combined_with(b).map(V::TokenListOp),
+        (V::StringListOp(r), V::StringListOp(b)) => r.combined_with(b).map(V::StringListOp),
+        (V::PathListOp(r), V::PathListOp(b)) => r.combined_with(b).map(V::PathListOp),
+        (V::ReferenceListOp(r), V::ReferenceListOp(b)) => {
+            r.combined_with(b).map(V::ReferenceListOp)
+        }
+        (V::PayloadListOp(r), V::PayloadListOp(b)) => r.combined_with(b).map(V::PayloadListOp),
+        (V::IntListOp(r), V::IntListOp(b)) => r.combined_with(b).map(V::IntListOp),
+        (V::Int64ListOp(r), V::Int64ListOp(b)) => r.combined_with(b).map(V::Int64ListOp),
+        (V::UIntListOp(r), V::UIntListOp(b)) => r.combined_with(b).map(V::UIntListOp),
+        (V::UInt64ListOp(r), V::UInt64ListOp(b)) => r.combined_with(b).map(V::UInt64ListOp),
+        _ => return Ok(None),
+    };
+    merged.map(Some).ok_or_else(|| {
+        anyhow!("list operations cannot be represented losslessly in one authored layer")
     })
 }
 
@@ -1114,8 +1126,8 @@ def "Part" { double referenced = 23 }
         let reparsed = usda_to_data(&text).unwrap();
         match reparsed.spec(&prim).and_then(|s| s.get("references")) {
             Some(Value::ReferenceListOp(op)) => {
-                assert_eq!(op.explicit_items.len(), 1);
-                assert_eq!(op.explicit_items[0].asset_path, "vessels/rover.usda");
+                assert_eq!(op.explicit_items().len(), 1);
+                assert_eq!(op.explicit_items()[0].asset_path, "vessels/rover.usda");
             }
             other => panic!("expected a ReferenceListOp at {prim}, got {other:?}"),
         }
@@ -1252,7 +1264,7 @@ def "Part" { double referenced = 23 }
         )
         .unwrap();
 
-        let composed = compose_layers(&base, &runtime);
+        let composed = compose_layers(&base, &runtime).unwrap();
 
         // Runtime attribute opinion wins.
         assert_eq!(
@@ -1297,7 +1309,7 @@ def "Part" { double referenced = 23 }
             "#usda 1.0\nover \"World\"\n{\n    over \"Box\"\n    {\n        double radius = 7\n    }\n}\n",
         )
         .unwrap();
-        let composed = compose_layers(&base, &runtime);
+        let composed = compose_layers(&base, &runtime).unwrap();
 
         // Specifier stays `def` on every overridden prim (not downgraded to over).
         for p in ["/World", "/World/Box"] {
@@ -1353,7 +1365,7 @@ def "Part" { double referenced = 23 }
         // Runtime sparse `over` touching only `a` — the shape SetAttribute authors.
         let runtime =
             usda_to_data("#usda 1.0\nover \"P\"\n{\n    custom float a = 9.0\n}\n").unwrap();
-        let composed = compose_layers(&base, &runtime);
+        let composed = compose_layers(&base, &runtime).unwrap();
         let text = data_to_usda(&composed).unwrap();
         let reparsed = usda_to_data(&text).unwrap();
         let p = SdfPath::new("/P").unwrap();
@@ -1387,7 +1399,7 @@ def "Part" { double referenced = 23 }
         )
         .unwrap();
         let runtime = usda_to_data("#usda 1.0\nover \"P\"\n{\n    double r = 7\n}\n").unwrap();
-        let composed = compose_layers(&base, &runtime);
+        let composed = compose_layers(&base, &runtime).unwrap();
         let attr = SdfPath::new("/P.r").unwrap();
         let spec = composed.spec(&attr).unwrap();
         assert_eq!(
@@ -1413,7 +1425,7 @@ def "Part" { double referenced = 23 }
             "#usda 1.0\nover \"P\"\n{\n    custom float a = 1.0 (\n        customData = {\n            double max = 99\n            dictionary limits = { double max = 77 }\n            token mode = \"runtime\"\n        }\n    )\n}\n",
         )
         .unwrap();
-        let composed = compose_layers(&base, &runtime);
+        let composed = compose_layers(&base, &runtime).unwrap();
         let attr = SdfPath::new("/P.a").unwrap();
         let dict = match composed.spec(&attr).and_then(|s| s.get("customData")) {
             Some(Value::Dictionary(d)) => d.clone(),
@@ -1444,7 +1456,7 @@ def "Part" { double referenced = 23 }
     fn compose_layers_runtime_class_wins_over_base_def() {
         let base = usda_to_data("#usda 1.0\ndef Xform \"P\"\n{\n}\n").unwrap();
         let runtime = usda_to_data("#usda 1.0\nclass Xform \"P\"\n{\n}\n").unwrap();
-        let composed = compose_layers(&base, &runtime);
+        let composed = compose_layers(&base, &runtime).unwrap();
         let spec = composed.spec(&SdfPath::new("/P").unwrap()).unwrap();
         assert!(
             matches!(
@@ -1455,12 +1467,27 @@ def "Part" { double referenced = 23 }
         );
     }
 
+    #[test]
+    fn compose_layers_rejects_irreducible_list_operations_without_mutating_inputs() {
+        let base = usda_to_data("#usda 1.0\ndef Xform \"P\" (append apiSchemas = [\"Weak\"]) {}\n")
+            .unwrap();
+        let runtime =
+            usda_to_data("#usda 1.0\nover \"P\" (add apiSchemas = [\"Strong\"]) {}\n").unwrap();
+        let base_before = data_to_usda(&base).unwrap();
+        let runtime_before = data_to_usda(&runtime).unwrap();
+        let error = compose_layers(&base, &runtime).unwrap_err().to_string();
+        assert!(error.contains("apiSchemas at /P"), "{error}");
+        assert!(error.contains("losslessly"), "{error}");
+        assert_eq!(data_to_usda(&base).unwrap(), base_before);
+        assert_eq!(data_to_usda(&runtime).unwrap(), runtime_before);
+    }
+
     /// An empty runtime layer composes to exactly the base.
     #[test]
     fn compose_layers_empty_runtime_is_base() {
         let base = usda_to_data(SCENE).unwrap();
         let empty = usda_to_data("#usda 1.0\n").unwrap();
-        let composed = compose_layers(&base, &empty);
+        let composed = compose_layers(&base, &empty).unwrap();
         assert_eq!(
             composed
                 .prim_type_name(&SdfPath::new("/World/Box").unwrap())

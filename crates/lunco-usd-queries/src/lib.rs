@@ -621,13 +621,13 @@ fn reference_list_value(value: Option<&SdfValue>) -> Result<ApiValue, ApiQueryEr
     };
     Ok(api_value!({
         "present": true,
-        "explicit": op.explicit,
-        "explicit_items": references_api_value(&op.explicit_items),
-        "prepended_items": references_api_value(&op.prepended_items),
-        "appended_items": references_api_value(&op.appended_items),
-        "added_items": references_api_value(&op.added_items),
-        "deleted_items": references_api_value(&op.deleted_items),
-        "ordered_items": references_api_value(&op.ordered_items),
+        "explicit": op.is_explicit(),
+        "explicit_items": references_api_value(op.explicit_items()),
+        "prepended_items": references_api_value(op.prepended_items()),
+        "appended_items": references_api_value(op.appended_items()),
+        "added_items": references_api_value(op.added_items()),
+        "deleted_items": references_api_value(op.deleted_items()),
+        "ordered_items": references_api_value(op.ordered_items()),
         "items": references_api_value(&op.flatten()),
     }))
 }

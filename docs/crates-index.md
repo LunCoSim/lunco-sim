@@ -102,7 +102,8 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 ## 4. USD Integration Layer
 Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation metadata, and materials.
 
-The workspace pins `openusd`, `openusd-schemas`, and `openusd-build` 0.8.0.
+The workspace pins `openusd`, `openusd-schemas`, and `openusd-build` 0.8.0
+to the same maintained upstream Git revision in `Cargo.toml`.
 Core composition and standard schemas come directly from the maintained Rust
 crates. Project declarations are generated from the schema source by
 `openusd-build`; asset provenance comes from native `ResolveInfo`.

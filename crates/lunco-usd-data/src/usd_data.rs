@@ -14,10 +14,6 @@ pub type UsdData = sdf::Data;
 
 /// Ergonomic reads over authored [`sdf::Data`].
 pub trait UsdDataExt {
-    /// The raw value of field `key` on the spec at `path`, if present. (A
-    /// missing spec or field is simply `None`.)
-    fn field(&self, path: &Path, key: &str) -> Option<&Value>;
-
     /// A typed view of field `key` on the spec at `path` (clones then extracts
     /// via `TryFrom<Value>`); `None` if absent or the wrong type.
     fn field_as<T: TryFrom<Value>>(&self, path: &Path, key: &str) -> Option<T>;
@@ -36,12 +32,11 @@ pub trait UsdDataExt {
 }
 
 impl UsdDataExt for sdf::Data {
-    fn field(&self, path: &Path, key: &str) -> Option<&Value> {
-        self.spec(path).and_then(|s| s.get(key))
-    }
-
     fn field_as<T: TryFrom<Value>>(&self, path: &Path, key: &str) -> Option<T> {
-        self.field(path, key).cloned().and_then(|v| v.get::<T>())
+        self.spec(path)
+            .and_then(|spec| spec.get(key))
+            .cloned()
+            .and_then(|v| v.get::<T>())
     }
 
     fn prim_children(&self, path: &Path) -> Vec<Path> {

@@ -29,9 +29,8 @@ pub fn read_drive(
     // distance / s²) scale by metersPerUnit; its stiffness (mass/s²) and
     // damping (mass/s) are distance-free and pass through.
     let conv = lunco_usd_bevy_stage::stage_convention(view).map_err(|_| ())?;
-    let property = |template: &str| {
-        openusd::usd::SchemaRegistry::make_multiple_apply_name_instance(template, ns).to_string()
-    };
+    let property =
+        |template: &str| openusd::usd::SchemaRegistry::make_name_instance(template, ns).to_string();
     let type_name = property(ptok::DRIVE_MULTIPLE_APPLY_TEMPLATE_PHYSICS_TYPE);
     let ty = match view.attr_value(path, &type_name) {
         Some(value) => Some(value.get::<DriveType>().ok_or(())?),
@@ -578,8 +577,7 @@ fn reduce_generic_joint(
     for (inst, axis, is_rot) in DOFS {
         let api_name = format!("{}:{inst}", ptok::PHYSICS_LIMIT_API);
         let property = |template: &str| {
-            openusd::usd::SchemaRegistry::make_multiple_apply_name_instance(template, inst)
-                .to_string()
+            openusd::usd::SchemaRegistry::make_name_instance(template, inst).to_string()
         };
         let read_bound = |name: &str, default: f64| match reader.real(path, name) {
             Some(value) if !value.is_nan() => Some(value),

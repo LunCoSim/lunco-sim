@@ -353,7 +353,7 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
 `clearcoatRoughness`, `useSpecularWorkflow`, `specularColor`.
 
 - **`MaterialBindingAPI` does NOT need applying.** Resolution uses
-  `compute_bound_material` via `::on`, so bindings **inherit down namespace** and
+  `bound_material` via `::on`, so bindings **inherit down namespace** and
   collection-based bindings work (`crates/lunco-usd-bevy/src/lib.rs`). Applying it is harmless.
 - **`primvars:displayColor` must be an ARRAY.** `color3f[] primvars:displayColor
   = [(r,g,b)]`. A scalar `color3f` is silently ignored, and the bare

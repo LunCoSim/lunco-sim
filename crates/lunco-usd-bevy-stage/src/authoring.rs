@@ -5,12 +5,14 @@
 //! [`crate::read`] and [`crate::view`].
 
 use lunco_usd_compose::parse_usda;
-use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{Data, Path as SdfPath, Value};
 
 /// Read the `defaultPrim` authored on a layer, without composition.
 pub fn layer_default_prim(layer: &lunco_usd_data::usd_data::UsdData) -> Option<String> {
-    let name = layer.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
+    let name = layer
+        .spec(&SdfPath::abs_root())
+        .and_then(|spec| spec.get("defaultPrim"))?
+        .as_str()?;
     (!name.is_empty()).then(|| name.to_string())
 }
 
@@ -35,7 +37,10 @@ impl DefaultPrim {
     /// `defaultPrim`; `Err` means the source itself could not be parsed.
     pub fn parse_result(text: &str) -> Result<Option<Self>, String> {
         let data = parse_usda(text).map_err(|error| error.to_string())?;
-        let Some(default_prim) = data.field(&SdfPath::abs_root(), "defaultPrim") else {
+        let Some(default_prim) = data
+            .spec(&SdfPath::abs_root())
+            .and_then(|spec| spec.get("defaultPrim"))
+        else {
             return Ok(None);
         };
         let Some(name) = default_prim.as_str() else {
@@ -59,13 +64,16 @@ impl DefaultPrim {
     /// Raw default-time value of `attr`, as authored.
     pub fn value(&self, attr: &str) -> Option<&Value> {
         let attr_path = self.path.append_property(attr).ok()?;
-        self.data.field(&attr_path, "default")
+        self.data
+            .spec(&attr_path)
+            .and_then(|spec| spec.get("default"))
     }
 
     /// The prim's USD `doc` metadata.
     pub fn documentation(&self) -> Option<String> {
         self.data
-            .field(&self.path, "documentation")
+            .spec(&self.path)
+            .and_then(|spec| spec.get("documentation"))
             .and_then(|value| value.as_str())
             .map(str::to_string)
     }

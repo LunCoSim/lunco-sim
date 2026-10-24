@@ -1882,7 +1882,7 @@ fn collect_vehicle_output_ports(
     source_paths.extend(
         network_members
             .iter()
-            .filter(|path| !path.is_property_path())
+            .filter(|path| !path.is_property())
             .map(|path| path.as_str().to_owned()),
     );
     let mut port_names = Vec::new();

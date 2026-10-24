@@ -365,7 +365,7 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
             .prim(p)
             .expect("validated USD path")
             .variant_sets()
-            .get_all_variant_selections()
+            .selections()
             .map(|selections| {
                 selections
                     .into_iter()

@@ -701,13 +701,13 @@ pub(crate) fn project_stage_changes(world: &mut World) {
             resynced.extend(
                 c.resynced
                     .iter()
-                    .filter(|path| !path.is_property_path())
+                    .filter(|path| !path.is_property())
                     .map(|path| path.to_string()),
             );
             info_only.extend(
                 c.resynced
                     .iter()
-                    .filter(|path| path.is_property_path())
+                    .filter(|path| path.is_property())
                     .map(|path| path.to_string()),
             );
             info_only.extend(c.info_only.iter().map(|p| p.to_string()));

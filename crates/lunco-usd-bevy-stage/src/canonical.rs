@@ -4,7 +4,7 @@
 //! openusd's `Stage` is `Rc`-backed (`!Send`), so the live authoring/runtime
 //! stage lives as a **`NonSend`** resource on the main thread and remains the
 //! source for edits and incremental re-projection. Initial asset materialisation
-//! crosses that membrane as the loader's `Send` [`UsdStageProjectionPlan`], so
+//! crosses that membrane as the loader's `Send` [`crate::UsdStageProjectionPlan`], so
 //! hierarchy and default-time visual reads do not run on the UI thread. The rest
 //! of the engine (render / physics / async) consumes the `Send` ECS components
 //! the projection emits — never the stage.
@@ -29,7 +29,7 @@ use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
 use crate::read::UsdReadSource;
 use crate::view::StageView;
-use crate::{UsdRead, UsdStageAsset, UsdStageProjectionPlan};
+use crate::{UsdRead, UsdStageAsset};
 
 struct ReferenceRecipe {
     recipe: Weak<StageRecipe>,
@@ -768,11 +768,12 @@ impl CanonicalStage {
                     _ => openusd::sdf::ReferenceListOp::default(),
                 };
                 if !op.iter().any(|r| *r == reference) {
-                    if op.explicit {
-                        op.explicit_items.push(reference);
+                    let position = if op.is_explicit() {
+                        openusd::sdf::ListOpType::Explicit
                     } else {
-                        op.prepended_items.push(reference);
-                    }
+                        openusd::sdf::ListOpType::Prepended
+                    };
+                    op.push(position, reference);
                 }
                 Some(openusd::sdf::Value::ReferenceListOp(op))
             })
@@ -1495,7 +1496,7 @@ impl CanonicalStages {
 
 /// Main-thread system: replace the live [`CanonicalStage`] after an authored
 /// asset modification. Initial loading is already represented by the worker
-/// [`UsdStageProjectionPlan`], so an `Added` event does not open OpenUSD on the
+/// [`crate::UsdStageProjectionPlan`], so an `Added` event does not open OpenUSD on the
 /// UI thread. `NonSend` is required because the live `Stage` is `!Send`.
 pub fn sync_canonical_stages(
     mut events: bevy::prelude::MessageReader<bevy::asset::AssetEvent<crate::UsdStageAsset>>,
@@ -2051,7 +2052,7 @@ mod authoring_tests {
                 ("part.usda".to_owned(), b"#usda 1.0\ndef Xform \"Part\" { double value = 1 }\n".to_vec()),
             ]),
         );
-        let mut canonical = CanonicalStage::from_recipe(&recipe).expect("build live stage");
+        let canonical = CanonicalStage::from_recipe(&recipe).expect("build live stage");
         let source =
             lunco_usd_compose::parse_usda("#usda 1.0\ndef Xform \"Part\" { double value = 2 }\n")
                 .expect("parse updated layer");
@@ -2074,8 +2075,6 @@ mod authoring_tests {
 
     #[test]
     fn dependent_layer_patch_updates_only_named_subtree_and_fields() {
-        use lunco_usd_data::usd_data::UsdDataExt;
-
         let initial =
             "#usda 1.0\ndef Xform \"Route\" { def Xform \"W0\" {} }\ndef Cube \"Unrelated\" {}\n";
         let updated = "#usda 1.0\ndef Xform \"Route\" { reorder nameChildren = [\"W1\", \"W0\"] def Xform \"W0\" {} def Xform \"W1\" {} }\ndef Cube \"Unrelated\" {}\n";
@@ -2098,12 +2097,14 @@ mod authoring_tests {
             )
             .expect("patch the authored layer");
 
-        let expected_order = source.field(&route, openusd::sdf::FieldKey::PrimOrder.as_str());
+        let expected_order = source
+            .spec(&route)
+            .and_then(|spec| spec.get(openusd::sdf::FieldKey::PrimOrder.as_str()));
         let actual_order = canonical
             .stage
             .root_layer()
             .data()
-            .get_field(&route, openusd::sdf::FieldKey::PrimOrder.as_str())
+            .field(&route, openusd::sdf::FieldKey::PrimOrder.as_str())
             .ok()
             .map(|value| value.into_owned());
         assert_eq!(

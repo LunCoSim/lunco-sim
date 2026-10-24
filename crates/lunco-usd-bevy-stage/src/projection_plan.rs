@@ -198,6 +198,7 @@ impl UsdStageProjectionPlan {
         // Native query equality certifies reuse only within this immutable stage.
         // Evaluator queries remain distinct under that native contract.
         let mut collection_expansions: Vec<(MembershipQuery, Arc<Vec<String>>)> = Vec::new();
+        let mut material_binding_cache = openusd_schemas::shade::BindingCache::default();
         let mut collection_requests = 0;
         let mut collection_reuses = 0;
         let mut collection_expansion_count = 0;
@@ -313,11 +314,15 @@ impl UsdStageProjectionPlan {
                 bevy::log::debug_span!("usd_projection_material_bindings").entered();
             let mut bound_materials = HashMap::new();
             for purpose in [MaterialPurpose::Render, MaterialPurpose::Physics] {
-                if let Some(material) = reader
-                    .bound_material(&path, purpose)
-                    .map_err(|error| anyhow!(error))?
+                if let Some(material) = crate::material_binding::resolve_bound_material(
+                    &reader,
+                    &path,
+                    purpose,
+                    &mut material_binding_cache,
+                )
+                .map_err(|error| anyhow!(error))?
                 {
-                    bound_materials.insert(purpose, material);
+                    bound_materials.insert(purpose, material.to_string());
                 }
             }
             let bound_shader = if let Some(material) = bound_materials.get(&MaterialPurpose::Render)
@@ -469,7 +474,7 @@ impl UsdStageProjectionPlan {
                                 .collect::<Vec<_>>(),
                         );
                         drop(expansion_span);
-                        if query.expression_evaluator().is_none() {
+                        if query.evaluator().is_none() {
                             collection_expansions.push((query, members.clone()));
                         }
                         Ok(members)
@@ -1058,6 +1063,84 @@ def Scope "Collection" (prepend apiSchemas = ["CollectionAPI:parts"]) {}
                 reader.connections(&root, "inputs:drive"),
                 vec!["/Root.outputs:speed".to_owned()]
             );
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic timing; run explicitly for snapshot read changes"]
+    fn native_projection_snapshot_benchmark() {
+        let mut source =
+            String::from("#usda 1.0\ndef Xform \"RootWithRepresentativeAssemblyNamespace\" {\n");
+        for index in 0..1000 {
+            source.push_str(&format!(
+                "def Xform \"ComponentWithRepresentativeNamespace{index}\" {{\n"
+            ));
+            for field in 0..12 {
+                source.push_str(&format!(
+                    "custom double value{field} = {}\n",
+                    index * 12 + field
+                ));
+            }
+            source.push_str("}\n");
+        }
+        source.push_str("}\n");
+        let recipe = StageRecipe::from_source("snapshot.usda", &source);
+        for complete_recipe in [false, true] {
+            let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+            let mut durations = Vec::new();
+            for _ in 0..5 {
+                let started = std::time::Instant::now();
+                let snapshot = if complete_recipe {
+                    UsdStageProjectionPlan::from_recipe(&recipe).unwrap()
+                } else {
+                    UsdStageProjectionPlan::from_stage(&stage).unwrap()
+                };
+                durations.push(started.elapsed().as_nanos());
+                assert_eq!(snapshot.data.prims.len(), 1001);
+                let path = SdfPath::new("/RootWithRepresentativeAssemblyNamespace/ComponentWithRepresentativeNamespace999").unwrap();
+                assert_eq!(
+                    snapshot.attr_value(&path, "value11"),
+                    Some(Value::Double(11999.0))
+                );
+                std::hint::black_box(snapshot);
+            }
+            durations.sort_unstable();
+            println!(
+                "complete_recipe={complete_recipe} snapshot_ns={durations:?} median_ns={}",
+                durations[2]
+            );
+        }
+    }
+
+    #[test]
+    fn native_invalid_material_bindings_reject_snapshot_admission() {
+        for target in ["Missing", "WrongType"] {
+            let source = format!(
+                r#"#usda 1.0
+                def Cube "Shape" (prepend apiSchemas = ["MaterialBindingAPI"]) {{
+                    rel material:binding = </{target}>
+                }}
+                def Cube "WrongType" {{}}
+            "#
+            );
+            let (stage, _) = crate::compose::build_stage_with_resolver(&StageRecipe::from_source(
+                "scene.usda",
+                &source,
+            ))
+            .unwrap();
+            let path = SdfPath::new("/Shape").unwrap();
+            let live_error = StageView::new(&stage)
+                .bound_material(&path, MaterialPurpose::Render)
+                .unwrap_err();
+            let snapshot_error = UsdStageProjectionPlan::from_stage(&stage)
+                .unwrap_err()
+                .to_string();
+            for error in [live_error, snapshot_error] {
+                assert!(
+                    error.contains(&format!("bound target /{target} is not a Material")),
+                    "{error}"
+                );
+            }
         }
     }
 
