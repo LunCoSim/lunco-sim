@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**275 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**276 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -34,7 +34,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Modelica modeling & simulation**
 
 - [`lunco-modelica-core`](#lunco-modelica-core) (1 command)
-- [`lunco-modelica-ui`](#lunco-modelica-ui) (34 commands)
+- [`lunco-modelica-ui`](#lunco-modelica-ui) (35 commands)
 
 **Co-simulation**
 
@@ -1038,6 +1038,18 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |   |
 | `path` | `String` |   |
 
+#### `SetPlotScrubTime`
+
+ Set the existing historical plot cursor, also consumed by DynamicSelect
+ diagrams. This selects recorded samples; it never advances a simulation.
+
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/plot.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `plot` | `u64` |  Zero selects the canonical Modelica graph. |
+| `time_s` | `Option < f64 >` |  Seconds in the experiment; omitted clears the cursor (latest sample). |
+
 #### `SetPlotSignals`
 
  Replace one plot's exact signal selection. Unlike the additive telemetry
@@ -1239,6 +1251,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `show_controls` | `Option < bool >` |   |
 | `use_authored_colors` | `Option < bool >` |   |
+| `show_hover_values` | `Option < bool >` |   |
 
 #### `SetTheme`
 
@@ -4201,7 +4214,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 275 commands from the runtime schema; scanned 1039 .rs files for docs (0 parse failure(s) skipped).
+<!-- 276 commands from the runtime schema; scanned 1040 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

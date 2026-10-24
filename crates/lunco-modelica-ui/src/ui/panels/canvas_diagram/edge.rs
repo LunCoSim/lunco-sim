@@ -293,7 +293,7 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             let hit = polyline
                 .windows(2)
                 .any(|w| dist_point_to_segment(p, w[0], w[1]) <= HOVER_PX);
-            if hit {
+            if hit && lunco_theme::diagram_hover_values(ctx.ui.ctx()) {
                 let state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
                 let text = edge_hover_text(self, &state);
                 paint_wire_tooltip(painter, p, &text, col);

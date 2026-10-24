@@ -190,6 +190,12 @@ Use `SetPlotSignals` for an exact replacement, including retirement of old live
 bindings and historical picks. An empty selection stays empty; the graph does
 not automatically substitute other variables. An explicit `SetPlotSignals` request seeds the canonical plot through its domain
 owner before its first paint; arbitrary unknown plot IDs are rejected.
+`SetPlotScrubTime {plot:1,time_s:0.5}` selects the existing historical cursor.
+Native DynamicSelect diagrams consume that same sample; it does not advance
+the simulation. Omit `time_s` to return to the latest sample. An authored Rhai
+presentation can move this cursor per captured frame to replay a completed
+experiment with real recorded values. Keep the selected run and document scope
+explicit; this does not synthesize intermediate physics or invent a new run.
 `ConfigureLinePlot` applies one persisted style
 to both: explicit quantity/unit axis labels, line width, plot-only `text_size`, reference Y bounds and
 `show_controls=false`. For one explanatory trace, `show_legend=false` avoids
@@ -206,11 +212,13 @@ horizontal window. `time_window_s=5` sets an initial five-second span; subsequen
 user zoom is retained, and zero uses the current span. Turning follow off
 restores fit-all. These are viewing controls, independent of telemetry retention.
 For clean Modelica and connection diagrams, dispatch
-`ConfigureDiagramPresentation {show_controls:false,use_authored_colors:true}`.
+`ConfigureDiagramPresentation {show_controls:false,use_authored_colors:true,show_hover_values:false}`.
 The shared preferences hide editing and zoom chrome without changing topology,
 models or live values, and keep deliberate dark icons from being inverted by
 the library's default theme adaptation. Presentation programs use this typed
 command; they may not mutate reflected resources directly.
+`show_hover_values=false` suppresses component and wire hover cards while
+retaining the diagram's authored DynamicSelect readouts.
 `FitCanvas` addresses the visible diagram host after moving it into a smaller
 floating panel. Embedded scopes use a `PlotNode` record, bare or qualified as
 `LunCoAnnotations.PlotNode`; arbitrary record names are not plot annotations.

@@ -2440,10 +2440,12 @@ pub(crate) fn register_workbench_appearance_settings_menu(world: &mut World) {
                 .on_hover_text("Hide toolbars, connection-view controls and zoom buttons for a presentation; model contents and live values stay visible.").changed();
             let colors_changed = ui.checkbox(&mut diagrams.use_authored_colors, "Preserve authored diagram colors")
                 .on_hover_text("Use the model's own icon and connection colors, including authored dark backgrounds.").changed();
-            if controls_changed || colors_changed {
+            let hover_changed = ui.checkbox(&mut diagrams.show_hover_values, "Diagram hover values").changed();
+            if controls_changed || colors_changed || hover_changed {
                 ctx.trigger(crate::theme_command::ConfigureDiagramPresentation {
                     show_controls: Some(diagrams.show_controls),
                     use_authored_colors: Some(diagrams.use_authored_colors),
+                    show_hover_values: Some(diagrams.show_hover_values),
                 });
             }
         }

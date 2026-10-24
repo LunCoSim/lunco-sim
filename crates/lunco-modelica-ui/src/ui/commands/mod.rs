@@ -37,7 +37,7 @@ pub use lifecycle::{
     OpenInNewView, PendingCloseAfterSave, PendingTabCloseScopes, TabCloseScope,
 };
 pub use nav::{AutoArrangeDiagram, FitCanvas, FocusComponent, PanCanvas, SetViewMode, SetZoom};
-pub use plot::{AddSignalToPlot, NewPlotPanel, SetPlotSignals};
+pub use plot::{AddSignalToPlot, NewPlotPanel, SetPlotScrubTime, SetPlotSignals};
 // `Exit` now lives in `lunco_api::session` — see `util`.
 
 pub struct ModelicaCommandsPlugin;
@@ -104,6 +104,7 @@ register_commands!(
     diagram::on_add_canvas_plot,
     plot::on_add_signal_to_plot,
     plot::on_set_plot_signals,
+    plot::on_set_plot_scrub_time,
     crate::ui::panels::canvas_diagram::on_auto_arrange_diagram,
     lifecycle::on_create_new_scratch_model,
     lifecycle::on_duplicate_model_from_read_only,

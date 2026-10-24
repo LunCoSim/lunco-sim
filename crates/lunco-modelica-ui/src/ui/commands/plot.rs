@@ -44,15 +44,80 @@ pub struct SetPlotSignals {
     pub target_gid: Option<lunco_core::GlobalEntityId>,
 }
 
+/// Set the existing historical plot cursor, also consumed by DynamicSelect
+/// diagrams. This selects recorded samples; it never advances a simulation.
+#[Command(default)]
+pub struct SetPlotScrubTime {
+    /// Zero selects the canonical Modelica graph.
+    pub plot: u64,
+    /// Seconds in the experiment; omitted clears the cursor (latest sample).
+    pub time_s: Option<f64>,
+}
+
+#[on_command(SetPlotScrubTime)]
+pub fn on_set_plot_scrub_time(
+    trigger: On<SetPlotScrubTime>,
+    mut commands: Commands,
+    active_id: Option<Res<lunco_core::ActiveCommandId>>,
+    pending_request: Option<Res<lunco_api::executor::PendingApiRequest>>,
+) {
+    let request = trigger.event().clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .as_ref()
+        .map(|r| r.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let result = (|| {
+            let id = if request.plot == 0 {
+                crate::ui::viz::DEFAULT_MODELICA_GRAPH
+            } else {
+                lunco_viz::VizId(request.plot)
+            };
+            if request.time_s.is_some_and(|t| !t.is_finite()) {
+                return Err("Plot cursor time must be finite".to_string());
+            }
+            if world
+                .resource::<lunco_viz::VisualizationRegistry>()
+                .get(id)
+                .is_none()
+            {
+                return Err(format!("No plot with id={}", id.0));
+            }
+            world
+                .resource_mut::<lunco_experiments_ui::PlotPanelStates>()
+                .set_scrub(id, request.time_s);
+            world.resource_mut::<lunco_experiments_ui::ActivePlot>().0 = Some(id);
+            Ok(lunco_command_contracts::Ack::new(
+                lunco_command_contracts::OpId::new(),
+            ))
+        })();
+        lunco_api::executor::finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            result,
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        );
+    });
+}
+
 #[on_command(SetPlotSignals)]
 pub fn on_set_plot_signals(trigger: On<SetPlotSignals>, mut commands: Commands) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         use lunco_viz::{SignalRef, VisualizationRegistry, VizId, viz::SignalBinding};
-        let id = if request.plot == 0 { crate::ui::viz::DEFAULT_MODELICA_GRAPH } else { VizId(request.plot) };
+        let id = if request.plot == 0 {
+            crate::ui::viz::DEFAULT_MODELICA_GRAPH
+        } else {
+            VizId(request.plot)
+        };
         let entity = match signal_owner(world, request.target_gid) {
             Ok(entity) => entity,
-            Err(error) => { bevy::log::warn!("[SetPlotSignals] {error}"); return; }
+            Err(error) => {
+                bevy::log::warn!("[SetPlotSignals] {error}");
+                return;
+            }
         };
         if request.signals.iter().any(|s| s.trim().is_empty()) {
             bevy::log::warn!("[SetPlotSignals] signal names must not be empty");
@@ -69,13 +134,21 @@ pub fn on_set_plot_signals(trigger: On<SetPlotSignals>, mut commands: Commands) 
             bevy::log::warn!("[SetPlotSignals] no plot with id={}", id.0);
             return;
         };
-        config.inputs = entity.map(|entity| picked.iter().map(|signal|
-            SignalBinding::live(SignalRef::new(entity, signal.clone()), "y")
-        ).collect()).unwrap_or_default();
+        config.inputs = entity
+            .map(|entity| {
+                picked
+                    .iter()
+                    .map(|signal| SignalBinding::live(SignalRef::new(entity, signal.clone()), "y"))
+                    .collect()
+            })
+            .unwrap_or_default();
         let twin = crate::ui::doc_pin::resolved_experiments_doc(world)
             .map(crate::ui::doc_pin::twin_id_for_doc);
-        if let Some(mut states) = world.get_resource_mut::<lunco_experiments_ui::PlotPanelStates>() {
-            if let Some(twin) = twin { states.sync_twin(id, &twin); }
+        if let Some(mut states) = world.get_resource_mut::<lunco_experiments_ui::PlotPanelStates>()
+        {
+            if let Some(twin) = twin {
+                states.sync_twin(id, &twin);
+            }
             let state = states.entry(id);
             state.picked_vars = picked;
             // An explicit empty selection is also intentional.

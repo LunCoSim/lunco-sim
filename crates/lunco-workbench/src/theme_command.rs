@@ -55,6 +55,7 @@ pub struct SetTheme {
 pub struct ConfigureDiagramPresentation {
     pub show_controls: Option<bool>,
     pub use_authored_colors: Option<bool>,
+    pub show_hover_values: Option<bool>,
 }
 
 #[on_command(ConfigureDiagramPresentation)]
@@ -69,6 +70,9 @@ fn on_configure_diagram_presentation(
     }
     if let Some(value) = request.use_authored_colors {
         next.use_authored_colors = value;
+    }
+    if let Some(value) = request.show_hover_values {
+        next.show_hover_values = value;
     }
     settings.set_if_neq(next);
 }
