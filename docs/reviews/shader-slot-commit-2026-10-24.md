@@ -43,3 +43,54 @@ Raw evidence stays ignored under
 `.cache/codex-evidence/performance-20261023/shader-write-borrow-*` and
 `griffin-shader-write-borrow-normal*`. The unused stage-import warning remains.
 Complete loading, coupled-tick and graphics timing requirements remain open.
+
+## Landed native attribution
+
+The separate Tracy build passes in 1m13s. The matching adjacent 0.14.1 collector
+starts before owned PID 135029/API 5187 on profiler port 8425 at 1 kHz. Landing,
+full terrain readiness, five seconds of soak and at least 240 fresh measured
+fixed ticks complete. The inspected image and diagnostics pass, sources remain
+unchanged, and app and collector close normally. The admitted source hashes,
+model commit and native counts match the preceding shader-input capture:
+638 bodies, 20 dynamic, 21 sleeping, 777 colliders, 31 joints, 315 graph pairs
+and zero orphan pairs. Rendering uses the native GPU preparation path.
+
+Native framing and export verify 18,849 blocks, 400,413,842 compressed payload
+bytes and 400,489,244 file bytes, the exact owned PID and 1,000,000 ns sampling
+period. The last 240 complete FixedMain instances span 58,695,170,305 through
+63,150,772,739 ns. Instrumented whole-tick median is 5.484 ms. Inclusive write
+median is 0.880 ms and complete propagation is 1.018 ms; the preceding capture
+observed 1.034 and 1.239 ms. These are different render/host cohorts, so this is
+bounded attribution rather than an isolated shader speedup claim.
+
+The same window shows response handling at 0.877 ms per invocation (478 rows),
+native physics at 1.454 ms and celestial endpoint publication at 0.498 ms.
+Completion admission includes response handling; do not add parent and child
+costs. Native GPU preprocess bind-group preparation is 2.160 ms per frame,
+and shadow instance-buffer preparation is 1.388 ms. These are further graphics
+leads, not evidence that a quality reduction is needed.
+
+The largest constructor is 3.500 seconds, with 16,414 native cache hits in
+16,482 attempts and 68 compilations. Its 3,122 selected CPU samples contain one
+enclosing-function leaf in `program_index_for_output`, versus 157 of 3,133 in
+the preceding capture. Shared-value construction, IR copies, Cranelift and
+native key hashing remain visible; complete loading is still far above target.
+
+The write selection has 220 CPU samples across 240 zones. Saved exact symbol
+indexes and PIE mappings resolve 163 executable leaves and 57 external leaves;
+live admission, name indexes and repeated ECS lookups remain prominent. The
+response selection has 440 samples across 478 invocations: 42 executable leaves
+in SipHash, sixteen in standard-map membership and ten in its random-state
+hasher. `ModelicaModel.inputs` and `.parameters` still use standard maps, whereas
+the observable store uses Bevy's native map. This identifies a first-party
+lookup lead. Any replacement must retain complete live classification and audit
+all consumers; the worker already sorts input names before dispatch.
+
+Per-process pressure telemetry records peak resident sizes of 5,218,732 KiB for
+the app and 1,753,148 KiB for the collector, with about 0.223 seconds of global
+full memory pressure over the complete run. This does not diagnose the preceding
+unqualified capture's long stall. Raw native data and summaries remain ignored
+in `griffin-shader-slot-landed` and `scripts/perf/captures/`.
+The normal production binary is restored after capture by the standard build
+in 2m21s, SHA-256
+`bdee65e9bedba599d4d823ea86cc12ffaed69373625dd6632a3ad9741eb7159d`.

@@ -10,6 +10,13 @@ and changing phases. Griffin's coupled tick remains 3.966 ms despite native Avia
 steps around 0.35 ms; the application bridge remains the profiling priority.
 All original timing targets remain open.
 
+The subsequent valid landed Tracy window uses native GPU preparation and the
+same authored hashes/native counts. Writes are 0.880 ms and complete propagation
+1.018 ms. Response handling, native GPU preparation and the 3.500-second
+constructor remain substantial. CPU samples identify standard-map membership
+and hashing in Modelica response admission as another first-party lead. Normal
+production is restored; capture/sample data remains ignored.
+
 ## Native GPU allocation and scalar output ownership
 
 The desktop uses native PBR instance preparation with a published shader-array
