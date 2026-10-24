@@ -258,10 +258,10 @@ license = "Apache-2.0"
 [workspace.dependencies]
 faer = { version = "0.24.4", default-features = false, features = ["std", "linalg"] }
 kurbo = "0.13.1"
-# Keep astronomy consumers on the same maintained, checked upstream API.
-celestial-core = { git = "https://github.com/gaker/celestial", rev = "609f3fa64d068fd890d713785113803f62a07b94" }
-celestial-ephemeris = { git = "https://github.com/gaker/celestial", rev = "609f3fa64d068fd890d713785113803f62a07b94" }
-celestial-time = { git = "https://github.com/gaker/celestial", rev = "609f3fa64d068fd890d713785113803f62a07b94" }
+# Keep astronomy consumers on one checked native revision.
+celestial-core = { git = "https://github.com/LunCoSim/celestial", rev = "3ceda3bbc8770023e0ab527e826828b7e9bf5aec" }
+celestial-ephemeris = { git = "https://github.com/LunCoSim/celestial", rev = "3ceda3bbc8770023e0ab527e826828b7e9bf5aec" }
+celestial-time = { git = "https://github.com/LunCoSim/celestial", rev = "3ceda3bbc8770023e0ab527e826828b7e9bf5aec" }
 # Slim Bevy: drop everything Modelica/rover workbench provably doesn't
 # use. Defaults pull bevy_audio/vorbis (no audio in the apps),
 # bevy_text/bevy_ui*/bevy_sprite* (egui replaces UI + 2D),

@@ -64,6 +64,14 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   can report success despite a truncated file.
   Native unwrapped CSV rows are grouped by source location; sort by
   `ns_since_start` before reconstructing chronological phases or transitions.
+  Create the ignored capture directory and check that the collector is still
+  alive before launching the app. A failed collector must not leave an
+  unconnected instrumented client accumulating events. If fine executor
+  bookkeeping dominates the diagnostic, a separately labelled cohort may use
+  `RUST_LOG=info,bevy_ecs::schedule::executor=warn`; retain system, schedule and
+  native physics spans and never compare that cohort as an isolated speedup
+  against a different filter. Exact-zone CPU selection matches the zone's own
+  thread: a FixedMain main-thread selection excludes concurrent Bevy workers.
   For sampled CPU stacks within a slow zone, use the read-only
   [`scripts/perf/tracy_samples.cpp`](../../scripts/perf/tracy_samples.cpp) tool
   and its [build/interpretation instructions](../../scripts/perf/README.md#saved-cpu-samples).
@@ -566,8 +574,11 @@ pair geometry and verdict hooks. Use `link_collect_endpoints`,
 `link_terrain_line_of_sight` and `link_verdict_policy` to distinguish snapshot
 preparation, terrain marching and typed-policy marshalling/execution. Pair
 spans contain terrain and policy spans; do not add inclusive durations.
-The analytic provider's exact-epoch cache also
-shares native EMB/Earth VSOP operands across dependent bodies. Preserve native
+The analytic provider's exact-epoch cache shares native VSOP2013 EMB and
+ELP/MPP02 Moon operands across dependent bodies. Earth's native
+`heliocentric_position_from_samples` consumes those checked samples. Keep epoch
+validation at their native evaluators and epoch coherence at the provider cache;
+an EMB-only request retains its independent range. Preserve native
 f64 values and formula order; a new epoch bit pattern invalidates final and
 intermediate samples together. Compare public `BodyPosition` results against the
 prior exact artifact at adjacent and revisited epochs before claiming a gain.

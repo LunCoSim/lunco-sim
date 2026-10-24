@@ -3191,7 +3191,7 @@ dependencies = [
 [[package]]
 name = "celestial-core"
 version = "0.1.1-alpha.2"
-source = "git+https://github.com/gaker/celestial?rev=609f3fa64d068fd890d713785113803f62a07b94#609f3fa64d068fd890d713785113803f62a07b94"
+source = "git+https://github.com/LunCoSim/celestial?rev=3ceda3bbc8770023e0ab527e826828b7e9bf5aec#3ceda3bbc8770023e0ab527e826828b7e9bf5aec"
 dependencies = [
  "libm",
  "once_cell",
@@ -3202,7 +3202,7 @@ dependencies = [
 [[package]]
 name = "celestial-ephemeris"
 version = "0.1.1-alpha.2"
-source = "git+https://github.com/gaker/celestial?rev=609f3fa64d068fd890d713785113803f62a07b94#609f3fa64d068fd890d713785113803f62a07b94"
+source = "git+https://github.com/LunCoSim/celestial?rev=3ceda3bbc8770023e0ab527e826828b7e9bf5aec#3ceda3bbc8770023e0ab527e826828b7e9bf5aec"
 dependencies = [
  "celestial-core",
  "celestial-time",
@@ -3214,7 +3214,7 @@ dependencies = [
 [[package]]
 name = "celestial-time"
 version = "0.1.1-alpha.2"
-source = "git+https://github.com/gaker/celestial?rev=609f3fa64d068fd890d713785113803f62a07b94#609f3fa64d068fd890d713785113803f62a07b94"
+source = "git+https://github.com/LunCoSim/celestial?rev=3ceda3bbc8770023e0ab527e826828b7e9bf5aec#3ceda3bbc8770023e0ab527e826828b7e9bf5aec"
 dependencies = [
  "celestial-core",
  "libm",

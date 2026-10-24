@@ -1,5 +1,30 @@
 # High-quality realtime performance handover
 
+## Native celestial operand sharing
+
+[The current settled capture and source audit](celestial-shared-operands-2026-10-24.md)
+identify repeated native EMB and Moon evaluations. The published native fork
+owns composition from shared checked operands; the application retains their
+exact-epoch lifetime and removes its independent Earth evaluator. Eighty-seven
+native checks, eight application checks and the production solar visibility,
+night and invalid-admission gates pass. Five alternating consumer comparisons
+measure 109.926 -> 54.539 ms with the same f64 fingerprint. The baseline's 240
+Moon placement zones are 0.878/1.331 ms median/p95 with Tracy and concurrent
+Tesla load; these are not clean product timings. A separate application
+revision-retention experiment is removed after a 3.2 percent slower paired
+consumer diagnostic. The normal production build is restored. All targets
+remain open.
+
+The final native capture retains exact baseline Twin hashes, nominal landing,
+readiness, clear diagnostics and an inspected image. Moon placement is
+0.263/0.364 ms median/p95 across 240 ticks, versus the baseline's 0.878/1.331 ms;
+different host pressure qualifies this comparison. Normal Griffin remains at
+18.309 s first physics readiness and 4.492/8.688 ms coupled service. Current
+Summer and Tesla ready windows report 3.166/4.738 and 1.573/2.891 ms coupled
+service respectively. Source, workload and mission-acceptance limits are recorded
+in the linked review. Sub-second loading, sub-millisecond coupled ticks and the
+complete graphics target remain unachieved.
+
 ## Native occlusion qualification
 
 [The landed Griffin off/on/off comparison](griffin-native-occlusion-2026-10-24.md)

@@ -34,3 +34,12 @@ unchanged. All original loading, coupled-tick and graphics targets remain open.
 Raw gates, alternating-run logs, binary hashes and cleanup receipt remain
 ignored under `.cache/codex-evidence/performance-20261023/port-inline-*` and
 `port-admission-benchmark-fixture.log`.
+
+The current follow-up measured retaining the global topology revision for
+one immutable transaction while preserving every live owner, slot, metadata,
+value and duplicate-write check. The same consumer diagnostic passes for both
+binaries. Five alternating pairs measure 215.414 ms baseline versus 222.314 ms
+candidate median (3.2 percent slower), with identical final f64 bits. The
+experiment is removed in full; no revision-retention helper or transaction
+field remains. Its baseline test hard link is removed after comparison.
+Raw comparison evidence stays ignored in `port-revision-*`.

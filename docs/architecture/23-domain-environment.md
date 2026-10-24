@@ -197,10 +197,14 @@ from one authored `DistantLight`. Neither choice adds another coordinate or
 time-conversion path.
 
 `lunco-celestial-ephemeris` owns exact-epoch analytical reuse. Its provider cache
-retains both final ecliptic body results and the native heliocentric ICRF f64
-operands used by the EMB, Earth and Moon formulas. Each native VSOP sample is
-evaluated once at a given Julian-Date bit pattern, including a missing result.
-A different epoch clears both sets. Reuse preserves the existing subtraction,
+retains final ecliptic body results, native heliocentric ICRF f64 operands and
+the native geocentric Moon sample. VSOP2013 EMB and ELP/MPP02 Moon each evaluate
+once at a given Julian-Date bit pattern, including a missing result. Native
+`Vsop2013Earth::heliocentric_position_from_samples` composes the checked samples;
+the application does not implement the Earth/Moon relation. The native sample
+calls own epoch validity; the provider's serialized exact-epoch boundary keeps
+their epochs coherent. EMB-only queries retain their independent valid range.
+A different epoch clears all samples. Reuse preserves the existing subtraction,
 rotation and parent-composition order; it does not quantize time or approximate
 positions. The cache belongs to the provider instance and uses its existing
 serialized access boundary.

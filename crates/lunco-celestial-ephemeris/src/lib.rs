@@ -34,6 +34,8 @@ struct EpochPositionCache {
     /// Native heliocentric ICRF samples shared by the Earth/EMB/Moon formulas.
     /// Keep the library's f64 operands so reuse never changes conversion order.
     heliocentric_icrf: HashMap<i32, Option<Vector3>>,
+    /// The Moon's native geocentric sample, including a failed evaluation.
+    geocentric_moon_icrf: Option<Option<Vector3>>,
 }
 
 impl EpochPositionCache {
@@ -48,6 +50,7 @@ impl EpochPositionCache {
             self.epoch_bits = Some(epoch_bits);
             self.positions.clear();
             self.heliocentric_icrf.clear();
+            self.geocentric_moon_icrf = None;
         }
         if let Some(position) = self.positions.get(&body_id) {
             return *position;
@@ -69,11 +72,17 @@ impl EpochPositionCache {
             .entry(body_id)
             .or_insert_with(evaluate)
     }
+
+    fn geocentric_moon_or_evaluate(
+        &mut self,
+        evaluate: impl FnOnce() -> Option<Vector3>,
+    ) -> Option<Vector3> {
+        *self.geocentric_moon_icrf.get_or_insert_with(evaluate)
+    }
 }
 
 /// Concrete implementation of the analytic [`EphemerisProvider`].
 pub struct CelestialEphemerisProvider {
-    earth: Vsop2013Earth,
     emb: Vsop2013Emb,
     moon: ElpMpp02Moon,
     /// Parent relationships from the canonical body catalog.
@@ -95,7 +104,6 @@ impl CelestialEphemerisProvider {
     /// Build the analytic provider with the canonical body's parent tree.
     pub fn new() -> Self {
         Self {
-            earth: Vsop2013Earth::new(),
             emb: Vsop2013Emb,
             moon: ElpMpp02Moon::new(),
             parents: parents_from_registry(),
@@ -114,25 +122,150 @@ impl Default for CelestialEphemerisProvider {
 mod position_cache_tests {
     use super::*;
 
+    #[test]
+    fn geocentric_operand_is_shared_with_exact_epoch_and_failure_lifetime() {
+        let mut cache = EpochPositionCache::default();
+        let calls = std::cell::Cell::new(0);
+        let epoch = 2_461_395.5_f64;
+        let native = Vector3::new(f64::from_bits(1), -0.0, 1.2345678901234567);
+        for body in [EARTH, MOON] {
+            let actual = cache
+                .get_or_evaluate(body, epoch, |cache| {
+                    let position = cache.geocentric_moon_or_evaluate(|| {
+                        calls.set(calls.get() + 1);
+                        Some(native)
+                    })?;
+                    Some(EclipticAu::new(DVec3::new(
+                        position.x, position.y, position.z,
+                    )))
+                })
+                .unwrap()
+                .raw();
+            assert_eq!(
+                actual.to_array().map(f64::to_bits),
+                native.to_array().map(f64::to_bits)
+            );
+        }
+        assert_eq!(calls.get(), 1);
+        let next = f64::from_bits(epoch.to_bits() + 1);
+        for body in [MOON, EARTH] {
+            assert!(
+                cache
+                    .get_or_evaluate(body, next, |cache| {
+                        let _ = cache.geocentric_moon_or_evaluate(|| {
+                            calls.set(calls.get() + 1);
+                            None
+                        })?;
+                        Some(EclipticAu::ZERO)
+                    })
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            calls.get(),
+            2,
+            "a missing same-epoch operand is not retried"
+        );
+        cache.get_or_evaluate(MOON, epoch, |cache| {
+            let _ = cache.geocentric_moon_or_evaluate(|| {
+                calls.set(calls.get() + 1);
+                Some(native)
+            })?;
+            Some(EclipticAu::ZERO)
+        });
+        assert_eq!(calls.get(), 3, "returning to an older epoch recomputes");
+    }
+
+    #[test]
+    fn shared_operands_preserve_native_bits_across_callers() {
+        let earth = Vsop2013Earth::new();
+        let moon = ElpMpp02Moon::new();
+        let cases = [625_295.0, 2_451_545.0, 2_461_395.5, 2_816_795.0].map(|epoch| {
+            let tdb = TDB::from_julian_date(JulianDate::new(epoch, 0.0));
+            let emb = Vsop2013Emb.heliocentric_position(&tdb).unwrap();
+            let earth = earth.heliocentric_position(&tdb).unwrap();
+            let moon = moon.geocentric_position(&tdb).unwrap();
+            let convert =
+                |p: Vector3| equatorial_to_ecliptic(IcrfAu::new(DVec3::new(p.x, p.y, p.z)));
+            let earth = convert(earth - emb);
+            (
+                epoch,
+                [
+                    (
+                        MOON,
+                        (convert(moon) + earth).raw().to_array().map(f64::to_bits),
+                    ),
+                    (EARTH, earth.raw().to_array().map(f64::to_bits)),
+                    (
+                        EARTH_MOON_BARYCENTER,
+                        convert(emb).raw().to_array().map(f64::to_bits),
+                    ),
+                    (SUN, [0.0_f64.to_bits(); 3]),
+                ],
+            )
+        });
+        let provider = CelestialEphemerisProvider::new();
+        std::thread::scope(|scope| {
+            for reverse in [false, true, false, true] {
+                let provider = &provider;
+                let cases = &cases;
+                scope.spawn(move || {
+                    for (epoch, samples) in cases {
+                        for index in 0..samples.len() {
+                            let (body, expected) = samples[if reverse {
+                                samples.len() - 1 - index
+                            } else {
+                                index
+                            }];
+                            let actual = provider
+                                .position(body, *epoch)
+                                .unwrap()
+                                .raw()
+                                .to_array()
+                                .map(f64::to_bits);
+                            assert_eq!(actual, expected, "body {body}, epoch {epoch}");
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn native_epoch_ranges_remain_independent() {
+        let provider = CelestialEphemerisProvider::new();
+        for epoch in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for body in [SUN, EARTH_MOON_BARYCENTER, EARTH, MOON] {
+                assert!(provider.position(body, epoch).is_none());
+            }
+        }
+        let epoch = 3_000_000.0;
+        assert!(provider.position(EARTH_MOON_BARYCENTER, epoch).is_some());
+        assert!(provider.position(EARTH, epoch).is_none());
+        assert!(provider.position(MOON, epoch).is_none());
+        assert!(provider.position(EARTH_MOON_BARYCENTER, epoch).is_some());
+        assert!(provider.position(i32::MAX, epoch).is_none());
+    }
+
     /// Measures exact-epoch native work and the complete provider composition.
     #[test]
     #[ignore = "manual native ephemeris composition measurement"]
     fn native_composition_benchmark() {
         let provider = CelestialEphemerisProvider::new();
+        let earth = Vsop2013Earth::new();
         let epochs = (0..256)
             .map(|sample| 2_461_395.5 + f64::from(sample) / 86_400.0)
             .collect::<Vec<_>>();
+        let emb_read = |tdb: &TDB| provider.emb_heliocentric(tdb);
+        let earth_read = |tdb: &TDB| earth.heliocentric_position(tdb).ok();
         for (name, read) in [
-            (
-                "emb",
-                CelestialEphemerisProvider::emb_heliocentric as fn(&_, &TDB) -> _,
-            ),
-            ("earth", CelestialEphemerisProvider::earth_heliocentric),
+            ("emb", &emb_read as &dyn Fn(&TDB) -> Option<Vector3>),
+            ("earth", &earth_read),
         ] {
             let began = std::time::Instant::now();
             for &epoch in &epochs {
                 let tdb = TDB::from_julian_date(JulianDate::new(epoch, 0.0));
-                let _ = std::hint::black_box(read(&provider, &tdb).unwrap());
+                let _ = std::hint::black_box(read(&tdb).unwrap());
             }
             println!(
                 "NATIVE_EPHEMERIS owner={name} samples=256 elapsed_ns={}",
@@ -287,10 +420,10 @@ impl CelestialEphemerisProvider {
         })
     }
 
-    fn earth_heliocentric(&self, tdb: &TDB) -> Option<Vector3> {
-        self.earth.heliocentric_position(tdb).ok().or_else(|| {
+    fn earth_heliocentric(emb: Vector3, moon: Vector3) -> Option<Vector3> {
+        Vsop2013Earth::heliocentric_position_from_samples(emb, moon).ok().or_else(|| {
             bevy::log::warn_once!(
-                "[ephemeris] VSOP2013 Earth evaluation failed — Earth and Moon will not be placed."
+                "[ephemeris] native Earth position composition failed — Earth and Moon will not be placed."
             );
             None
         })
@@ -357,8 +490,10 @@ impl CelestialEphemerisProvider {
                 let p_emb = cache.heliocentric_or_evaluate(EARTH_MOON_BARYCENTER, || {
                     self.emb_heliocentric(&tdb)
                 })?;
-                let p_earth =
-                    cache.heliocentric_or_evaluate(EARTH, || self.earth_heliocentric(&tdb))?;
+                let p_m_geo =
+                    cache.geocentric_moon_or_evaluate(|| self.moon_geocentric_icrs_au(&tdb))?;
+                let p_earth = cache
+                    .heliocentric_or_evaluate(EARTH, || Self::earth_heliocentric(p_emb, p_m_geo))?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,
@@ -366,7 +501,8 @@ impl CelestialEphemerisProvider {
                 ))))
             }
             MOON => {
-                let p_m_geo = self.moon_geocentric_icrs_au(&tdb)?;
+                let p_m_geo =
+                    cache.geocentric_moon_or_evaluate(|| self.moon_geocentric_icrs_au(&tdb))?;
                 let p_m_geo_au = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_m_geo.x, p_m_geo.y, p_m_geo.z,
                 )));
@@ -374,8 +510,8 @@ impl CelestialEphemerisProvider {
                 let p_emb = cache.heliocentric_or_evaluate(EARTH_MOON_BARYCENTER, || {
                     self.emb_heliocentric(&tdb)
                 })?;
-                let p_earth =
-                    cache.heliocentric_or_evaluate(EARTH, || self.earth_heliocentric(&tdb))?;
+                let p_earth = cache
+                    .heliocentric_or_evaluate(EARTH, || Self::earth_heliocentric(p_emb, p_m_geo))?;
                 let p_earth_rel_emb = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,
