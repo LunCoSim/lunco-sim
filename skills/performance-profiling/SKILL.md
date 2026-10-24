@@ -150,6 +150,10 @@ include its first complete observation. Zero native compilations do not prove
 faster admission: reference evaluation can dominate a large coupled initializer
 even when it avoids JIT work. Keep an evaluator change only when the actual
 scene improves with its numerical contract intact.
+Before changing an artifact-cache codec, sample its complete lookup zone.
+Checked deserialization may spend most of its time reconstructing native
+structural contracts; parsing and decompression must be attributed separately.
+Do not bypass those checks to improve a disk-hit number.
 Shared-value construction also pays for source discovery and symbolic proofs.
 Its read collector shares the exhaustive Solve operand checks in one traversal;
 preserve range/context checks and whole-program equivalence when optimizing it.

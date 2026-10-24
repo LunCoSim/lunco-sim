@@ -12,6 +12,16 @@ Observed readiness is 12.996 s, versus 14.036 s in the preceding source-matched
 normal observation; contention limits timing attribution. Modelica initialization
 remains the next large startup cost. All original timing targets remain open.
 
+A final-pin startup capture observes 1.788 s of native USD facts work and
+3.495 s of coupled session construction. It is startup-only and includes Tracy
+overhead. Native exporters succeed; the owned app/collector exit, with source
+hashes unchanged. The current constructor sample set contains one sample in
+the previously fixed output lookup. Source confirms separate interpreter and
+native derivation of each exact schedule's shared-value proof. The linked
+review records the concrete typed proof-sharing proposal; dependency approval
+is pending. Cache decoding samples primarily identify native structural
+validation, so a codec replacement is not the current repair.
+
 ## Modelica live name indexes
 
 Input and parameter maps use Bevy's reflected native storage. Compile and step

@@ -94,3 +94,50 @@ sub-millisecond coupled tick and graphics targets remain open.
 
 All traces, sampled stacks, process maps, timing receipts and images are ignored
 under `.cache/codex-evidence/performance-20261023/` and `scripts/perf/captures/`.
+
+## Current constructor attribution
+
+The separate final-pin startup capture uses owned PID 971514/API 5202 and
+Tracy collector 8428. Both exit normally, authored hashes remain unchanged and
+the inspected image shows the in-flight lander and terrain. The capture is
+319,878,375 bytes: 14,607 native blocks and 319,819,941 compressed payload bytes.
+Native aggregate and exact-zone exports succeed; CPU sampling is 1,000,000 ns.
+This startup-only run is not a landing or settled frame-time acceptance gate.
+
+Observed native USD facts time is 1.788 s, versus 3.509 s in the SDK-only
+capture. Different concurrent pressure prevents treating that as a controlled
+speed ratio. Requested-Twin/native-physics readiness is 17.929 s with Tracy.
+The initializer constructor is 3.495 s and has 3,010 selected CPU samples,
+with zero missing stacks. The native output lookup fixed earlier appears in
+only one selected sample. Shared-value construction and proof functions appear
+in 505 sampled stacks; these inclusive counts overlap and are not self times.
+
+The next proposed native change belongs to Rumoca's exact refresh schedule
+construction. `InterpretedSchedules::construct` calls `shared_segments`,
+materializes a checked scalar block and retains its interpreter. The native
+backend later calls `compile_exact_assignment_schedule`, which calls
+`shared_segments` again for the same immutable schedule. Both derivations run
+the symbolic equivalence proof and recreate assignment operations.
+
+Proposal: retain one proven `SharedAssignmentSchedule` per issued runtime
+sequence and let the interpreter and native backend consume that typed result.
+The source/owner validation and full equivalence proof remain at construction;
+mutable solver values and output scratch remain instance-owned. Update the
+backend contract and all consumers together, remove the redundant derivation
+entry point, and avoid a global or hash-keyed proof cache. No lifecycle policy
+or Rhai hook belongs in this pure IR construction.
+
+This extends the earlier typed-key optimization into shared proof ownership
+and requires explicit dependency-source/publication approval. Before adopting
+it: cover ordered writes, repeated targets, opaque programs, invalid schedule
+ownership and separate runtime scratch; run the native schedule checks and
+20-model MSL canary, then compare the complete initializer's f64 observations
+and regular Griffin readiness/landing. Profiling alone does not establish the
+size of the potential end-to-end improvement.
+
+The initializer's prepared-cache lookup is 1.129 s in that capture, with
+654 selected CPU samples and no missing stacks. Its leading leaves are native
+dependency walks, assignment-shape construction and coverage validation; JSON
+string parsing accounts for ten samples and zstd decoding for nine. Changing
+cache codecs is not supported as the next optimization by this attribution.
+Retain native checked deserialization.
