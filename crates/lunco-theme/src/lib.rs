@@ -111,9 +111,14 @@ pub fn active(ctx: &egui::Context) -> Arc<Theme> {
 /// Diagram paint policy over the same active theme transport. An authored dark
 /// card must not be inverted a second time when its presentation opts out.
 pub fn diagram_icon_palette(ctx: &egui::Context) -> ModelicaIconPalette {
-    let authored = ctx.data(|data| data.get_temp::<bool>(egui::Id::new("lunco_theme.diagram_authored_colors")))
+    let authored = ctx
+        .data(|data| data.get_temp::<bool>(egui::Id::new("lunco_theme.diagram_authored_colors")))
         .unwrap_or(false);
-    if authored { ModelicaIconPalette::identity() } else { active(ctx).modelica_icons.clone() }
+    if authored {
+        ModelicaIconPalette::identity()
+    } else {
+        active(ctx).modelica_icons.clone()
+    }
 }
 
 /// Supported theme modes.
@@ -1306,7 +1311,7 @@ pub mod fonts;
 /// egui's default font does not cover, so DejaVu is appended in the
 /// `Proportional` / `Monospace` font families.
 pub mod presentation;
-pub use presentation::DiagramPresentationSettings;
+pub use presentation::{DiagramPresentationSettings, diagram_hover_values};
 
 pub struct ThemePlugin;
 
@@ -1353,7 +1358,11 @@ impl Plugin for ThemePlugin {
 ///
 /// Change-driven: the clone only happens when `Theme` actually changes (or on the first
 /// frames, until the context exists).
-fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>, diagrams: Res<DiagramPresentationSettings>) {
+fn publish_active_theme(
+    mut contexts: bevy_egui::EguiContexts,
+    theme: Res<Theme>,
+    diagrams: Res<DiagramPresentationSettings>,
+) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     // `is_changed()` covers insertion, so the first successful frame always publishes.
     // The `get_temp` check re-publishes if egui evicted the entry.
@@ -1365,6 +1374,10 @@ fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>
     let key = egui::Id::new("lunco_theme.diagram_authored_colors");
     if diagrams.is_changed() || ctx.data(|data| data.get_temp::<bool>(key)).is_none() {
         ctx.data_mut(|data| data.insert_temp(key, diagrams.use_authored_colors));
+    }
+    let hover_key = egui::Id::new("lunco_theme.diagram_hover_values");
+    if diagrams.is_changed() || ctx.data(|data| data.get_temp::<bool>(hover_key)).is_none() {
+        ctx.data_mut(|data| data.insert_temp(hover_key, diagrams.show_hover_values));
     }
 }
 

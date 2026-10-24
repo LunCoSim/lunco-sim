@@ -552,7 +552,10 @@ impl NodeVisual for IconNodeVisual {
             .map(|c| canvas_widget_rect.contains(c))
             .unwrap_or(false);
         let is_hovered = cursor.map(|c| rect.contains(c)).unwrap_or(false) && in_canvas;
-        if is_hovered && !self.instance_name.is_empty() {
+        if is_hovered
+            && !self.instance_name.is_empty()
+            && lunco_theme::diagram_hover_values(ctx.ui.ctx())
+        {
             let cursor = cursor.unwrap();
             let snap = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
             let prefix = format!("{}.", self.instance_name);
