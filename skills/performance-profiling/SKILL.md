@@ -678,6 +678,18 @@ steps with 2304 named observables and excludes input/parameter fields. Compare
 the same fixture and retain its exact-value and clock checks. Qualify the
 `modelica_variable_projection` and `modelica_variables_missing` production gates
 and the compiled-metadata editor scenario after changing this boundary.
+For worker-side collection, the ignored solver-owner
+`observation_diagnostics::named_and_batched_observation_collection` compares
+native named-map collection with the public ME batch reader and shared labels.
+Run it with `cargo test --locked -p lunco-modelica-solver --lib
+observation_diagnostics::named_and_batched_observation_collection -j 4 --
+--ignored --nocapture`. It checks all names, f64 bits and current inputs at five
+communication points, then times 512 reads per mode in alternating order.
+Construction, advancement and label preparation are excluded. Do not turn that
+collection result into a complete-worker or coupled-tick claim, duplicate the
+adaptive host constructor, or remove input visibility to bypass an SDK boundary.
+The [owner proposal](../../docs/reviews/modelica-batched-observation-2026-10-24.md)
+records the supported batch APIs and dependency-approval boundary.
 Immutable live solver facts share one `Arc` across the cache, receipt and model;
 do not clone their parameter/input strings on every step. The bridge ownership
 regression checks shared storage as well as terminal metadata rejection.

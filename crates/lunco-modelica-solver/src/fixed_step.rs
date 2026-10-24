@@ -356,3 +356,109 @@ fn reject_unsupported_constructs(
         unsupported.join(", "),
     )))
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod observation_diagnostics {
+    use super::*;
+    use std::{hint::black_box, sync::Arc, time::Instant};
+
+    /// Compare complete observation collection through the existing public ME
+    /// surfaces. Construction and communication-point advancement are excluded.
+    #[test]
+    #[ignore = "manual observation collection timing diagnostic"]
+    fn named_and_batched_observation_collection() {
+        let mut compiler = rumoca_compile::Session::default();
+        compiler
+            .add_document(
+                "observation_probe.mo",
+                r#"
+model ObservationProbe
+  input Real command = 0;
+  parameter Real gain = 2;
+  output Real observed[2304];
+equation
+  for i in 1:2304 loop
+    observed[i] = gain * command + i * time;
+  end for;
+end ObservationProbe;
+"#,
+            )
+            .unwrap();
+        let compiled = compiler
+            .compile_model_dae_strict_reachable_uncached_with_recovery("ObservationProbe")
+            .unwrap();
+        let mut stepper = FixedStepSession::new(
+            &compiled.dae,
+            SimOptions {
+                dt: Some(0.01),
+                t_end: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let labels: Vec<Arc<str>> = stepper
+            .session
+            .output_names()
+            .into_iter()
+            .map(Arc::from)
+            .collect();
+        assert_eq!(labels.len(), 2305);
+        assert!(labels.iter().any(|name| name.as_ref() == "command"));
+        let named = |stepper: &FixedStepSession| {
+            let state = stepper.state().unwrap();
+            assert!(state.time.is_finite());
+            assert!(state.values.values().all(|value| value.is_finite()));
+            state
+                .values
+                .into_iter()
+                .filter(|(name, _)| name != "time")
+                .collect::<Vec<_>>()
+        };
+        let batched = |stepper: &FixedStepSession| {
+            assert!(stepper.time().is_finite());
+            let values = stepper.session.output_values().unwrap();
+            assert_eq!(labels.len(), values.len());
+            assert!(values.iter().all(|value| value.is_finite()));
+            labels
+                .iter()
+                .cloned()
+                .zip(values)
+                .filter(|(name, _)| name.as_ref() != "time")
+                .collect::<Vec<_>>()
+        };
+        for pair in 0..5 {
+            let command = (f64::from(pair) - 2.0) * 0.125;
+            stepper.set_inputs(&[("command", command)]).unwrap();
+            stepper.step(0.01).unwrap();
+            let expected = named(&stepper);
+            let actual = batched(&stepper);
+            assert_eq!(expected.len(), actual.len());
+            for ((name, value), (label, sample)) in expected.iter().zip(&actual) {
+                assert_eq!(name, label.as_ref());
+                assert_eq!(value.to_bits(), sample.to_bits());
+            }
+            let mut timings = [0_u128; 2];
+            for phase in 0..2 {
+                let mode = (pair as usize + phase) % 2;
+                let start = Instant::now();
+                for _ in 0..512 {
+                    if mode == 0 {
+                        drop(black_box(named(&stepper)));
+                    } else {
+                        drop(black_box(batched(&stepper)));
+                    }
+                }
+                timings[mode] = start.elapsed().as_nanos();
+            }
+            println!(
+                "OBSERVATION_COLLECTION pair={pair} named_ns={} batched_ns={} width={} command_bits={} time_bits={} last_bits={}",
+                timings[0],
+                timings[1],
+                labels.len(),
+                command.to_bits(),
+                stepper.time().to_bits(),
+                actual.last().unwrap().1.to_bits()
+            );
+        }
+    }
+}
