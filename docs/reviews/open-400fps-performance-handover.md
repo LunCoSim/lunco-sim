@@ -2012,8 +2012,9 @@ Evidence uses `matrix-free-summer-` in the loading evidence directory.
 `SurfaceOcclusionCache` now retains canonical rectangular certificates at the
 terrain mathematical owner. A fresh segment must fit entirely inside each
 attempted dyadic enclosure before its bounds can certify clear or blocked.
-Complete surface identity, raster cell and exact f64 rectangle bits identify
-the certificate. The existing FIFO capacity bounds residency. The owner budget
+Complete surface identity fences the certificate cache. Whole cells use their
+raster indices; refined rectangles additionally use exact f64 coordinate bits.
+The existing FIFO capacity bounds residency. The owner budget
 allows eight ray-enclosure cuts by default, then the exact footprint and normal
 interval subdivision continue as needed. Cut order does not depend on cache
 hits. Scene teardown retains the existing owner boundary. This is continuous

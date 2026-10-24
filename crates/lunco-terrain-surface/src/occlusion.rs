@@ -30,7 +30,28 @@ impl Default for SurfaceOcclusionBudget {
     }
 }
 
-type CellBoundsKey = ([usize; 2], [u64; 4]);
+/// Cell geometry is fixed by its surface; subrectangles retain exact coordinates.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum CellBoundsKey {
+    Cell {
+        x: usize,
+        z: usize,
+    },
+    Rectangle {
+        cell: [usize; 2],
+        coordinates: [u64; 4],
+    },
+}
+
+impl CellBoundsKey {
+    /// Raster cell owning this certificate.
+    fn cell(self) -> [usize; 2] {
+        match self {
+            Self::Cell { x, z } => [x, z],
+            Self::Rectangle { cell, .. } => cell,
+        }
+    }
+}
 type RayCoverEntry = ([f64; 4], [f64; 2], usize);
 
 /// Reusable conservative spatial enclosures, invalidated by the complete surface key.
@@ -61,25 +82,24 @@ impl SurfaceOcclusionCache {
     fn bounds(
         &mut self,
         surface: &SurfaceOracle,
-        cell: [usize; 2],
+        key: CellBoundsKey,
         rect: [f64; 4],
         capacity: usize,
     ) -> Result<[f64; 2], String> {
-        let rectangle = (cell, rect.map(f64::to_bits));
-        if let Some(bounds) = self.cells.get(&rectangle) {
+        if let Some(bounds) = self.cells.get(&key) {
             return Ok(*bounds);
         }
         let bounds = {
             let _span = bevy::log::debug_span!("terrain_occlusion_bounds_miss").entered();
-            surface.height_bounds_in_cell(cell, rect)?
+            surface.height_bounds_in_cell(key.cell(), rect)?
         };
         while self.cells.len() >= capacity {
             if let Some(oldest) = self.order.pop_front() {
                 self.cells.remove(&oldest);
             }
         }
-        self.cells.insert(rectangle, bounds);
-        self.order.push_back(rectangle);
+        self.cells.insert(key, bounds);
+        self.order.push_back(key);
         Ok(bounds)
     }
 
@@ -161,7 +181,11 @@ impl SurfaceOcclusionCache {
                     }) {
                         return Ok(None);
                     }
-                    let bounds = self.bounds(surface, cell, child, budget.max_cached_cells)?;
+                    let key = CellBoundsKey::Rectangle {
+                        cell,
+                        coordinates: child.map(f64::to_bits),
+                    };
+                    let bounds = self.bounds(surface, key, child, budget.max_cached_cells)?;
                     match classify_enclosure(bounds, points) {
                         Some(true) => return Ok(Some(true)),
                         Some(false) => {}
@@ -289,66 +313,69 @@ impl SurfaceOracle {
         // is immutable during this ray; reuse only identical f64 coordinates.
         // Sample residency cannot change interval admission or classification.
         let mut point_samples = HashMap::new();
-        let mut classify = |cell, a: f64, b: f64, rect| -> Result<Option<bool>, String> {
-            if *remaining == 0 {
-                return Err("solar fixed-tick interval budget exceeded".into());
-            }
-            *remaining -= 1;
-            examined += 1;
-            if examined > budget.max_intervals {
-                return Err("terrain occlusion interval budget exceeded".into());
-            }
-            let [pa, pb] = ray.endpoints([a, b]);
-            if !pa.is_finite() || !pb.is_finite() {
-                return Err("terrain ray interval exceeds finite coordinates".into());
-            }
-            let bounds = cache.bounds(self, cell, rect, budget.max_cached_cells)?;
-            if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
-                return Ok(Some(result));
-            }
-            if let Some(result) =
-                cache.refine_ray_enclosure(self, cell, rect, ray, [a, b], budget)?
-            {
-                return Ok(Some(result));
-            }
-            // The shared cell certificate includes terrain beside the ray.
-            // Restrict the same oracle enclosure to the segment's footprint
-            // before subdividing: transverse relief cannot block this segment.
-            let bounds = {
-                let _span = bevy::log::debug_span!("terrain_occlusion_exact_footprint").entered();
-                self.height_bounds_in_cell(
-                    cell,
-                    [
-                        pa.x.min(pb.x),
-                        pa.z.min(pb.z),
-                        pa.x.max(pb.x),
-                        pa.z.max(pb.z),
-                    ],
-                )?
+        let mut classify =
+            |key: CellBoundsKey, a: f64, b: f64, rect| -> Result<Option<bool>, String> {
+                let cell = key.cell();
+                if *remaining == 0 {
+                    return Err("solar fixed-tick interval budget exceeded".into());
+                }
+                *remaining -= 1;
+                examined += 1;
+                if examined > budget.max_intervals {
+                    return Err("terrain occlusion interval budget exceeded".into());
+                }
+                let [pa, pb] = ray.endpoints([a, b]);
+                if !pa.is_finite() || !pb.is_finite() {
+                    return Err("terrain ray interval exceeds finite coordinates".into());
+                }
+                let bounds = cache.bounds(self, key, rect, budget.max_cached_cells)?;
+                if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
+                    return Ok(Some(result));
+                }
+                if let Some(result) =
+                    cache.refine_ray_enclosure(self, cell, rect, ray, [a, b], budget)?
+                {
+                    return Ok(Some(result));
+                }
+                // The shared cell certificate includes terrain beside the ray.
+                // Restrict the same oracle enclosure to the segment's footprint
+                // before subdividing: transverse relief cannot block this segment.
+                let bounds = {
+                    let _span =
+                        bevy::log::debug_span!("terrain_occlusion_exact_footprint").entered();
+                    self.height_bounds_in_cell(
+                        cell,
+                        [
+                            pa.x.min(pb.x),
+                            pa.z.min(pb.z),
+                            pa.x.max(pb.x),
+                            pa.z.max(pb.z),
+                        ],
+                    )?
+                };
+                if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
+                    return Ok(Some(result));
+                }
+                // Actual samples only certify blockers. A clear ray still requires
+                // conservative enclosures over every interval it traverses.
+                for t in [a, a + (b - a) * 0.5, b] {
+                    let point = origin + direction * t;
+                    let height = *point_samples
+                        .entry([point.x.to_bits(), point.z.to_bits()])
+                        .or_insert_with(|| {
+                            let _span =
+                                bevy::log::debug_span!("terrain_occlusion_point_sample").entered();
+                            self.height_at(point.x, point.z)
+                        });
+                    if !height.is_finite() {
+                        return Err("non-finite terrain sample".into());
+                    }
+                    if point.y < height {
+                        return Ok(Some(true));
+                    }
+                }
+                Ok(None)
             };
-            if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
-                return Ok(Some(result));
-            }
-            // Actual samples only certify blockers. A clear ray still requires
-            // conservative enclosures over every interval it traverses.
-            for t in [a, a + (b - a) * 0.5, b] {
-                let point = origin + direction * t;
-                let height = *point_samples
-                    .entry([point.x.to_bits(), point.z.to_bits()])
-                    .or_insert_with(|| {
-                        let _span =
-                            bevy::log::debug_span!("terrain_occlusion_point_sample").entered();
-                        self.height_at(point.x, point.z)
-                    });
-                if !height.is_finite() {
-                    return Err("non-finite terrain sample".into());
-                }
-                if point.y < height {
-                    return Ok(Some(true));
-                }
-            }
-            Ok(None)
-        };
         let p = origin + direction * near;
         let cell_axis = |v: f64, d: f64| {
             let f = ((v + half) / spacing).clamp(0.0, (self.base_resolution() - 1) as f64);
@@ -398,7 +425,11 @@ impl SurfaceOracle {
                 boundary(cell[1] + 1),
             ];
             if end > near {
-                match classify(cell, near, end, rect)? {
+                let key = CellBoundsKey::Cell {
+                    x: cell[0],
+                    z: cell[1],
+                };
+                match classify(key, near, end, rect)? {
                     Some(true) => return Ok(true),
                     Some(false) => {}
                     None => pending.push_back((cell, near, end, 0, rect)),
@@ -426,7 +457,11 @@ impl SurfaceOracle {
         let _refinement_span = bevy::log::debug_span!("terrain_occlusion_refinement").entered();
         while let Some((cell, a, b, depth, rect)) = pending.pop_front() {
             if depth != 0 {
-                match classify(cell, a, b, rect)? {
+                let key = CellBoundsKey::Rectangle {
+                    cell,
+                    coordinates: rect.map(f64::to_bits),
+                };
+                match classify(key, a, b, rect)? {
                     Some(true) => return Ok(true),
                     Some(false) => continue,
                     None => {}

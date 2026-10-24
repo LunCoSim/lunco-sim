@@ -321,8 +321,9 @@ complete current segment. When the segment crosses both cell midplanes, it
 clips both halves and certifies their complete interval cover. The shared slab
 clipper preserves fresh f64 endpoints for both cache preparation and the outer
 breadth-first traversal. A reusable scratch queue and two child slots avoid
-per-cut allocation. The complete surface key, raster cell and exact
-rectangle-coordinate bits identify each certificate. Nearby rays can share
+per-cut allocation. The complete surface key fences every certificate. Whole
+raster cells use their two integer indices as their cache identity; refined
+rectangles additionally retain their exact coordinate bits. Nearby rays can share
 these spatial bounds while retaining their full f64 coordinates. The
 `SurfaceOcclusionBudget.max_ray_cache_depth` bound limits this preparation
 (eight cuts by default; zero skips preparatory cuts);

@@ -174,6 +174,14 @@ native work. A local dependency path patch can disable prepared-model disk
 caching; record that state and reject it as final loading acceptance for a
 portable Git pin.
 
+For terrain certificate lookups, whole-cell identity is the fenced surface and
+the two raster indices. Refined rectangles also retain exact coordinate bits.
+Keep one FIFO capacity and the same cache-independent interval and refinement
+admission. Use the certified occlusion mechanism checks and production solar
+visibility, night and invalid-admission gates. Compare the actual solar zones
+in matched settled captures; a smaller synthetic lookup time is not whole-tick
+or graphics acceptance.
+
 ## Architecture checks
 
 When comparing native CPU/GPU instance preparation, retain the same PBR,
