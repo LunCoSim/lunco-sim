@@ -122,6 +122,9 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   ordering rules after removing the original system; retaining its implicit
   type set alone preserves only dependencies targeting that set. Check the
   actual shadow image before admitting a capture as performance evidence.
+  Qualify point/spot roots with the `shared_shadow_allocation` graphics fixture
+  before comparing native builders. Its positive and negative pixel probes
+  cover the separate shared-light schedule; camera shadows alone do not.
   `SharedShadowView` uses the native single-threaded executor for its serial
   GPU chain or two CPU-mode shadow passes. Native render preparation clears
   indirect parameter buffers once per frame before view work. Attribute its inclusive

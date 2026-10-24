@@ -87,6 +87,11 @@ GPU acceptance still require the rendered fixture and a clean process log.
    uniform bound in depth-only passes. Run the `vertex_shadow_alignment`
    graphics fixture: both lit-vacated and shadowed-displaced probes must appear,
    with no red disagreement pixels.
+   For point/spot shared shadow roots, retain native uniform allocation before
+   bin unpacking. Run the `shared_shadow_allocation` graphics fixture: its point
+   light, two differently sized caster meshes and all camera prepasses must
+   produce both positive probes without red pixels. A valid directional-shadow
+   image does not cover the separate shared-light schedule.
    Enable `DepthPrepass`, `NormalPrepass`, and `MotionVectorPrepass` through the
    existing reflected `add` interface when checking optional camera passes.
    Declare the camera dependency in the scenario. The terrain appearance and

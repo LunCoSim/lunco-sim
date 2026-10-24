@@ -239,7 +239,13 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
-    if [[ -z "$reason" && "$name" =~ ^(vertex_shadow_alignment|sun_material_precision|sun_material_precision_dem)$ ]]; then
+    if [[ -z "$reason" && "$name" == "shared_shadow_allocation" ]]; then
+        if ! grep -Fq 'SHARED SHADOW ALLOCATION: PASS' "$log"; then
+            reason="authored point light and camera prepass contract did not pass"
+        fi
+    fi
+
+    if [[ -z "$reason" && "$name" =~ ^(vertex_shadow_alignment|shared_shadow_allocation|sun_material_precision|sun_material_precision_dem)$ ]]; then
         # Both numerical probes must be visible; disagreement with native
         # rendering state turns a probe red.
         green_coverage=$(convert "$last" -fx 'g > 0.8 && r < 0.2 && b < 0.2' \
