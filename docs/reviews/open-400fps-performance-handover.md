@@ -12,6 +12,10 @@ in 20.548 s; its warm restart takes 14.243 s versus the qualified-main baseline'
 time from 7.411 to 3.267 s. Concurrent work qualifies total timing; the stale-owner
 regression directly proves the cache fault and repair. Candidate runs retain
 all 271 source hashes, land at four-pad handoff, and close their owned sessions.
+The validated warm-cache capture attributes remaining construction to native
+IR/proof preparation and hashing; prepared-IR lookup also includes native
+validation. The ordinary build is restored. The same review records the
+ordered preparation/construction queue as a further serialization lead.
 Sub-second loading and sub-ms coupled ticks remain open.
 
 ## Shared native runtime preparation qualification

@@ -115,5 +115,47 @@ targets remain open.
 The repair removes repeated native compilation caused by stale publishers.
 Remaining loading time includes USD admission, prepared-IR decoding, live
 component construction and the coupled initial-condition solve. The warm
-initializer alone still costs 3.267 s; it is the next constructor attribution
-target. No part of the descent is counted as loading.
+initializer alone still costs 3.267 s. No part of the descent is counted as loading.
+
+## Warm-cache native attribution
+
+A separate Tracy 0.14.1 / 1 kHz startup-only capture uses owned app
+4009688/API 5354 and collector 4009612/port 8446. The socket receipt matches
+both PIDs. Its 268,057,599 bytes contain 12,102 native blocks and 268,009,185
+compressed payload bytes, matching the collector's rounded 255.59 MiB.
+Native export reads all 4,311,857 zones. Source hashes match the normal cohort;
+both processes and ports close. The instrumented readiness observation is
+20.303 s and supplies no product timing comparison.
+
+The initializer's exact constructor zone is 4.158 s on CSV thread 51. Its
+3,114 selected samples have zero missing stacks and exactly one matching zone;
+the owned maps and ELF symbol index resolve 1,596 addresses. Leading leaves
+include SHA-256 (106 samples), `LinearOp::clone` (99), symbolic operation-key
+lookup (85), `Terms::key` (68), `SymbolicSlots::run` (60), shared-value builder
+append (52), and `ExactRefreshAssignmentSchedule::shared_segments` (51).
+Cranelift verification remains visible (78). Kernel reuse therefore leaves
+native IR construction, proof preparation, hashing and allocation costs.
+The published, held schedule-sharing upgrade addresses an observed owner;
+its integration still requires resolving the exact-replay failure.
+
+The initializer's disk-lookup zone is 1.520 s. A separate exact-zone selection
+has 664 samples, zero missing stacks and one matching zone. Dependency-state
+destruction (58), structural dependency walking (36), canonical assignment
+shape derivation (22) and exact coverage marking (15) appear alongside JSON
+string decoding (15 and 14). This boundary includes native validation of the
+decoded FMI component; its inclusive duration is not raw disk latency. Those
+checks remain enabled.
+
+The main, attitude-propulsion and attitude-actuation constructors take
+1.543/1.342/1.074 s under instrumentation and run consecutively. The source
+owner uses one ordered queue for prepared IR and live construction completions;
+a ready preparation can wait behind an earlier live construction. Further
+parallel preparation must retain deterministic admission, lane assignment,
+failure delivery and publication rather than consume worker completion order.
+No queue, scheduling or numerical change is made in this cache repair.
+
+The regular optimized development build is restored after capture, SHA-256
+`ffb5e39dd2bdbd4ff868f10881c2f8a6b19c5039bb49dd16edfdbc0aa0be82a3`.
+The difference from the measured candidate is final source formatting/line
+metadata; no behavior changed after the production gates. All raw profiling
+artifacts remain ignored.
