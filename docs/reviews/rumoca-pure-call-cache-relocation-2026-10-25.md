@@ -1,90 +1,111 @@
 # Rumoca pure-call result storage relocation
 
-Status: concrete dependency-patch proposal; no dependency source changed.
+Status: native fix `5febdef6d489538e26960d9528c352a257431046` is tested and
+published to LunCoSim/rumoca branch `fix/pure-call-data-relocation`.
+The application pins that published revision; production qualification and its
+remaining replay boundary are recorded below.
 
-## Observed owner fault
+## Owner and current contract
 
-`rumoca-exec-cranelift::emit::typed_program::input_results::InputResults::enter`
-emits the instance-owned `Box<[Cell<u64>]>` address as an integer constant in
-every typed pure-call function. `TableCompiler::compile_program` invokes it for
-primal and issued directional bodies. Cranelift's native cache key hashes the
-complete function stencil, including that constant. A new allocation therefore
-changes code identity even when the typed program and all codegen flags match.
+Rumoca's native typed-program emitter allocates zero-initialized writable result
+cells through Cranelift `DataDescription` and `define_data`. Helpers reference
+module data symbolically through the supported global-value API, with full-width
+address materialization rather than code/data colocation assumptions. The
+existing artifact adapter rebinds these data relocations to each current JIT
+module. Each primal/directional helper owns separate fresh state; the table
+remains non-Sync and drops its code/data arena after callable addresses.
 
-The checked Griffin initializer cache record has 34 pure-call owners. Production
-warm construction repeatedly reports 16,414 hits and 68 compilations. Those
-counts are consistent with recompiling the primal/directional family, but a
-native two-live-table regression must establish the exact attribution before
-claiming the 68 misses are all removed. No allocator-address normalization or
-weaker cache key is proposed.
+The complete-input bit comparisons, directional seed, publish-after-success,
+assertion predicates, function ABI and numerical checks remain unchanged.
+Heap-cell retention and its per-table result-buffer vector are removed.
+Application code adds no adapter, policy or alternate path. Native execution
+and storage lifetime are engine invariants, not a hook decision.
 
-## Proposed native change
+## Reproduced fault and native proof
 
-Use Cranelift's existing module-owned writable data objects for pure-call result
-cells. Allocate zero-initialized storage through `DataDescription`/`define_data`,
-and emit its symbolic address through `declare_data_in_func` and `global_value`.
-The maintained JIT relocation path binds the current module's data when cached
-code is defined. Keep far-address materialization valid on x86-64 and AArch64;
-the data symbol must not assume code/data arenas are colocated.
+The previous emitter embeds result-storage addresses as integer constants in
+function stencils. The held-two-table regression observes zero native hits for
+two equivalent helpers on the second construction. The fixed table reuses every
+artifact without compilation, while interleaved primal/directional calls retain
+independent storage and exact finite/signed-zero bits. Changed bodies still miss;
+dropping one table leaves the other valid.
 
-This replaces literal process addresses and heap-cell retention with native
-module ownership. Each table and each primal/directional body still owns fresh
-mutable cells. Preserve the table's existing non-Sync contract explicitly if
-removing `Cell` storage would otherwise weaken it. The native module remains the
-last owner dropped, after all callable addresses become unreachable. Keep the
-two-pointer function ABI, complete input-bit comparisons, publish-after-success,
-acyclic call rules, numerical checks and independent execution state unchanged.
-No application shim, persistent data state, alternate execution path or cache
-key relaxation is involved. This is native execution/relocation ownership, not
-changeable policy, so no hook is appropriate.
+All 114 native owner checks pass, including the explicitly enabled x86-64 and
+AArch64 code-generation test for full-width `Abs8` data relocations. That is not
+AArch64/macOS execution acceptance. Scoped all-target/all-feature Clippy passes
+with warnings denied. The fixed 20-model MSL 4.1.0/OpenModelica 1.27.1 canary has
+12 strict-high comparisons, zero deviations, missing/skipped traces or timeouts.
+Six ToDAE refusals and two EL005 lowering refusals remain visible. All 20
+phase/error rows and 12 channel-band rows match retained snapshot `d47a5bf3`;
+the documented predecessor counts are unchanged. Its raw intermediate directory
+is absent, so no bitwise trace delta or runtime delta for refused models is
+asserted. The partial run skips the full-cohort gate; no Tier 2 claim is made.
 
-## Required proof and qualification
+The DCO-signed-off native commit is pushed and its remote SHA verified. Native
+[source/verification review](https://github.com/LunCoSim/rumoca/blob/5febdef6d489538e26960d9528c352a257431046/docs/reviews/luncosim-pure-call-data-relocation.md)
+records the owner, tests and canary boundary. No cache-key normalization,
+compiler-check suppression or precision change is introduced.
 
-Add a focused native regression that holds two independently compiled tables
-alive under one immutable artifact cache. First demonstrate recompilation on the
-unchanged code, then require full warm reuse and interleaved independent outputs
-with changed input coordinates. Include primal and directional forms, exact
-signed-zero/finite bits, same-input reuse, changed seeds, and owner/module drop
-ordering. Changed program bodies must still miss. Retain all existing input
-reuse and native artifact relocation checks, and verify the supported far-data
-address lowering for both host architectures where tooling permits.
+## Application admission
 
-Run the affected owner suites and scoped Clippy, plus the unchanged fixed
-20-model Tier 1 MSL/OpenModelica canary with every refusal/missing comparison
-visible. Publish only after these gates. Then pin the exact tested Rumoca commit
-and run production initialization/receipt, negative faults, lifecycle and exact
-replay gates. Measure Griffin first fill separately from a warm restart, retain
-all source hashes, inspect landing, and use an owned native Tracy capture for
-attribution. Concurrent applications/builds qualify timings; no product speedup
-or original timing-target completion is claimed from a helper diagnostic.
+The native family moves together to the exact published Git revision. The
+lockfile changes source identities only, preserving the complete current graph,
+including independently integrated mobility and UI changes. The ordinary
+optimization target and four-job/sccache build remain authoritative.
 
-## Current baseline and application profiling boundary
+Before the pin, the unchanged application exact-reference gate fails at
+articulated tick 11 for `/MultiRoverStress/Rovers/Rover01` in profile
+`jitter-0.25-seed-1234567890123456789`. Expected position begins
+`[-7.499999989098277, 1.5772187814000063, ...]`; observed begins
+`[-7.500000000324079, 1.577218776481459, ...]`. This is a pre-pin finding;
+no reference or tolerance is changed and no causal attribution is made from
+that failure alone. The owned baseline API 5388 exits. This finding remains
+separate from native artifact-reuse qualification and the passing candidate run.
 
-No dependency source is modified. The six existing `input_reuse` checks pass on
-native revision `45d66677`, covering exact input bits, directional seeds,
-independent tables, tensors/assertion predicates, nested calls and failed
-execution. The same built owner binary passes all five `native_code_cache`
-checks, including function/host-address rebinding and changed code. The explicit
-scope-unwind panic is caught by its positive ownership test. These checks do not
-assert pure-call artifact reuse; that is the specific missing regression above.
+All ten unchanged candidate exact-replay profiles pass 360 authored checks on
+owned API 5397, covering the maintained jitter/seed and roster/thread matrix.
+The reference SHA-256 remains
+`6247db0dfefbd0eaedad3d712c359578f30a75addb6daea4a79584b784a70451`.
+No reference, tolerance or behavioral assertion is weakened. This bounded pass
+does not resolve the separately documented
+[intermittent first-step articulated finding](physics-first-step-joint-replay-2026-10-25.md).
 
-Commands use the production consumer's Rust 1.97.1, regular target and sccache,
-with four build/test/Rayon workers. The cache group reuses the already-built
-binary. Raw baseline logs stay ignored under
-`.cache/codex-evidence/performance-20261023/rumoca-pure-call-relocation-*.log`.
+The regular locked application build passes with four jobs and sccache. Its
+SHA-256 is `288648c323e8251648c9eb96379a869e5cdb1b653ea1654651f6831250b6b029`.
+Production initialization/receipt retirement passes 46 assertions, source-target
+passes 20, and lifecycle passes 21. Both negative scenes report their expected
+terminal initialization/step faults with a passing production verdict. The
+43-skill catalogue and both MCP skill-reader checks pass.
 
-A new binary-cache Tracy build is queued in the application checkout, but
-another build owns its target lock and the separate mobility source changes
-before compilation. The owned queued Cargo process is identified through its
-exact log descriptor, cwd and arguments, then interrupted (exit 130). No app or
-collector is launched and no new profile is claimed. Foreign builds, sessions
-and source changes remain untouched.
+The bounded Summer Lunokhod physics gate passes 102 assertions and Roadster's
+launch/runner verification passes eight requirements. Both production verdicts
+and process exits pass, with unchanged authored source hashes and released owned
+API ports 5398/5399. These gates do not assert complete mission/trick acceptance.
 
-## Approval boundary
+Griffin's first process and warm restart preserve all 271 source hashes, reach
+four-pad handoff and sleeping unpaused lander state, retain clear registered
+diagnostics and script logs, and complete a five-second readiness soak followed
+by at least ten seconds and 240 fresh simulation ticks. Screenshots are inspected;
+the owned API sessions 5395 and 5396 exit and release their ports.
 
-The application `AGENTS.md` says: “Ask the user explicitly before vendoring,
-forking, or modifying third-party dependency source, or publishing dependency
-patches.” This pure-call storage/relocation change is outside the prior immutable
-assignment-preparation and mutable sweep-workspace approvals. Requested scope is
-the existing `../rumoca` / `LunCoSim/rumoca` fork: implement, test and push this
-native fix, then qualify its application pin.
+The first process after the pin constructs the initializer in 6.453 s with
+16,482 attempts, 7,958 hits and 8,524 compilations. This uses the existing
+bounded native store, not an empty cache namespace. The warm restart records
+**16,482 attempts, 16,482 hits and zero compilations**, with zero rejection or
+eviction. This removes all 68 recurring warm misses observed before the pin,
+consistent with the checked wire's 34 pure-call owners and their two forms.
+Warm construction still takes 3.378 s: native IR/proof preparation and hashing
+are not eliminated by code reuse.
+
+First/warm physics-ready observations are 20.563/17.229 s. Warm fixed-tick service
+p50/p95 is 7.715/10.985 ms in its final 240-sample window. Desktop/video-player
+workloads differ across runs, so these are bounded observations, not an isolated
+loading or tick speedup. Sub-second loading and sub-ms coupled ticks remain open.
+The separate native-cache I/O Tracy capture also remains open; this patch's
+artifact-reuse claim comes from native regression and production counters.
+
+Raw logs, references, source snapshots and captures remain ignored under
+`.cache/codex-evidence/performance-20261023/rumoca-pure-call-relocation-*`,
+`pure-call-relocation-*`, `griffin-pure-call-relocation-*` and
+`scripts/perf/captures/`. No raw profiling data is tracked. All owned production
+sessions are closed; the ordinary production artifact remains available.

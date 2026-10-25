@@ -294,6 +294,10 @@ Native construction can reuse relocatable Cranelift artifacts through Rumoca's
 explicit thread-local cache scope; LunCoSim owns budgets, asynchronous persistence
 and public accounting. See the [cache ownership contract](20-domain-modelica.md)
 for identity, failure and lifetime boundaries. This scope retains no solver state.
+Native pure-call helpers address module-owned result cells through symbolic,
+full-width data relocations. Artifact reuse binds fresh cells in the current
+module; mutable results never travel with cached code. The compiled table
+remains non-Sync and releases its code/data arena after callable addresses.
 The workspace pins the Rumoca family from `LunCoSim/rumoca` in
 [`Cargo.toml`](../../Cargo.toml) and `Cargo.lock`; normal builds require no local
 dependency override.

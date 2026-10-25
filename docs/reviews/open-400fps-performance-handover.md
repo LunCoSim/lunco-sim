@@ -1,21 +1,26 @@
 # High-quality realtime performance handover
 
-## Pure-call native cache relocation lead
+## Pure-call native cache relocation
 
-The [concrete dependency proposal](rumoca-pure-call-cache-relocation-2026-10-25.md)
-identifies instance heap addresses emitted into pure-call function stencils.
-They invalidate native code identity on a new allocation. The initializer wire
-contains 34 pure-call owners and its warm construction repeatedly compiles 68
-kernels; a focused two-live-table regression must prove that full attribution.
-The proposed repair uses module-owned writable data and standard far-address
-relocations, preserving independent mutable results and the non-Sync contract.
-Approval is pending; no dependency source has changed. Six input-reuse and five
-native cache baseline checks pass, reusing one built owner test binary.
+The [published native repair](rumoca-pure-call-cache-relocation-2026-10-25.md)
+pins Rumoca `5febdef6`. Module-owned writable data and standard full-width data
+relocations preserve independent mutable results and the non-Sync contract.
+All 114 native checks, scoped Clippy and the fixed MSL canary pass within their
+documented platform and pre-runtime refusal boundaries. Production admission,
+source-target, expected faults and lifecycle pass. All ten unchanged exact
+profiles pass 360 assertions; Summer physics passes 102 and Roadster launch
+passes eight, retaining source hashes and authored verdicts.
 
-The new-format I/O capture remains open: a queued owned profiling build is
-cancelled before compilation after another build takes the target lock and
-separate mobility code changes. Two foreign application sessions also load the
-host. No instrumented result or product gain is inferred from that attempt.
+Griffin's warm initializer records 16,482 attempts, 16,482 hits and **zero
+compilations**, removing the recurring 68 misses. Both ordinary process runs
+retain 271 source hashes and reach sleeping four-pad handoff with clear
+diagnostics. Warm construction is still 3.378 s and physics-ready is 17.229 s;
+fixed-tick service p50/p95 is 7.715/10.985 ms. Desktop/video workloads qualify
+those observations; they establish no isolated product speedup. The unchanged
+pre-pin exact replay also exposes the documented intermittent articulated
+tick-11 mismatch. The passing candidate matrix does not resolve that intermittent
+finding; no reference or tolerance is changed. Sub-second loading, sub-ms coupled
+ticks and a separate native-cache I/O capture remain open.
 
 ## Direct native artifact bytes
 

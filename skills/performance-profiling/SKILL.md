@@ -793,6 +793,12 @@ warm and new-process loading. The worker's application-lived cache retains only
 relocatable compiler artifacts, under `ModelicaCacheLimits` entry/byte budgets;
 it does not retain live FMI state. Cache I/O is asynchronous, so report observed
 hits rather than assuming that a disk snapshot was ready before construction.
+Pure-call helpers use full-width symbolic references to fresh module-owned result
+cells. The native two-live-table regression requires artifact hits with separate
+mutable primal/directional state. Compare complete constructor attempt/hit/compile
+counts across unchanged warm sources; code reuse alone does not establish total
+loading or tick improvements. Preserve the non-Sync/lifetime contract and every
+input-bit/numerical check when profiling this boundary.
 Inspect the separate `modelica_native_cache_load` and
 `modelica_native_cache_publish` zones when cache I/O consumes startup CPU.
 The shared transport buffers serializer fragments before Zstd. Native artifacts

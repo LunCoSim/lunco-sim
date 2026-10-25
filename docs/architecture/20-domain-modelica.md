@@ -853,8 +853,11 @@ compile check.
 compiler artifacts. Rumoca's scoped native adapter consumes them synchronously
 through Cranelift's maintained incremental-cache API. Cranelift keys include
 the complete function stencil, compiler version, ISA and compiler flags. Current
-module relocations and host addresses are rebound on every construction; no
-executable arena, FMI state, scene entity or numeric workspace is retained.
+module function/data relocations and host addresses are rebound on every
+construction. Native pure-call result cells belong to each current JIT module's
+writable data arena, and its table retains the non-Sync mutation boundary. No
+executable arena, FMI state, scene entity or numeric workspace is retained in
+the artifact store.
 Twin close retires its live owners while this immutable compiler cache survives.
 One dedicated thread-affine I/O lane asynchronously loads and coalesces bounded
 publication deltas in `modelica/native-code-v3/stencils.bin.zst`. Each delta
