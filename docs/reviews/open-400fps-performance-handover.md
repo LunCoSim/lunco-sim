@@ -1,5 +1,23 @@
 # High-quality realtime performance handover
 
+## Shared immutable assignment preparation
+
+The [qualified SDK pin](rumoca-shared-assignment-preparation-2026-10-25.md)
+uses published Rumoca `45d66677`: interpreter and JIT consume one checked
+immutable assignment schedule. Mutable sweep code remains byte-identical to
+the previous application pin. Native owner checks, scoped Clippy and the fixed
+MSL canary pass with the documented pre-runtime refusals. Application admission,
+negative faults, lifecycle and all ten exact profiles pass; Summer's physics
+fixture passes 102 assertions and Roadster launch passes eight requirements.
+
+Griffin first-fill/warm readiness is 18.436/12.775 s, with unchanged 271 source
+hashes and sleeping four-pad handoff. Warm initializer construction is 2.935 s;
+coupled-tick p50/p95 remains 3.394/4.162 ms. These observations are host-qualified,
+not an isolated speedup ratio. A validated native warm capture still attributes
+construction to native IR, hashing and proof preparation. The regular artifact
+is restored exactly and owned sessions close. Sub-second loading and sub-ms
+ticks remain open. The independent mutable-workspace candidate below stays held.
+
 ## Independent construction preparation
 
 The [construction pipeline review](griffin-construction-pipeline-2026-10-25.md)
@@ -21,8 +39,7 @@ the regular build is restored, owned sessions close, and all targets remain open
 
 The [native cache publication repair](griffin-startup-native-cache-publication-2026-10-25.md)
 merges accessed/compiled deltas under the existing storage transaction instead
-of letting stale processes replace the machine's complete artifact set. Main's
-Rumoca pin remains unchanged. Four focused cache checks and 46 production
+of letting stale processes replace the machine's complete artifact set. This application-owned repair preserves native cache semantics. Four focused cache checks and 46 production
 initialization/receipt checks pass. A normal first fill reaches physics-ready
 in 20.548 s; its warm restart takes 14.243 s versus the qualified-main baseline's
 23.331 s. Initializer compilation falls from 12,508 kernels to 68, and constructor
@@ -66,9 +83,9 @@ The normal cohorts have changing concurrent load and establish no isolated
 timing benefit. A separate validated Tracy capture measures 0.002465 ms child
 propagation and 0.036719 ms moved-bound update; the complete tick target remains
 open. The regular artifact is restored exactly. The slower static-scatter
-grouping experiment is removed. Rumoca proof sharing and per-runtime torn-sweep
-workspace reuse are published and under production qualification in the
-[current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
+grouping experiment is removed. Immutable proof sharing is qualified separately above; mutable torn-sweep
+workspace reuse remains held in its
+[integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
 
 ## Native physical commit executor
 

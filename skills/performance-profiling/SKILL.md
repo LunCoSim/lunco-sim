@@ -770,6 +770,11 @@ the public accepted-step reader through production. Measure response latency
 separately from solver integration and fixed-step output publication.
 For loading, separate prepared-FMI lookup/lowering, live construction and ordered
 publication.
+Rumoca's `SharedAssignmentSchedule` carries the already-checked immutable
+programs to interpreter and native construction. Preserve that shared storage,
+source provenance and target order when attributing proof/IR costs. Treat
+immutable preparation sharing separately from mutable runtime workspace changes;
+qualify each against the unchanged exact reference and fixed MSL canary.
 Read `GetReadiness` alongside compact `CosimStatus` during loading. A terminal
 participant error, including a rejected generated network with no solver,
 must expose its named `program_failed` readiness item. Preserve the full error

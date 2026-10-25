@@ -568,7 +568,9 @@ execution backend from Rumoca's simulation facade; fixed RK4 passes
 `fmi_execution_backend(component, options)` into the shared retained ME
 component. Numerical integration, execution policy and complete checked
 observations keep their existing owners. The application does not implement a
-second Cranelift adapter. Independent owners can execute
+second Cranelift adapter. Rumoca shares its checked immutable assignment
+preparation between interpreter and native execution through the
+[SDK contract](29-rumoca-runtime-contracts.md). Independent owners can execute
 concurrently. The command owner admits results in its
 existing round order, validates session/library-generation fences before
 construction commit, and retains per-entity command order. Repeated commands

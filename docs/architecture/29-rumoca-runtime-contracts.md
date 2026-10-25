@@ -294,8 +294,17 @@ Native construction can reuse relocatable Cranelift artifacts through Rumoca's
 explicit thread-local cache scope; LunCoSim owns budgets, asynchronous persistence
 and public accounting. See the [cache ownership contract](20-domain-modelica.md)
 for identity, failure and lifetime boundaries. This scope retains no solver state.
-The workspace pins Rumoca revision `f8df42b448c31273d94926183dac2fffeccef9d0`
-from `LunCoSim/rumoca`; normal builds require no local dependency override.
+The workspace pins the Rumoca family from `LunCoSim/rumoca` in
+[`Cargo.toml`](../../Cargo.toml) and `Cargo.lock`; normal builds require no local
+dependency override.
+Rumoca's exact assignment owner issues a checked `SharedAssignmentSchedule`
+containing immutable `ScalarProgramBlock` storage, provenance and ordered target
+rows. The interpreter prepares that same block through a shallow clone, and
+the native backend consumes the proven schedule directly. Generated C reads
+the same contract. Equivalence checks precede issuance; execution commits each
+program's targets in source order. Mutable evaluation buffers and numerical
+state remain instance-owned. The application adds no schedule proof or native
+backend adapter.
 Precompile source interfaces project only direct declarations of the selected
 class: parameter/input literal bindings, explicit causal ports, and authored
 documentation. Generated synthesis requests its exact validated class through

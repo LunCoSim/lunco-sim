@@ -2,8 +2,11 @@
 
 Status: native implementation is tested and published as
 `fbfbcdc908bec19fa9b2f2b63486e1c8838e5340` on LunCoSim/rumoca branch
-`fix/shared-refresh-runtime-preparation`. The application retains qualified pin
-`b825929b`; upgrading to the published commit is held by exact replay qualification.
+`fix/shared-refresh-runtime-preparation`. Its mutable sweep-workspace change
+remains held by exact replay qualification. Immutable assignment preparation is
+isolated and qualified independently in the
+[construction-only review](rumoca-shared-assignment-preparation-2026-10-25.md).
+The ownership and evidence below describe the published combined candidate.
 
 ## Owners and current mechanism
 
