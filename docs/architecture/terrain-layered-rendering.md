@@ -357,6 +357,13 @@ identity and participating shape revisions fence complete-sample memo reuse.
 Spatial certificates and per-ray point samples use Bevy's maintained hash map
 for exact-key lookup. Neither map is iterated for query decisions; the separate
 FIFO queue and geometric traversal retain admission and evaluation order.
+The Overzoom owner derives signed global crater-band enclosures from its actual
+bowl, rim, apron, reach-tail and population limits, intersected with regional
+enclosures. Positive and inverted bowls retain distinct upper/lower limits.
+Tighter certificates avoid unnecessary canonical cuts and exact-footprint
+refinement without changing the sampled terrain, fresh ray, work budgets or
+unavailable-data behavior. The population generator and enclosure share their
+rim-ratio and per-cell count constants.
 
 `scenarios/tests/celestial_terrain_clock.rhai` attaches to a settled celestial DEM
 through `RunScenarioAsset`, with the wired environment probe's `probe_id`. Its

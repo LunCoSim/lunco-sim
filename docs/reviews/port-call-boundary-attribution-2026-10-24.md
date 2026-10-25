@@ -35,14 +35,14 @@ Raw gates, alternating-run logs, binary hashes and cleanup receipt remain
 ignored under `.cache/codex-evidence/performance-20261023/port-inline-*` and
 `port-admission-benchmark-fixture.log`.
 
-The current follow-up measured retaining the global topology revision for
-one immutable transaction while preserving every live owner, slot, metadata,
-value and duplicate-write check. The same consumer diagnostic passes for both
-binaries. Five alternating pairs measure 215.414 ms baseline versus 222.314 ms
-candidate median (3.2 percent slower), with identical final f64 bits. The
-experiment is removed in full; no revision-retention helper or transaction
-field remains. Its baseline test hard link is removed after comparison.
-Raw comparison evidence stays ignored in `port-revision-*`.
+The topology-revision retention experiment is not present in the runtime.
+Its paired timing result is excluded: `port-revision-comparison.json` records
+the same executable hash for baseline and candidate. The receipt does not
+distinguish implementations; rebuilding hard-linked outputs can invalidate such
+comparisons. It cannot establish a slowdown or reject
+revision retention as an optimization. Numerical verdicts remain valid for the
+executed binary. Any renewed comparison requires independent executable copies
+with distinct, unchanged hashes.
 
 ## Source fan-out attribution
 
@@ -54,22 +54,18 @@ repeated reads, but does not establish that reading dominates the transaction.
 The retained `settled_diagnostic_publication_benchmark` measures the complete
 exchange and diagnostic publication with 128 targets, 6,000 transactions and
 fan-outs 128, four and one. Every case requires 768,000 writes and final exact
-f64 bits `4000000000000000`. Five alternating baseline/candidate pairs give:
+f64 bits `4000000000000000`. The earlier alternating timing result is excluded:
+`source-fanout-comparison/receipt.json` records identical executable hashes for
+the two supposed variants. It cannot establish the performance effect of source
+interning.
 
-| Fan-out | Baseline median | Candidate median | Change |
-| --- | ---: | ---: | ---: |
-| 128 | 171.261 ms | 171.040 ms | 0.1% faster |
-| 4 | 180.801 ms | 179.250 ms | 0.9% faster |
-| 1 | 190.173 ms | 190.933 ms | 0.4% slower |
-
-Interning sources and sampling each once per transaction does not establish a
-useful gain in this consumer. The experiment and its private instrumentation
-are removed completely; production propagation remains unchanged. Its thirteen
-focused mechanism checks passed, including canonical order, missing fan-in,
-input/output identity, fresh replay samples and topology rebuilds. The diagnostic
-extension remains to prevent accepting a fan-out optimization that penalizes
-ordinary connections. No production rebuild or runtime rerun is needed for this
-test-only result. All original timing targets remain open.
+The experiment and its private instrumentation are absent; production
+propagation is unchanged. Its focused numerical checks covered canonical order,
+missing fan-in, input/output identity, fresh replay samples and topology rebuilds.
+The retained diagnostic covers large fan-out, ordinary connections and complete
+publication. Source-read sharing remains a performance hypothesis to revisit
+with a current owner profile and verified independent binaries. All original
+timing targets remain open.
 
 Logs, binary hashes and exact-value receipts stay ignored under
 `.cache/codex-evidence/performance-20261023/source-fanout-comparison/`.

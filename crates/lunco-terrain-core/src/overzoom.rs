@@ -30,6 +30,10 @@ use crate::crater::{CRATER_REACH, crater_profile_rim_limited};
 use crate::modifier::HeightModifier;
 use crate::source::{hash01, vnoise};
 
+const MAX_CELL_CRATERS: u32 = 8;
+const RIM_RATIO_BASE: f64 = 0.15;
+const RIM_RATIO_SPAN: f64 = 0.5;
+
 /// Deterministic synthetic sub-DEM detail: hashed craterlet bands + FBM
 /// micro-relief. See the module docs. All fields are authorable (the USD
 /// `lunco:layer = "overzoom"` prim maps onto them).
@@ -116,7 +120,7 @@ impl PoissonDistribution {
         let mut p = self.initial_probability;
         let mut cum = p;
         let mut k = 0u32;
-        while u > cum && k < 8 {
+        while u > cum && k < MAX_CELL_CRATERS {
             k += 1;
             p *= self.lambda / k as f64;
             cum += p;
@@ -255,7 +259,7 @@ impl Overzoom {
                     }
                     let depth = radius
                         * (self.depth_ratio.0 + (self.depth_ratio.1 - self.depth_ratio.0) * ud);
-                    let rim = depth * (0.15 + 0.5 * ue);
+                    let rim = depth * (RIM_RATIO_BASE + RIM_RATIO_SPAN * ue);
                     let power = 6.0 - 4.0 * ud;
                     let sigma = (0.5 * self.min_wavelength / radius).clamp(0.14, 0.35);
                     let tail = crater_profile_rim_limited(CRATER_REACH, depth, rim, power, sigma);
@@ -365,15 +369,23 @@ impl HeightModifier for Overzoom {
             let mut band = 0;
             while r_hi > self.min_radius.max(0.05) && band < 8 {
                 let r_lo = (r_hi * 0.5).max(self.min_radius);
-                // Each point sees at most nine lattice cells with eight
-                // craters each. This amplitude certificate bounds broad
-                // enclosures without enumerating an arbitrarily large region.
-                let amplitude = if nyquist_fade(r_hi, self.min_wavelength) < 0.05 {
-                    0.0
+                // A point sees at most nine cells of eight craters each.
+                // For positive depth d, the bowl is in [-d, 0], while
+                // rim + apron and the subtracted reach tail are each in
+                // [0, 0.65 * (1 + APRON_FRAC) * d]. Negative depths reverse
+                // those signs. Keep both signs for authored inverted bowls.
+                let mut delta = if nyquist_fade(r_hi, self.min_wavelength) < 0.05 {
+                    [0.0; 2]
                 } else {
-                    72.0 * 2.625 * r_hi * self.depth_ratio.0.abs().max(self.depth_ratio.1.abs())
+                    let positive = r_hi * self.depth_ratio.0.max(self.depth_ratio.1).max(0.0);
+                    let negative = -r_hi * self.depth_ratio.0.min(self.depth_ratio.1).min(0.0);
+                    let rim = (RIM_RATIO_BASE + RIM_RATIO_SPAN) * (1.0 + crate::crater::APRON_FRAC);
+                    let count = 9.0 * MAX_CELL_CRATERS as f64;
+                    [
+                        -count * ((1.0 + rim) * positive).max(rim * negative),
+                        count * (rim * positive).max((1.0 + rim) * negative),
+                    ]
                 };
-                let mut delta = [-amplitude, amplitude];
                 let cell = r_hi * CRATER_REACH;
                 if region[2] - region[0] <= 4.0 * cell && region[3] - region[1] <= 4.0 * cell {
                     let mut regional = [0.0, 0.0];
@@ -585,6 +597,35 @@ mod tests {
 #[cfg(test)]
 mod enclosure_tests {
     use super::*;
+    #[test]
+    fn broad_enclosures_cover_positive_inverted_and_mixed_craters() {
+        for depth_ratio in [(0.06, 0.22), (-0.22, -0.06), (-0.22, 0.22)] {
+            for gate in [0.0, 0.2, 1.0, 2.7] {
+                let surface = Overzoom {
+                    depth_ratio,
+                    min_wavelength: gate,
+                    ..Default::default()
+                };
+                for side in [2.0, 8.0, 32.0, 100.0] {
+                    let rect = [-40.5, -20.3, -40.5 + side, -20.3 + side];
+                    let bounds = surface.height_bounds(rect, [0.0; 2]).unwrap();
+                    for iz in 0..=32 {
+                        for ix in 0..=32 {
+                            let h = surface.delta_at(
+                                rect[0] + ix as f64 * side / 32.0,
+                                rect[1] + iz as f64 * side / 32.0,
+                            );
+                            assert!(
+                                bounds[0] <= h && h <= bounds[1],
+                                "{depth_ratio:?}, gate={gate}, {bounds:?} misses {h}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn regional_overzoom_enclosures_cover_warped_population_and_noise() {
         let invalid = Overzoom {

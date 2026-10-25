@@ -103,6 +103,11 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 - Attribute CPU, GPU, physics, terrain, and UI separately. Never disable
   shadows, lower authored terrain quality, change BigSpace, or change the
   standard substep count to make a graph look better.
+  Snapshot compiler-managed executables with independent copies, for example
+  `cp --reflink=auto`, never hard links. Rebuilding can overwrite every hard link
+  to a test artifact. Verify separate device/inode identities and record hashes
+  before and after the comparison; reject results if a snapshot changed or a
+  supposed code variant resolved to the same executable.
   In a diagnostics-enabled render host, `lunco-render-bevy` adds
   `lunco_shadow_shared_early`/`late` and `lunco_shadow_camera_early`/`late`
   timestamps around the native shadow passes. Shared events correspond to
@@ -531,11 +536,14 @@ data and fault behavior. Run the focused certified-occlusion mechanism checks
 and the production terrain solar visibility and invalid-admission gates; compare
 the unchanged solar-power observations and run a separate production Twin window.
 The ignored `occlusion::tests::certified_cache_moving_ray_diagnostic` in
-`lunco-terrain-surface` exercises 18,432 moving rays at both a thrashing and a
-resident cache capacity. Compare alternating invocations of the same built
-baseline/candidate test binaries; require identical ray verdicts, interval totals
-and final occupancy. These are cache-consumer timings, not complete fixed-tick
-or application FPS measurements. Resolve sampled instruction addresses against
+`lunco-terrain-surface` exercises one- and two-metre raster cells with 32 ticks
+at a thrashing capacity and 512 ticks at a resident capacity (36 rays per tick).
+Compare alternating invocations of independently copied baseline/candidate test
+binaries with unchanged hashes. Require identical ray inputs and verdicts;
+cache-only changes must also retain interval totals and occupancy. A stronger
+geometric certificate can reduce admitted refinement work; verify its bounds,
+budget failures and cold/warm admission independently. These are consumer
+timings, not complete fixed-tick or application FPS measurements. Resolve sampled instruction addresses against
 the matching executable and saved process mappings before attributing a derive
 line to hashing: that line can belong to inlined equality inside table lookup.
 For procedural synthesis, separate noise, population generation and profile

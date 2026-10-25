@@ -954,51 +954,96 @@ mod tests {
     #[test]
     #[ignore = "bounded moving-ray cache timing diagnostic"]
     fn certified_cache_moving_ray_diagnostic() {
+        for resolution in [129, 257] {
+            let surface = SurfaceOracle::new(
+                Arc::new(HeightGrid::new_flat(resolution, 128.0)),
+                vec![HeightContribution {
+                    modifier: Arc::new(lunco_terrain_core::Overzoom::default()),
+                    content_key: 7,
+                }],
+            );
+            let direction = DVec3::new(0.0, 0.163, 0.987).normalize();
+            for capacity in [256, 65536] {
+                let budget = SurfaceOcclusionBudget {
+                    max_cached_cells: capacity,
+                    ..Default::default()
+                };
+                let mut cache = SurfaceOcclusionCache::default();
+                let mut intervals = 0;
+                let started = std::time::Instant::now();
+                let ticks = if capacity == 256 { 32 } else { 512 };
+                for tick in 0..ticks {
+                    let mut remaining = budget.max_tick_intervals;
+                    for x in [-40.0, -20.0, 0.0, 20.0] {
+                        for z in [-1.0, 0.0, 1.0] {
+                            for dx in [-2.0, 0.0, 2.0] {
+                                let origin = DVec3::new(x + dx + tick as f64 * 0.001, 1.5, z);
+                                assert_eq!(
+                                    std::hint::black_box(surface.occludes_ray(
+                                        origin,
+                                        direction,
+                                        budget,
+                                        &mut remaining,
+                                        &mut cache,
+                                    )),
+                                    Ok(false)
+                                );
+                            }
+                        }
+                    }
+                    intervals += budget.max_tick_intervals - remaining;
+                    assert_eq!(cache.cells.len(), cache.order.len());
+                    assert!(cache.cells.len() <= capacity);
+                }
+                eprintln!(
+                    "moving-ray diagnostic: resolution={resolution}, capacity={capacity}, ticks={ticks}, rays={}, intervals={intervals}, cached={}, elapsed_ns={}",
+                    ticks * 36,
+                    cache.cells.len(),
+                    started.elapsed().as_nanos()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn certified_occlusion_admits_procedural_rays_with_bounded_refinement() {
         let surface = SurfaceOracle::new(
-            Arc::new(HeightGrid::new_flat(257, 128.0)),
+            Arc::new(HeightGrid::new_flat(129, 128.0)),
             vec![HeightContribution {
                 modifier: Arc::new(lunco_terrain_core::Overzoom::default()),
                 content_key: 7,
             }],
         );
+        let budget = SurfaceOcclusionBudget {
+            max_intervals: 200,
+            ..Default::default()
+        };
         let direction = DVec3::new(0.0, 0.163, 0.987).normalize();
-        for capacity in [256, 65536] {
-            let budget = SurfaceOcclusionBudget {
-                max_cached_cells: capacity,
-                ..Default::default()
-            };
-            let mut cache = SurfaceOcclusionCache::default();
-            let mut intervals = 0;
-            let started = std::time::Instant::now();
-            for tick in 0..512 {
-                let mut remaining = budget.max_tick_intervals;
-                for x in [-40.0, -20.0, 0.0, 20.0] {
-                    for z in [-1.0, 0.0, 1.0] {
-                        for dx in [-2.0, 0.0, 2.0] {
-                            let origin = DVec3::new(x + dx + tick as f64 * 0.001, 1.5, z);
-                            assert_eq!(
-                                std::hint::black_box(surface.occludes_ray(
-                                    origin,
-                                    direction,
-                                    budget,
-                                    &mut remaining,
-                                    &mut cache,
-                                )),
-                                Ok(false)
-                            );
-                        }
-                    }
-                }
-                intervals += budget.max_tick_intervals - remaining;
-                assert_eq!(cache.cells.len(), cache.order.len());
-                assert!(cache.cells.len() <= capacity);
+        let mut cache = SurfaceOcclusionCache::default();
+        let mut remaining = budget.max_tick_intervals;
+        for x in [-42.0, -20.0, 2.0, 22.0] {
+            for z in [-1.0, 0.0, 1.0] {
+                let origin = DVec3::new(x, 1.5, z);
+                assert_eq!(
+                    surface.occludes_ray(origin, direction, budget, &mut remaining, &mut cache),
+                    Ok(false)
+                );
             }
-            eprintln!(
-                "moving-ray diagnostic: capacity={capacity}, ticks=512, rays=18432, intervals={intervals}, cached={}, elapsed_ns={}",
-                cache.cells.len(),
-                started.elapsed().as_nanos()
-            );
         }
+        let mut remaining = budget.max_tick_intervals;
+        assert_eq!(
+            surface.occludes_ray(
+                DVec3::new(-42.0, 1.5, -1.0),
+                direction,
+                SurfaceOcclusionBudget {
+                    max_intervals: 1,
+                    ..budget
+                },
+                &mut remaining,
+                &mut cache,
+            ),
+            Err("terrain occlusion interval budget exceeded".into())
+        );
     }
 
     #[test]

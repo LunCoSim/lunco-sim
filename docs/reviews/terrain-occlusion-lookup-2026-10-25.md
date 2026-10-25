@@ -1,9 +1,11 @@
 # Physical terrain occlusion: lookup attribution and bounded diagnostic
 
-The production algorithm is unchanged. Bevy prehashed keys and separate compact
-whole-cell storage did not establish a useful consumer improvement, so neither
-experiment remains in the runtime. The retained change is an ignored, bounded
-numerical timing diagnostic in `lunco-terrain-surface`.
+The production cache retains Bevy's hash map. Neither the prehashed-key nor the
+compact whole-cell experiment remains in the runtime. Their paired timing
+comparison is excluded by the artifact-identity audit below. The reusable
+diagnostic belongs to `lunco-terrain-surface`.
+The retained mathematical repair and current production qualification are in
+[the native enclosure review](terrain-procedural-enclosures-2026-10-25.md).
 
 ## Attribution
 
@@ -25,34 +27,37 @@ and its inlined key equality are the stronger lead.
 
 ## Consumer evidence
 
-The diagnostic uses a 257-post flat base plus the native analytic Overzoom
-modifier, 36 positive-slope moving rays per tick, and 512 ticks per capacity.
-Every ray must certify clear. Both capacities produce 2,359,296 admitted
-intervals; final occupancy is 256 and 1,558 respectively. It also asserts
-FIFO/map cardinality and the configured capacity. The existing ten occlusion
+The diagnostic uses flat bases with one- and two-metre raster cells plus the
+native analytic Overzoom modifier. It queries 36 positive-slope moving rays per
+tick: 32 ticks at capacity 256, and 512 ticks at capacity 65,536. Every ray must
+certify clear. It reports interval admission, occupancy and elapsed time, and
+asserts FIFO/map cardinality and the configured capacity. The existing occlusion
 mechanism checks retain negative coverage for ambiguous geometry, unavailable
 bounds, exhausted quotas, replacement surfaces and moving-ray certificates.
 
-Regular `cargo test --locked -p lunco-terrain-surface --lib --no-run -j 4`
-produces immutable test binaries for alternating comparisons, using the normal
-target directory and sccache. Five baseline/prehashed pairs give these medians:
+## Artifact identity
 
-| Capacity | Baseline | Prehashed | Difference |
-|---|---:|---:|---:|
-| 256 | 11,536.567 ms | 11,538.966 ms | 0.02% slower |
-| 65,536 | 56.878 ms | 57.044 ms | 0.29% slower |
+The earlier cache-layout comparison used hard links to Cargo's test output.
+Rebuilding overwrote the linked snapshots together; identical timings from those
+paths do not compare different implementations. That paired result is withdrawn.
+The independently run numerical checks remain valid, and no cache-layout change
+was committed. Use independent copies, verify different device/inode identities,
+and check recorded hashes after both builds and after the comparison.
 
-Every pair has identical verdicts, interval totals and occupancy. A separate
-compact-storage probe gives 11,776.742/56.530 ms; this single probe does not
-establish an improvement. Both candidates pass the same ten mechanism checks.
-No candidate production build or new scene-performance claim is made. The
-current normal production executable remains unchanged.
+The normal CPU/GPU renderer comparison is unaffected: its session receipts have
+distinct hashes `31d869123...` and `d227f3cec...` for the respective builds.
+The saved native Tracy captures are immutable data from their owned live PIDs.
+Do not infer that a hard-link snapshot remained immutable merely because a
+different artifact family happened to survive a rebuild.
 
 ## Next algorithm boundary
 
-The raster DDA still visits every crossed cell after a ray rises above the
-nearby terrain. Certified bounds over larger spatial regions could avoid those
-lookups. Such acceleration must conservatively enclose the actual bicubic base
+The raster DDA visits every crossed cell after a ray rises above nearby terrain.
+First inspect the procedural modifier's conservative certificates: an overly
+broad amplitude interval can force repeated refinement and lookup even over
+clear ground. A larger-block traversal experiment was removed without a verified
+consumer improvement; it did not establish a solution to that certificate
+problem. Any future spatial acceleration must conservatively enclose the actual bicubic base
 and all analytic modifiers, including extrapolated boundary posts and overshoot.
 Sampled visual LOD height ranges and collider triangles do not certify that
 surface. Retain fresh f64 rays, exact surface identity, bounded work and visible
@@ -68,7 +73,6 @@ platforms, including invalidation after raster or analytic edits. Its preparatio
 cost and memory must also be measured against the loading target.
 
 Raw captures, symbols, logs and paired results remain ignored under `.cache/`
-and `scripts/perf/captures/`. Temporary executable links are removed. No new
-runtime session was launched for these pure numerical experiments. Sub-second
-loading, sub-millisecond coupled ticks and the complete graphics target remain
+and `scripts/perf/captures/`. No runtime session was launched for these numerical
+experiments. Sub-second loading, sub-millisecond coupled ticks and the complete graphics target remain
 open.

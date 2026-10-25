@@ -1,16 +1,35 @@
 # High-quality realtime performance handover
 
-## Physical solar lookup attribution
+## Native procedural solar enclosures
+
+[The native enclosure repair](terrain-procedural-enclosures-2026-10-25.md)
+tightens signed crater-band bounds without changing the sampled terrain or
+adding a spatial index. Verified independent consumer pairs take 75% less time
+at two-metre raster spacing; the one-metre case is 1–12% slower. The new
+200-interval regression fails on the baseline and passes on the candidate;
+eleven terrain mechanism checks, two core enclosure checks and all four
+production solar gates pass. Summer's source-matched normal A/B/A coupled
+medians are 5.604/4.888/5.752 ms. Griffin reaches sleeping four-pad handoff with
+clear diagnostics. Host/workload-qualified graphics and loading targets remain
+unmet.
+
+The saved native capture matches the candidate source cohort and passes framing,
+native exports and exact-zone PID/period checks. Solar visibility is
+0.740/1.053 ms median/p95, while complete FixedMain remains 6.940 ms with Tracy.
+Pose bridge and rootless collider propagation are the next first-party physics
+leads; source-read sharing remains open after its earlier comparison was excluded.
+
+## Physical solar artifact audit
 
 [The exact-zone lookup audit](terrain-occlusion-lookup-2026-10-25.md) resolves
 96 of 237 physical-solar CPU samples to native table lookup and key comparison;
-the key's derive line alone did not establish hashing cost. Five alternating
-consumer pairs show no benefit from prehashed keys, and a compact-storage probe
-does not establish a gain. Both runtime experiments are removed. Ten numerical
-mechanism checks pass; the retained bounded moving-ray diagnostic supports the
-next algorithm comparison. Larger-region conservative bounds require proper
-asynchronous preparation, including the web worker boundary. Production behavior
-and the normal executable remain unchanged; all targets remain open.
+the key's derive line alone did not establish hashing cost. The cache-layout
+comparison is excluded: its test snapshots shared an inode and a later build
+overwrote both variants. Neither cache-layout experiment remains. Ten numerical
+mechanism checks passed for those experiments. The retained moving-ray
+diagnostic now covers one- and two-metre cells. Any future larger-region index
+would need proper asynchronous preparation, including the web worker boundary;
+the retained repair stays at the procedural enclosure owner. All targets remain open.
 
 ## Native CPU instance preparation
 
@@ -67,8 +86,8 @@ night and invalid-admission gates pass. Five alternating consumer comparisons
 measure 109.926 -> 54.539 ms with the same f64 fingerprint. The baseline's 240
 Moon placement zones are 0.878/1.331 ms median/p95 with Tracy and concurrent
 Tesla load; these are not clean product timings. A separate application
-revision-retention experiment is removed after a 3.2 percent slower paired
-consumer diagnostic. The normal production build is restored. All targets
+revision-retention experiment is absent; its paired timing is excluded because
+both receipt hashes identify the same executable. The normal production build is restored. All targets
 remain open.
 
 The final native capture retains exact baseline Twin hashes, nominal landing,
@@ -96,10 +115,11 @@ sharing remains the proposed startup repair, pending dependency approval.
 ## Scalar port call-boundary attribution
 
 [Source fan-out measurements](port-call-boundary-attribution-2026-10-24.md#source-fan-out-attribution)
-also retain no runtime change: source interning measures only 0.9 percent faster
-at fan-out four and 0.4 percent slower without fan-out across five alternating
-pairs. The reusable diagnostic now covers both cases and large fan-out, with
-identical exact-value checks. Production propagation remains unchanged.
+retain no runtime change. Their paired timing is excluded after the receipt
+audit found identical executable hashes for both variants. The reusable
+diagnostic covers ordinary connections and large fan-out with exact-value
+checks; source-read sharing remains a hypothesis to test properly. Production
+propagation remains unchanged.
 
 [The consumer diagnostic](port-call-boundary-attribution-2026-10-24.md) rejects
 compiler-inlining hints after five alternating comparisons: 187.855 ms baseline

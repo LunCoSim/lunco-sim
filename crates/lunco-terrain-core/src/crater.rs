@@ -228,7 +228,7 @@ const RIM_SIGMA: f64 = 0.14;
 /// Ejecta-apron Gaussian: centre, width, and amplitude as a fraction of rim height.
 const APRON_CENTER: f64 = 1.15;
 const APRON_SIGMA: f64 = 0.30;
-const APRON_FRAC: f64 = 0.25;
+pub(crate) const APRON_FRAC: f64 = 0.25;
 
 /// Gaussian bump `exp(−((d−c)/σ)²)`.
 #[inline]
