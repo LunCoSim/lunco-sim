@@ -848,8 +848,18 @@ module relocations and host addresses are rebound on every construction; no
 executable arena, FMI state, scene entity or numeric workspace is retained.
 Twin close retires its live owners while this immutable compiler cache survives.
 One dedicated thread-affine I/O lane asynchronously loads and coalesces bounded
-snapshots in `modelica/native-code-v1/stencils.json.zst`. Neither physics nor UI
-waits for storage. A late load only admits keys absent from current compilation.
+publication deltas in `modelica/native-code-v2/stencils.json.zst`. Each delta
+contains only entries accessed or compiled since the last successful publication.
+The I/O owner merges it with the current record under the storage-owned
+cross-process directory transaction, then publishes through atomic file replace.
+The common LRU and both admitted limits bound the merged record. A stale process
+cannot refresh untouched entries or displace other retained work by republishing
+those entries. Global eviction follows the merged recency and budgets.
+Neither physics nor UI waits for storage. A late load retains current compilation
+values and recency. Pure hits request no rewrite; failed publication retains its
+delta until another modification requests publication. Immutable code buffers
+remain shared through serialization. The versioned namespace owns this writer
+protocol, so its initial fill is distinct from warm reuse.
 The existing bounded zstd/typed persistence codec owns both artifact formats.
 Storage failures and invalid records warn at their owner; Cranelift-rejected
 artifacts warn, increment the profile's rejection count and compile fresh code.
@@ -857,7 +867,8 @@ Cache key protocol or poisoned-owner failures reject the construction visibly.
 The I/O owner drains after the live owners shut down. Native artifact completion
 order affects only reuse, never authoritative simulation state or commit order.
 The low-level cache tests cover byte/count eviction, replacement accounting,
-bounded persistence and corrupt records; `modelica_source_target` consumes the
+stale-owner deltas, load overlap, failed-publication recovery and corrupt records;
+`modelica_source_target` consumes the
 accounting through production, including rejection/replacement lifecycle checks.
 
 Native prepared-solve disk reuse uses the cache-owned `ModelicaArtifactDiskLimits`

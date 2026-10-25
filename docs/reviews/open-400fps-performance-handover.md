@@ -1,5 +1,19 @@
 # High-quality realtime performance handover
 
+## Griffin compiled-artifact retention
+
+The [native cache publication repair](griffin-startup-native-cache-publication-2026-10-25.md)
+merges accessed/compiled deltas under the existing storage transaction instead
+of letting stale processes replace the machine's complete artifact set. Main's
+Rumoca pin remains unchanged. Four focused cache checks and 46 production
+initialization/receipt checks pass. A normal first fill reaches physics-ready
+in 20.548 s; its warm restart takes 14.243 s versus the qualified-main baseline's
+23.331 s. Initializer compilation falls from 12,508 kernels to 68, and constructor
+time from 7.411 to 3.267 s. Concurrent work qualifies total timing; the stale-owner
+regression directly proves the cache fault and repair. Candidate runs retain
+all 271 source hashes, land at four-pad handoff, and close their owned sessions.
+Sub-second loading and sub-ms coupled ticks remain open.
+
 ## Shared native runtime preparation qualification
 
 Rumoca `fbfbcdc9` is tested and published: interpreter/native assignment

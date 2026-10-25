@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 type Key = [u8; 32];
+const NATIVE_CODE_CACHE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,12 +25,12 @@ struct Record {
 #[serde(deny_unknown_fields)]
 struct Entry {
     key: Key,
-    code: Vec<u8>,
+    code: Arc<[u8]>,
 }
 
 impl Record {
     fn validate(&self) -> Result<(), String> {
-        if self.version != 1 {
+        if self.version != NATIVE_CODE_CACHE_VERSION {
             return Err(format!(
                 "unsupported native artifact record version {}",
                 self.version
@@ -45,43 +46,90 @@ impl Record {
     }
 }
 
+struct CachedCode {
+    code: Arc<[u8]>,
+    used_at: Cell<u64>,
+}
+
 struct Data {
-    entries: BoundedReuseCache<Key, Arc<[u8]>>,
+    entries: BoundedReuseCache<Key, CachedCode>,
     bytes: usize,
     max_bytes: usize,
+    /// Local access order; publication never uses wall time.
     revision: u64,
+    /// Last insertion requiring persistence, distinct from read-only touches.
+    modified: u64,
+    /// Access watermark advanced only after a successful disk merge.
+    published: u64,
     requested: u64,
     attempted: u64,
     writer_active: bool,
 }
 
 impl Data {
-    fn insert(&mut self, key: Key, code: Arc<[u8]>) -> u64 {
+    fn new(capacities: ModelicaCacheCapacities) -> Self {
+        Self {
+            entries: BoundedReuseCache::new(capacities.native_code_entries),
+            bytes: 0,
+            max_bytes: capacities.native_code_bytes.get(),
+            revision: 0,
+            modified: 0,
+            published: 0,
+            requested: 0,
+            attempted: 0,
+            writer_active: false,
+        }
+    }
+
+    fn get(&mut self, key: &Key) -> Option<Arc<[u8]>> {
+        let entry = self.entries.get(key)?;
+        self.revision += 1;
+        entry.used_at.set(self.revision);
+        Some(Arc::clone(&entry.code))
+    }
+
+    fn admit(&mut self, key: Key, code: Arc<[u8]>, used_at: u64) -> Option<u64> {
         let weight = key.len() + code.len();
         if code.is_empty() || weight > self.max_bytes {
-            return 0;
+            return None;
         }
         let mut evictions = 0;
         loop {
             let replaced = self
                 .entries
                 .get(&key)
-                .map_or(0, |old| key.len() + old.len());
+                .map_or(0, |old| key.len() + old.code.len());
             if self.bytes - replaced + weight <= self.max_bytes {
                 break;
             }
             if let Some(old) = self.entries.pop_oldest() {
-                self.bytes -= key.len() + old.len();
+                self.bytes -= key.len() + old.code.len();
                 evictions += 1;
             }
         }
         let replacing = self.entries.contains_key(&key);
-        if let Some(old) = self.entries.insert(key, code) {
-            self.bytes -= key.len() + old.len();
+        if let Some(old) = self.entries.insert(
+            key,
+            CachedCode {
+                code,
+                used_at: Cell::new(used_at),
+            },
+        ) {
+            self.bytes -= key.len() + old.code.len();
             evictions += u64::from(!replacing);
         }
         self.bytes += weight;
-        self.revision += 1;
+        Some(evictions)
+    }
+
+    fn insert(&mut self, key: Key, code: Arc<[u8]>) -> u64 {
+        let weight = key.len() + code.len();
+        let revision = self.revision + 1;
+        let Some(evictions) = self.admit(key, code, revision) else {
+            return 0;
+        };
+        self.revision = revision;
+        self.modified = revision;
         bevy::log::trace!(
             operation = "insert",
             key = ?key,
@@ -94,11 +142,25 @@ impl Data {
         evictions
     }
 
-    fn snapshot(&self) -> Vec<(Key, Arc<[u8]>)> {
+    fn snapshot(&self, after: Option<u64>) -> Vec<(Key, Arc<[u8]>)> {
         self.entries
             .ordered_entries()
-            .map(|(key, code)| (*key, Arc::clone(code)))
+            .filter(|(_, entry)| after.is_none_or(|revision| entry.used_at.get() > revision))
+            .map(|(key, entry)| (*key, Arc::clone(&entry.code)))
             .collect()
+    }
+
+    fn import_older(&mut self, record: Record, capacities: ModelicaCacheCapacities) {
+        let mut merged = Self::new(capacities);
+        for entry in record.entries {
+            let _ = merged.admit(entry.key, entry.code, 0);
+        }
+        for (key, entry) in self.entries.ordered_entries() {
+            let _ = merged.admit(*key, Arc::clone(&entry.code), entry.used_at.get());
+        }
+        // A late load keeps current values, order and unpublished access stamps.
+        self.entries = merged.entries;
+        self.bytes = merged.bytes;
     }
 }
 
@@ -107,6 +169,7 @@ pub(super) struct SharedNativeCodeCache {
     data: Arc<Mutex<Data>>,
     io: Lane<()>,
     limits: ModelicaArtifactDiskLimits,
+    capacities: ModelicaCacheCapacities,
     path: StorageHandle,
 }
 
@@ -117,20 +180,13 @@ impl SharedNativeCodeCache {
         io: Lane<()>,
     ) -> Result<Self, String> {
         let cache = Self {
-            data: Arc::new(Mutex::new(Data {
-                entries: BoundedReuseCache::new(capacities.native_code_entries),
-                bytes: 0,
-                max_bytes: capacities.native_code_bytes.get(),
-                revision: 0,
-                requested: 0,
-                attempted: 0,
-                writer_active: false,
-            })),
+            data: Arc::new(Mutex::new(Data::new(capacities))),
             io,
             limits,
+            capacities,
             path: StorageHandle::File(
                 lunco_assets_core::modelica_dir()
-                    .join("native-code-v1")
+                    .join(format!("native-code-v{NATIVE_CODE_CACHE_VERSION}"))
                     .join("stencils.json.zst"),
             ),
         };
@@ -165,12 +221,7 @@ impl SharedNativeCodeCache {
         record.validate()?;
         let loaded_entries = record.entries.len();
         let mut data = self.lock()?;
-        for entry in record.entries {
-            // A concurrent fresh compilation owns its newer value.
-            if !data.entries.contains_key(&entry.key) {
-                data.insert(entry.key, entry.code.into());
-            }
-        }
+        data.import_older(record, self.capacities);
         bevy::log::info!(
             loaded_entries,
             retained_entries = data.entries.len(),
@@ -183,8 +234,8 @@ impl SharedNativeCodeCache {
     fn request_publication(&self) -> Result<(), String> {
         {
             let mut data = self.lock()?;
-            data.requested = data.revision;
-            if data.writer_active || data.requested == data.attempted {
+            data.requested = data.requested.max(data.modified);
+            if data.writer_active || data.requested <= data.attempted {
                 return Ok(());
             }
             data.writer_active = true;
@@ -205,7 +256,7 @@ impl SharedNativeCodeCache {
                     return None;
                 }
                 let revision = data.revision;
-                Some((revision, data.snapshot()))
+                Some((revision, data.snapshot(Some(data.published))))
             });
             let (revision, entries) = match snapshot {
                 Ok(Some(snapshot)) => snapshot,
@@ -217,23 +268,8 @@ impl SharedNativeCodeCache {
                     return;
                 }
             };
-            let record = Record {
-                version: 1,
-                entries: entries
-                    .into_iter()
-                    .map(|(key, code)| Entry {
-                        key,
-                        code: code.to_vec(),
-                    })
-                    .collect(),
-            };
-            let result = encode_record(&record, self.limits)
-                .map_err(|error| error.to_string())
-                .and_then(|bytes| {
-                    FileStorage::new()
-                        .write_sync(&self.path, &bytes)
-                        .map_err(|error| error.to_string())
-                });
+            let result = self.publish_delta(entries);
+            let published = result.is_ok();
             if let Err(error) = result {
                 bevy::log::warn!(
                     "[modelica-runtime] native code cache publication failed: {error}"
@@ -242,6 +278,9 @@ impl SharedNativeCodeCache {
             match self.lock() {
                 Ok(mut data) => {
                     data.attempted = revision;
+                    if published {
+                        data.published = revision;
+                    }
                     if data.requested <= revision {
                         data.requested = revision;
                     }
@@ -254,6 +293,44 @@ impl SharedNativeCodeCache {
                 }
             }
         }
+    }
+
+    fn publish_delta(&self, entries: Vec<(Key, Arc<[u8]>)>) -> Result<(), String> {
+        let StorageHandle::File(path) = &self.path else {
+            return Err("native artifacts require a file cache".to_owned());
+        };
+        let root = path.parent().ok_or("native cache path has no parent")?;
+        let name = path
+            .file_name()
+            .ok_or("native cache path has no filename")?;
+        let storage = FileStorage::new();
+        let transaction = storage
+            .lock_cache_directory(&StorageHandle::File(root.to_path_buf()))
+            .map_err(|error| error.to_string())?;
+        // The storage guard covers the complete read/merge/atomic-replace operation.
+        let path = StorageHandle::File(transaction.directory().join(name));
+        let mut merged = Data::new(self.capacities);
+        if let Some(record) = read_record::<Record>(&storage, &path, self.limits)
+            .map_err(|error| error.to_string())?
+        {
+            record.validate()?;
+            merged.import_older(record, self.capacities);
+        }
+        for (key, code) in entries {
+            let _ = merged.admit(key, code, 0);
+        }
+        let record = Record {
+            version: NATIVE_CODE_CACHE_VERSION,
+            entries: merged
+                .snapshot(None)
+                .into_iter()
+                .map(|(key, code)| Entry { key, code })
+                .collect(),
+        };
+        let bytes = encode_record(&record, self.limits).map_err(|error| error.to_string())?;
+        storage
+            .write_sync(&path, &bytes)
+            .map_err(|error| error.to_string())
     }
 
     pub(super) fn construct<R>(
@@ -329,7 +406,7 @@ impl CacheKvStore for Adapter {
         match self.cache.lock() {
             Ok(mut data) => {
                 let code: Option<Cow<'_, [u8]>> =
-                    data.entries.get(&key).map(|code| Cow::Owned(code.to_vec()));
+                    data.get(&key).map(|code| Cow::Owned(code.to_vec()));
                 bevy::log::trace!(
                     operation = "get",
                     key = ?key,
@@ -362,19 +439,181 @@ impl CacheKvStore for Adapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::NonZeroUsize;
+
+    fn capacities(entries: usize, bytes: usize) -> ModelicaCacheCapacities {
+        lunco_modelica_runtime::ModelicaCacheLimits {
+            native_code_entries: entries,
+            native_code_bytes: bytes,
+            ..Default::default()
+        }
+        .validate()
+        .unwrap()
+    }
+
+    fn cache_at(path: &StorageHandle, io: Lane<()>) -> SharedNativeCodeCache {
+        let capacities = capacities(3, 1000);
+        SharedNativeCodeCache {
+            data: Arc::new(Mutex::new(Data::new(capacities))),
+            io,
+            limits: ModelicaArtifactDiskLimits::default(),
+            capacities,
+            path: path.clone(),
+        }
+    }
+
+    fn publish_now(cache: &SharedNativeCodeCache) {
+        let mut data = cache.lock().unwrap();
+        data.requested = data.revision;
+        drop(data);
+        cache.publish();
+    }
+
+    #[test]
+    fn native_code_cache_preserves_other_writers_and_recent_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = StorageHandle::File(directory.path().join("stencils.json.zst"));
+        let limits = ModelicaArtifactDiskLimits::default();
+        let seed = Record {
+            version: NATIVE_CODE_CACHE_VERSION,
+            entries: vec![
+                Entry {
+                    key: [1; 32],
+                    code: vec![1].into(),
+                },
+                Entry {
+                    key: [2; 32],
+                    code: vec![2].into(),
+                },
+            ],
+        };
+        FileStorage::new()
+            .write_sync(&path, &encode_record(&seed, limits).unwrap())
+            .unwrap();
+        let mut pool = super::super::thread_pool::ThreadAffinePool::new(
+            "native-cache-test",
+            1,
+            || (),
+            |error| panic!("{error}"),
+        )
+        .unwrap();
+        let first = cache_at(&path, pool.next_lane());
+        let second = cache_at(&path, pool.next_lane());
+        first.load().unwrap();
+        second.load().unwrap();
+        first.lock().unwrap().insert([3; 32], vec![3].into());
+        publish_now(&first);
+        let mut stale = Adapter {
+            cache: second.clone(),
+            fault: RefCell::new(None),
+            evictions: Cell::new(0),
+        };
+        assert_eq!(stale.get(&[1; 32]).unwrap().as_ref(), &[1]);
+        stale.insert(&[4; 32], vec![4]);
+        publish_now(&second);
+        let record = read_record::<Record>(&FileStorage::new(), &path, limits)
+            .unwrap()
+            .unwrap();
+        record.validate().unwrap();
+        assert_eq!(
+            record
+                .entries
+                .iter()
+                .map(|entry| entry.key)
+                .collect::<Vec<_>>(),
+            vec![[3; 32], [1; 32], [4; 32]],
+            "a stale owner must publish its delta without replacing another owner's code or refreshing untouched entries"
+        );
+    }
+
+    #[test]
+    fn native_code_cache_load_keeps_newer_values_and_pending_recency() {
+        let capacities = capacities(2, 100);
+        let mut data = Data::new(capacities);
+        data.insert([1; 32], vec![9].into());
+        data.insert([3; 32], vec![3].into());
+        data.get(&[1; 32]).unwrap();
+        let revision = data.revision;
+        let modified = data.modified;
+        data.import_older(
+            Record {
+                version: NATIVE_CODE_CACHE_VERSION,
+                entries: vec![
+                    Entry {
+                        key: [1; 32],
+                        code: vec![1].into(),
+                    },
+                    Entry {
+                        key: [2; 32],
+                        code: vec![2].into(),
+                    },
+                ],
+            },
+            capacities,
+        );
+        let delta = data.snapshot(Some(data.published));
+        assert_eq!(
+            delta.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            vec![[3; 32], [1; 32]]
+        );
+        assert_eq!(delta[1].1.as_ref(), &[9]);
+        assert_eq!(
+            (data.revision, data.modified, data.bytes),
+            (revision, modified, 66)
+        );
+    }
+
+    #[test]
+    fn native_code_cache_failed_publication_keeps_pending_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = StorageHandle::File(directory.path().join("stencils.json.zst"));
+        let storage = FileStorage::new();
+        let seed = Record {
+            version: NATIVE_CODE_CACHE_VERSION,
+            entries: vec![Entry {
+                key: [1; 32],
+                code: vec![1].into(),
+            }],
+        };
+        let encoded = encode_record(&seed, ModelicaArtifactDiskLimits::default()).unwrap();
+        storage.write_sync(&path, &encoded).unwrap();
+        let mut pool = super::super::thread_pool::ThreadAffinePool::new(
+            "native-cache-failure-test",
+            1,
+            || (),
+            |error| panic!("{error}"),
+        )
+        .unwrap();
+        let cache = cache_at(&path, pool.next_lane());
+        cache.load().unwrap();
+        cache.lock().unwrap().insert([2; 32], vec![2].into());
+        storage.write_sync(&path, b"corrupt").unwrap();
+        assert!(
+            cache
+                .publish_delta(vec![([2; 32], vec![2].into())])
+                .is_err()
+        );
+        publish_now(&cache);
+        assert_eq!(cache.lock().unwrap().published, 0);
+        assert_eq!(storage.read_sync(&path).unwrap(), b"corrupt");
+        storage.write_sync(&path, &encoded).unwrap();
+        cache.lock().unwrap().insert([3; 32], vec![3].into());
+        publish_now(&cache);
+        let record = read_record::<Record>(&storage, &path, ModelicaArtifactDiskLimits::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record
+                .entries
+                .iter()
+                .map(|entry| entry.key)
+                .collect::<Vec<_>>(),
+            vec![[1; 32], [2; 32], [3; 32]]
+        );
+    }
 
     #[test]
     fn native_code_cache_enforces_both_budgets_and_rejects_invalid_records() {
-        let mut data = Data {
-            entries: BoundedReuseCache::new(NonZeroUsize::new(2).unwrap()),
-            bytes: 0,
-            max_bytes: 100,
-            revision: 0,
-            requested: 0,
-            attempted: 0,
-            writer_active: false,
-        };
+        let mut data = Data::new(capacities(2, 100));
         data.insert([1; 32], vec![1; 8].into());
         data.insert([2; 32], vec![2; 8].into());
         // Replacement refreshes recency and accounts for the previous bytes.
@@ -398,10 +637,10 @@ mod tests {
         assert!(!data.entries.contains_key(&[4; 32]));
 
         let record = Record {
-            version: 1,
+            version: NATIVE_CODE_CACHE_VERSION,
             entries: vec![Entry {
                 key: [1; 32],
-                code: vec![1],
+                code: vec![1].into(),
             }],
         };
         record.validate().unwrap();
@@ -415,17 +654,17 @@ mod tests {
             .unwrap()
             .unwrap();
         loaded.validate().unwrap();
-        assert_eq!(loaded.entries[0].code, vec![1]);
+        assert_eq!(loaded.entries[0].code.as_ref(), &[1]);
         let mut invalid = loaded;
         invalid.entries.push(Entry {
             key: [1; 32],
-            code: vec![2],
+            code: vec![2].into(),
         });
         assert!(invalid.validate().unwrap_err().contains("duplicate"));
         invalid.entries.pop();
-        invalid.entries[0].code.clear();
+        invalid.entries[0].code = Vec::new().into();
         assert!(invalid.validate().unwrap_err().contains("empty"));
-        invalid.version = 2;
+        invalid.version = NATIVE_CODE_CACHE_VERSION + 1;
         assert!(invalid.validate().unwrap_err().contains("version"));
         let mut corrupted = encoded;
         let last = corrupted.len() - 1;

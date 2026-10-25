@@ -797,9 +797,12 @@ eviction/retention counters. Replay that order to distinguish keys absent from
 the loaded snapshot from keys evicted before reuse. These events are disabled
 by the normal info filter; use a separate run for timing acceptance.
 Fingerprint the actual file before and after each process. Concurrent LunCoSim
-sessions can use the same cache root and publish complete snapshots to it;
-matching model sources alone does not establish matching cache starting state
-or prove that another process caused a miss.
+sessions merge accessed/compiled deltas in the same versioned cache under the
+storage transaction. Confirm that each writer uses that protocol; record its
+initial fill and warm reuse separately. Matching sources alone do not establish
+matching cache starting state or prove that another process caused a miss.
+The `native_code_cache_preserves_other_writers_and_recent_reads` regression
+rejects stale-owner replacement while preserving both retention budgets.
 Check `evictions`, `retained_entries` and `retained_bytes` alongside the admitted
 byte/entry limits. A repeated load whose working set exceeds retention can evict
 the next functions before they are reused; a cache file alone proves no benefit.
