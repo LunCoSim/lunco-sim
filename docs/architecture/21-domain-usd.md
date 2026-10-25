@@ -950,7 +950,11 @@ in stable source order to fill automatic mass, inertia and center-of-mass fields
 Native override preparation and co-simulation retain ownership of explicit
 computed properties through `NoAuto*`; an explicit mass rescales only automatic
 inertia. Nested bodies and visual descendants never add mass to that
-geometry reduction. Contact orientation uses the same stable physics identities.
+geometry reduction. The shared `PhysicsGeometryPreparation` schedule completes
+native cooking and this reduction at `PhysicsGeometryAdmission`, before USD
+dynamic admission publishes readiness. It also runs before each fixed solver
+step, so neither initial observations nor ongoing geometry edits require a
+priming tick. Contact orientation uses the same stable physics identities.
 Primitive `axis` belongs to the collider-local geometry basis, including when
 the collision geometry is authored on the rigid-body prim itself. The body's
 authored pose never substitutes for that basis; root and descendant primitives
@@ -958,8 +962,9 @@ use the same axis conversion before their native collider entities are attached.
 The native `MassPropertyHelper` traverses the complete entity hierarchy without
 a rigid-body boundary; USD mass ownership therefore reduces the native
 `ColliderMassProperties` through `RigidBodyColliders` and Parry's public f64
-mass-property math. Body-local transforms, reduction and computed results stay
-f64. Native preparation invalidates the computed properties when geometry,
+mass-property math. The reduction widens native collider mass and local-transform
+inputs once, computes in f64, and writes computed values at the documented f32
+solver boundary. Native preparation invalidates the computed properties when geometry,
 density or overrides change. That invalidation and membership changes wake the
 body reduction; unchanged bodies do not repeat it each tick.
 The physics owner registers native contact and constraint graph reset operations

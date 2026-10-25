@@ -73,7 +73,7 @@ fn make_app() -> App {
     // propagation (the production shape).
     app.add_plugins((
         big_space::plugin::BigSpaceMinimalPlugins,
-        PhysicsPlugins::default(),
+        lunco_physics::body_mass::with_geometry_preparation(PhysicsPlugins::default().build()),
         BigSpacePhysicsBridgePlugin,
     ));
     // Drive real frames at the fixed timestep so FixedUpdate ticks once per
@@ -98,8 +98,8 @@ fn make_app_with_usd_collision_hooks() -> App {
     app.init_asset::<Mesh>();
     app.add_plugins((
         big_space::plugin::BigSpaceMinimalPlugins,
-        PhysicsPlugins::default()
-            .with_collision_hooks::<lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter>(),
+        lunco_physics::body_mass::with_geometry_preparation(PhysicsPlugins::default()
+            .with_collision_hooks::<lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter>().build()),
         BigSpacePhysicsBridgePlugin,
     ));
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(

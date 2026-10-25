@@ -5,7 +5,45 @@
 //! independently simulated descendants contribute nothing.
 use avian3d::parry::{mass_properties::MassProperties, math::Pose};
 use avian3d::prelude::*;
+use bevy::app::PluginGroupBuilder;
+use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
+
+/// Native collider cooking and body mass preparation, without advancing time.
+/// The spatial bridge runs this boundary before initial query admission and
+/// before each solver invocation, after supplying current collider transforms.
+#[derive(ScheduleLabel, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PhysicsGeometryPreparation;
+
+/// Admission consumers run after this set to observe prepared native geometry.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PhysicsGeometryAdmission;
+
+/// Configure the native physics group to share geometry preparation between
+/// lifecycle admission and fixed integration. Native plugins retain all shape
+/// cooking, override validation and mass recomputation mechanisms.
+pub fn with_geometry_preparation(plugins: PluginGroupBuilder) -> PluginGroupBuilder {
+    plugins
+        .set(MassPropertyPlugin::new(PhysicsGeometryPreparation))
+        .set(ColliderBackendPlugin::<Collider>::new(
+            PhysicsGeometryPreparation,
+        ))
+        .add(PhysicsGeometryPreparationPlugin)
+}
+
+struct PhysicsGeometryPreparationPlugin;
+
+impl Plugin for PhysicsGeometryPreparationPlugin {
+    fn build(&self, app: &mut App) {
+        use avian3d::dynamics::rigid_body::mass_properties::MassPropertySystems;
+        app.init_schedule(PhysicsGeometryPreparation);
+        app.add_systems(
+            PhysicsGeometryPreparation,
+            update_body_mass_from_colliders
+                .after(MassPropertySystems::UpdateComputedMassProperties),
+        );
+    }
+}
 
 /// Derive automatic properties from `RigidBodyColliders`; explicit computed
 /// properties remain owned by native override preparation and co-simulation.

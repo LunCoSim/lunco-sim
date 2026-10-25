@@ -1538,7 +1538,9 @@ The whole-simulation guarantee remains open because:
    runner decodes that file into typed records at the
    `--determinism-reference PATH` process boundary and exposes one requested
    value through the existing Rhai query bridge. Rhai selects the profile from
-   typed runner parameters, compares six physics checkpoints, sparse Modelica
+   typed runner parameters, derives scenario phase boundaries from the
+   authoritative tick and requested tick rate instead of accumulating rounded
+   floating-point deltas, and compares six physics checkpoints, sparse Modelica
    and articulated checkpoints, and the explicit final physics, Modelica, and
    articulated state with exact equality (`numeric_tolerance=0`). It retains
    only checkpoint tick numbers and the first mismatch. Physics pose rows use

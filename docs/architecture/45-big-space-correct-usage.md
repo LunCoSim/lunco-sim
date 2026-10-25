@@ -118,12 +118,17 @@ changing the model or adding an Earth/Sun/Moon conversion path. Render
 projection may read a finalized `GlobalTransform` only after BigSpace
 propagation, for presentation and shadow consumers.
 
-The physics bridge propagates rootless `ColliderTransform` values in native
-`FixedPostUpdate` preparation, before Avian cooks collider scale and reduces
-mass properties. The nested solver consumes that same prepared geometry and
-COM. Collider insertion retains the constructor's shape and scale; it never
-rescales geometry from a presentation `GlobalTransform`. Native transform-driven
-scale changes enter through the ordered preparation consumer.
+`lunco-physics::body_mass::with_geometry_preparation` configures Avian's native
+collider backend and mass plugin on `PhysicsGeometryPreparation`. The spatial
+bridge supplies rootless `ColliderTransform` values before native scale cooking,
+mass recomputation and the body-owned collider reduction. That one preparation
+schedule runs during `PreUpdate` admission and before each fixed solver step;
+it never advances time. Initial attached-collider poses and native tree bounds
+are published afterward, in `PhysicsGeometryAdmission`. USD dynamic admission
+orders after that set before publishing `PhysicsStateReady`. Consumers therefore
+observe prepared geometry and COM before the first simulation tick. Collider
+insertion is provisional; presentation `GlobalTransform` is not the admitted
+source of collider scale.
 That consumer independently drains `Transform`, `RigidBody` and `ChildOf`
 removals. A removed parent invalidates the relative collider transform even
 when its local transform stays unchanged, so the next preparation pass must

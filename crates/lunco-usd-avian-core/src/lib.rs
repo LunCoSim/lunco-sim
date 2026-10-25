@@ -315,6 +315,11 @@ fn validate_physics_frame_contract(
 
 impl Plugin for BigSpacePhysicsBridgePlugin {
     fn build(&self, app: &mut App) {
+        assert!(
+            app.get_schedule(lunco_physics::body_mass::PhysicsGeometryPreparation)
+                .is_some(),
+            "compose native physics with with_geometry_preparation before BigSpacePhysicsBridgePlugin"
+        );
         // The bridge owns the frame admission contract. The fixed solver set
         // below is gated directly, while PhysicsGatePlugin consumes the same
         // hold to pause Time<Physics> and prevent force accumulation.
@@ -353,7 +358,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PreUpdate,
             (
-                propagate_collider_transforms_rootless,
+                prepare_physics_geometry,
                 seed_attached_collider_poses,
                 validate_physics_backend_state,
                 avian3d::collider_tree::update_moved_collider_aabbs::<Collider>
@@ -363,6 +368,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .run_if(physics_frame_contract_ready)
                 .run_if(physics_query_admission_needed)
                 .after(PhysicsBridgeSystems::Read)
+                .in_set(lunco_physics::body_mass::PhysicsGeometryAdmission)
                 .before(lunco_physics::apply_physics_holds),
         );
         // Update can admit or reparent physical entities after the lifecycle
@@ -492,19 +498,27 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         );
         app.add_systems(
             FixedPostUpdate,
-            (propagate_collider_transforms_rootless,)
-                .chain()
+            prepare_physics_geometry
                 .run_if(physics_frame_contract_ready)
-                .in_set(PhysicsTransformSystems::Propagate)
+                .in_set(PhysicsSystems::Prepare)
+                .after(PhysicsTransformSystems::TransformToPosition)
                 .after(PhysicsBridgeSystems::Read)
                 .before(PhysicsSystems::StepSimulation),
         );
-        // The bridge supplies ColliderTransform in Avian's preparation
-        // schedule, before native scale cooking and mass-property reduction.
-        // Both must consume the current hierarchy before the nested solver
-        // reads its geometry and COM. BigSpace's root has no Transform, so
-        // propagation follows each collider's ancestor chain directly.
+        // BigSpace's root has no Transform. Supply its collider-relative
+        // hierarchy before native scale cooking and mass-property reduction
+        // in the same schedule used for time-zero admission.
+        app.add_systems(
+            lunco_physics::body_mass::PhysicsGeometryPreparation,
+            propagate_collider_transforms_rootless
+                .run_if(physics_frame_contract_ready)
+                .before(PhysicsTransformSystems::TransformToPosition),
+        );
     }
+}
+
+fn prepare_physics_geometry(world: &mut World) {
+    world.run_schedule(lunco_physics::body_mass::PhysicsGeometryPreparation);
 }
 
 /// Last active Avian frame observed by the bridge.
@@ -2416,7 +2430,7 @@ mod tests {
         app.add_plugins((
             MinimalPlugins,
             AssetPlugin::default(),
-            PhysicsPlugins::default(),
+            lunco_physics::body_mass::with_geometry_preparation(PhysicsPlugins::default().build()),
             BigSpacePhysicsBridgePlugin,
         ));
         app.init_asset::<Mesh>();
@@ -2448,7 +2462,6 @@ mod tests {
         app.cleanup();
         app.world_mut().run_schedule(PreUpdate);
         assert!(app.world().resource::<PhysicsFrameContractStatus>().ready);
-        app.world_mut().run_schedule(FixedPostUpdate);
         assert_eq!(
             app.world().get::<Collider>(body).unwrap().scale(),
             Vec3::splat(6.0)
@@ -2456,6 +2469,12 @@ mod tests {
         assert_eq!(
             app.world().get::<ComputedMass>(body).unwrap().value(),
             216.0
+        );
+        assert!(
+            app.world()
+                .get::<ComputedAngularInertia>(body)
+                .unwrap()
+                .is_finite()
         );
 
         app.world_mut().get_mut::<Transform>(group).unwrap().scale = Vec3::splat(4.0);

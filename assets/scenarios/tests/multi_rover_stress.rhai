@@ -581,7 +581,6 @@ fn deterministic_profile_selection(rover_count) {
 }
 
 fn on_start(me, ctx) {
-    this.t = 0.0;
     this.phase = "settle";
     this.rovers = [];
     this.rover_paths = [];
@@ -770,7 +769,8 @@ fn on_tick(me, ctx) {
     this.last_observed_tick = current_tick;
     if this.phase == "done" { return; }
     let scenario_tick = sim_tick();
-    this.t += dt();
+    let elapsed_s = (scenario_tick - this.on_start_tick).to_float()
+        / this.capture_parameters.tick_hz;
 
     if !this.early_determinism_trace_captured {
         this.early_determinism_trace_captured = true;
@@ -806,7 +806,7 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == "settle" {
-        if this.t < SETTLE_SECONDS {
+        if elapsed_s < SETTLE_SECONDS {
             for rover in this.rovers { brake(rover); }
             return;
         }
@@ -868,8 +868,8 @@ fn on_tick(me, ctx) {
         }
     }
 
-    if this.t >= this.next_determinism_sample_s
-        && this.t < SETTLE_SECONDS + DRIVE_SECONDS {
+    if elapsed_s >= this.next_determinism_sample_s
+        && elapsed_s < SETTLE_SECONDS + DRIVE_SECONDS {
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
             false, this.determinism_profile, "modelica");
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
@@ -886,7 +886,7 @@ fn on_tick(me, ctx) {
         this.next_determinism_sample_s += 3.0;
     }
 
-    if this.t < SETTLE_SECONDS + DRIVE_SECONDS { return; }
+    if elapsed_s < SETTLE_SECONDS + DRIVE_SECONDS { return; }
     let final_sample = deterministic_state_sample(this.rover_paths, this.rovers,
         true, this.determinism_profile, "final_modelica");
     this.deterministic_trace_valid = this.deterministic_trace_valid && final_sample.valid;

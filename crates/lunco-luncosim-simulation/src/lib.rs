@@ -164,11 +164,13 @@ fn load_input_bindings_defaults(
 
 /// The luncosim's one physics configuration.
 fn luncosim_physics_plugins() -> impl PluginGroup {
-    PhysicsPlugins::default()
-        .with_collision_hooks::<UsdCollisionFilter>()
-        .build()
-        .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
-        .add(physics_presentation::PhysicsPresentationPlugin)
+    lunco_physics::body_mass::with_geometry_preparation(
+        PhysicsPlugins::default()
+            .with_collision_hooks::<UsdCollisionFilter>()
+            .build(),
+    )
+    .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
+    .add(physics_presentation::PhysicsPresentationPlugin)
 }
 
 /// The luncosim's gravity before any scene is loaded, and the value scene

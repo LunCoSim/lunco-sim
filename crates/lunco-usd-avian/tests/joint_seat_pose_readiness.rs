@@ -44,7 +44,7 @@ fn make_app() -> App {
     // propagation. This is the production shape.
     app.add_plugins((
         big_space::plugin::BigSpaceMinimalPlugins,
-        PhysicsPlugins::default(),
+        lunco_physics::body_mass::with_geometry_preparation(PhysicsPlugins::default().build()),
         BigSpacePhysicsBridgePlugin,
     ));
     app.init_resource::<SeenInJointPreparation>();
@@ -54,9 +54,7 @@ fn make_app() -> App {
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
         15625,
     )));
-    app.world_mut()
-        .resource_mut::<Time<Virtual>>()
-        .pause();
+    app.world_mut().resource_mut::<Time<Virtual>>().pause();
     app.finish();
     app.cleanup();
     app

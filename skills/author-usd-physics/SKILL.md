@@ -114,7 +114,12 @@ limits to make a valid unbounded joint accept a command.
 Startup joint topology is prepared while the shared fixed clock is held. The
 shared USD reader excludes disabled and lint-only joints from both runtime
 projection and admission topology; authored lint facts still include them.
-BigSpace physics bridge seeds authored body poses in `PreUpdate`; USD joints
+BigSpace physics bridge seeds authored body poses in `PreUpdate` and completes
+the shared native shape/mass preparation at `PhysicsGeometryAdmission` before
+USD publishes `PhysicsStateReady`. Rust hosts compose the Avian group through
+`lunco_physics::body_mass::with_geometry_preparation`. Check initial finite
+mass/inertia without advancing the clock; never prime a solver tick to make a
+body ready. USD joints
 are projected in `JointPreparation` during `Update`, after USD simulation
 projection and before the generic `JointAdmission` owner. This phase must not
 wait for a first physics step to resolve bodies or seat a joint.

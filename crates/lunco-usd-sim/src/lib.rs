@@ -1147,6 +1147,7 @@ impl Plugin for UsdSimPlugin {
             PreUpdate,
             activate_dynamic_bodies
                 .in_set(UsdSimSet::ActivateDynamicBodies)
+                .after(lunco_physics::body_mass::PhysicsGeometryAdmission)
                 .before(lunco_physics::apply_physics_holds)
                 .run_if(any_match_filter::<DynamicBodyAdmissionFilter>),
         );

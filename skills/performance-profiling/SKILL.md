@@ -452,6 +452,12 @@ full-state replay.
 Compound audit rows include native scale and local part mass properties.
 If the first divergence is already in COM, compare admitted geometry and
 mass ownership before attributing later motion to the query dispatcher.
+For time-zero mass/inertia, inspect `PhysicsGeometryAdmission` before changing
+the authored checkpoint or reference. The shared native geometry schedule must
+finish before USD publishes physics-ready; advancing a solver tick to prepare
+geometry would change the initial state. Qualify preparation changes with the
+rootless scale/mass mechanism check and the unchanged four-rover production
+gate, including its deliberately altered-row negative.
 
 When attributing native GPU preprocessing, trace allocation identity rather
 than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges

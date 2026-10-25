@@ -511,10 +511,6 @@ impl Plugin for UsdAvianPlugin {
         // scene it would make a fresh `PhysicsScene` look like a conflicting
         // duplicate of a prim that no longer exists.
         app.init_resource::<CollisionGroupTables>();
-        app.add_systems(FixedPostUpdate,
-            lunco_physics::body_mass::update_body_mass_from_colliders
-                .after(avian3d::dynamics::rigid_body::mass_properties::MassPropertySystems::UpdateComputedMassProperties)
-                .before(PhysicsSystems::StepSimulation));
         app.add_systems(
             lunco_core::SceneTeardown,
             |mut commands: Commands, mut groups: ResMut<CollisionGroupTables>| {

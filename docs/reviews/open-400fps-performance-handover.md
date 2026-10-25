@@ -1,14 +1,22 @@
 # High-quality realtime performance handover
 
-## Startup inertia gate
+## Native geometry admission
 
-[The normal four-rover baseline](open-physics-startup-inertia-2026-10-25.md)
-fails three of 24 checks before the executor experiment. At ticks zero and
-one, all four bodies report physics-ready and finite mass while their computed
-inertia is not finite. The authored diagnostic retains those facts without
-changing the assertion or reference. Native geometry preparation and dynamic
-readiness need one ordered boundary before the time-zero consumer. This remains
-open; later readiness windows do not prove correct startup inertia.
+[The shared native preparation boundary](physics-geometry-admission-2026-10-25.md)
+prepares collider scale and body mass before USD publishes physics-ready,
+without advancing a solver tick. The focused scale/mass mechanism check and
+invalid-rotation terminal-fault gate pass. All ten registered rover profiles
+match exactly in paired captures, then pass a third exact replay with 360
+checks and the altered-row negative enabled. Scenario checkpoint timing uses
+the authoritative tick; the expected-state fixture includes the current
+Modelica variable set. Normal three-Twin windows retain clear diagnostics,
+finite mass/inertia and inspected images; Griffin reaches sleeping four-pad
+handoff. Its interrupted launch controller excludes loading timing; the
+verified owned API supplies a fresh settled window. Coupled medians are
+4.198 ms Summer, 6.082 ms Griffin and 2.855 ms Tesla under contention. These
+observations do not establish a speedup. All original performance targets
+remain open; Tesla's existing datum HUD and complete mission acceptance remain
+outside this bounded checkpoint.
 
 ## Shared collider hierarchy preparation
 

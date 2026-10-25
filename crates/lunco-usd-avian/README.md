@@ -18,6 +18,13 @@ entity construction and lifecycle.
 ### 1. `UsdAvianPlugin`
 The main Bevy plugin that sets up the physics mapping logic. It registers necessary types and observers.
 
+Compose the native physics group with
+`lunco_physics::body_mass::with_geometry_preparation` and install
+`BigSpacePhysicsBridgePlugin` for the shared geometry preparation boundary.
+The bridge runs native shape and mass preparation before initial query
+admission and each fixed solver step; USD projection only supplies authored
+components. See [the spatial contract](../../docs/architecture/45-big-space-correct-usage.md).
+
 ### 2. Mapping (observers + deferred resolution)
 When an entity is tagged with a `UsdPrimPath`, the crate looks up the Prim and maps:
 *   **RigidBody** — an applied `PhysicsRigidBodyAPI` is the only thing that makes a prim a body; its own `physics:rigidBodyEnabled` (default true) says whether that body is simulated → `RigidBody`, with **mass-properties** `physics:mass` / `physics:diagonalInertia` / `physics:centerOfMass` → the Avian override components (`Mass`/`AngularInertia`/`CenterOfMass`, shared with the runtime mass-props ports).
