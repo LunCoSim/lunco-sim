@@ -1,5 +1,15 @@
 # High-quality realtime performance handover
 
+## Startup inertia gate
+
+[The normal four-rover baseline](open-physics-startup-inertia-2026-10-25.md)
+fails three of 24 checks before the executor experiment. At ticks zero and
+one, all four bodies report physics-ready and finite mass while their computed
+inertia is not finite. The authored diagnostic retains those facts without
+changing the assertion or reference. Native geometry preparation and dynamic
+readiness need one ordered boundary before the time-zero consumer. This remains
+open; later readiness windows do not prove correct startup inertia.
+
 ## Shared collider hierarchy preparation
 
 [Invocation-local validated prefixes](collider-hierarchy-prefixes-2026-10-25.md)

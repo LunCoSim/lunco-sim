@@ -80,6 +80,12 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   can be narrowed to complete instances of one exact zone by appending its name
   to the sample export command; inspect `matched_zones` and the terminal result.
   Frame-wide samples include unrelated work outside the selected child zone.
+  The native exporter supports `-e -u` for per-event self times. Match those
+  rows to the inclusive export by source, thread and start before selecting a
+  bounded window: self duration does not provide the event's original end.
+  For one complete schedule subtree, require the selected self-time sum to
+  equal its inclusive duration. Main-thread schedule self time includes waits
+  for worker systems; it does not by itself prove executor overhead.
   Profiling data stays in ignored `scripts/perf/captures/`, `.cache/` or
   `target/perf/`; commit
   reusable tool sources and documentation only.

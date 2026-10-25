@@ -208,6 +208,11 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values,
         let state = query("QueryPhysicsState", #{ id: rover });
         let avian_contact = contact_debug(rover);
         if position == () || rotation == () || state == () || avian_contact == () {
+            print("D4_PHYSICS_SAMPLE_UNAVAILABLE " + #{
+                tick: tick, path: path, position: position != (),
+                rotation: rotation != (), state: state != (),
+                contact: avian_contact != (),
+            }.to_string());
             valid = false;
             continue;
         }
@@ -225,6 +230,15 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values,
             && state.linear_velocity_mps != ()
             && state.angular_velocity_radps != ();
         if !state_is_valid {
+            print("D4_PHYSICS_STATE_INVALID " + #{
+                tick: tick, path: path, mode: state.body_mode,
+                ready: state.physics_state_ready, pending: state.physics_state_pending,
+                seeded: state.physics_pose_seeded, admission: state.physics_admission_requested,
+                initialization: state.physics_initialization_pending,
+                disabled: state.rigid_body_disabled, mass: state.mass_kg,
+                mass_finite: state.computed_mass_finite,
+                inertia_finite: state.computed_inertia_finite,
+            }.to_string());
             valid = false;
             continue;
         }
