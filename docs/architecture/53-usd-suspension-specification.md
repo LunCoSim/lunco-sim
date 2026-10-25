@@ -301,12 +301,30 @@ those two lines can strike different sides of a narrow ramp track.
 
 The authored `physxVehicleSuspension:travelDistance` bounds compression from the
 uncompressed hub. It must be finite, nonnegative and no greater than `restLength`.
-`raycast_travel` installs a unilateral custom XPBD constraint through Avian's
-supported constraint and joint-graph APIs. It joins the carrier to the actual
-ray-hit support body, using contact-normal effective mass and inertia. There is
+`raycast_travel` installs a unilateral stop through Avian's joint graph and
+`ContactNormalPart` solver. It joins the carrier to the actual ray-hit support
+body, using contact-normal effective mass and inertia. Speculative normal
+impulses, the shared contact softness, substep warm starting and unbiased
+velocity relaxation enforce the limit. Penetration is not projected into a
+body displacement and then converted into separating velocity: that would
+turn a late ray contact into an energy-producing rebound. There is
 no wheel collider or extra wheel mass. The stop reaction participates in the tire
 load budget, and losing contact retires its cached constraint and reaction.
 These transient support edges are excluded from the wheel's own assembly filter.
+
+Wheel rays extend beyond rest length by the hub's swept distance over one master
+step, including carrier angular velocity and constant linear acceleration. This
+admits the speculative stop before a fast landing crosses the travel limit.
+The stop preserves the signed free-travel gap; spring load and physical contact
+still require a hit within rest length. A distant speculative hit is not a
+compressed spring or a tire contact.
+
+The [impact-energy review](../reviews/raycast-stop-energy-2026-10-25.md)
+records the shared ownership and regressions across vehicle masses, off-centre
+contacts and static/dynamic/kinematic supports. A moving support may supply real
+work; energy checks use its translating frame, and dynamic pairs preserve total
+momentum. These invariants belong in the shared mobility tests, independently of
+any Twin's jump controls.
 
 Hub presentation reads the fresh completed-pose raycast after physics. Compression
 is displayed as solved; a visual clamp must never conceal travel failure. Physics

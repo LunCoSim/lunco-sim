@@ -2012,14 +2012,27 @@ fn sync_raycast_wheel_physics_pose(
             Without<lunco_core::SimulationObjectPaused>,
         ),
     >,
-    q_chassis: Query<(&Position, &Rotation), (With<RigidBody>, Without<WheelRaycast>)>,
+    q_chassis: Query<
+        (
+            &Position,
+            &Rotation,
+            &LinearVelocity,
+            &AngularVelocity,
+            &ComputedCenterOfMass,
+            Option<&ConstantLinearAcceleration>,
+        ),
+        (With<RigidBody>, Without<WheelRaycast>),
+    >,
+    physics_time: Res<Time<Physics>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     for (wheel_entity, wheel, mut wpos, mut wrot, mut raycaster, mount, suspension) in
         q_wheels.iter_mut()
     {
-        if let Ok((cpos, crot)) = q_chassis.get(mount.body) {
+        if let Ok((cpos, crot, velocity, angular_velocity, center, acceleration)) =
+            q_chassis.get(mount.body)
+        {
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(cpos.0),
                 GridRot(crot.0.as_dquat()),
@@ -2029,13 +2042,27 @@ fn sync_raycast_wheel_physics_pose(
             // Avian transforms this local origin and NEG_Y direction by the
             // same solved hub rotation used by raycast_contact_point below.
             let ray_origin = DVec3::Y * strut_offset(suspension.rest_length, wheel.wheel_radius);
+            // Discover a support before the next master step can cross the
+            // bump stop. This extends the query only; spring/contact consumers
+            // still qualify physical contact against the authored rest length.
+            let lever = hub_pos.0 - (cpos.0 + crot.0.as_dquat() * center.0.as_dvec3());
+            let point_velocity = velocity.0.as_dvec3() + angular_velocity.0.as_dvec3().cross(lever);
+            let step = physics_time.delta_secs_f64();
+            let swept_distance = point_velocity.length() * step
+                + acceleration.map_or(0.0, |a| 0.5 * f64::from(a.0.length()) * step * step);
+            let ray_distance = suspension_ray_max_distance(suspension.rest_length + swept_distance);
             // A NaN rotation or origin poisons the cast and avian asserts on it.
             // avian's `raycast` asserts `origin.is_finite()` and takes the whole
             // app down with it. Do not leave the wheel on an old pose and let the
             // next system interpret that pose as current physics. Record the
             // invalid source as a terminal scene fault; the fault gate pauses
             // force production and the scene lifecycle owns the explicit reset.
-            if !hub_pos.0.is_finite() || !hub_rot.0.is_finite() || !ray_origin.is_finite() {
+            if !hub_pos.0.is_finite()
+                || !hub_rot.0.is_finite()
+                || !ray_origin.is_finite()
+                || !ray_distance.is_finite()
+                || ray_distance > f64::from(f32::MAX)
+            {
                 if let Some(holds) = holds.as_deref_mut() {
                     holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
                 }
@@ -2066,6 +2093,10 @@ fn sync_raycast_wheel_physics_pose(
             }
             if raycaster.origin != ray_origin {
                 raycaster.origin = ray_origin;
+            }
+            // Explicit Avian query scalar boundary; physical parameters remain f64.
+            if raycaster.max_distance != ray_distance as f32 {
+                raycaster.max_distance = ray_distance as f32;
             }
             if wrot.0 != hub_rot.0.as_quat() {
                 wrot.0 = hub_rot.0.as_quat();
@@ -2644,6 +2675,7 @@ mod wheel_raycast_parallel_tests {
     #[test]
     fn raycast_wheel_physics_pose_ignores_interpolated_transform() {
         let mut app = App::new();
+        app.init_resource::<Time<Physics>>();
         app.add_systems(FixedPostUpdate, sync_raycast_wheel_physics_pose);
 
         let chassis_position = DVec3::new(12.0, 4.0, -8.0);
