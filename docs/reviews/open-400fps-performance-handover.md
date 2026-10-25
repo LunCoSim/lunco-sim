@@ -1,5 +1,17 @@
 # High-quality realtime performance handover
 
+## Buffered artifact compression
+
+The [cache stream repair](griffin-cache-stream-buffering-2026-10-25.md) uses the
+standard buffered writer at the existing bounded codec. All 31 cache cases and
+46 production initialization/receipt cases pass. Griffin retains all sources,
+reaches sleeping four-pad handoff and clear diagnostics. Normal readiness is
+14.153 s; coupled p50/p95 remains 3.476/4.288 ms. Differing host/view cohorts
+establish no isolated scene speedup. Native framing, CSV and CPU exports pass;
+the regular artifact is restored and owned sessions close. The capture still
+shows substantial JSON byte-array encoding/decoding on the I/O lane. The wire,
+namespace, numerical checks and both original timing targets are preserved.
+
 ## Shared immutable assignment preparation
 
 The [qualified SDK pin](rumoca-shared-assignment-preparation-2026-10-25.md)

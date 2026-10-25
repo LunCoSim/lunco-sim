@@ -793,6 +793,12 @@ warm and new-process loading. The worker's application-lived cache retains only
 relocatable compiler artifacts, under `ModelicaCacheLimits` entry/byte budgets;
 it does not retain live FMI state. Cache I/O is asynchronous, so report observed
 hits rather than assuming that a disk snapshot was ready before construction.
+Inspect the separate `modelica_native_cache_load` and
+`modelica_native_cache_publish` zones when cache I/O consumes startup CPU.
+The shared codec buffers serializer fragments before Zstd; retain decoded and
+compressed budgets, explicit flush failure handling and the existing wire
+identity when tuning this boundary. Codec diagnostics do not establish a
+complete-loading or coupled-tick speedup.
 For key-level attribution, enable
 `RUST_LOG=info,lunco_modelica_worker::worker::native_code_cache=trace`.
 The cache admission event identifies the actual storage path and entry/byte

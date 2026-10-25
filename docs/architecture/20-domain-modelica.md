@@ -870,6 +870,11 @@ delta until another modification requests publication. Immutable code buffers
 remain shared through serialization. The versioned namespace owns this writer
 protocol, so its initial fill is distinct from warm reuse.
 The existing bounded zstd/typed persistence codec owns both artifact formats.
+Its standard buffered writer batches JSON fragments before compression, with
+the decoded-byte check outside that buffer. Publication explicitly flushes the
+buffer before finalizing the checksummed frame; flush and compression errors
+reject the write. The buffer retains only its bounded streaming capacity,
+not another full serialized record.
 Storage failures and invalid records warn at their owner; Cranelift-rejected
 artifacts warn, increment the profile's rejection count and compile fresh code.
 Cache key protocol or poisoned-owner failures reject the construction visibly.

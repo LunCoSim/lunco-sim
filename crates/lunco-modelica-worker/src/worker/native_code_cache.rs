@@ -212,6 +212,7 @@ impl SharedNativeCodeCache {
     }
 
     fn load(&self) -> Result<(), String> {
+        let _span = bevy::log::info_span!("modelica_native_cache_load").entered();
         let Some(record) = read_record::<Record>(&FileStorage::new(), &self.path, self.limits)
             .map_err(|error| error.to_string())?
         else {
@@ -296,6 +297,7 @@ impl SharedNativeCodeCache {
     }
 
     fn publish_delta(&self, entries: Vec<(Key, Arc<[u8]>)>) -> Result<(), String> {
+        let _span = bevy::log::info_span!("modelica_native_cache_publish").entered();
         let StorageHandle::File(path) = &self.path else {
             return Err("native artifacts require a file cache".to_owned());
         };
@@ -466,6 +468,49 @@ mod tests {
         data.requested = data.revision;
         drop(data);
         cache.publish();
+    }
+
+    #[test]
+    fn native_code_cache_large_record_roundtrip() {
+        let record = Record {
+            version: NATIVE_CODE_CACHE_VERSION,
+            entries: (0u32..4096)
+                .map(|index| {
+                    let mut key = [0; 32];
+                    key[..4].copy_from_slice(&index.to_le_bytes());
+                    Entry {
+                        key,
+                        code: (0u32..512)
+                            .map(|offset| index.wrapping_mul(31).wrapping_add(offset) as u8)
+                            .collect::<Vec<_>>()
+                            .into(),
+                    }
+                })
+                .collect(),
+        };
+        let limits = ModelicaArtifactDiskLimits::default();
+        let started = std::time::Instant::now();
+        let encoded = encode_record(&record, limits).unwrap();
+        let encoding = started.elapsed();
+        let dir = tempfile::tempdir().unwrap();
+        let handle = StorageHandle::File(dir.path().join("native.zst"));
+        let storage = FileStorage::new();
+        storage.write_sync(&handle, &encoded).unwrap();
+        let started = std::time::Instant::now();
+        let loaded = read_record::<Record>(&storage, &handle, limits)
+            .unwrap()
+            .unwrap();
+        let decoding = started.elapsed();
+        loaded.validate().unwrap();
+        assert_eq!(loaded.entries.len(), record.entries.len());
+        for (actual, expected) in loaded.entries.iter().zip(&record.entries) {
+            assert_eq!(actual.key, expected.key);
+            assert_eq!(actual.code, expected.code);
+        }
+        println!(
+            "native cache 4096-entry codec diagnostic: encode={encoding:?}, decode={decoding:?}, compressed_bytes={}",
+            encoded.len()
+        );
     }
 
     #[test]

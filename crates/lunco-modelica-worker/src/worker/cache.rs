@@ -596,10 +596,18 @@ pub(super) fn encode_record<T: Serialize>(
     encoder
         .include_checksum(true)
         .map_err(ModelicaCacheWriteError::Compression)?;
-    let mut decoded = BudgetWriter::new(encoder, limits.decoded_bytes, "decoded");
+    // JSON emits small number and punctuation fragments. Batch them before
+    // compression while checking the decoded budget before they enter the buffer.
+    let mut decoded = BudgetWriter::new(
+        std::io::BufWriter::new(encoder),
+        limits.decoded_bytes,
+        "decoded",
+    );
     serde_json::to_writer(&mut decoded, record).map_err(ModelicaCacheWriteError::Codec)?;
     let compressed = decoded
         .inner
+        .into_inner()
+        .map_err(|error| ModelicaCacheWriteError::Compression(error.into_error()))?
         .finish()
         .map_err(ModelicaCacheWriteError::Compression)?;
     Ok(compressed.inner.0)

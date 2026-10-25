@@ -98,3 +98,21 @@ No mutable sweep change, Avian fix, reduced numerical check, altered integration
 setting or new policy hook is part of this pin. This candidate's passing exact
 profiles do not establish resolution of the separate intermittent articulated
 first-step finding.
+
+## Evaluator-selection diagnostic
+
+A bounded production diagnostic forces Rumoca's supported interpreter policy
+for all live constructors, then exits at first physics readiness. Its initializer
+makes zero native lookups but constructs in 6.808034 s and spends 2.405787 s on
+the first checked observation; readiness is 20.230421 s. The immediately
+subsequent native control constructs in 3.209457 s, observes in 1.333 ms, and
+reaches readiness in 15.381713 s with 16,414 hits and 68 compiles. Host load
+qualifies totals, but removing JIT does not remove the expensive evaluation and
+is not an accepted loading optimization. Both retain all 271 source hashes,
+close owned APIs 5379/5380, and have clear registered diagnostics. They certify
+startup only, not landing or complete replay.
+
+The probe is removed completely. The regular restored artifact is
+`74354134a2c684023108bdc0cd0d5b2f17e243cca8d20e0f78b84e19cb2839c4`;
+its build has no warnings. Its application commit metadata includes the pin's
+local integration. No evaluator-selection mechanism or policy change remains.
