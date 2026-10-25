@@ -143,6 +143,11 @@ new node's rotation is validated before its result can be shared. Prefix entries
 are cleared between invocations; only allocation capacity is retained. Plain
 leaves without a collider transform cannot invalidate a collider hierarchy.
 
+The shared application composition also uses Bevy's native single-thread
+executor for `FixedPostUpdate`, which wraps the ordered physical pose admission,
+geometry preparation, native solver and writeback chain. Avian retains ownership
+of its inner schedules and parallel queries; Modelica keeps its worker pool.
+
 Pose invalidation stops at the active physics frame: ancestors above that
 boundary change its render representation, not a body's local physics pose.
 Changed plain leaves cannot invalidate another body's pose. The bridge still

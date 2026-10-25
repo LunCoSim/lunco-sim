@@ -7,6 +7,28 @@ diagnostic belongs to `lunco-terrain-surface`.
 The retained mathematical repair and current production qualification are in
 [the native enclosure review](terrain-procedural-enclosures-2026-10-25.md).
 
+## Verified key-layout diagnostic
+
+Five alternating pairs of independent executable copies compare a split
+whole-cell/rectangle table with the current table. Device/inode identities and
+SHA-256 hashes differ, and the hashes remain unchanged after all ten runs.
+The same eleven mechanism checks pass, including exhausted budgets, ambiguous
+rays and replacement surfaces. All four diagnostic cases retain exactly equal
+ray counts, admitted intervals and final occupancy.
+
+| Raster cells | Capacity | Current median | Split-table median | Change |
+|---|---:|---:|---:|---:|
+| 2 m | 256 | 1,040.489 ms | 1,045.054 ms | 0.44% more |
+| 2 m | 65,536 | 2,624.313 ms | 2,610.876 ms | 0.51% less |
+| 1 m | 256 | 706.582 ms | 701.782 ms | 0.68% less |
+| 1 m | 65,536 | 55.001 ms | 53.808 ms | 2.17% less |
+
+That small, mixed benefit does not justify another table and its retention
+bookkeeping. The split implementation is removed; the current single table
+remains authoritative. No production speedup is claimed. Raw executable
+identities, exact counts and per-run results remain ignored under
+`.cache/codex-evidence/performance-20261023/occlusion-layout-*`.
+
 ## Attribution
 
 The qualified Summer CPU-builder Tracy capture

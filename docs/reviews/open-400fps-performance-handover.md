@@ -1,5 +1,24 @@
 # High-quality realtime performance handover
 
+## Native physical commit executor
+
+[The outer-schedule comparison](physics-fixed-post-executor-2026-10-25.md)
+uses Bevy's supported single-thread executor for shared `FixedPostUpdate`.
+All ten unchanged exact profiles pass 360 checks and the invalid-rotation
+terminal-fault gate passes. Summer normal A/B/A coupled medians are
+2.349/2.287/2.412 ms, about 3.9% lower in the candidate. Griffin settles after
+four-pad handoff; Tesla's early driving window stays finite and unpaused.
+Their coupled medians are 3.280 and 1.227 ms, with clear diagnostics. These
+bounded windows leave complete mission acceptance and Tesla's existing datum
+HUD issue open.
+
+The matching native capture verifies framing, source hashes, owned PID/socket,
+1 kHz samples and exact outer-schedule self accounting. A concurrent video
+player qualifies its higher timings. Schedule self includes worker work/waits;
+the normal cohort owns the product comparison. All original targets remain
+open. The independently retested split certificate-table change is removed
+after a small, mixed diagnostic benefit.
+
 ## Startup failure ownership and cache conditions
 
 [The startup audit](startup-failure-ownership-2026-10-25.md) fixes a reproduced

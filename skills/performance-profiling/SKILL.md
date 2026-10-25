@@ -473,6 +473,11 @@ and require exact replay against the maintained reference before changing its
 executor. Main-thread schedule self time includes worker waits; do not label
 the whole self span dispatch overhead. Attribute that child schedule separately
 from the complete fixed cycle and the native solver.
+The shared application also configures `FixedPostUpdate` with the native
+single-thread executor for the surrounding physical commit chain. Attribute
+that outer schedule separately from `PhysicsSchedule` and geometry preparation.
+Keep native parallel queries, Modelica worker pools and authored replay checks
+when comparing executor configurations.
 
 When attributing native GPU preprocessing, trace allocation identity rather
 than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges
