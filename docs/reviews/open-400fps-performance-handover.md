@@ -1,5 +1,22 @@
 # High-quality realtime performance handover
 
+## Pure-call native cache relocation lead
+
+The [concrete dependency proposal](rumoca-pure-call-cache-relocation-2026-10-25.md)
+identifies instance heap addresses emitted into pure-call function stencils.
+They invalidate native code identity on a new allocation. The initializer wire
+contains 34 pure-call owners and its warm construction repeatedly compiles 68
+kernels; a focused two-live-table regression must prove that full attribution.
+The proposed repair uses module-owned writable data and standard far-address
+relocations, preserving independent mutable results and the non-Sync contract.
+Approval is pending; no dependency source has changed. Six input-reuse and five
+native cache baseline checks pass, reusing one built owner test binary.
+
+The new-format I/O capture remains open: a queued owned profiling build is
+cancelled before compilation after another build takes the target lock and
+separate mobility code changes. Two foreign application sessions also load the
+host. No instrumented result or product gain is inferred from that attempt.
+
 ## Direct native artifact bytes
 
 The [native binary codec](griffin-native-artifact-binary-codec-2026-10-25.md)

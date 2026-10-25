@@ -80,10 +80,12 @@ Sub-second loading and sub-ms coupled ticks remain open.
 
 An unrelated `lunco-mobility/src/raycast_travel.rs` edit appears after the regular
 artifact above was built, and a separate regular build starts in this checkout.
-It is not part of this cache change or these runtime receipts. No further Cargo
-or instrumented production build is launched across that concurrent edit. The
-new-format Tracy I/O comparison therefore remains open; the preceding native
-capture supplies attribution, and the exact-record owner diagnostic supplies
-the scoped codec measurement. The tested regular artifact is not replaced by
-this task after the production gates. No foreign process, port, source, staged
-change or build is controlled.
+It is not part of this cache change or these runtime receipts. A later owned
+Tracy build is queued, but a foreign build holds the target lock and the saved
+code snapshot changes. The queued job is interrupted before compilation; no
+app/collector launches and no new timing evidence results. The new-format
+Tracy I/O comparison remains open. The preceding native capture supplies
+attribution, and the exact-record owner diagnostic supplies the scoped codec
+measurement. The tested regular artifact is not replaced by this task after
+the production gates. Foreign processes, ports, source, staged changes and
+builds remain outside this task's control.
