@@ -1,5 +1,25 @@
 # High-quality realtime performance handover
 
+## Shared collider hierarchy preparation
+
+[Invocation-local validated prefixes](collider-hierarchy-prefixes-2026-10-25.md)
+share rootless collider ancestry, transform composition and dirty state while
+retaining the full depth limit and native arithmetic order. Independent pairs
+take 74–80% less time for ancestor/body changes and retain exact fingerprints.
+All 17 owner checks and the production invalid-rotation terminal-fault gate
+pass. Normal Summer A/B/A coupled medians are 5.033/4.738/5.652 ms with 72
+matched source hashes. Griffin reaches sleeping four-pad handoff with an
+identical final body query; Tesla's stationary readiness window stays clear.
+Host variation and the existing Tesla datum HUD remain qualification limits.
+
+The source-matched native capture verifies framing, exports, the owned
+PID/connection and 1 kHz samples. Collider preparation is 0.257/0.506 ms
+median/p95, versus 0.622/0.933 ms baseline; complete instrumented FixedMain is
+6.049 ms. Native physics schedule and physical solar visibility remain measured
+leads at 1.399 and 0.658 ms respectively. Exact-FixedMain CPU data is retained
+for further attribution. The normal binary is restored. All original targets
+remain open; no dependency changes or quality reductions are introduced.
+
 ## Physics pose selection
 
 [The frame-local pose selection repair](physics-pose-invalidation-2026-10-25.md)

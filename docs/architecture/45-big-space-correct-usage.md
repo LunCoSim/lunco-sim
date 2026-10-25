@@ -129,6 +129,14 @@ removals. A removed parent invalidates the relative collider transform even
 when its local transform stays unchanged, so the next preparation pass must
 recompose it before native collision and mass consumers run.
 
+Within one preparation invocation, colliders share validated hierarchy prefixes:
+the composed native transform, complete depth from the root and ancestor dirty
+state. The queries supplying those facts remain immutable during propagation.
+The depth of a cached prefix still counts toward the hierarchy limit, and each
+new node's rotation is validated before its result can be shared. Prefix entries
+are cleared between invocations; only allocation capacity is retained. Plain
+leaves without a collider transform cannot invalidate a collider hierarchy.
+
 Pose invalidation stops at the active physics frame: ancestors above that
 boundary change its render representation, not a body's local physics pose.
 Changed plain leaves cannot invalidate another body's pose. The bridge still

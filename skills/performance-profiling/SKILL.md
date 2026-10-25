@@ -113,6 +113,10 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   Preserve its separate leaf, render-branch, above-frame and physical-parent
   cases; require exact native poses, velocities and leaf representation history.
   Pair it with a normal production window before claiming scene-level savings.
+  `collider_composition_diagnostic` in the same owner runs 512 colliders over
+  256 iterations for ancestor translation, rotation, scale, physical-parent
+  motion and an irrelevant leaf. Require exact transform fingerprints across
+  independent variants and retain the cached-prefix hierarchy-depth check.
   In a diagnostics-enabled render host, `lunco-render-bevy` adds
   `lunco_shadow_shared_early`/`late` and `lunco_shadow_camera_early`/`late`
   timestamps around the native shadow passes. Shared events correspond to

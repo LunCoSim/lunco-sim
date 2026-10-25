@@ -34,9 +34,9 @@
 //! exact cell re-split from the previous representation, not by guessing from
 //! Bevy change flags; a real cross-cell teleport therefore cannot be mistaken
 //! for internal maintenance. A moved body also re-reads every descendant body,
-//! so teleporting a chassis carries its jointed wheels. Plain chain nodes (no
-//! body, no collider) carry no shadow; their motion is probed via
-//! `Changed<Transform>`/`Changed<CellCoord>` instead, so moving a group Xform
+//! so teleporting a chassis carries its jointed wheels. Plain chain motion is
+//! probed via `Changed<Transform>`/`Changed<CellCoord>`, with exact previous
+//! representations retained on `CellCoord` nodes. Moving a group Xform
 //! re-reads the bodies beneath it too. A `Grid` can be either a paired BigSpace
 //! representation re-split or a real moving physical frame; only the paired
 //! re-split is excluded below. Static bodies at rest are never touched, so
@@ -1835,6 +1835,13 @@ fn position_to_pose(
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct ColliderHierarchyPrefix {
+    transform: ColliderTransform,
+    depth: usize,
+    dirty: bool,
+}
+
 /// Recompute every collider's [`ColliderTransform`] from its entity path,
 /// without needing a `Transform` on the tree root (avian's version does).
 ///
@@ -1847,8 +1854,9 @@ fn position_to_pose(
 /// the canonical BigSpace root is. Cell offsets are irrelevant here: nodes
 /// between root and body only ever contribute SCALE, and cells do not scale.
 ///
-/// Ancestor paths are checked when relevant nodes change. Composition runs
-/// for new colliders and changed ancestors. Removing a `Transform`, `RigidBody`
+/// Validated ancestor prefixes are shared within each invocation. Their depth
+/// and dirty state apply to every descendant, so each relevant node is checked
+/// and composed once. Removing a `Transform`, `RigidBody`
 /// or `ChildOf` invalidates every collider once because the previous ancestor
 /// chain may no longer exist. Each removal stream is drained independently.
 ///
@@ -1867,12 +1875,15 @@ fn propagate_collider_transforms_rootless(
     // frame-resetting body.
     q_dirty_nodes: Query<
         Entity,
-        Or<(
-            Changed<Transform>,
-            Changed<ChildOf>,
-            Added<RigidBody>,
-            Changed<ColliderOf>,
-        )>,
+        (
+            Or<(
+                Changed<Transform>,
+                Changed<ChildOf>,
+                Added<RigidBody>,
+                Changed<ColliderOf>,
+            )>,
+            Or<(With<Children>, With<ColliderTransform>)>,
+        ),
     >,
     mut removed_tf: RemovedComponents<Transform>,
     mut removed_rb: RemovedComponents<RigidBody>,
@@ -1887,6 +1898,7 @@ fn propagate_collider_transforms_rootless(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut path: Local<Vec<Entity>>,
     mut dirty: Local<EntityHashSet>,
+    mut prefixes: Local<EntityHashMap<ColliderHierarchyPrefix>>,
 ) {
     // DRAIN, don't peek (see `escape.rs`): un-drained removal events re-fire
     // for their whole retention window.
@@ -1895,6 +1907,7 @@ fn propagate_collider_transforms_rootless(
     let removed_parents = removed_parent.read().count() > 0;
     let all_dirty = removed_transforms || removed_bodies || removed_parents;
     dirty.clear();
+    prefixes.clear();
     if !all_dirty {
         dirty.extend(q_dirty_nodes.iter());
     }
@@ -1904,22 +1917,22 @@ fn propagate_collider_transforms_rootless(
         if !all_dirty && !ct.is_added() && dirty.is_empty() {
             continue;
         }
-        if let Err(error) = ancestor_path(e, &q_parents, &mut path) {
-            report_physics_runtime_fault(
-                faults.as_deref_mut(),
-                holds.as_deref_mut(),
-                e,
-                physics_subject(e, name, prim_path),
-                "avian-collider-topology-invalid",
-                error.to_string(),
-            );
-            continue;
-        }
-        if !all_dirty && !ct.is_added() && !path.iter().any(|n| dirty.contains(n)) {
-            continue;
-        }
+        let mut prefix = match collider_prefix_path(e, &q_parents, &prefixes, &mut path) {
+            Ok(prefix) => prefix,
+            Err(error) => {
+                report_physics_runtime_fault(
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    e,
+                    physics_subject(e, name, prim_path),
+                    "avian-collider-topology-invalid",
+                    error.to_string(),
+                );
+                continue;
+            }
+        };
 
-        let mut acc = ColliderTransform::default();
+        let mut acc = prefix.transform;
         for &n in path.iter().rev() {
             let is_rb = q_rb.contains(n);
             match q_transforms.get(n) {
@@ -1964,25 +1977,43 @@ fn propagate_collider_transforms_rootless(
                 }
                 Err(_) => {}
             }
+            prefix = ColliderHierarchyPrefix {
+                transform: acc,
+                depth: prefix.depth + 1,
+                dirty: prefix.dirty || dirty.contains(&n),
+            };
+            prefixes.insert(n, prefix);
         }
-        if *ct != acc {
+        if (all_dirty || ct.is_added() || prefix.dirty) && *ct != acc {
             *ct = acc;
         }
     }
+    // Keep allocation capacity, but no scene-derived values between invocations.
+    prefixes.clear();
 }
 
-/// Write `e`'s ancestor path into `path` as `[e, parent, …, root]`. Caller-owned
-/// buffer: this runs per collider per tick, so the Vec is reused rather than
-/// reallocated. Reject invalid topology before composing a collider transform.
-fn ancestor_path(
+/// Check the unshared ancestry up to a validated prefix or the tree root.
+/// Cached depths preserve the full hierarchy bound even when most of a chain
+/// has already been checked for another collider in this invocation.
+fn collider_prefix_path(
     e: Entity,
     q_parents: &Query<&ChildOf>,
+    prefixes: &EntityHashMap<ColliderHierarchyPrefix>,
     path: &mut Vec<Entity>,
-) -> Result<(), lunco_spatial::coords::CoordinateError> {
+) -> Result<ColliderHierarchyPrefix, lunco_spatial::coords::CoordinateError> {
     use lunco_spatial::coords::{CoordinateError, MAX_SPATIAL_HIERARCHY_DEPTH};
     path.clear();
     let mut cur = e;
     for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
+        if let Some(prefix) = prefixes.get(&cur) {
+            if prefix.depth + path.len() > MAX_SPATIAL_HIERARCHY_DEPTH {
+                return Err(CoordinateError::DepthExceeded {
+                    entity: e,
+                    limit: MAX_SPATIAL_HIERARCHY_DEPTH,
+                });
+            }
+            return Ok(*prefix);
+        }
         if path.contains(&cur) {
             return Err(CoordinateError::Cycle { entity: cur });
         }
@@ -1991,7 +2022,7 @@ fn ancestor_path(
             Ok(co) => {
                 cur = co.parent();
             }
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(ColliderHierarchyPrefix::default()),
         }
     }
     Err(CoordinateError::DepthExceeded {
@@ -2038,6 +2069,124 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn collider_prefix_path_enforces_complete_depth() {
+        use lunco_spatial::coords::{CoordinateError, MAX_SPATIAL_HIERARCHY_DEPTH};
+        let mut world = World::new();
+        let mut parent = world.spawn_empty().id();
+        for _ in 1..MAX_SPATIAL_HIERARCHY_DEPTH {
+            parent = world.spawn(ChildOf(parent)).id();
+        }
+        let too_deep = world.spawn(ChildOf(parent)).id();
+        let mut state: SystemState<Query<&ChildOf>> = SystemState::new(&mut world);
+        let parents = state.get(&world).unwrap();
+        let mut prefixes = EntityHashMap::default();
+        let mut path = Vec::new();
+        assert!(collider_prefix_path(parent, &parents, &prefixes, &mut path).is_ok());
+        assert_eq!(path.len(), MAX_SPATIAL_HIERARCHY_DEPTH);
+        prefixes.insert(
+            parent,
+            ColliderHierarchyPrefix {
+                depth: MAX_SPATIAL_HIERARCHY_DEPTH,
+                ..default()
+            },
+        );
+        assert!(collider_prefix_path(parent, &parents, &prefixes, &mut path).is_ok());
+        assert!(path.is_empty());
+        assert!(
+            matches!(collider_prefix_path(too_deep, &parents, &prefixes, &mut path), Err(CoordinateError::DepthExceeded { entity, limit }) if entity == too_deep && limit == MAX_SPATIAL_HIERARCHY_DEPTH)
+        );
+    }
+
+    #[test]
+    #[ignore = "bounded rootless collider composition timing diagnostic"]
+    fn collider_composition_diagnostic() {
+        for case in [
+            "render_leaf",
+            "ancestor_translation",
+            "ancestor_rotation",
+            "ancestor_scale",
+            "physical_parent",
+        ] {
+            let mut world = World::new();
+            let root = world.spawn_empty().id();
+            let mut parent = root;
+            let mut chain = Vec::new();
+            for depth in 0..6 {
+                parent = world
+                    .spawn((Transform::from_xyz(0.125, 0.0, 0.0), ChildOf(parent)))
+                    .id();
+                if depth == 2 {
+                    world.entity_mut(parent).insert(RigidBody::Dynamic);
+                }
+                chain.push(parent);
+            }
+            let colliders = (0..512)
+                .map(|index| {
+                    world
+                        .spawn((
+                            Transform::from_xyz(index as f32 * 0.25, 0.0, 0.0),
+                            ColliderTransform::default(),
+                            ChildOf(parent),
+                        ))
+                        .id()
+                })
+                .collect::<Vec<_>>();
+            let leaf = world.spawn((Transform::default(), ChildOf(root))).id();
+            let changed = match case {
+                "render_leaf" => leaf,
+                "physical_parent" => parent,
+                _ => chain[0],
+            };
+            let mut system = IntoSystem::into_system(propagate_collider_transforms_rootless);
+            system.initialize(&mut world);
+            system.run((), &mut world).unwrap();
+            let started = std::time::Instant::now();
+            for tick in 0..256 {
+                let mut tf = world.get_mut::<Transform>(changed).unwrap();
+                match case {
+                    "ancestor_rotation" => {
+                        tf.rotation = Quat::from_rotation_z((tick % 16) as f32 * 0.125)
+                    }
+                    "ancestor_scale" => tf.scale = Vec3::splat(1.0 + (tick % 16) as f32 * 0.125),
+                    _ => tf.translation.x = 0.125 + (tick % 16) as f32 * 0.25,
+                }
+                system.run((), &mut world).unwrap();
+            }
+            let elapsed = started.elapsed().as_nanos();
+            let scale = if case == "ancestor_scale" { 2.875 } else { 1.0 };
+            let local_offset = if case == "physical_parent" {
+                4.125
+            } else {
+                0.375
+            };
+            let mut fingerprint = 0_u64;
+            for (index, collider) in colliders.iter().copied().enumerate() {
+                let ct = world.get::<ColliderTransform>(collider).unwrap();
+                assert_eq!(
+                    ct.translation,
+                    Vec3::X * ((local_offset + index as f32 * 0.25) * scale)
+                );
+                assert_eq!(ct.rotation, Quat::IDENTITY);
+                assert_eq!(ct.scale, Vec3::splat(scale));
+                for value in ct
+                    .translation
+                    .to_array()
+                    .into_iter()
+                    .chain(ct.rotation.to_array())
+                    .chain(ct.scale.to_array())
+                {
+                    fingerprint = fingerprint
+                        .wrapping_mul(1_099_511_628_211)
+                        .wrapping_add(u64::from(value.to_bits()));
+                }
+            }
+            eprintln!(
+                "collider composition: case={case}, colliders=512, iterations=256, elapsed_ns={elapsed}, fingerprint={fingerprint}"
+            );
+        }
+    }
 
     #[test]
     #[ignore = "bounded pose-invalidation timing diagnostic"]
