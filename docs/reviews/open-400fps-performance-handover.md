@@ -1,5 +1,18 @@
 # High-quality realtime performance handover
 
+## Startup failure ownership and cache conditions
+
+[The startup audit](startup-failure-ownership-2026-10-25.md) fixes a reproduced
+process exit caused by a retired bootstrap scene's late asset failure. The
+application guard uses the full startup owner/path and retires on `TwinClosed`.
+The lifecycle seam, four-check production replacement gate and invalid-root
+terminal diagnostic pass. A normal Griffin repeat reaches sleeping four-pad
+handoff with all 271 hashes matched. Its initializer constructor takes 3.162 s
+with 16,414 native hits, versus 8.280 s with 7,896 hits previously; this is a
+cache-condition observation, not a gain from the guard fix. The repeat's
+interrupted controller excludes total loading timing; a recovered fresh window
+measures 3.325 ms coupled and 9.233 ms frames, median. All targets remain open.
+
 ## Native geometry executor
 
 [The preparation executor comparison](physics-geometry-executor-2026-10-25.md)

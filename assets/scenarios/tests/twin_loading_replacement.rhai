@@ -62,3 +62,19 @@ fn verify_cleared_loading(twin_root, retired_root) {
             "cleared loading scene leaves no pending preparation or fault")
     ], "Clear during loading", "TWIN_LOADING_CLEAR")
 }
+
+fn verify_startup_replacement(replacement_root) {
+    let twin = query("ListTwin", #{limit: 0});
+    let ready = query("GetReadiness", #{});
+    let diagnostics = query("RuntimeDiagnostics", #{});
+    let scene = query("QueryUsdPrim", #{path: "/World"});
+    report_verdict([
+        t_true(twin.open == true && twin.root == replacement_root,
+            "the replacement owns the workspace after startup cancellation"),
+        t_true(ready.ready == true && ready.world_hold == false && ready.faulted == false,
+            "retired startup work cannot terminate or hold the replacement"),
+        t_true(diagnostics.errors == 0, "replacement diagnostics are clear"),
+        t_true(scene.spawned == true && find_path("/World") >= 0,
+            "the replacement projects its scene"),
+    ], "Startup Twin replacement", "STARTUP_TWIN_REPLACEMENT")
+}

@@ -493,7 +493,11 @@ resolves the owning root and queues the shared asynchronous Twin scan. The
 filesystem walk and `TwinMode::open` index never run in `Startup` on the UI
 thread. A scan failure is surfaced through the shared `TWIN_OPEN_FAILED`
 telemetry edge; the explicit startup guard turns it into a fatal startup result,
-while later user-requested opens remain recoverable.
+while later user-requested opens remain recoverable. That guard belongs to the
+canonical startup Twin root and full root-relative scene path. `TwinClosed`
+retires it before asynchronous asset results arrive; a canceled startup scene
+cannot terminate its replacement. Load failures from another mount or a
+same-named file in another directory cannot acquire this fatal ownership.
 
 Teardown also avoids duplicate ownership work: the grid hierarchy is despawned
 recursively, while the stage-identity sweep only handles active-scene prims

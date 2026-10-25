@@ -181,6 +181,15 @@ certification. Pending constructors supply no certifiable observation; the owner
 waits on their outcomes and revalidates current source, wiring and physical
 samples at final admission. Include coordinator counts and main-thread time
 when measuring startup; worker timing alone misses repeated certification work.
+Bootstrap API readiness does not certify the requested Twin. Record the exact
+active Twin and its physics admission. An interactive replacement retires the
+startup failure guard on `TwinClosed`; a late canceled asset result must not
+terminate the replacement. The focused production gate is
+`scripts/api/test_startup_scene_replacement.py --port <free-port> --log-dir <ignored-evidence-directory>`.
+Record prepared-solver hits and native attempts/hits/compilations alongside
+startup time; tests and other Twins can legitimately evict bounded artifacts.
+An immediate repeat with unchanged inputs distinguishes cold-cache work from
+recurring constructor cost without changing retention limits.
 
 For Modelica native-construction costs, distinguish selected application work
 from whole-source preparation. Projection reuse storage is needed only for

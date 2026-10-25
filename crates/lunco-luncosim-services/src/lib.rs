@@ -49,6 +49,7 @@ impl Plugin for LunCoSimServicesPlugin {
         app.insert_resource(ScenePath(self.startup_scene.clone()))
             .add_systems(Startup, load_startup_scene_on_boot)
             .add_observer(startup_twin_scan_failguard)
+            .add_observer(retire_startup_scene_guard)
             .add_systems(Update, startup_scene_failguard);
 
         #[cfg(all(feature = "session-input-archive-export", not(target_arch = "wasm32")))]
@@ -969,14 +970,25 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    world.insert_resource(StartupSceneGuard {
-        file: scene_file.clone(),
-    });
-
     let rel_scene_path = abs_path
         .strip_prefix(&twin_root)
         .map(lunco_assets_path::slashed)
         .unwrap_or_else(|_| scene_file.clone());
+    let guard_root = match twin_root.canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            error!(
+                "Startup Twin `{}` cannot be resolved: {error}",
+                twin_root.display()
+            );
+            world.write_message(AppExit::error());
+            return;
+        }
+    };
+    world.insert_resource(StartupSceneGuard {
+        root: guard_root,
+        scene: rel_scene_path.clone(),
+    });
     let Some(mut pending) = world.get_resource_mut::<lunco_workspace::open::PendingTwinOpens>()
     else {
         error!(
@@ -1049,24 +1061,27 @@ fn resolve_scene_cli_path(input: &str) -> std::io::Result<std::path::PathBuf> {
     Ok(lunco_assets_core::assets_dir_abs()?.join(path))
 }
 
-/// Tracks an explicitly requested startup scene so the two startup failguards
-/// can turn a silent scan or asset-load failure into a loud, fatal error. It is
-/// removed once the scene has loaded (or failed), so later runtime `LoadScene`s
-/// (API / UI) — which must NOT crash the app on a bad request — are unaffected.
+/// Fatal-load ownership for the explicitly requested startup Twin and scene.
+/// Success, failure, or Twin retirement ends this ownership before late asset
+/// results can affect an interactive replacement.
 #[derive(Resource)]
 struct StartupSceneGuard {
-    /// File name of the explicitly requested startup scene.
-    file: String,
+    root: std::path::PathBuf,
+    scene: String,
 }
 
-/// Fail loud if the explicit `--scene` Twin scan or USD scene fails at startup.
-///
-/// The bug this guards: `--scene` paths are relative to the `assets/` source
-/// root; prefixing `assets/` doubles it (`assets/assets/…`), the asset is not
-/// found, and the app *silently* boots a scene-less world. Here a matching
-/// `TWIN_OPEN_FAILED` / `AssetLoadFailedEvent<UsdStageAsset>` → clear error +
-/// non-zero exit. Disarms on success (scene produced `UsdPrimPath` entities) so
-/// runtime loads are safe.
+/// Retire the startup failure lease at the workspace's shared close boundary.
+fn retire_startup_scene_guard(
+    trigger: On<lunco_workspace::TwinClosed>,
+    guard: Option<Res<StartupSceneGuard>>,
+    mut commands: Commands,
+) {
+    if guard.is_some_and(|guard| guard.root == trigger.event().root) {
+        commands.remove_resource::<StartupSceneGuard>();
+    }
+}
+
+/// An unsuccessful explicit startup scan has a terminal process result.
 fn startup_twin_scan_failguard(
     trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     guard: Option<Res<StartupSceneGuard>>,
@@ -1082,13 +1097,14 @@ fn startup_twin_scan_failguard(
     if !detail.starts_with("StartupScene failed:") {
         return;
     }
-    error!("Startup scene `{}` failed to scan: {detail}", guard.file);
+    error!("Startup scene `{}` failed to scan: {detail}", guard.scene);
     commands.write_message(AppExit::error());
     commands.remove_resource::<StartupSceneGuard>();
 }
 
 fn startup_scene_failguard(
     guard: Option<Res<StartupSceneGuard>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut failures: MessageReader<AssetLoadFailedEvent<UsdStageAsset>>,
     scene: Query<(), With<UsdPrimPath>>,
     mut exit: MessageWriter<AppExit>,
@@ -1097,14 +1113,31 @@ fn startup_scene_failguard(
     let Some(guard) = guard else { return };
 
     for failed in failures.read() {
-        let is_startup_scene =
-            failed.path.path().file_name().and_then(|s| s.to_str()) == Some(guard.file.as_str());
-        if is_startup_scene {
+        let uri = failed.path.to_string();
+        let Some((authority, relative)) = lunco_assets_core::twin_source::parse_twin_uri(&uri)
+        else {
+            continue;
+        };
+        let root = roots
+            .as_ref()
+            .ok_or(lunco_assets_core::twin_source::TwinRootsError::RegistryUnavailable)
+            .and_then(|roots| roots.root_for(authority));
+        let root = match root {
+            Ok(root) => root,
+            Err(error) => {
+                error!(
+                    "Startup scene `{}` ownership is unavailable: {error}",
+                    guard.scene
+                );
+                exit.write(AppExit::error());
+                commands.remove_resource::<StartupSceneGuard>();
+                return;
+            }
+        };
+        if root.as_ref() == Some(&guard.root) && relative == guard.scene {
             error!(
-                "Startup scene `{}` failed to load: {}. \
-                 NOTE: `--scene` is relative to the `assets/` source root — do NOT prefix \
-                 `assets/` (use `scenes/luncosim/sandbox_scene.usda`, not `assets/scenes/...`).",
-                guard.file, failed.error,
+                "Startup scene `{}` failed to load: {}.",
+                guard.scene, failed.error,
             );
             exit.write(AppExit::error());
             commands.remove_resource::<StartupSceneGuard>();
@@ -1116,5 +1149,68 @@ fn startup_scene_failguard(
     // failure (API/UI) never trips this fatal guard.
     if !scene.is_empty() {
         commands.remove_resource::<StartupSceneGuard>();
+    }
+}
+
+#[cfg(test)]
+mod startup_guard_tests {
+    use super::*;
+    use bevy::asset::{AssetId, AssetLoadError, AssetPath};
+    use lunco_assets_core::twin_source::{TwinRoots, twin_uri};
+
+    /// Exercise late message admission directly; the public API cannot inject
+    /// native asset failures after a workspace close.
+    #[test]
+    fn startup_failure_lease_matches_the_exact_live_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let roots = TwinRoots::default();
+        let name = roots.register("startup", root.path()).unwrap();
+        let foreign = roots.register("other", other.path()).unwrap();
+        let mut app = App::new();
+        app.insert_resource(roots)
+            .add_message::<AppExit>()
+            .add_message::<AssetLoadFailedEvent<UsdStageAsset>>()
+            .add_observer(retire_startup_scene_guard)
+            .add_systems(Update, startup_scene_failguard);
+        let guard = || StartupSceneGuard {
+            root: root.path().canonicalize().unwrap(),
+            scene: "scenes/start.usda".into(),
+        };
+        let fail = |app: &mut App, uri: String| {
+            app.world_mut()
+                .write_message(AssetLoadFailedEvent::<UsdStageAsset> {
+                    id: AssetId::default(),
+                    path: AssetPath::from(uri),
+                    error: AssetLoadError::AssetMetaReadError,
+                });
+            app.update();
+        };
+        let exited = |app: &App| !app.world().resource::<Messages<AppExit>>().is_empty();
+        app.insert_resource(guard());
+        fail(&mut app, twin_uri(&foreign, "scenes/start.usda"));
+        assert!(!exited(&app));
+        fail(&mut app, twin_uri(&name, "different/start.usda"));
+        assert!(!exited(&app));
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(2),
+            root: other.path().canonicalize().unwrap(),
+            was_active: false,
+        });
+        app.world_mut().flush();
+        assert!(app.world().contains_resource::<StartupSceneGuard>());
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root: root.path().canonicalize().unwrap(),
+            was_active: true,
+        });
+        app.world_mut().flush();
+        assert!(!app.world().contains_resource::<StartupSceneGuard>());
+        fail(&mut app, twin_uri(&name, "scenes/start.usda"));
+        assert!(!exited(&app));
+        app.insert_resource(guard());
+        fail(&mut app, twin_uri(&name, "scenes/start.usda"));
+        assert!(exited(&app));
+        assert!(!app.world().contains_resource::<StartupSceneGuard>());
     }
 }
