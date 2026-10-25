@@ -123,7 +123,8 @@ collider backend and mass plugin on `PhysicsGeometryPreparation`. The spatial
 bridge supplies rootless `ColliderTransform` values before native scale cooking,
 mass recomputation and the body-owned collider reduction. That one preparation
 schedule runs during `PreUpdate` admission and before each fixed solver step;
-it never advances time. Initial attached-collider poses and native tree bounds
+its ordered passes use Bevy's native single-thread executor on the invoking
+thread, and it never advances time. Initial attached-collider poses and native tree bounds
 are published afterward, in `PhysicsGeometryAdmission`. USD dynamic admission
 orders after that set before publishing `PhysicsStateReady`. Consumers therefore
 observe prepared geometry and COM before the first simulation tick. Collider

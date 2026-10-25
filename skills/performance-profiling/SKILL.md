@@ -458,6 +458,12 @@ finish before USD publishes physics-ready; advancing a solver tick to prepare
 geometry would change the initial state. Qualify preparation changes with the
 rootless scale/mass mechanism check and the unchanged four-rover production
 gate, including its deliberately altered-row negative.
+`PhysicsGeometryPreparation` uses the native single-thread executor for its
+short ordered chain. Compare the same source cohort in normal A/B/A windows
+and require exact replay against the maintained reference before changing its
+executor. Main-thread schedule self time includes worker waits; do not label
+the whole self span dispatch overhead. Attribute that child schedule separately
+from the complete fixed cycle and the native solver.
 
 When attributing native GPU preprocessing, trace allocation identity rather
 than only buffer capacity. Bevy's `collect_buffers_for_phase` exchanges

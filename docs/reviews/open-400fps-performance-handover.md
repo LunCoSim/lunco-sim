@@ -1,5 +1,20 @@
 # High-quality realtime performance handover
 
+## Native geometry executor
+
+[The preparation executor comparison](physics-geometry-executor-2026-10-25.md)
+runs the short native geometry chain in its invoking thread through Bevy's
+supported single-thread executor. All ten unchanged exact profiles pass 360
+checks, and the invalid-rotation terminal-fault gate passes. Summer normal
+A/B/A coupled medians are 2.422/2.325/2.416 ms with 72 matched source hashes,
+about 3.9% lower in the candidate. Griffin reaches sleeping four-pad handoff;
+all three inspected Twin windows retain clear diagnostics. The candidate's
+Tracy geometry median is 0.221 ms versus 0.454 ms baseline. Native framing,
+PID/connection, counter selection and exact self accounting are verified;
+host changes prevent assigning the whole instrumented-cycle difference to
+this setting. All original targets remain open. Rumoca workspace reuse is a
+separate permission-pending proposal.
+
 ## Native geometry admission
 
 [The shared native preparation boundary](physics-geometry-admission-2026-10-25.md)

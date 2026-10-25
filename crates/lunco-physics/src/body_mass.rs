@@ -6,7 +6,7 @@
 use avian3d::parry::{mass_properties::MassProperties, math::Pose};
 use avian3d::prelude::*;
 use bevy::app::PluginGroupBuilder;
-use bevy::ecs::schedule::ScheduleLabel;
+use bevy::ecs::schedule::{ScheduleLabel, SingleThreadedExecutor};
 use bevy::prelude::*;
 
 /// Native collider cooking and body mass preparation, without advancing time.
@@ -37,6 +37,10 @@ impl Plugin for PhysicsGeometryPreparationPlugin {
     fn build(&self, app: &mut App) {
         use avian3d::dynamics::rigid_body::mass_properties::MassPropertySystems;
         app.init_schedule(PhysicsGeometryPreparation);
+        // Run the ordered geometry passes in the invoking thread.
+        app.edit_schedule(PhysicsGeometryPreparation, |schedule| {
+            schedule.set_executor(SingleThreadedExecutor::new());
+        });
         app.add_systems(
             PhysicsGeometryPreparation,
             update_body_mass_from_colliders
