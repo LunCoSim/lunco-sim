@@ -817,7 +817,12 @@ policy: idle unfocused windows can use a one-second low-power wait. Use the
 explicit `--no-throttle` production run for throughput attribution and report
 ordinary background loading separately. `[pacing] host frame policy changed`
 logs primary-window focus and both effective update modes on transitions.
-`modelica_live_plan_admission` runs on the command owner;
+The command owner reserves domain-worker lanes and publication slots before
+preparation. Attribute prepared-IR dispatch separately from live publication;
+later ready IR must not wait for an earlier constructor. Cache hits, errors,
+shared lowering and cancellation retain the reserved publication order. The
+low-level `independent_preparations_advance_while_live_publication_stays_ordered`
+regression covers those stage-ordering boundaries.
 `modelica_live_construction_job` records queue wait and measures the native session,
 metadata and initial-observation children. `modelica_live_construction_commit`
 measures publication. Preparation and live sessions use separate captured bounded

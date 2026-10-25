@@ -900,8 +900,14 @@ Actor admission is bounded across submitted compiles, root installs, lowerings
 and constructions to the largest pool count plus two
 staged operations. This lookahead keeps the serialized Rumoca owner preparing
 later independent programs while the pool lowers existing DAEs, while keeping
-retained compilation state bounded. Solve results still commit in submission
-order.
+retained compilation state bounded. Before immutable preparation, the command
+owner reserves the live request's domain worker lane and publication slot.
+Preparation dispatch and live publication have independent submission queues:
+an earlier running constructor does not block later ready IR. Cache hits use
+the same publication queue; both errors and successful results commit in the
+reserved order. Cancelled or stale preparation releases its slot only after
+draining, and live commit retains session/library-generation fences. Background
+completion order chooses neither live-owner assignment nor publication order.
 
 The native execution host captures `lunco_modelica_worker::worker::ModelicaWorkerLimits`
 before launching its worker. `preparation` and scene `live_execution` each use a typed

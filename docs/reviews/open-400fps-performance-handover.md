@@ -1,5 +1,22 @@
 # High-quality realtime performance handover
 
+## Independent construction preparation
+
+The [construction pipeline review](griffin-construction-pipeline-2026-10-25.md)
+reserves domain-worker lanes and publication slots before preparation, then
+dispatches ready IR independently of earlier live constructors. Typed errors,
+cache hits and shared lowering retain ordered publication and retirement fences.
+Thirteen scheduling checks, 46 initialization/receipt checks, 20 source-target
+checks, both expected terminal-fault gates, 21 lifecycle checks and all ten
+exact-replay profiles pass. The final primitive-field cleanup also passes one
+36-check exact replay. No reference or tolerance change is made.
+
+Native zones verify 0.995 s overlap between two constructors. Normal readiness
+observations are 14.543 s baseline, 17.664 s under added browser load, and
+14.135 s in the qualified final build. The normal data establishes no isolated
+overall gain. Griffin lands with unchanged source hashes and clear diagnostics;
+the regular build is restored, owned sessions close, and all targets remain open.
+
 ## Griffin compiled-artifact retention
 
 The [native cache publication repair](griffin-startup-native-cache-publication-2026-10-25.md)

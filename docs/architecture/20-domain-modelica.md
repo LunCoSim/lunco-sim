@@ -578,7 +578,14 @@ publishing. Explicit pool shutdown retires every context on its constructing
 thread even when mailbox handles remain. A lost owner produces the existing
 structured worker failure; no retry or replacement solver masks that failure.
 
-`modelica_live_plan_admission` measures command-owner admission.
+The command owner reserves each live request's publication slot and scene/document
+worker lane before immutable preparation. Prepared IR dispatches in its own
+submission order, independently of earlier live construction completion.
+Memory hits reserve the same publication order. Successful construction and
+preparation/construction errors publish only at the reserved FIFO slot. A retired
+preparation releases its slot after draining; existing session/library fences
+also reject obsolete live results. The admitted build plan is reused through
+construction rather than selected again after background completion.
 `modelica_live_construction_job` records queue wait and measures construction;
 its children are `modelica_live_session_construct`,
 `modelica_compiled_scalar_metadata` and `modelica_initial_observation`.
