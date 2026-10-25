@@ -1086,6 +1086,7 @@ struct PoseToPositionParams<'w, 's> {
             &'static Transform,
             Option<&'static mut SpatialBridgeShadow>,
             Option<&'static ChildOf>,
+            Has<Children>,
         ),
         (
             Or<(Changed<Transform>, Changed<CellCoord>, Changed<ChildOf>)>,
@@ -1243,10 +1244,10 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
         // pose, current contacts, and current joint geometry.
         frame_state.request_solver_reset();
     }
-    // Pass 1 (read-only): which entities did an external writer touch?
+    // Pass 1: which entities did an external writer touch?
     moved.clear();
     if policy == PoseToPositionPolicy::FixedStep {
-        for (entity, cell, tf, shadow, child_of) in &mut q_moved_plain {
+        for (entity, cell, tf, shadow, child_of, has_children) in &mut q_moved_plain {
             let representation_only = match (cell, shadow, child_of) {
                 (Some(cell), Some(mut shadow), Some(child_of)) => {
                     let parent = child_of.parent();
@@ -1258,7 +1259,9 @@ fn sync_pose_to_position(params: PoseToPositionParams, policy: PoseToPositionPol
                 }
                 _ => false,
             };
-            if !representation_only {
+            // Leaves cannot move another entity's physics pose. Capture their
+            // representation history before they can acquire descendants.
+            if !representation_only && has_children {
                 moved.insert(entity);
             }
         }
@@ -1494,23 +1497,18 @@ fn body_needs_pose_refresh(
     }
 
     let mut current = body;
-    let mut reached_active_frame = false;
     for _ in 0..32 {
         let Ok(child_of) = q_parents.get(current) else {
             return false;
         };
         current = child_of.parent();
         if current == active_frame {
-            reached_active_frame = true;
             // The active frame itself is a render representation boundary, not
             // a local physics input.
-            if moved.contains(&current) {
-                return false;
-            }
-            continue;
+            return false;
         }
         if moved.contains(&current) {
-            return !reached_active_frame;
+            return true;
         }
     }
     false
@@ -2040,6 +2038,113 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    #[ignore = "bounded pose-invalidation timing diagnostic"]
+    fn pose_invalidation_diagnostic() {
+        for case in [
+            "render_leaf",
+            "render_branch",
+            "above_frame",
+            "physical_parent",
+        ] {
+            let mut world = World::new();
+            let above = world
+                .spawn((Grid::new(1000.0, 0.0), Transform::default()))
+                .id();
+            let frame = world
+                .spawn((
+                    Grid::new(1000.0, 0.0),
+                    CellCoord::default(),
+                    Transform::default(),
+                    ChildOf(above),
+                ))
+                .id();
+            world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+            world.insert_resource(PhysicsFrameTransportState {
+                frame: Some(frame),
+                ..Default::default()
+            });
+            let mut parent = frame;
+            for _ in 0..6 {
+                parent = world.spawn((Transform::default(), ChildOf(parent))).id();
+            }
+            let mut bodies = Vec::new();
+            for index in 0..512 {
+                let tf = Transform::from_xyz(index as f32 * 0.25, 0.0, 0.0);
+                let mut shadow = BridgeShadow::default();
+                shadow.capture(None, &tf, frame);
+                bodies.push(
+                    world
+                        .spawn((
+                            RigidBody::Dynamic,
+                            tf,
+                            ChildOf(parent),
+                            Position(tf.translation.as_dvec3()),
+                            Rotation::default(),
+                            LinearVelocity::ZERO,
+                            AngularVelocity::ZERO,
+                            shadow,
+                            lunco_physics::PhysicsPoseSeeded,
+                        ))
+                        .id(),
+                );
+            }
+            let branch = world.spawn((Transform::default(), ChildOf(frame))).id();
+            let leaf = world
+                .spawn((
+                    Transform::default(),
+                    CellCoord::default(),
+                    SpatialBridgeShadow::default(),
+                    ChildOf(frame),
+                ))
+                .id();
+            for _ in 0..16 {
+                world.spawn((Transform::default(), ChildOf(branch)));
+            }
+            let changed = match case {
+                "render_leaf" => leaf,
+                "render_branch" => branch,
+                "above_frame" => above,
+                "physical_parent" => parent,
+                _ => unreachable!(),
+            };
+            let mut system = IntoSystem::into_system(pose_to_position_fixed_step);
+            system.initialize(&mut world);
+            system.run((), &mut world).unwrap();
+            let started = std::time::Instant::now();
+            for tick in 0..256 {
+                world.get_mut::<Transform>(changed).unwrap().translation.x =
+                    (tick % 16) as f32 * 0.25;
+                system.run((), &mut world).unwrap();
+            }
+            let elapsed = started.elapsed().as_nanos();
+            for (index, body) in bodies.iter().copied().enumerate() {
+                let expected =
+                    index as f64 * 0.25 + if case == "physical_parent" { 3.75 } else { 0.0 };
+                assert_eq!(
+                    world.get::<Position>(body).unwrap().0,
+                    DVec3::new(expected, 0.0, 0.0)
+                );
+                assert_eq!(world.get::<LinearVelocity>(body).unwrap().0, Vec3::ZERO);
+            }
+            // A leaf's representation history remains current before it can
+            // acquire descendants through a later hierarchy edit.
+            if case == "render_leaf" {
+                assert_eq!(
+                    world
+                        .get::<SpatialBridgeShadow>(leaf)
+                        .unwrap()
+                        .translation
+                        .x,
+                    3.75
+                );
+            }
+            eprintln!(
+                "pose invalidation: case={case}, bodies=512, iterations=256, elapsed_ns={elapsed}"
+            );
+        }
+    }
 
     #[test]
     fn collider_pose_seeding_survives_retirement_before_command_application() {

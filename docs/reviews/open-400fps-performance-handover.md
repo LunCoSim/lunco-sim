@@ -1,5 +1,25 @@
 # High-quality realtime performance handover
 
+## Physics pose selection
+
+[The frame-local pose selection repair](physics-pose-invalidation-2026-10-25.md)
+excludes plain leaves from ancestor invalidation while retaining their exact
+representation history, and stops selection at the active frame. Independent
+consumer pairs reduce render-only selection work by 15–97%, with actual
+physical-parent updates unchanged. All 16 owner checks and the production
+invalid-rotation terminal-fault gate pass. Normal Summer A/B/A coupled medians
+are 5.233/4.948/5.353 ms with all 72 source hashes matched. Griffin reaches
+sleeping four-pad handoff; Tesla's stationary readiness window stays clear.
+Host contention, the existing Tesla datum HUD and the limited mission windows
+are recorded in the review. Loading, coupled-tick and graphics targets remain
+unmet. Rootless collider propagation is the next separately sampled lead.
+
+The matching native capture verifies its owned PID/connection, 1 kHz sampling,
+framing and exports. In 240 complete FixedMain ticks, pose-reader median falls
+from 0.343 to 0.265 ms over 480 calls; parent-lookup samples fall from 61 to 25.
+Complete instrumented FixedMain stays 6.940/6.920 ms, and rootless propagation
+remains 0.622 ms. This is attribution evidence, not clean runtime acceptance.
+
 ## Native procedural solar enclosures
 
 [The native enclosure repair](terrain-procedural-enclosures-2026-10-25.md)

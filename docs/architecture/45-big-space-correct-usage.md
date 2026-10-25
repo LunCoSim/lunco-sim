@@ -129,6 +129,13 @@ removals. A removed parent invalidates the relative collider transform even
 when its local transform stays unchanged, so the next preparation pass must
 recompose it before native collision and mass consumers run.
 
+Pose invalidation stops at the active physics frame: ancestors above that
+boundary change its render representation, not a body's local physics pose.
+Changed plain leaves cannot invalidate another body's pose. The bridge still
+captures their exact representation history so later child insertion uses
+current state. Physical ancestor changes below the frame retain the ordinary
+pose refresh path, including validation and velocity transport.
+
 Presentation systems that solve a pose repeatedly must compare each derived
 `Transform` and `CellCoord` value before mutating it. Bevy change detection is
 the input to BigSpace's dirty-subtree pruning; assigning an equal value still

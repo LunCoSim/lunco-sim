@@ -108,6 +108,11 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   to a test artifact. Verify separate device/inode identities and record hashes
   before and after the comparison; reject results if a snapshot changed or a
   supposed code variant resolved to the same executable.
+  For pose-bridge selection, the ignored `pose_invalidation_diagnostic` in
+  `lunco-usd-avian-core` measures 512 bodies over 256 persistent-system runs.
+  Preserve its separate leaf, render-branch, above-frame and physical-parent
+  cases; require exact native poses, velocities and leaf representation history.
+  Pair it with a normal production window before claiming scene-level savings.
   In a diagnostics-enabled render host, `lunco-render-bevy` adds
   `lunco_shadow_shared_early`/`late` and `lunco_shadow_camera_early`/`late`
   timestamps around the native shadow passes. Shared events correspond to
