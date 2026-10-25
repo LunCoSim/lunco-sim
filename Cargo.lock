@@ -9810,6 +9810,7 @@ name = "lunco-modelica-worker"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bincode 2.0.1",
  "crossbeam-channel",
  "linked-hash-map",
  "log",

@@ -1,28 +1,28 @@
 //! Application-lived, bounded native compiler artifacts; no executable or FMI state.
 
-use super::cache::{BoundedReuseCache, ModelicaArtifactDiskLimits, encode_record, read_record};
+use super::cache::{
+    BoundedReuseCache, ModelicaArtifactDiskLimits, ModelicaCacheWriteError, encode_payload,
+    read_payload,
+};
 use super::thread_pool::Lane;
 use lunco_modelica_runtime::{ModelicaCacheCapacities, ModelicaNativeCodeCacheProfile};
 use lunco_storage::{FileStorage, Storage, StorageHandle};
 use rumoca_sim::native_code_cache::{CacheKvStore, with_native_code_cache};
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 type Key = [u8; 32];
-const NATIVE_CODE_CACHE_VERSION: u32 = 2;
+const NATIVE_CODE_CACHE_VERSION: u32 = 3;
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(bincode::Encode, bincode::Decode)]
 struct Record {
     version: u32,
     entries: Vec<Entry>,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(bincode::Encode, bincode::Decode)]
 struct Entry {
     key: Key,
     code: Arc<[u8]>,
@@ -44,6 +44,39 @@ impl Record {
         }
         Ok(())
     }
+}
+
+fn record_config() -> impl bincode::config::Config {
+    bincode::config::standard()
+        .with_limit::<{ ModelicaArtifactDiskLimits::CODEC_MAX_DECODED_BYTES }>()
+}
+
+fn read_record(
+    storage: &FileStorage,
+    handle: &StorageHandle,
+    limits: ModelicaArtifactDiskLimits,
+) -> Result<Option<Record>, String> {
+    let Some(bytes) = read_payload(storage, handle, limits).map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let (record, consumed) = bincode::decode_from_slice(&bytes, record_config())
+        .map_err(|error| format!("native artifact decoding rejected: {error}"))?;
+    if consumed != bytes.len() {
+        return Err("native artifact record contains trailing bytes".into());
+    }
+    Ok(Some(record))
+}
+
+fn encode_record(
+    record: &Record,
+    limits: ModelicaArtifactDiskLimits,
+) -> Result<Vec<u8>, ModelicaCacheWriteError> {
+    encode_payload(limits, |mut writer| {
+        bincode::encode_into_std_write(record, &mut writer, record_config())
+            .map(|_| ())
+            .map_err(ModelicaCacheWriteError::BinaryCodec)
+    })
 }
 
 struct CachedCode {
@@ -187,7 +220,7 @@ impl SharedNativeCodeCache {
             path: StorageHandle::File(
                 lunco_assets_core::modelica_dir()
                     .join(format!("native-code-v{NATIVE_CODE_CACHE_VERSION}"))
-                    .join("stencils.json.zst"),
+                    .join("stencils.bin.zst"),
             ),
         };
         bevy::log::debug!(
@@ -213,9 +246,7 @@ impl SharedNativeCodeCache {
 
     fn load(&self) -> Result<(), String> {
         let _span = bevy::log::info_span!("modelica_native_cache_load").entered();
-        let Some(record) = read_record::<Record>(&FileStorage::new(), &self.path, self.limits)
-            .map_err(|error| error.to_string())?
-        else {
+        let Some(record) = read_record(&FileStorage::new(), &self.path, self.limits)? else {
             bevy::log::info!("[modelica-runtime] native code artifact cache is cold");
             return Ok(());
         };
@@ -312,9 +343,7 @@ impl SharedNativeCodeCache {
         // The storage guard covers the complete read/merge/atomic-replace operation.
         let path = StorageHandle::File(transaction.directory().join(name));
         let mut merged = Data::new(self.capacities);
-        if let Some(record) = read_record::<Record>(&storage, &path, self.limits)
-            .map_err(|error| error.to_string())?
-        {
+        if let Some(record) = read_record(&storage, &path, self.limits)? {
             record.validate()?;
             merged.import_older(record, self.capacities);
         }
@@ -497,9 +526,7 @@ mod tests {
         let storage = FileStorage::new();
         storage.write_sync(&handle, &encoded).unwrap();
         let started = std::time::Instant::now();
-        let loaded = read_record::<Record>(&storage, &handle, limits)
-            .unwrap()
-            .unwrap();
+        let loaded = read_record(&storage, &handle, limits).unwrap().unwrap();
         let decoding = started.elapsed();
         loaded.validate().unwrap();
         assert_eq!(loaded.entries.len(), record.entries.len());
@@ -514,9 +541,58 @@ mod tests {
     }
 
     #[test]
+    fn native_code_cache_binary_payload_rejects_trailing_truncated_and_oversized_lengths() {
+        let limits = ModelicaArtifactDiskLimits::default();
+        let record = Record {
+            version: NATIVE_CODE_CACHE_VERSION,
+            entries: vec![Entry {
+                key: [1; 32],
+                code: vec![2; 16].into(),
+            }],
+        };
+        let raw = bincode::encode_to_vec(&record, record_config()).unwrap();
+        let mut trailing = raw.clone();
+        trailing.push(0);
+        let malicious_length =
+            bincode::encode_to_vec((NATIVE_CODE_CACHE_VERSION, u64::MAX), record_config()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let handle = StorageHandle::File(dir.path().join("native.zst"));
+        let storage = FileStorage::new();
+        for payload in [trailing, raw[..raw.len() - 1].to_vec(), malicious_length] {
+            let compressed = encode_payload(limits, |writer| {
+                writer
+                    .write_all(&payload)
+                    .map_err(ModelicaCacheWriteError::Compression)
+            })
+            .unwrap();
+            storage.write_sync(&handle, &compressed).unwrap();
+            assert!(read_record(&storage, &handle, limits).is_err());
+        }
+        let encoded = encode_record(&record, limits).unwrap();
+        let exact = ModelicaArtifactDiskLimits {
+            decoded_bytes: raw.len(),
+            compressed_bytes: encoded.len(),
+            ..limits
+        };
+        assert_eq!(encode_record(&record, exact).unwrap(), encoded);
+        for limits in [
+            ModelicaArtifactDiskLimits {
+                decoded_bytes: raw.len() - 1,
+                ..exact
+            },
+            ModelicaArtifactDiskLimits {
+                compressed_bytes: 1,
+                ..exact
+            },
+        ] {
+            assert!(encode_record(&record, limits).is_err());
+        }
+    }
+
+    #[test]
     fn native_code_cache_preserves_other_writers_and_recent_reads() {
         let directory = tempfile::tempdir().unwrap();
-        let path = StorageHandle::File(directory.path().join("stencils.json.zst"));
+        let path = StorageHandle::File(directory.path().join("stencils.bin.zst"));
         let limits = ModelicaArtifactDiskLimits::default();
         let seed = Record {
             version: NATIVE_CODE_CACHE_VERSION,
@@ -555,7 +631,7 @@ mod tests {
         assert_eq!(stale.get(&[1; 32]).unwrap().as_ref(), &[1]);
         stale.insert(&[4; 32], vec![4]);
         publish_now(&second);
-        let record = read_record::<Record>(&FileStorage::new(), &path, limits)
+        let record = read_record(&FileStorage::new(), &path, limits)
             .unwrap()
             .unwrap();
         record.validate().unwrap();
@@ -610,7 +686,7 @@ mod tests {
     #[test]
     fn native_code_cache_failed_publication_keeps_pending_changes() {
         let directory = tempfile::tempdir().unwrap();
-        let path = StorageHandle::File(directory.path().join("stencils.json.zst"));
+        let path = StorageHandle::File(directory.path().join("stencils.bin.zst"));
         let storage = FileStorage::new();
         let seed = Record {
             version: NATIVE_CODE_CACHE_VERSION,
@@ -643,7 +719,7 @@ mod tests {
         storage.write_sync(&path, &encoded).unwrap();
         cache.lock().unwrap().insert([3; 32], vec![3].into());
         publish_now(&cache);
-        let record = read_record::<Record>(&storage, &path, ModelicaArtifactDiskLimits::default())
+        let record = read_record(&storage, &path, ModelicaArtifactDiskLimits::default())
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -695,9 +771,7 @@ mod tests {
         let handle = StorageHandle::File(dir.path().join("native.zst"));
         let storage = FileStorage::new();
         storage.write_sync(&handle, &encoded).unwrap();
-        let loaded = read_record::<Record>(&storage, &handle, limits)
-            .unwrap()
-            .unwrap();
+        let loaded = read_record(&storage, &handle, limits).unwrap().unwrap();
         loaded.validate().unwrap();
         assert_eq!(loaded.entries[0].code.as_ref(), &[1]);
         let mut invalid = loaded;
@@ -715,6 +789,6 @@ mod tests {
         let last = corrupted.len() - 1;
         corrupted[last] ^= 1;
         storage.write_sync(&handle, &corrupted).unwrap();
-        assert!(read_record::<Record>(&storage, &handle, limits).is_err());
+        assert!(read_record(&storage, &handle, limits).is_err());
     }
 }

@@ -857,7 +857,7 @@ module relocations and host addresses are rebound on every construction; no
 executable arena, FMI state, scene entity or numeric workspace is retained.
 Twin close retires its live owners while this immutable compiler cache survives.
 One dedicated thread-affine I/O lane asynchronously loads and coalesces bounded
-publication deltas in `modelica/native-code-v2/stencils.json.zst`. Each delta
+publication deltas in `modelica/native-code-v3/stencils.bin.zst`. Each delta
 contains only entries accessed or compiled since the last successful publication.
 The I/O owner merges it with the current record under the storage-owned
 cross-process directory transaction, then publishes through atomic file replace.
@@ -869,9 +869,14 @@ values and recency. Pure hits request no rewrite; failed publication retains its
 delta until another modification requests publication. Immutable code buffers
 remain shared through serialization. The versioned namespace owns this writer
 protocol, so its initial fill is distinct from warm reuse.
-The existing bounded zstd/typed persistence codec owns both artifact formats.
-Its standard buffered writer batches JSON fragments before compression, with
-the decoded-byte check outside that buffer. Publication explicitly flushes the
+The shared bounded Zstd transport owns both artifact formats. Native code uses
+Bincode's typed `Encode`/`Decode` contract, storing byte slices directly. Its
+allocation ceiling is the named codec ceiling, and decoding must consume the
+complete record before version/key validation. Prepared FMI keeps Rumoca's
+checked structured wire and its native deserializer. The native namespace has
+one binary reader/writer; a new namespace measures first fill independently.
+The transport's standard buffered writer batches serializer fragments before
+compression, with the decoded-byte check outside that buffer. Publication explicitly flushes the
 buffer before finalizing the checksummed frame; flush and compression errors
 reject the write. The buffer retains only its bounded streaming capacity,
 not another full serialized record.

@@ -39,6 +39,7 @@ web-time.workspace = true
 linked-hash-map.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bincode.workspace = true
 rumoca-eval-solve.workspace = true
 serde_json.workspace = true
 lunco-assets-core = { path = "../lunco-assets-core" }

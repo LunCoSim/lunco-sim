@@ -795,10 +795,13 @@ it does not retain live FMI state. Cache I/O is asynchronous, so report observed
 hits rather than assuming that a disk snapshot was ready before construction.
 Inspect the separate `modelica_native_cache_load` and
 `modelica_native_cache_publish` zones when cache I/O consumes startup CPU.
-The shared codec buffers serializer fragments before Zstd; retain decoded and
-compressed budgets, explicit flush failure handling and the existing wire
-identity when tuning this boundary. Codec diagnostics do not establish a
-complete-loading or coupled-tick speedup.
+The shared transport buffers serializer fragments before Zstd. Native artifacts
+use Bincode's direct byte-slice encoding; checked prepared-FMI records retain
+their native structured decoder. Preserve both byte budgets, the binary
+allocation ceiling, full consumption, explicit flush failure handling and the
+owned versioned namespace. Separate a new namespace's first fill from warm
+restart, without seeding it from an unrelated format. Codec diagnostics do not
+establish a complete-loading or coupled-tick speedup.
 For key-level attribution, enable
 `RUST_LOG=info,lunco_modelica_worker::worker::native_code_cache=trace`.
 The cache admission event identifies the actual storage path and entry/byte

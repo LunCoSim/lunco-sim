@@ -1,5 +1,18 @@
 # High-quality realtime performance handover
 
+## Direct native artifact bytes
+
+The [native binary codec](griffin-native-artifact-binary-codec-2026-10-25.md)
+uses the existing Bincode dependency and shared bounded compression transport.
+All 32 cache cases and 46 production initialization/receipt cases pass. Exact
+record diagnostics observe about 3 ms encoding / 6 ms decoding for 4,096 entries.
+Native byte buffers stay shared and no JSON native reader remains. First fill
+and warm restart both retain source hashes and reach sleeping four-pad handoff,
+with clear diagnostics. Concurrent Roadster and compiler workloads invalidate
+scene timing comparisons; the <1 s load / <1 ms coupled-tick targets stay open.
+Separate mobility edits and another build are preserved. A new-format native
+I/O capture and an uncontended product timing window remain open.
+
 ## Buffered artifact compression
 
 The [cache stream repair](griffin-cache-stream-buffering-2026-10-25.md) uses the

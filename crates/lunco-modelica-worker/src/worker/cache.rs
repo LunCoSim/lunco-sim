@@ -137,6 +137,7 @@ pub(super) enum ModelicaCacheWriteError {
     InvalidPath,
     ConstructionWire(String),
     Codec(serde_json::Error),
+    BinaryCodec(bincode::error::EncodeError),
     Compression(std::io::Error),
     Storage(StorageError),
 }
@@ -156,6 +157,7 @@ impl std::fmt::Display for ModelicaCacheWriteError {
                 formatter.write_str("publication is outside its owned cache namespace")
             }
             Self::Codec(error) => write!(formatter, "cache serialization rejected: {error}"),
+            Self::BinaryCodec(error) => write!(formatter, "cache serialization rejected: {error}"),
             Self::Compression(error) => write!(formatter, "cache compression rejected: {error}"),
             Self::Storage(error) => {
                 write!(formatter, "cache publication/retention failed: {error}")
@@ -544,6 +546,20 @@ pub(super) fn read_record<T: serde::de::DeserializeOwned>(
     handle: &StorageHandle,
     limits: ModelicaArtifactDiskLimits,
 ) -> Result<Option<T>, ModelicaCacheReadError> {
+    let Some(bytes) = read_payload(storage, handle, limits)? else {
+        return Ok(None);
+    };
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(ModelicaCacheReadError::Codec)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn read_payload(
+    storage: &FileStorage,
+    handle: &StorageHandle,
+    limits: ModelicaArtifactDiskLimits,
+) -> Result<Option<Vec<u8>>, ModelicaCacheReadError> {
     use std::io::Read;
     limits
         .validate()
@@ -570,15 +586,23 @@ pub(super) fn read_record<T: serde::de::DeserializeOwned>(
             max_bytes: limits.decoded_bytes,
         });
     }
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(ModelicaCacheReadError::Codec)
+    Ok(Some(bytes))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn encode_record<T: Serialize>(
     record: &T,
     limits: ModelicaArtifactDiskLimits,
+) -> Result<Vec<u8>, ModelicaCacheWriteError> {
+    encode_payload(limits, |writer| {
+        serde_json::to_writer(writer, record).map_err(ModelicaCacheWriteError::Codec)
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn encode_payload(
+    limits: ModelicaArtifactDiskLimits,
+    serialize: impl FnOnce(&mut dyn std::io::Write) -> Result<(), ModelicaCacheWriteError>,
 ) -> Result<Vec<u8>, ModelicaCacheWriteError> {
     limits
         .validate()
@@ -596,14 +620,14 @@ pub(super) fn encode_record<T: Serialize>(
     encoder
         .include_checksum(true)
         .map_err(ModelicaCacheWriteError::Compression)?;
-    // JSON emits small number and punctuation fragments. Batch them before
-    // compression while checking the decoded budget before they enter the buffer.
+    // Batch serializer fragments before compression, with decoded admission
+    // outside the buffer so oversized writes cannot enter it.
     let mut decoded = BudgetWriter::new(
         std::io::BufWriter::new(encoder),
         limits.decoded_bytes,
         "decoded",
     );
-    serde_json::to_writer(&mut decoded, record).map_err(ModelicaCacheWriteError::Codec)?;
+    serialize(&mut decoded)?;
     let compressed = decoded
         .inner
         .into_inner()
