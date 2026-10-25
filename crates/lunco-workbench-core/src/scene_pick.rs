@@ -18,6 +18,14 @@ pub enum SceneTarget {
     Offscreen(PanelId),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PointerOwner {
+    #[default]
+    Egui,
+    NativeUi,
+    Scene(SceneTarget),
+}
+
 /// Per-frame inputs and resolved output of the scene-vs-chrome pick gate.
 ///
 /// The concrete host resets the gate before its egui pass, records scene and
@@ -32,9 +40,10 @@ pub struct ScenePickGate {
     rendered: bool,
     scene_leaf: Option<SceneTarget>,
     chrome_cards: Vec<(egui::Rect, egui::Rect)>,
+    native_ui_regions: Vec<egui::Rect>,
     dock_rect: Option<egui::Rect>,
     scene_viewport_rect: Option<egui::Rect>,
-    resolved: Option<SceneTarget>,
+    resolved: PointerOwner,
     tool_pointer_capture: bool,
     latched: bool,
 }
@@ -44,6 +53,8 @@ pub struct ScenePickGate {
 pub struct EguiPointerState {
     /// Whether egui's occlusion-aware pointer test finds a reserved surface.
     pub over_egui: bool,
+    /// An occluding egui window/menu above the background layer owns this point.
+    pub over_egui_overlay: bool,
     /// Whether egui is actively dragging one of its own widgets.
     pub using_pointer: bool,
     /// The pointer position, or `None` after the pointer leaves the window.
@@ -71,6 +82,12 @@ impl ScenePickGate {
         self.chrome_cards.push((body, card));
     }
 
+    /// Native retained UI blocks scene input but is picked by Bevy's UI backend.
+    /// The egui capture backend must not replace that native hit with its own.
+    pub fn record_native_ui_region(&mut self, rect: egui::Rect) {
+        self.native_ui_regions.push(rect);
+    }
+
     /// Record the dock's extent in egui points.
     pub fn set_dock_rect(&mut self, rect: egui::Rect) {
         self.dock_rect = Some(rect);
@@ -96,6 +113,7 @@ impl ScenePickGate {
         self.rendered = false;
         self.scene_leaf = None;
         self.chrome_cards.clear();
+        self.native_ui_regions.clear();
         self.dock_rect = None;
         self.scene_viewport_rect = None;
         self.tool_pointer_capture = false;
@@ -103,12 +121,20 @@ impl ScenePickGate {
 
     /// Return the resolved scene under the pointer, or `None` for chrome.
     pub fn resolved(&self) -> Option<SceneTarget> {
-        self.resolved
+        match self.resolved {
+            PointerOwner::Scene(target) => Some(target),
+            PointerOwner::Egui | PointerOwner::NativeUi => None,
+        }
     }
 
     /// Return whether the pointer owns the main full-window 3D scene.
     pub fn over_main_scene(&self) -> bool {
-        self.resolved == Some(SceneTarget::MainViewport)
+        self.resolved == PointerOwner::Scene(SceneTarget::MainViewport)
+    }
+
+    /// Whether the native UI backend owns the current pointer gesture.
+    pub fn over_native_ui(&self) -> bool {
+        self.resolved == PointerOwner::NativeUi
     }
 
     /// Return whether an interactive tool owns the primary drag in an offscreen
@@ -124,19 +150,30 @@ impl ScenePickGate {
         if !self.rendered {
             return false;
         }
-        let candidate = resolve_scene_target(
-            egui_state,
-            self.scene_leaf,
-            &self.chrome_cards,
-            self.dock_rect,
-            self.scene_viewport_rect,
-        );
+        let native_ui = egui_state
+            .hover_pos
+            .is_some_and(|pos| self.native_ui_regions.iter().any(|rect| rect.contains(pos)));
+        let candidate = if egui_state.over_egui_overlay {
+            PointerOwner::Egui
+        } else if native_ui && !egui_state.using_pointer {
+            PointerOwner::NativeUi
+        } else {
+            resolve_scene_target(
+                egui_state,
+                self.scene_leaf,
+                &self.chrome_cards,
+                self.dock_rect,
+                self.scene_viewport_rect,
+            )
+            .map_or(PointerOwner::Egui, PointerOwner::Scene)
+        };
         let latch = PressLatch {
             held: self.latched,
             owner: self.resolved,
         };
-        let scene_press =
-            !self.latched && egui_state.any_down && candidate == Some(SceneTarget::MainViewport);
+        let scene_press = !self.latched
+            && egui_state.any_down
+            && candidate == PointerOwner::Scene(SceneTarget::MainViewport);
         let next = latch.update(egui_state.any_down, candidate);
         self.resolved = next.owner;
         self.latched = next.held;
@@ -152,9 +189,12 @@ fn resolve_scene_target(
     scene_viewport_rect: Option<egui::Rect>,
 ) -> Option<SceneTarget> {
     let pos = egui_state.hover_pos?;
-    // Runtime HUI controls are registered as chrome cards. They must own the
-    // pointer before the full-window scene leaf is considered; the leaf is a
-    // geometry hit target, not an input capture layer.
+    // An offscreen leaf was already admitted by egui's occlusion-aware content
+    // hit test. Its own surrounding panel card must not revoke that ownership.
+    if matches!(scene_leaf, Some(SceneTarget::Offscreen(_))) {
+        return scene_leaf;
+    }
+    // Foreground chrome takes precedence over the full-window scene geometry.
     if chrome_cards.iter().any(|(_, card)| card.contains(pos)) {
         return None;
     }
@@ -182,11 +222,11 @@ fn resolve_scene_target(
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PressLatch {
     held: bool,
-    owner: Option<SceneTarget>,
+    owner: PointerOwner,
 }
 
 impl PressLatch {
-    fn update(self, any_down: bool, candidate: Option<SceneTarget>) -> Self {
+    fn update(self, any_down: bool, candidate: PointerOwner) -> Self {
         match (any_down, self.held) {
             (false, _) => Self {
                 held: false,
@@ -220,6 +260,57 @@ mod tests {
             hover_pos: Some(pos2(p.0, p.1)),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn native_ui_receives_its_gesture_without_releasing_the_scene() {
+        let mut gate = ScenePickGate::default();
+        gate.mark_rendered();
+        gate.record_native_ui_region(rect((20.0, 20.0), (120.0, 60.0)));
+        gate.record_scene_leaf(SceneTarget::MainViewport, true);
+        let mut pointer = hovering((40.0, 40.0));
+        gate.resolve(pointer);
+        assert!(gate.over_native_ui());
+        assert_eq!(gate.resolved(), None);
+        pointer.any_down = true;
+        assert!(!gate.resolve(pointer));
+        gate.begin_frame();
+        gate.mark_rendered();
+        gate.record_scene_leaf(SceneTarget::MainViewport, true);
+        pointer.hover_pos = Some(pos2(400.0, 400.0));
+        gate.resolve(pointer);
+        assert!(
+            gate.over_native_ui(),
+            "drag ownership survives leaving the button"
+        );
+        pointer.any_down = false;
+        gate.resolve(pointer);
+        assert!(gate.over_main_scene());
+        assert!(!gate.over_native_ui());
+    }
+
+    #[test]
+    fn foreground_egui_blocks_native_buttons_and_keeps_its_drag() {
+        let mut gate = ScenePickGate::default();
+        gate.mark_rendered();
+        gate.record_native_ui_region(rect((20.0, 20.0), (120.0, 60.0)));
+        gate.record_scene_leaf(SceneTarget::MainViewport, true);
+        let mut pointer = hovering((40.0, 40.0));
+        pointer.over_egui_overlay = true;
+        gate.resolve(pointer);
+        assert!(!gate.over_native_ui());
+        assert_eq!(gate.resolved(), None);
+        pointer.any_down = true;
+        gate.resolve(pointer);
+        pointer.over_egui_overlay = false;
+        gate.resolve(pointer);
+        assert!(
+            !gate.over_native_ui(),
+            "native UI cannot steal an egui drag"
+        );
+        pointer.any_down = false;
+        gate.resolve(pointer);
+        assert!(gate.over_native_ui());
     }
 
     #[test]
@@ -434,16 +525,16 @@ mod tests {
     #[test]
     fn latch_keeps_widget_drag_in_chrome() {
         let mut latch = PressLatch::default();
-        latch = latch.update(false, None);
-        latch = latch.update(true, None);
-        latch = latch.update(true, Some(SceneTarget::MainViewport));
-        assert_eq!(latch.owner, None);
+        latch = latch.update(false, PointerOwner::Egui);
+        latch = latch.update(true, PointerOwner::Egui);
+        latch = latch.update(true, PointerOwner::Scene(SceneTarget::MainViewport));
+        assert_eq!(latch.owner, PointerOwner::Egui);
         assert!(latch.held);
         assert_eq!(
-            latch.update(false, Some(SceneTarget::MainViewport)),
+            latch.update(false, PointerOwner::Scene(SceneTarget::MainViewport)),
             PressLatch {
                 held: false,
-                owner: Some(SceneTarget::MainViewport),
+                owner: PointerOwner::Scene(SceneTarget::MainViewport),
             }
         );
     }
@@ -451,15 +542,15 @@ mod tests {
     #[test]
     fn latch_keeps_scene_drag_in_scene() {
         let mut latch = PressLatch::default();
-        latch = latch.update(false, Some(SceneTarget::MainViewport));
-        latch = latch.update(true, Some(SceneTarget::MainViewport));
-        latch = latch.update(true, None);
-        assert_eq!(latch.owner, Some(SceneTarget::MainViewport));
+        latch = latch.update(false, PointerOwner::Scene(SceneTarget::MainViewport));
+        latch = latch.update(true, PointerOwner::Scene(SceneTarget::MainViewport));
+        latch = latch.update(true, PointerOwner::Egui);
+        assert_eq!(latch.owner, PointerOwner::Scene(SceneTarget::MainViewport));
         assert_eq!(
-            latch.update(false, None),
+            latch.update(false, PointerOwner::Egui),
             PressLatch {
                 held: false,
-                owner: None,
+                owner: PointerOwner::Egui,
             }
         );
     }

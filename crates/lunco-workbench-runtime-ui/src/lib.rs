@@ -2549,7 +2549,9 @@ fn runtime_ui_surface_ancestor(
 /// Add the visible interactive runtime controls to the existing workbench
 /// scene/chrome gate. This is intentionally a bridge into `ScenePickGate`, not
 /// a second hit-test implementation: egui dock cards and runtime UI controls
-/// are resolved by the same press latch and scene ownership state machine.
+/// are resolved by the same press latch and pointer ownership state machine.
+/// Native controls block the scene without asking egui's capture backend to
+/// intercept the Bevy UI hit that must deliver their press.
 ///
 /// The surface root is a layout container, not an input target. In particular,
 /// a `viewport` surface is intentionally full-window, so registering its
@@ -2620,7 +2622,7 @@ fn register_runtime_ui_input_regions(
             continue;
         }
         if let Some(rect) = runtime_ui_input_rect(node, transform) {
-            gate.record_chrome_panel(rect, rect);
+            gate.record_native_ui_region(rect);
         }
     }
 }

@@ -579,6 +579,10 @@ pub(crate) fn resolve_scene_pointer(
     for mut ctx in q.iter_mut() {
         let c = ctx.get_mut();
         state.over_egui |= c.is_pointer_over_egui();
+        state.over_egui_overlay |= c
+            .pointer_hover_pos()
+            .and_then(|pos| c.layer_id_at(pos))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
         state.using_pointer |= c.egui_is_using_pointer();
         // `pointer_hover_pos()` — NOT `pointer_interact_pos()`, which egui keeps
         // alive after `PointerGone` and would have the gate resolving against a
@@ -649,13 +653,13 @@ pub(crate) fn egui_viewport_aware_picking(
                 continue;
             }
             // `resolve_scene_pointer` (runs just before this) has already collapsed
-            // scene-vs-chrome into one `SceneTarget`. Over the main scene → let the
-            // mesh pick win (no capture). Otherwise → emit a high-order capture hit
+            // scene/native-UI/egui ownership into one latched decision. Let the
+            // native scene or UI backend deliver its own hit. Otherwise emit a capture hit
             // UNCONDITIONALLY. We must NOT gate on `egui_wants_pointer_input()`
             // here: its `&& !any_down()` clause returns false at the instant of a
             // press over a panel background/label, which let the gizmo/hover pick
             // leak through chrome on click.
-            if gate.over_main_scene() {
+            if gate.over_main_scene() || gate.over_native_ui() {
                 continue;
             }
             out.write(PointerHits::new(
