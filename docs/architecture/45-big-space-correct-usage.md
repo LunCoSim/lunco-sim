@@ -304,6 +304,11 @@ Avian retains subsequent fixed-step collider propagation. The authored
 standalone obstacle heights on the first tick, before any solver step can
 conceal an incomplete initial query state.
 
+Native fixed-step propagation retains a child collider's pose change ticks
+when its computed position and rotation bits are unchanged. Avian's existing
+tree update can then skip stationary bounds. Pose calculation, normalization,
+signed-zero representation and non-finite diagnostics retain their owners.
+
 The local avatar is a kinematic camera embodiment, not an authored rigid body.
 Its keyboard and wheel movement uses Avian's `MoveAndSlide` with one capsule
 shape against the standard colliders projected from the composed USD stage.

@@ -1,5 +1,23 @@
 # High-quality realtime performance handover
 
+## Native child-collider invalidation
+
+[The native change-detection audit](avian-child-collider-change-detection-2026-10-25.md)
+pins Avian `95d02b3`: unchanged child pose bits retain their component change
+ticks, allowing the existing native bound-update fast path to work. Four
+dimension/precision configurations pass native checks. All ten unchanged
+production profiles pass 360 exact checks; spatial-query positive/negative and
+collision gates pass 32 checks, and invalid rotation retains its expected
+terminal fault. Griffin reaches sleeping four-pad handoff with unchanged
+sources and clear registered diagnostics.
+
+The normal cohorts have changing concurrent load and establish no isolated
+timing benefit. A separate validated Tracy capture measures 0.002465 ms child
+propagation and 0.036719 ms moved-bound update; the complete tick target remains
+open. The regular artifact is restored exactly. The slower static-scatter
+grouping experiment is removed. Rumoca proof sharing and per-runtime torn-sweep
+workspace reuse are separately authorized next work.
+
 ## Native physical commit executor
 
 [The outer-schedule comparison](physics-fixed-post-executor-2026-10-25.md)

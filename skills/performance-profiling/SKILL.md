@@ -114,6 +114,9 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   to a test artifact. Verify separate device/inode identities and record hashes
   before and after the comparison; reject results if a snapshot changed or a
   supposed code variant resolved to the same executable.
+  Before grouping static shapes, inspect native child-pose invalidation and
+  material inheritance. Preserve mutable global material defaults; a lower
+  body count alone does not prove a speedup or equivalent physical behavior.
   For pose-bridge selection, the ignored `pose_invalidation_diagnostic` in
   `lunco-usd-avian-core` measures 512 bodies over 256 persistent-system runs.
   Preserve its separate leaf, render-branch, above-frame and physical-parent
