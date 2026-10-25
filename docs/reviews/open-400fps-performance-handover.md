@@ -1,5 +1,21 @@
 # High-quality realtime performance handover
 
+## Shared native runtime preparation qualification
+
+Rumoca `fbfbcdc9` is tested and published: interpreter/native assignment
+preparation shares one proven immutable schedule, and each runtime retains its
+torn-sweep workspace with independent numerical checks intact. The
+[current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md)
+records 130 solver tests, five Cranelift assignment tests and scoped Clippy.
+Twelve of the twenty MSL canary models compare strictly against OpenModelica;
+the other eight are refused before runtime and have no asserted baseline delta.
+
+Application integration is held for an intermittent first-step articulated
+replay failure. See the [owner investigation](physics-first-step-joint-replay-2026-10-25.md).
+No reference or tolerance changes, numerical workaround or timing benefit is
+claimed. Temporary source probes are removed, and the normal candidate is
+restored exactly. All original performance targets remain open.
+
 ## Native child-collider invalidation
 
 [The native change-detection audit](avian-child-collider-change-detection-2026-10-25.md)
@@ -16,7 +32,8 @@ timing benefit. A separate validated Tracy capture measures 0.002465 ms child
 propagation and 0.036719 ms moved-bound update; the complete tick target remains
 open. The regular artifact is restored exactly. The slower static-scatter
 grouping experiment is removed. Rumoca proof sharing and per-runtime torn-sweep
-workspace reuse are separately authorized next work.
+workspace reuse are published and under production qualification in the
+[current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
 
 ## Native physical commit executor
 
@@ -62,8 +79,8 @@ all three inspected Twin windows retain clear diagnostics. The candidate's
 Tracy geometry median is 0.221 ms versus 0.454 ms baseline. Native framing,
 PID/connection, counter selection and exact self accounting are verified;
 host changes prevent assigning the whole instrumented-cycle difference to
-this setting. All original targets remain open. Rumoca workspace reuse is a
-separate permission-pending proposal.
+this setting. All original targets remain open. Rumoca workspace reuse is covered by the
+[current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
 
 ## Native geometry admission
 
@@ -284,11 +301,11 @@ A final-pin startup capture observes 1.788 s of native USD facts work and
 3.495 s of coupled session construction. It is startup-only and includes Tracy
 overhead. Native exporters succeed; the owned app/collector exit, with source
 hashes unchanged. The current constructor sample set contains one sample in
-the previously fixed output lookup. Source confirms separate interpreter and
-native derivation of each exact schedule's shared-value proof. The linked
-review records the concrete typed proof-sharing proposal; dependency approval
-is pending. Cache decoding samples primarily identify native structural
-validation, so a codec replacement is not the current repair.
+the previously fixed output lookup. Exact schedules now retain one checked
+immutable proof object for interpreter and native consumers, as described in
+the [runtime preparation review](rumoca-refresh-runtime-preparation-2026-10-25.md).
+Cache decoding samples primarily identify native structural validation, so a
+codec replacement is not the current repair.
 
 ## Modelica live name indexes
 

@@ -112,28 +112,15 @@ with zero missing stacks. The native output lookup fixed earlier appears in
 only one selected sample. Shared-value construction and proof functions appear
 in 505 sampled stacks; these inclusive counts overlap and are not self times.
 
-The next proposed native change belongs to Rumoca's exact refresh schedule
-construction. `InterpretedSchedules::construct` calls `shared_segments`,
-materializes a checked scalar block and retains its interpreter. The native
-backend later calls `compile_exact_assignment_schedule`, which calls
-`shared_segments` again for the same immutable schedule. Both derivations run
-the symbolic equivalence proof and recreate assignment operations.
-
-Proposal: retain one proven `SharedAssignmentSchedule` per issued runtime
-sequence and let the interpreter and native backend consume that typed result.
-The source/owner validation and full equivalence proof remain at construction;
-mutable solver values and output scratch remain instance-owned. Update the
-backend contract and all consumers together, remove the redundant derivation
-entry point, and avoid a global or hash-keyed proof cache. No lifecycle policy
-or Rhai hook belongs in this pure IR construction.
-
-This extends the earlier typed-key optimization into shared proof ownership
-and requires explicit dependency-source/publication approval. Before adopting
-it: cover ordered writes, repeated targets, opaque programs, invalid schedule
-ownership and separate runtime scratch; run the native schedule checks and
-20-model MSL canary, then compare the complete initializer's f64 observations
-and regular Griffin readiness/landing. Profiling alone does not establish the
-size of the potential end-to-end improvement.
+Rumoca's exact refresh schedule owner now retains one proven
+`SharedAssignmentSchedule` per issued runtime sequence. Interpreter and native
+compilation consume that immutable typed result. The checked block shares its
+operation storage; solver values and outputs remain runtime-owned. The native
+change is published as `fbfbcdc908bec19fa9b2f2b63486e1c8838e5340`.
+See the [current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md)
+for native checks, the twenty-model canary boundary, and production qualification.
+The source/owner validation and complete symbolic equivalence proof remain at
+construction. No lifecycle policy or Rhai hook belongs in this pure IR work.
 
 The initializer's prepared-cache lookup is 1.129 s in that capture, with
 654 selected CPU samples and no missing stacks. Its leading leaves are native
@@ -153,5 +140,5 @@ not a serial critical-path duration. The existing bounded worker pools overlap
 independent compiler, preparation and construction work while committing
 results in submission order. Removing either producer admission or the final
 participant constructors would omit required initialization, rather than remove
-duplicate work. Shared proof derivation inside each native constructor remains
-the proposed optimization owner.
+duplicate work. The shared proof construction inside each native constructor is covered by
+the current integration review.
