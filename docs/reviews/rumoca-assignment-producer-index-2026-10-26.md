@@ -16,7 +16,7 @@ production artifact is restored with SHA-256
 
 The capture contains complete startup and four-pad handoff, but does **not**
 qualify the requested settled window. At that boundary application readiness
-is true and unfaulted; terrain reports one pending tile. The driver exits 1 and
+is true and unfaulted; terrain reports one pending work item. The driver exits 1 and
 retains the exact qualification facts. No repeat replaces that failure. Video
 encoding and another simulator contend with this diagnostic. Neither its frame
 times nor its 13.225 s physics readiness are clean performance acceptance.
@@ -189,7 +189,7 @@ local paths; the final loading passes below exercise the portable pins.
 
 | Twin | API / PID | Physics readiness | Settled window |
 | --- | --- | ---: | --- |
-| Summer | 5497 / 1136523 | 2.803 s | Fails when terrain has one pending tile |
+| Summer | 5497 / 1136523 | 2.803 s | Fails when terrain has one pending work item |
 | Roadster | 5498 / 1136772 | 2.984 s | Passes, clear diagnostics |
 | Griffin | 5499 / 1137335 | 9.120 s | Passes, clear diagnostics and sleeping four-pad handoff |
 

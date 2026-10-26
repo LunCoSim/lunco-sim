@@ -438,6 +438,12 @@ mutation is committed on the main thread. The live OpenUSD stage is still
 `!Send` and is retained only by `CanonicalStages` for authoring and explicit
 incremental edits after the initial snapshot.
 
+During snapshot extraction, each prim's native attribute handles are retained
+across value, type, authored-opinion, connection and time-sample reads. This
+shares immutable property-path derivation while every read still uses native
+composition. Handles expire after that prim is prepared; none crosses the
+worker boundary or survives as a cache of another document revision.
+
 `UsdVisualProjectionSettings::frame_budget` bounds prim binding because entity
 allocation and Bevy asset mutation are main-thread responsibilities. A prim
 count cap bounds the deferred command batch applied after that system returns;

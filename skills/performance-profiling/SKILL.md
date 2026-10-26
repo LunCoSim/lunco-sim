@@ -1332,6 +1332,10 @@ snapshot-only and complete recipe preparation with exact geometry checks; the
 paired transform reader shares native composition without changing rendering's
 decomposition/convention order. Alternate independently copied test artifacts
 when host workloads change, and keep these timings separate from Twin readiness.
+Attribute preparation retains native handles for one prim across its field
+reads. Check live/prepared equality for values, types, authored opinions,
+connections and samples, including blocked and unset values. Measure complete
+recipe preparation; handle construction alone excludes the real consumer.
 Native typed relationship enumeration avoids target-resolution probes on every
 attribute. The prepared reader retains empty relationships; verify the
 `native_relationships` gate as well as the complete snapshot timing.

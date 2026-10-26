@@ -221,13 +221,23 @@ impl UsdStageProjectionPlan {
             drop(transform_span);
             let properties_span = bevy::log::debug_span!("usd_projection_property_names").entered();
             let attribute_names = reader.attr_names(&path);
+            // Retain native property paths across reads of this prim. Their
+            // immutable parent derivation is shared by the native queries.
+            let native_prim = stage.prim(&path)?;
+            let native_attributes = attribute_names
+                .iter()
+                .map(|name| native_prim.attribute(name.as_str()))
+                .collect::<Vec<_>>();
             drop(properties_span);
             let values_span = bevy::log::debug_span!("usd_projection_attribute_values").entered();
             let attributes = attribute_names
                 .iter()
-                .filter_map(|name| {
-                    reader
-                        .attr_value(&path, name)
+                .zip(&native_attributes)
+                .filter_map(|(name, attribute)| {
+                    attribute
+                        .get::<Value>()
+                        .ok()
+                        .flatten()
                         .map(|value| (name.clone(), value))
                 })
                 .collect::<HashMap<_, _>>();
@@ -236,16 +246,25 @@ impl UsdStageProjectionPlan {
                 bevy::log::debug_span!("usd_projection_attribute_metadata").entered();
             let attribute_types = attribute_names
                 .iter()
-                .filter_map(|name| {
-                    reader
-                        .attr_type_name(&path, name)
-                        .map(|type_name| (name.clone(), type_name))
+                .zip(&native_attributes)
+                .filter_map(|(name, attribute)| {
+                    attribute
+                        .type_name()
+                        .ok()
+                        .flatten()
+                        .map(|type_name| (name.clone(), type_name.to_string()))
                 })
                 .collect::<HashMap<_, _>>();
             let authored_attributes = attribute_names
                 .iter()
-                .filter(|name| reader.has_authored_attribute(&path, name))
-                .cloned()
+                .zip(&native_attributes)
+                .filter(|(_, attribute)| {
+                    attribute
+                        .resolve_info()
+                        .map(|info| info.has_authored_value_opinion())
+                        .unwrap_or(false)
+                })
+                .map(|(name, _)| name.clone())
                 .collect();
             let attr_ui_hints = attribute_names
                 .iter()
@@ -260,19 +279,36 @@ impl UsdStageProjectionPlan {
             let api_schemas = reader.api_schemas(&path);
             let connections = attribute_names
                 .iter()
-                .map(|name| (name.clone(), reader.connections(&path, name)))
+                .zip(&native_attributes)
+                .map(|(name, attribute)| {
+                    let paths = attribute.connections().unwrap_or_default();
+                    (
+                        name.clone(),
+                        paths
+                            .into_iter()
+                            .map(|path| path.to_string())
+                            .collect::<Vec<_>>(),
+                    )
+                })
                 .filter(|(_, values)| !values.is_empty())
                 .collect();
             drop(connections_span);
             let time_span = bevy::log::debug_span!("usd_projection_time_samples").entered();
             let time_samples: HashMap<String, Vec<f64>> = attribute_names
                 .iter()
-                .map(|name| (name.clone(), reader.time_sample_times(&path, name)))
+                .zip(&native_attributes)
+                .map(|(name, attribute)| {
+                    (
+                        name.clone(),
+                        attribute.time_sample_times().unwrap_or_default(),
+                    )
+                })
                 .filter(|(_, values)| !values.is_empty())
                 .collect();
             let time_sample_values = attribute_names
                 .iter()
-                .filter_map(|name| {
+                .zip(&native_attributes)
+                .filter_map(|(name, attribute)| {
                     let mut times = time_samples.get(name)?.clone();
                     if !times.contains(&0.0) {
                         times.push(0.0);
@@ -280,8 +316,10 @@ impl UsdStageProjectionPlan {
                     let values = times
                         .into_iter()
                         .filter_map(|time| {
-                            reader
-                                .attr_value_at(&path, name, time)
+                            attribute
+                                .get_at::<Value>(openusd::usd::TimeCode::new(time))
+                                .ok()
+                                .flatten()
                                 .map(|value| (time, value))
                         })
                         .collect();
@@ -1763,6 +1801,8 @@ def Xform "Test"
         {
             float inputs:voltage
             float outputs:power = 42
+            double blocked = None
+            double sampled.timeSamples = {0: 0.125, 1: 1000000000.125}
             rel material:binding = </Test/Vehicle/Looks/Chassis>
         }
         def Xform "Thermal" (
@@ -1838,6 +1878,34 @@ def Xform "Test"
                     "prepared property names differ at {path}"
                 );
                 for attr in live_attrs {
+                    assert_eq!(
+                        live.attr_value(&path, &attr),
+                        plan.attr_value(&path, &attr),
+                        "value at {path}.{attr}"
+                    );
+                    assert_eq!(
+                        live.attr_type_name(&path, &attr),
+                        plan.attr_type_name(&path, &attr),
+                        "type at {path}.{attr}"
+                    );
+                    assert_eq!(
+                        live.has_authored_attribute(&path, &attr),
+                        plan.has_authored_attribute(&path, &attr),
+                        "authored value at {path}.{attr}"
+                    );
+                    let times = live.time_sample_times(&path, &attr);
+                    assert_eq!(
+                        times,
+                        plan.time_sample_times(&path, &attr),
+                        "samples at {path}.{attr}"
+                    );
+                    for time in times {
+                        assert_eq!(
+                            live.attr_value_at(&path, &attr, time),
+                            plan.attr_value_at(&path, &attr, time),
+                            "value at {path}.{attr}, t={time}"
+                        );
+                    }
                     assert_eq!(
                         live.connections(&path, &attr),
                         plan.connections(&path, &attr),

@@ -131,7 +131,7 @@ repeated derivation; these samples do not prove that the remaining parsing has
 the same caller. A new parsing change requires its own owner attribution.
 
 Startup and the four-pad landing are captured, but the driver exits 1 when one
-pending terrain tile invalidates the settled window. Application readiness stays
+pending terrain work item invalidates the settled window. Application readiness stays
 true and unfaulted; the body is asleep. All 271 source hashes remain unchanged.
 This trace does not qualify steady-state graphics or physics timing. Both owned
 processes and ports close; the independent regular binary is restored.

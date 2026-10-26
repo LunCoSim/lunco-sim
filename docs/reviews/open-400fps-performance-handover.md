@@ -1,5 +1,26 @@
 # High-quality realtime performance handover
 
+## Native attribute handle reuse
+
+The [attribute-handle review](usd-attribute-handle-reuse-2026-10-26.md) records
+per-prim reuse of native OpenUSD handles during snapshot preparation. Five
+alternating fixture pairs improve complete recipe preparation by 4.3–6.1%;
+composition checks retain exact values, types, authored opinions, connections
+and samples, including blocked and unset values. No dependency source changes.
+
+The regular production build passes Griffin's settled landing window at 8.653 s
+readiness, with 271 unchanged source hashes, sleeping four-pad handoff, clear
+diagnostics and inspected rendering. Coupled-tick p50/p95 is 3.607/4.163 ms;
+application-frame p50/p95 is 9.490/11.872 ms. The baseline launch overlaps a
+focused test compilation, so this pair does not establish isolated mission
+speedup. Initializer construction remains 2.417 s plus a separate 0.641 s
+prepared-component lookup. All performance targets remain open.
+
+Terrain's pending count includes cover-selection tasks as well as tile/render
+work. A count of one alone does not identify a missing tile; prior failed settled
+windows remain failures. Raw evidence is ignored and owned sessions close.
+
+
 ## Native loading indexes and shared parents
 
 Published Rumoca `41637b1e` uses compact sorted assignment-producer intervals;
@@ -19,7 +40,7 @@ and reach sleeping four-pad handoff with clear diagnostics and inspected views.
 The candidate first fill takes 14.568 s. All performance targets remain open.
 
 The new Tracy run captures startup and handoff but loses its settled window to
-one pending terrain tile; it is not steady-state acceptance. It also shows cache
+one pending terrain work item; it is not steady-state acceptance. It also shows cache
 churn after the numerical matrix: 8,518 native compilations/evictions during the
 initializer and a prepared-cache miss. Investigate the existing application
 cache owner and budgets before adding another mechanism. The raw capture,
@@ -28,7 +49,7 @@ receipts, executables and exports remain ignored; all owned sessions close.
 The final regular build uses the published Git pins. Roadster and Griffin pass
 loading windows at 2.984 s and 9.120 s readiness, with clear diagnostics and
 inspected rendering. Summer reaches readiness in 2.803 s but fails its settled
-window on one pending terrain tile while remaining ready and unpaused. All
+window on one pending terrain work item while remaining ready and unpaused. All
 source hashes stay unchanged; all sessions close. This failed window remains
 open. The final views differ from baseline and do not qualify a matched graphics
 speedup. Griffin's fully warm initializer still takes 2.487 s plus a separate
@@ -106,7 +127,7 @@ the user's explicit approval.
 
 The trace passes native framing and zone/CPU export checks and preserves all
 271 source hashes. It contains complete startup and handoff, but the settled
-driver exits 1 when terrain reports a pending tile. It is startup diagnostic
+driver exits 1 when terrain reports pending work. It is startup diagnostic
 evidence only, not a qualified steady-state or graphics window. Both processes
 close and the exact regular production binary is restored. The preceding
 production qualification below remains the functional result for this pin.
