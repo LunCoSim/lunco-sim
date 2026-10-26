@@ -1,5 +1,25 @@
 # High-quality realtime performance handover
 
+## Direct native proof terms
+
+The [published Rumoca storage optimization](rumoca-direct-proof-terms-2026-10-26.md)
+pins `aae2bbdd`, removing a redundant scalar-term lookup table while retaining
+complete operation equality and independent equivalence checks. Matched scalar
+and wide proof fixtures improve 4.1% and 5.2%; this is not a scene speedup.
+Native IR tests, owner Clippy and the fixed MSL canary pass within their recorded
+limits. Production initialization, expected faults, Summer's 102 checks and
+Roadster's eight pass. Eight exact-replay profiles pass; two fail the existing
+articulated tick-11 boundary. The matrix is not green and no reference changes.
+
+Griffin first-fill/warm readiness is 24.337/14.254 s. Both retain all 271 source
+hashes and reach four-pad handoff with clear diagnostics and inspected rendering;
+the warm run finishes asleep. It has thirteen compiled hits and 16,482 initializer
+native hits with zero compilation, but live initializer construction still takes
+4.104 s. Warm fixed service p50/p95 is 7.377/9.245 ms, application frames
+26.431/33.395 ms. Video encoding and another simulator contend; the first run
+also includes manual ramp unfolding. These are not clean performance acceptance
+or GPU timings. All owned sessions close; all requested targets remain open.
+
 ## Shared coordinate-frame identity
 
 The [immutable frame-text change](shared-coordinate-frame-identity-2026-10-26.md)
