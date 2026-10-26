@@ -360,7 +360,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> std::io::Result<PathBuf> {
 }
 
 /// Current processing pipeline identity used by bake completion stamps.
-pub const PROCESS_PIPELINE_VERSION: u32 = 7;
+pub const PROCESS_PIPELINE_VERSION: u32 = 8;
 
 /// Resolve the output path of a manifest process declaration.
 pub fn process_output_path(

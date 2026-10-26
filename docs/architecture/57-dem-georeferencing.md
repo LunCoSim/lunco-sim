@@ -35,8 +35,11 @@ parameters record *where on the body* the crop sits, which a bare local grid
 could not express.
 
 Spacing is **node-based**: samples are nodes, so an extent spans `res − 1`
-intervals (the Apollo 15 crop is the live case — 1002 m over 512 samples gives
-1002/511 m spacing; getting this wrong scales the whole terrain by 512/511).
+intervals. A crop of `win` source nodes at spacing `scale` spans
+`(win - 1) * scale` metres, regardless of output resolution. The DEM processor
+passes that sampled span to `GeoTransform::centred_square`; for example,
+513 nodes at 4 m spacing cover 2048 m. Processor bake keys include the pipeline
+version, so a georeferencing change invalidates previously processed output.
 
 `GeoTransform` is the in-memory form — `pixel_size_m` (one spacing, both axes),
 `origin_x_m`/`origin_y_m` (model position of the upper-left sample; +X east,

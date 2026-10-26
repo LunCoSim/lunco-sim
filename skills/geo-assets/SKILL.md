@@ -57,6 +57,11 @@ UI remains usable, then the existing terrain bridge automatically retries the
 pending prim when the dataset is installed. Do not add a full scene reload.
 For Griffin's polar NOBILE03 source, use the Twin's prepared release payload:
 downloading its raw TIF and label does not create `terrain/nobile03`.
+Polar adapters prepare a local raster for the native processor. Keep void
+interpolation and its coverage rejection in that processor, record its filled
+sample count, and verify the emitted node span: `(resolution - 1) * spacing`.
+For a crop enlargement, compare the retained operating area's heights before
+and after processing and again through `TerrainHeights` in the production app.
 
 For download UI acceptance, use `scripts/api/test_dataset_provisioning.py`
 with `LUNCOSIM_BIN`, a free `--port`, a fresh `--output`, and exact prepared

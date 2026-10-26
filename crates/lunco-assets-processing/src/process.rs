@@ -590,7 +590,7 @@ fn process_dem(
         // The GEO half — without it QGIS opens the raster in pixel units and every
         // slope computed from it is wrong by the ground-sample factor, silently.
         //
-        // `win * scale` is the true on-the-ground span, and the frame is
+        // `(win - 1) * scale` is the sampled on-the-ground span; the frame is
         // node-based: sample 0 on the west/north edge, sample n-1 on the east/south.
         // Body radius, for the GeoTIFF citation only — it does not enter the
         // pixel→metre mapping, which is a local metric frame.
@@ -604,7 +604,7 @@ fn process_dem(
         // and the simulation's `lunco_celestial::registry` — which re-exports it —
         // cannot stamp two different datums. This site used to mirror the VALUE.
         let mut geo = lunco_geotiff::GeoTransform::centred_square(
-            win as f64 * scale,
+            (win - 1) as f64 * scale,
             out_n,
             lunco_celestial_data::MOON_MEAN_RADIUS_M,
             center_lat,
@@ -1916,7 +1916,7 @@ mod tests {
 
         // Center the ROI in the middle of the source; window small enough to
         // fit. The 2-point extent affine (extent corners → raster edges) places
-        // the center. pixel_scale_m=2 so an 8 m window = 4 px half → 9px square.
+        // the center. pixel_scale_m=2 so an 8 m window spans five source nodes.
         let cfg = ProcessConfig {
             kind: "dem".into(),
             output: "site".into(),
@@ -1924,7 +1924,7 @@ mod tests {
             target_resolution: Some([4, 4]),
             center_lat: Some(0.0),
             center_lon: Some(0.0),
-            window_m: Some(8.0), // 8 m ÷ 2 m/px = 4 px half → 9px square window
+            window_m: Some(8.0),
             pixel_scale_m: Some(2.0),
             source_height_scale_m_per_unit: 1.0,
             source_height_offset_m: 0.0,
@@ -1971,6 +1971,9 @@ mod tests {
         let mut tag_dec = tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
         let geo = lunco_geotiff::read_geo_tags(&mut tag_dec).unwrap();
         assert_eq!(geo.frame, Some(lunco_geotiff::LunarFrame::MoonMe));
+        assert_eq!(geo.extent_m(w as usize), 8.0);
+        assert_eq!(geo.pixel_size_m, 8.0 / 3.0);
+        assert_eq!((geo.origin_x_m, geo.origin_y_m), (-4.0, 4.0));
     }
 
     /// `kind = "dem"` must ingest a PDS3 `.IMG` source using the label's own
