@@ -801,6 +801,12 @@ loading or tick improvements. Preserve the non-Sync/lifetime contract and every
 input-bit/numerical check when profiling this boundary.
 Inspect the separate `modelica_native_cache_load` and
 `modelica_native_cache_publish` zones when cache I/O consumes startup CPU.
+Also inspect `modelica_compiled_artifact_lookup` and
+`modelica_compiled_artifact_publish`: native-code hits do not imply equation
+compilation was reused. Check strict compiled-artifact hit logs across fresh
+processes, and distinguish source/admission changes from a warm complete input.
+Keep native checked DAE reconstruction, source/URI/structural-bit identity and
+external-resource eligibility intact; this cache retains no numerical state.
 The shared transport buffers serializer fragments before Zstd. Native artifacts
 use Bincode's direct byte-slice encoding; checked prepared-FMI records retain
 their native structured decoder. Preserve both byte budgets, the binary

@@ -301,6 +301,13 @@ remains non-Sync and releases its code/data arena after callable addresses.
 The workspace pins the Rumoca family from `LunCoSim/rumoca` in
 [`Cargo.toml`](../../Cargo.toml) and `Cargo.lock`; normal builds require no local
 dependency override.
+
+The application compiler owner may persist the SDK's checked DAE and consumed
+experiment defaults for an exact admitted source context. Flat IR and additional
+compiler source-map/diagnostic data are not retained by live workers. Native DAE decoding
+reconstructs through the checked constructor. Compilation input identity,
+participating-source identity and solver-preparation identity remain distinct;
+the earlier cache cannot bypass source admission or retain a live session.
 Rumoca's exact assignment owner issues a checked `SharedAssignmentSchedule`
 containing immutable `ScalarProgramBlock` storage, provenance and ordered target
 rows. The interpreter prepares that same block through a shallow clone, and

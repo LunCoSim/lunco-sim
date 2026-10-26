@@ -840,6 +840,19 @@ lifetimes underneath active work.
 Worker replacement or configuration-post failure also terminates the pipeline
 and reports a worker-wide error; queued work cannot remain behind a dead slot.
 
+The native compiler actor persists source-closed strict compilation artifacts
+in `modelica/compiled-dae-v2` before the prepared-FMI stage. Its conservative
+input CID includes all admitted source bytes, source-set identities and order,
+diagnostic URIs, the primary/extras unit, exact structural binding bits, clean
+Rumoca revision, OS/architecture and format version. Failed latest source
+admission cannot authorize a hit. The participating-source CID retained with
+the result still owns prepared-FMI reuse. Native DAE deserialization validates
+the schema and reconstructs its branded graph; it does not admit unchecked IR.
+Loaded external table data is ineligible until its resource bytes have captured
+identities. Each artifact family uses the existing bounded compression, storage
+transaction, record-size/retention limits and rejection diagnostics. The cache
+retains no live solver or numerical state.
+
 Eviction releases only the shared cache reference. Active compiled participants,
 steppers and in-flight preparations retain their own valid references; Twin
 close continues to retire their exact mutable owners. These entry caps bound

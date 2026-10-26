@@ -12,6 +12,11 @@ mod compiler_heartbeat;
 
 const SOURCE_SET_REVISION_VERSION: u32 = 1;
 
+fn source_content_field(bytes: &mut Vec<u8>, value: &[u8]) {
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(value);
+}
+
 /// Strong content identity for one exact Modelica source file in an admitted
 /// source root.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1195,6 +1200,40 @@ impl ModelicaCompiler {
         hasher.finish()
     }
 
+    /// Exact admitted context for serialized compiler artifacts, including
+    /// source-set identities and diagnostic URIs. Source admission order is
+    /// semantic; an artifact cannot carry provenance from another admission.
+    pub fn admitted_compilation_identity(&self) -> Result<lunco_hash::content::Cid, String> {
+        if !self.failed_source_roots.is_empty() {
+            return Err("the latest source-root admission failed".into());
+        }
+        let mut bytes = b"LunCoModelicaAdmittedCompilationContext\0\x01".to_vec();
+        for id in &self.source_set_order {
+            let contribution = self
+                .source_set_contributions
+                .get(id)
+                .ok_or("admitted source-set order has no contribution")?;
+            let content = contribution
+                .content_closure
+                .as_ref()
+                .map_err(|error| error.to_string())?;
+            source_content_field(&mut bytes, id.as_bytes());
+            source_content_field(&mut bytes, &(content.files.len() as u64).to_le_bytes());
+            for file in &content.files {
+                source_content_field(&mut bytes, file.source_uri.as_bytes());
+                source_content_field(&mut bytes, &file.cid.to_bytes());
+            }
+            source_content_field(
+                &mut bytes,
+                &(contribution.source_files.len() as u64).to_le_bytes(),
+            );
+            for file in &contribution.source_files {
+                source_content_field(&mut bytes, file.source_uri.as_bytes());
+            }
+        }
+        Ok(lunco_hash::content::cid(&bytes))
+    }
+
     /// Return the current source-content state for one root. Failed latest
     /// admissions return explicit errors rather than exposing stale source text
     /// as a closure.
@@ -1215,10 +1254,6 @@ impl ModelicaCompiler {
         &self,
         compiled: &rumoca_compile::compile::DaeCompilationResult,
     ) -> Result<lunco_hash::content::Cid, String> {
-        fn field(bytes: &mut Vec<u8>, value: &[u8]) {
-            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
-            bytes.extend_from_slice(value);
-        }
         let closure = compiled
             .source_closure
             .as_ref()
@@ -1227,7 +1262,7 @@ impl ModelicaCompiler {
             return Err("strict compile has no participating source files".into());
         }
         let mut bytes = b"LunCoModelicaCompileClosure\0\x01".to_vec();
-        field(&mut bytes, closure.target.as_bytes());
+        source_content_field(&mut bytes, closure.target.as_bytes());
         let mut overlays = Vec::new();
         let mut contributing_roots = std::collections::HashSet::new();
         for participant in &closure.files {
@@ -1249,7 +1284,7 @@ impl ModelicaCompiler {
         }
         overlays.sort_by_key(|cid| cid.to_bytes());
         for cid in overlays {
-            field(&mut bytes, &cid.to_bytes());
+            source_content_field(&mut bytes, &cid.to_bytes());
         }
         // Preserve actual first-wins admission order while excluding unrelated
         // roots. A contributing source set is conservatively represented in full.
@@ -1273,8 +1308,8 @@ impl ModelicaCompiler {
                 .as_ref()
                 .map_err(|error| error.to_string())?;
             for file in &content.files {
-                field(&mut bytes, file.source_uri.as_bytes());
-                field(&mut bytes, &file.cid.to_bytes());
+                source_content_field(&mut bytes, file.source_uri.as_bytes());
+                source_content_field(&mut bytes, &file.cid.to_bytes());
             }
         }
         Ok(lunco_hash::content::cid(&bytes))

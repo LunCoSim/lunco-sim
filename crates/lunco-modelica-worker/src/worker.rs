@@ -32,7 +32,7 @@ const PREPARED_SOLVE_CACHE_VERSION: u32 = 13;
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::ModelicaArtifactDiskLimits;
-use cache::{BoundedReuseCache, PreparedSolveCache, PreparedSolveKey};
+use cache::{CompiledArtifactCache, PreparedSolveCache, PreparedSolveKey};
 mod bridge;
 mod compile;
 pub use bridge::{
@@ -1628,8 +1628,7 @@ use std::sync::Arc;
 
 /// Cached compilation result per entity.
 ///
-/// This holds the compiled artifact, not just the source. Rumoca's
-/// `DaeCompilationResult` is `Clone` and carries the DAE behind an `Arc`; Reset
+/// The checked runtime DAE is shared through an `Arc`; Reset
 /// and Step auto-init can rebuild from it without touching the compiler while
 /// the library generation matches. If solve IR is absent, disk cache access
 /// and lowering run through the asynchronous preparation pool.
@@ -1692,7 +1691,7 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
 /// travels with the immutable DAE through memory hits and participant resets.
 #[derive(Clone)]
 struct CompiledModelArtifact {
-    compiled: Box<rumoca_compile::compile::DaeCompilationResult>,
+    compiled: Box<CompiledRuntimeModel>,
     prepared_source_key: u64,
     /// Exact numeric intent already incorporated by Rumoca instantiation.
     structural_overrides: Vec<(String, f64)>,
@@ -1700,7 +1699,16 @@ struct CompiledModelArtifact {
     source_content: lunco_hash::content::Cid,
 }
 
-type CompiledArtifactCache = BoundedReuseCache<u64, CompiledModelArtifact>;
+/// Runtime consumers retain the checked DAE and the authored execution defaults.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct CompiledRuntimeModel {
+    dae: Arc<rumoca_compile::compile::Dae>,
+    experiment_start_time: Option<f64>,
+    experiment_stop_time: Option<f64>,
+    experiment_tolerance: Option<f64>,
+    experiment_interval: Option<f64>,
+    experiment_solver: Option<String>,
+}
 
 /// Fold the exact compiler-owned source CID into the worker's bounded memo key.
 fn prepared_source_key(source_content: lunco_hash::content::Cid) -> u64 {
@@ -1794,6 +1802,35 @@ fn compile_shared_variant(
         log::debug!("[worker] shared Modelica artifact hit for `{model_name}` (key={key})");
         return Ok(compiled.clone());
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    let disk_key = match artifacts.disk_key(compiler, model_name, unit, doc_uri, numeric) {
+        Ok(key) => key,
+        Err(error) => {
+            log::warn!(
+                "[modelica-runtime] compiled artifact persistence not admitted for `{model_name}`: {error}"
+            );
+            None
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(disk_key) = &disk_key {
+        let started = web_time::Instant::now();
+        let _span = bevy::log::info_span!("modelica_compiled_artifact_lookup").entered();
+        match artifacts.load_disk(disk_key, numeric) {
+            Ok(Some(artifact)) => {
+                log::info!(
+                    "[modelica-runtime] strict compiled artifact for `{model_name}`: cache=disk-hit lookup={:?}",
+                    started.elapsed()
+                );
+                artifacts.insert(key, artifact.clone());
+                return Ok(artifact);
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!(
+                "[modelica-runtime] compiled artifact cache rejected for `{model_name}`: {error}"
+            ),
+        }
+    }
     let outcome = if unit.extras.is_empty() {
         compiler.compile_str_after_source_root_admission(
             model_name,
@@ -1814,12 +1851,28 @@ fn compile_shared_variant(
     let source_content = compiler.compiled_source_content_identity(&compiled)?;
     let prepared_source_key = prepared_source_key(source_content);
     let artifact = CompiledModelArtifact {
-        compiled,
+        compiled: Box::new(CompiledRuntimeModel {
+            dae: compiled.dae,
+            experiment_start_time: compiled.experiment_start_time,
+            experiment_stop_time: compiled.experiment_stop_time,
+            experiment_tolerance: compiled.experiment_tolerance,
+            experiment_interval: compiled.experiment_interval,
+            experiment_solver: compiled.experiment_solver,
+        }),
         prepared_source_key,
         structural_overrides: numeric.to_vec(),
         #[cfg(not(target_arch = "wasm32"))]
         source_content,
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(disk_key) = &disk_key {
+        let _span = bevy::log::info_span!("modelica_compiled_artifact_publish").entered();
+        if let Err(error) = artifacts.save_disk(disk_key, &artifact) {
+            log::warn!(
+                "[modelica-runtime] compiled artifact publication failed for `{model_name}`: {error}"
+            );
+        }
+    }
     artifacts.insert(key, artifact.clone());
     Ok(artifact)
 }
@@ -2594,6 +2647,7 @@ pub fn modelica_worker(
     let mut compiler = match CompilerActor::new(
         solve_preparation_pool.tx.clone(),
         capacities.compiled_artifacts,
+        Some(disk_limits),
     ) {
         Ok(compiler) => compiler,
         Err(error) => {

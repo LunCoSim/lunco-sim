@@ -11,6 +11,29 @@ non-on-demand Tracy client needs a fresh process for each capture.
 Wait for the exact scene and projected target, not just `/api/ready`; the API
 can be ready before scene preparation finishes.
 
+`twin_startup.py` owns a windowed production session and measures
+`OpenTwin` to physics readiness separately from the settled mission window.
+The latter requires settled terrain, an optional authored handoff signal, five
+seconds of readiness, then ten seconds and at least 240 fresh simulation ticks.
+It rejects source changes, retired body identity, runtime faults, coupled-object
+pauses and render/script failures. Record camera differences and other workloads
+before interpreting its frame summaries as comparable graphics measurements.
+Receipts retain the exact readiness, body, terrain and handoff facts at a
+qualification loss, including source and process/port state after failure.
+
+```sh
+LUNCOSIM_BIN="$PWD/target/debug/luncosim" python3 scripts/perf/twin_startup.py \
+  --port 5410 --twin /absolute/model/twins/mission --twin-name mission \
+  --source-root /absolute/model --body /Mission/Lander \
+  --handoff-property landing_handoff --output .cache/perf/mission-startup
+```
+
+The output must be ignored by Git. For a separate Tracy run, start the matching
+collector first, set `TRACY_PORT` and `TRACY_SAMPLING_HZ=1000`, then add
+`--tracy-port <port> --symbols`. The driver verifies the profiler socket against
+its owned PID and saves native maps/ELF/symbols for subsequent sample resolution.
+Profiler timings remain diagnostic; retain a separate regular build/run.
+
 ```sh
 python3 scripts/perf/summer_space_school_motion.py --port 4748 \
   --move-seconds 10 --rotate-seconds 10 --rotate-degrees 360

@@ -1,4 +1,4 @@
-//! In-memory and persistent prepared-solve cache for the Modelica worker.
+//! In-memory and persistent compiled-DAE and prepared-solve caches.
 //!
 //! Prepared graphs use participating-source content identity, solver identity,
 //! and exact parameter and admitted input bits. Compiler admission revisions fence compiled
@@ -17,6 +17,239 @@ use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+
+/// Immutable strict compilation results. Persistent reuse is installed only
+/// by the native compiler owner after its disk budgets have been admitted.
+pub(super) struct CompiledArtifactCache {
+    entries: BoundedReuseCache<u64, super::CompiledModelArtifact>,
+    #[cfg(not(target_arch = "wasm32"))]
+    disk_limits: Option<ModelicaArtifactDiskLimits>,
+}
+
+impl CompiledArtifactCache {
+    pub(super) fn new(capacity: NonZeroUsize) -> Self {
+        Self {
+            entries: BoundedReuseCache::new(capacity),
+            #[cfg(not(target_arch = "wasm32"))]
+            disk_limits: None,
+        }
+    }
+
+    pub(super) fn get(&mut self, key: &u64) -> Option<&super::CompiledModelArtifact> {
+        self.entries.get(key)
+    }
+
+    pub(super) fn insert(&mut self, key: u64, artifact: super::CompiledModelArtifact) {
+        self.entries.insert(key, artifact);
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+    }
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct CompiledArtifactDiskKey {
+    input: lunco_hash::content::Cid,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Serialize, Deserialize)]
+struct CompiledArtifactDiskRecord<C> {
+    version: u32,
+    input: String,
+    source_content: String,
+    structural_overrides: Vec<(String, u64)>,
+    compiled: C,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl CompiledArtifactCache {
+    const DISK_VERSION: u32 = 2;
+
+    pub(super) fn enable_disk(&mut self, limits: ModelicaArtifactDiskLimits) {
+        self.disk_limits = Some(limits);
+    }
+
+    pub(super) fn disk_key(
+        &self,
+        compiler: &super::ModelicaCompiler,
+        model: &str,
+        unit: &super::CompileUnit,
+        uri: &str,
+        numeric: &[(String, f64)],
+    ) -> Result<Option<CompiledArtifactDiskKey>, String> {
+        if self.disk_limits.is_none() {
+            return Ok(None);
+        }
+        let Some(identity) =
+            rumoca_core::build_identity().filter(|identity| !identity.ends_with("-dirty"))
+        else {
+            return Ok(None);
+        };
+        let context = compiler.admitted_compilation_identity()?;
+        let mut hash = lunco_hash::content::ContentHasher::default();
+        let mut field = |bytes: &[u8]| {
+            hash.update(&(bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+        };
+        field(b"LunCoStrictDaeArtifact");
+        field(&Self::DISK_VERSION.to_le_bytes());
+        field(identity.as_bytes());
+        field(std::env::consts::ARCH.as_bytes());
+        field(std::env::consts::OS.as_bytes());
+        field(&context.to_bytes());
+        field(model.as_bytes());
+        field(uri.as_bytes());
+        field(unit.source.as_bytes());
+        field(&(unit.extras.len() as u64).to_le_bytes());
+        for (uri, source) in &unit.extras {
+            field(uri.as_bytes());
+            field(source.as_bytes());
+        }
+        field(&(numeric.len() as u64).to_le_bytes());
+        for (name, value) in numeric {
+            field(name.as_bytes());
+            field(&value.to_bits().to_le_bytes());
+        }
+        Ok(Some(CompiledArtifactDiskKey {
+            input: hash.finish(),
+        }))
+    }
+
+    fn disk_path(key: &CompiledArtifactDiskKey) -> std::path::PathBuf {
+        let bytes = key.input.to_bytes();
+        let first = lunco_hash::fnv1a64(&bytes);
+        let second = lunco_hash::fnv1a64(key.input.to_string().as_bytes());
+        modelica_dir()
+            .join("compiled-dae-v2")
+            .join(format!("{first:016x}-{second:016x}.bin.zst"))
+    }
+
+    pub(super) fn load_disk(
+        &self,
+        key: &CompiledArtifactDiskKey,
+        numeric: &[(String, f64)],
+    ) -> Result<Option<super::CompiledModelArtifact>, ModelicaCacheReadError> {
+        let Some(limits) = self.disk_limits else {
+            return Ok(None);
+        };
+        self.load_disk_at(
+            &FileStorage::new(),
+            &StorageHandle::File(Self::disk_path(key)),
+            key,
+            numeric,
+            limits,
+        )
+    }
+
+    fn load_disk_at(
+        &self,
+        storage: &FileStorage,
+        handle: &StorageHandle,
+        key: &CompiledArtifactDiskKey,
+        numeric: &[(String, f64)],
+        limits: ModelicaArtifactDiskLimits,
+    ) -> Result<Option<super::CompiledModelArtifact>, ModelicaCacheReadError> {
+        let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            read_record::<CompiledArtifactDiskRecord<Box<super::CompiledRuntimeModel>>>(
+                storage, handle, limits,
+            )
+        }))
+        .map_err(|_| {
+            ModelicaCacheReadError::Codec(serde_json::Error::io(std::io::Error::other(
+                "compiled artifact deserialization panicked",
+            )))
+        })??;
+        let Some(record) = decoded else {
+            return Ok(None);
+        };
+        if record.version != Self::DISK_VERSION
+            || record.input != key.input.to_string()
+            || record.structural_overrides
+                != numeric
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.to_bits()))
+                    .collect::<Vec<_>>()
+        {
+            return Err(ModelicaCacheReadError::Identity);
+        }
+        if !record.compiled.dae.external_tables().is_empty() {
+            return Err(ModelicaCacheReadError::Identity);
+        }
+        let source_content = record
+            .source_content
+            .parse::<lunco_hash::content::Cid>()
+            .map_err(|_| ModelicaCacheReadError::Identity)?;
+        if let Err(error) = storage.mark_cache_file_used(handle) {
+            log::warn!("[modelica-runtime] compiled-artifact cache use was not recorded: {error}");
+        }
+        Ok(Some(super::CompiledModelArtifact {
+            compiled: record.compiled,
+            prepared_source_key: super::prepared_source_key(source_content),
+            structural_overrides: numeric.to_vec(),
+            source_content,
+        }))
+    }
+
+    pub(super) fn save_disk(
+        &self,
+        key: &CompiledArtifactDiskKey,
+        artifact: &super::CompiledModelArtifact,
+    ) -> Result<(), ModelicaCacheWriteError> {
+        let Some(limits) = self.disk_limits else {
+            return Ok(());
+        };
+        // Loaded external resources need their own captured byte identities;
+        // source text alone cannot authorize reuse of their constructor data.
+        if !artifact.compiled.dae.external_tables().is_empty() {
+            log::debug!(
+                "[modelica-runtime] compiled artifact is not source-closed: loaded external table data"
+            );
+            return Ok(());
+        }
+        let compressed = Self::encode_disk(key, artifact, limits)?;
+        let path = Self::disk_path(key);
+        let root = path.parent().ok_or(ModelicaCacheWriteError::InvalidPath)?;
+        let storage = FileStorage::new();
+        let transaction = storage.lock_cache_directory(&StorageHandle::File(root.to_path_buf()))?;
+        let incoming = transaction.directory().join(
+            path.file_name()
+                .ok_or(ModelicaCacheWriteError::InvalidPath)?,
+        );
+        PreparedSolveCache::retain_disk(&storage, &transaction, &incoming, limits)?;
+        storage.write_sync(&StorageHandle::File(incoming), &compressed)?;
+        Ok(())
+    }
+
+    fn encode_disk(
+        key: &CompiledArtifactDiskKey,
+        artifact: &super::CompiledModelArtifact,
+        limits: ModelicaArtifactDiskLimits,
+    ) -> Result<Vec<u8>, ModelicaCacheWriteError> {
+        if !artifact.compiled.dae.external_tables().is_empty() {
+            return Err(ModelicaCacheWriteError::ConstructionWire(
+                "compiled artifact has uncaptured external resource bytes".into(),
+            ));
+        }
+        let record = CompiledArtifactDiskRecord {
+            version: Self::DISK_VERSION,
+            input: key.input.to_string(),
+            source_content: artifact.source_content.to_string(),
+            structural_overrides: artifact
+                .structural_overrides
+                .iter()
+                .map(|(name, value)| (name.clone(), value.to_bits()))
+                .collect(),
+            compiled: &artifact.compiled,
+        };
+        encode_record(&record, limits)
+    }
+}
 
 /// Count-bounded least-recently-used retention. Successful reads and
 /// replacements refresh recency. Values are owned once and
@@ -75,7 +308,7 @@ impl<K: Eq + Hash, V> BoundedReuseCache<K, V> {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
 pub struct ModelicaArtifactDiskLimits {
-    /// Maximum current-version cache records retained after a successful publication.
+    /// Maximum records per current-version artifact family after publication.
     pub retained_entries: usize,
     pub compressed_bytes: usize,
     pub decoded_bytes: usize,
@@ -641,6 +874,200 @@ pub(super) fn encode_payload(
 mod tests {
     use super::*;
     use lunco_storage::Storage;
+
+    fn compiled_fixture() -> (
+        super::super::ModelicaCompiler,
+        super::super::CompileUnit,
+        super::super::CompiledModelArtifact,
+    ) {
+        let unit = super::super::assemble_compile_unit(
+            "model CompileCacheProbe parameter Real gain=0.10000000000000002; output Real y; equation y=gain; annotation(experiment(StartTime=0.25,StopTime=3.75,Tolerance=1e-9,Interval=0.125)); end CompileCacheProbe;",
+            Vec::new(),
+        );
+        let mut compiler = super::super::ModelicaCompiler::new();
+        let mut cache = CompiledArtifactCache::new(NonZeroUsize::new(2).unwrap());
+        let artifact = super::super::compile_shared(
+            &mut cache,
+            &mut compiler,
+            "CompileCacheProbe",
+            &unit,
+            "compile-cache.mo",
+            0,
+        )
+        .unwrap();
+        (compiler, unit, artifact)
+    }
+
+    #[test]
+    fn compiled_artifact_round_trip_uses_native_checked_dae() {
+        let (compiler, unit, artifact) = compiled_fixture();
+        let limits = ModelicaArtifactDiskLimits::default();
+        let mut cache = CompiledArtifactCache::new(NonZeroUsize::new(2).unwrap());
+        cache.enable_disk(limits);
+        let key = cache
+            .disk_key(
+                &compiler,
+                "CompileCacheProbe",
+                &unit,
+                "compile-cache.mo",
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let handle = StorageHandle::File(directory.path().join("artifact.bin.zst"));
+        let storage = FileStorage::new();
+        storage
+            .write_sync(
+                &handle,
+                &CompiledArtifactCache::encode_disk(&key, &artifact, limits).unwrap(),
+            )
+            .unwrap();
+        let loaded = cache
+            .load_disk_at(&storage, &handle, &key, &[], limits)
+            .unwrap()
+            .unwrap();
+        let mut expected = serde_json::to_value(&artifact.compiled).unwrap();
+        let mut actual = serde_json::to_value(&loaded.compiled).unwrap();
+        expected.sort_all_objects();
+        actual.sort_all_objects();
+        assert_eq!(expected.to_string(), actual.to_string());
+        assert_eq!(loaded.source_content, artifact.source_content);
+        assert_eq!(loaded.prepared_source_key, artifact.prepared_source_key);
+        assert_eq!(loaded.compiled.experiment_start_time, Some(0.25));
+        assert_eq!(loaded.compiled.experiment_stop_time, Some(3.75));
+        assert_eq!(loaded.compiled.experiment_tolerance, Some(1e-9));
+        assert_eq!(loaded.compiled.experiment_interval, Some(0.125));
+
+        let mut record: serde_json::Value =
+            read_record(&storage, &handle, limits).unwrap().unwrap();
+        record["compiled"]["dae"]["schema_version"] = serde_json::json!(0);
+        storage
+            .write_sync(&handle, &encode_record(&record, limits).unwrap())
+            .unwrap();
+        assert!(matches!(
+            cache.load_disk_at(&storage, &handle, &key, &[], limits),
+            Err(ModelicaCacheReadError::Codec(_))
+        ));
+    }
+
+    #[test]
+    fn compiled_artifact_identity_covers_inputs_and_exact_structural_bits() {
+        let (mut compiler, unit, _) = compiled_fixture();
+        let mut cache = CompiledArtifactCache::new(NonZeroUsize::new(2).unwrap());
+        cache.enable_disk(ModelicaArtifactDiskLimits::default());
+        let key = |compiler: &super::super::ModelicaCompiler,
+                   unit: &super::super::CompileUnit,
+                   uri,
+                   numeric: &[(String, f64)]| {
+            cache
+                .disk_key(compiler, "CompileCacheProbe", unit, uri, numeric)
+                .unwrap()
+                .unwrap()
+        };
+        let first = key(&compiler, &unit, "compile-cache.mo", &[]);
+        assert_eq!(
+            first,
+            key(
+                &super::super::ModelicaCompiler::new(),
+                &unit,
+                "compile-cache.mo",
+                &[]
+            )
+        );
+        assert_ne!(first, key(&compiler, &unit, "another.mo", &[]));
+        let extra = super::super::assemble_compile_unit(
+            &unit.source,
+            vec![(
+                "extra.mo".into(),
+                "model ExtraProbe Real x; equation x=1; end ExtraProbe;".into(),
+            )],
+        );
+        assert_ne!(first, key(&compiler, &extra, "compile-cache.mo", &[]));
+        let changed = super::super::assemble_compile_unit(
+            &unit.source.replace("0.10000000000000002", "0.25"),
+            Vec::new(),
+        );
+        assert_ne!(first, key(&compiler, &changed, "compile-cache.mo", &[]));
+        assert_ne!(
+            key(
+                &compiler,
+                &unit,
+                "compile-cache.mo",
+                &[("gain".into(), 0.0)]
+            ),
+            key(
+                &compiler,
+                &unit,
+                "compile-cache.mo",
+                &[("gain".into(), -0.0)]
+            )
+        );
+        compiler.load_source_root_in_memory(
+            "context-library",
+            "ContextLibrary",
+            vec![(
+                "ContextLibrary/package.mo".into(),
+                "package ContextLibrary end ContextLibrary;".into(),
+            )],
+        );
+        assert_ne!(first, key(&compiler, &unit, "compile-cache.mo", &[]));
+        let admitted = key(&compiler, &unit, "compile-cache.mo", &[]);
+        compiler.load_source_root_in_memory(
+            "context-library",
+            "ContextLibrary",
+            vec![(
+                "ContextLibrary/package.mo".into(),
+                "package ContextLibrary constant Real k=2; end ContextLibrary;".into(),
+            )],
+        );
+        assert_ne!(admitted, key(&compiler, &unit, "compile-cache.mo", &[]));
+        compiler.load_source_root_in_memory(
+            "context-library",
+            "ContextLibrary",
+            vec![("ContextLibrary/package.mo".into(), "package ???".into())],
+        );
+        assert!(
+            cache
+                .disk_key(
+                    &compiler,
+                    "CompileCacheProbe",
+                    &unit,
+                    "compile-cache.mo",
+                    &[]
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn compiled_artifact_does_not_persist_uncaptured_external_resources() {
+        let (_, _, mut artifact) = compiled_fixture();
+        artifact.compiled.dae =
+            serde_json::from_value(serde_json::to_value(&artifact.compiled.dae).unwrap()).unwrap();
+        let dae = Arc::try_unwrap(artifact.compiled.dae).unwrap();
+        artifact.compiled.dae =
+            Arc::new(
+                dae.with_external_tables(vec![rumoca_core::ExternalTableData {
+                    id: 1,
+                    data: vec![vec![0.0, 1.0], vec![1.0, 2.0]],
+                    columns: vec![2],
+                    smoothness: 1,
+                    extrapolation: 1,
+                }]),
+            );
+        let key = CompiledArtifactDiskKey {
+            input: lunco_hash::content::cid(b"resource-dependent"),
+        };
+        assert!(matches!(
+            CompiledArtifactCache::encode_disk(
+                &key,
+                &artifact,
+                ModelicaArtifactDiskLimits::default()
+            ),
+            Err(ModelicaCacheWriteError::ConstructionWire(_))
+        ));
+    }
 
     fn key() -> PreparedSolveKey {
         PreparedSolveKey {

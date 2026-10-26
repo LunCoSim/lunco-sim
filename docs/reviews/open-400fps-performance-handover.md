@@ -1,5 +1,32 @@
 # High-quality realtime performance handover
 
+## Strict compiled-artifact reuse
+
+The [compiled-DAE cache](griffin-compiled-dae-cache-2026-10-26.md) persists native
+checked equations and consumed experiment defaults under exact source/context
+identity. Workers release unused compiler intermediates. This uses existing SDK
+APIs and bounded storage; no dependency patch or numerical policy changes.
+Griffin first-fill/warm readiness is 13.414/8.683 s, with 13 warm compiled hits.
+The initializer's 2.04 s compilation becomes a 146 ms checked lookup. Both runs
+land normally with unchanged sources and clear diagnostics. A later ordinary
+run after a desktop restart is ready in 7.643 s; host conditions differ.
+
+Initialization, source-target, expected faults and lifecycle gates pass, as do
+Summer's 102 and Roadster's eight assertions. Nine exact profiles pass on their
+first run; the serial four-rover profile fails the known articulated tick-11
+boundary and passes an unchanged repeat. This does not resolve the intermittent
+replay finding. No reference or tolerance changes.
+
+A fresh qualified native capture verifies framing, CSV/CPU export, owned
+session closure and the full landing window. It still shows 3.260 s in live
+initializer construction and 1.829 s in USD facts; these are profiler timings,
+not product acceptance. Symbolic proof/IR construction and native USD path
+queries remain substantial. Sub-second loading, sub-ms coupled ticks and
+sub-10-ms graphics remain open across all three Twins.
+Integration with main `3553f2618` passes the ordinary Griffin landing/render
+window. A concurrent build in the `usd` worktree contends with that run, so its
+18.474 s readiness is excluded from clean timing comparisons.
+
 ## Pure-call native cache relocation
 
 The [published native repair](rumoca-pure-call-cache-relocation-2026-10-25.md)

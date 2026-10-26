@@ -87,12 +87,16 @@ impl CompilerActor {
     pub(super) fn new(
         results: Sender<WorkerPreparationResult>,
         cache_capacity: NonZeroUsize,
+        disk_limits: Option<super::ModelicaArtifactDiskLimits>,
     ) -> Result<Self, String> {
+        if let Some(limits) = disk_limits {
+            limits.validate()?;
+        }
         let (tx, rx) = crossbeam_channel::unbounded();
         let thread = std::thread::Builder::new()
             .name("modelica-rumoca-owner".to_owned())
             .stack_size(16 * 1024 * 1024)
-            .spawn(move || compiler_actor_loop(rx, results, cache_capacity))
+            .spawn(move || compiler_actor_loop(rx, results, cache_capacity, disk_limits))
             .map_err(|error| format!("cannot start Modelica compiler actor: {error}"))?;
         Ok(Self {
             tx: Some(tx),
@@ -215,9 +219,13 @@ fn compiler_actor_loop(
     rx: Receiver<Request>,
     results: Sender<WorkerPreparationResult>,
     cache_capacity: NonZeroUsize,
+    disk_limits: Option<super::ModelicaArtifactDiskLimits>,
 ) {
     let mut compiler: Option<ModelicaCompiler> = None;
     let mut compiled_artifacts = CompiledArtifactCache::new(cache_capacity);
+    if let Some(limits) = disk_limits {
+        compiled_artifacts.enable_disk(limits);
+    }
     let mut terminal_error: Option<String> = None;
 
     while let Ok(request) = rx.recv() {
@@ -555,7 +563,7 @@ mod tests {
     #[test]
     fn source_root_and_compile_share_one_fifo_owner() {
         let (results_tx, results_rx) = crossbeam_channel::unbounded();
-        let mut actor = CompilerActor::new(results_tx, NonZeroUsize::new(2).unwrap())
+        let mut actor = CompilerActor::new(results_tx, NonZeroUsize::new(2).unwrap(), None)
             .expect("test compiler actor");
         let root_id = actor
             .submit_source_root(
