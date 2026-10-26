@@ -690,6 +690,11 @@ object. The immutable snapshot shares one native `UsdShade::BindingCache` across
 prim and purpose resolution, then drops it with its worker-local stage. Live
 reads create a fresh cache; no binding cache survives an authored edit. Resolved
 bindings that target a missing or non-material prim reject admission visibly.
+For each active prim, the snapshot composes the native local transform once
+and produces both render and geometry representations. Render decomposition
+and explicit narrowing precede stage-convention conversion; the geometry matrix
+retains `f64` through its canonical conversion. Empty stacks remain absent, and
+invalid transforms reject snapshot admission.
 Concrete authored `Sdf Data` reads borrow `SpecData::get` directly; fallible
 abstract data reads use native `AbstractData::field`/`try_field`.
 

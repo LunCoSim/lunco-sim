@@ -1295,6 +1295,12 @@ Additional bounded spans attribute traversal, property enumeration, connections,
 relationships, material bindings, prim identity/visibility and collections.
 Compare **inclusive** `usd_projection_facts` durations when adding child spans;
 self time moves into those children and is not a loading improvement by itself.
+The ignored `native_projection_snapshot_benchmark` includes both omitted stacks
+and authored double-precision translation/rotation/scale stacks. Compare both
+snapshot-only and complete recipe preparation with exact geometry checks; the
+paired transform reader shares native composition without changing rendering's
+decomposition/convention order. Alternate independently copied test artifacts
+when host workloads change, and keep these timings separate from Twin readiness.
 Native typed relationship enumeration avoids target-resolution probes on every
 attribute. The prepared reader retains empty relationships; verify the
 `native_relationships` gate as well as the complete snapshot timing.

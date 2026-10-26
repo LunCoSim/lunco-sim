@@ -1,5 +1,6 @@
 use bevy::math::{DMat4, DVec3};
 use bevy::prelude::{EulerRot, Quat, Transform, Vec3};
+use lunco_usd_data::units::ConventionTransform;
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::read::UsdReadObject;
@@ -98,13 +99,44 @@ pub(crate) fn compose_live_xform_order_at(
     path: &SdfPath,
     time: f64,
 ) -> Result<Option<Transform>, TransformReadError> {
+    let Some((matrix, convention)) = live_local_matrix_and_convention_at(reader, path, time)?
+    else {
+        return Ok(None);
+    };
+    let raw = project_transform_matrix_d(matrix, path)?;
+    Ok(Some(convention.local_transform(raw)))
+}
+
+/// Prepare both snapshot representations from one native composition. Render
+/// decomposition precedes convention conversion; geometry retains the matrix's
+/// original precision through its separate canonical conversion.
+pub(crate) fn local_transform_pair_at(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    time: f64,
+) -> Result<Option<(Transform, DMat4)>, TransformReadError> {
+    let Some((matrix, convention)) = live_local_matrix_and_convention_at(reader, path, time)?
+    else {
+        return Ok(None);
+    };
+    let raw = project_transform_matrix_d(matrix, path)?;
+    Ok(Some((
+        convention.local_transform(raw),
+        convention.canonical_local_matrix_d(matrix),
+    )))
+}
+
+fn live_local_matrix_and_convention_at(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    time: f64,
+) -> Result<Option<(DMat4, ConventionTransform)>, TransformReadError> {
     if validated_live_xform_op_order(reader, path)?.is_none() {
         return Ok(None);
     }
     let matrix = local_to_parent_matrix_d_at(reader, path, time)?;
-    let raw = project_transform_matrix_d(matrix, path)?;
     let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
-    Ok(Some(convention.local_transform(raw)))
+    Ok(Some((matrix, convention)))
 }
 
 pub(crate) fn validated_live_xform_op_order(
@@ -181,11 +213,10 @@ pub fn local_transform_matrix_d_at(
     path: &SdfPath,
     time: f64,
 ) -> Result<Option<DMat4>, TransformReadError> {
-    if validated_live_xform_op_order(reader, path)?.is_none() {
+    let Some((matrix, convention)) = live_local_matrix_and_convention_at(reader, path, time)?
+    else {
         return Ok(None);
-    }
-    let matrix = local_to_parent_matrix_d_at(reader, path, time)?;
-    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
+    };
     Ok(Some(convention.canonical_local_matrix_d(matrix)))
 }
 

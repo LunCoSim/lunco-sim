@@ -1,5 +1,21 @@
 # High-quality realtime performance handover
 
+## Shared native transform preparation
+
+The [paired snapshot reader](usd-paired-transform-preparation-2026-10-26.md)
+composes each active prim once for render and full-precision geometry facts.
+Alternating independent binaries reduces the authored-transform snapshot
+median from 435.189 to 411.983 ms (5.3%); complete recipe preparation improves
+4.8%, while omitted stacks are effectively unchanged. Native-schema precision,
+convention, animation and rejection checks pass.
+
+The regular candidate build passes Griffin landing, source preservation,
+diagnostics and visual checks. Its 10.196 s readiness versus the preceding
+7.886 s baseline is affected by newly concurrent video encoding, so it proves
+no scene-level speedup. Both owned sessions close. Modelica construction and
+remaining native USD queries still dominate startup; all performance targets
+below remain open.
+
 ## Strict compiled-artifact reuse
 
 The [compiled-DAE cache](griffin-compiled-dae-cache-2026-10-26.md) persists native

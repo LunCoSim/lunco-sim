@@ -211,17 +211,12 @@ impl UsdStageProjectionPlan {
                 .is_active(&path)
                 .map_err(|error| anyhow!("{path_string}: {error}"))?;
             let transform_span = bevy::log::debug_span!("usd_projection_transforms").entered();
-            let transform = if active {
-                crate::local_transform_at(&reader, &path, 0.0)
+            let (transform, transform_matrix_d) = if active {
+                crate::transform::local_transform_pair_at(&reader, &path, 0.0)
                     .map_err(|error| anyhow!("{path_string}: {error}"))?
+                    .unzip()
             } else {
-                None
-            };
-            let transform_matrix_d = if active {
-                crate::local_transform_matrix_d_at(&reader, &path, 0.0)
-                    .map_err(|error| anyhow!("{path_string}: {error}"))?
-            } else {
-                None
+                (None, None)
             };
             drop(transform_span);
             let properties_span = bevy::log::debug_span!("usd_projection_property_names").entered();
@@ -1067,48 +1062,136 @@ def Scope "Collection" (prepend apiSchemas = ["CollectionAPI:parts"]) {}
     }
 
     #[test]
+    fn prepared_transform_pair_preserves_native_representations() {
+        for axis in ["Y", "Z"] {
+            for meters in [1.0, 0.01] {
+                let source = format!(
+                    r#"#usda 1.0
+(metersPerUnit = {meters}
+upAxis = "{axis}")
+def Xform "Body" {{
+    double3 xformOp:translate.timeSamples = {{0: (1000000000.125, 2, -3), 10: (1000000000.375, 4, -5)}}
+    double3 xformOp:translate:pivot = (0.25, 0.5, 0.75)
+    double3 xformOp:rotateXYZ = (13, 27, 43)
+    double3 xformOp:scale = (1, 1.000001, 2)
+    uniform token[] xformOpOrder = ["!resetXformStack!", "xformOp:translate", "xformOp:translate:pivot", "xformOp:rotateXYZ", "xformOp:scale", "!invert!xformOp:translate:pivot"]
+}}
+def Xform "Empty" {{ uniform token[] xformOpOrder = [] }}
+def Xform "Omitted" {{}}
+def Xform "Blocked" {{ uniform token[] xformOpOrder = None }}
+def Xform "Inactive" (active = false) {{
+    double3 xformOp:translate = (1, 2, 3)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}}
+"#
+                );
+                let recipe = StageRecipe::from_source("transforms.usda", &source);
+                let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+                let live = StageView::new(&stage);
+                let plan = UsdStageProjectionPlan::from_stage(&stage).unwrap();
+                for name in ["Body", "Empty", "Omitted", "Blocked"] {
+                    let path = SdfPath::new(&format!("/{name}")).unwrap();
+                    for time in [0.0, 5.0, 10.0] {
+                        let expected = (
+                            crate::local_transform_at(&live, &path, time).unwrap(),
+                            crate::local_transform_matrix_d_at(&live, &path, time).unwrap(),
+                        );
+                        let actual = crate::transform::local_transform_pair_at(&live, &path, time)
+                            .unwrap()
+                            .unzip();
+                        assert_eq!(actual, expected, "{name} at {time}, {axis}, {meters}");
+                        if time == 0.0 {
+                            assert_eq!(plan.local_transform_at(&path, time).unwrap(), expected.0);
+                            assert_eq!(
+                                plan.local_transform_matrix_d_at(&path, time).unwrap(),
+                                expected.1
+                            );
+                        }
+                    }
+                }
+                let inactive = plan.prim(&SdfPath::new("/Inactive").unwrap()).unwrap();
+                assert!(inactive.transform.is_none() && inactive.transform_matrix_d.is_none());
+            }
+        }
+        for stack in [
+            "uniform bool xformOpOrder = true",
+            "double3 xformOp:scale = (0, 1, 1)\nuniform token[] xformOpOrder = [\"xformOp:scale\"]",
+            "double3 xformOp:translate = (1e100, 0, 0)\nuniform token[] xformOpOrder = [\"xformOp:translate\"]",
+        ] {
+            let source = format!("#usda 1.0\ndef Xform \"Invalid\" {{\n{stack}\n}}");
+            let recipe = StageRecipe::from_source("invalid.usda", &source);
+            let error = UsdStageProjectionPlan::from_recipe(&recipe)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("malformed authored transform at /Invalid"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "diagnostic timing; run explicitly for snapshot read changes"]
     fn native_projection_snapshot_benchmark() {
-        let mut source =
-            String::from("#usda 1.0\ndef Xform \"RootWithRepresentativeAssemblyNamespace\" {\n");
-        for index in 0..1000 {
-            source.push_str(&format!(
-                "def Xform \"ComponentWithRepresentativeNamespace{index}\" {{\n"
-            ));
-            for field in 0..12 {
+        for authored_transform in [false, true] {
+            let mut source = String::from(
+                "#usda 1.0\n(metersPerUnit = 1\nupAxis = \"Y\")\ndef Xform \"RootWithRepresentativeAssemblyNamespace\" {\n",
+            );
+            for index in 0..1000 {
                 source.push_str(&format!(
-                    "custom double value{field} = {}\n",
-                    index * 12 + field
+                    "def Xform \"ComponentWithRepresentativeNamespace{index}\" {{\n"
                 ));
+                if authored_transform {
+                    source.push_str(&format!(
+                    "double3 xformOp:translate = ({}, 0.125, -3)\n\
+                     double3 xformOp:rotateXYZ = (13, 27, 43)\n\
+                     double3 xformOp:scale = (1, 1.000001, 2)\n\
+                     uniform token[] xformOpOrder = [\"xformOp:translate\", \"xformOp:rotateXYZ\", \"xformOp:scale\"]\n",
+                    1_000_000_000.125_f64 + f64::from(index),
+                ));
+                }
+                for field in 0..12 {
+                    source.push_str(&format!(
+                        "custom double value{field} = {}\n",
+                        index * 12 + field
+                    ));
+                }
+                source.push_str("}\n");
             }
             source.push_str("}\n");
-        }
-        source.push_str("}\n");
-        let recipe = StageRecipe::from_source("snapshot.usda", &source);
-        for complete_recipe in [false, true] {
-            let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
-            let mut durations = Vec::new();
-            for _ in 0..5 {
-                let started = std::time::Instant::now();
-                let snapshot = if complete_recipe {
-                    UsdStageProjectionPlan::from_recipe(&recipe).unwrap()
-                } else {
-                    UsdStageProjectionPlan::from_stage(&stage).unwrap()
-                };
-                durations.push(started.elapsed().as_nanos());
-                assert_eq!(snapshot.data.prims.len(), 1001);
-                let path = SdfPath::new("/RootWithRepresentativeAssemblyNamespace/ComponentWithRepresentativeNamespace999").unwrap();
-                assert_eq!(
-                    snapshot.attr_value(&path, "value11"),
-                    Some(Value::Double(11999.0))
+            let recipe = StageRecipe::from_source("snapshot.usda", &source);
+            for complete_recipe in [false, true] {
+                let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+                let mut durations = Vec::new();
+                for _ in 0..5 {
+                    let started = std::time::Instant::now();
+                    let snapshot = if complete_recipe {
+                        UsdStageProjectionPlan::from_recipe(&recipe).unwrap()
+                    } else {
+                        UsdStageProjectionPlan::from_stage(&stage).unwrap()
+                    };
+                    durations.push(started.elapsed().as_nanos());
+                    assert_eq!(snapshot.data.prims.len(), 1001);
+                    let path = SdfPath::new("/RootWithRepresentativeAssemblyNamespace/ComponentWithRepresentativeNamespace999").unwrap();
+                    assert_eq!(
+                        snapshot.attr_value(&path, "value11"),
+                        Some(Value::Double(11999.0))
+                    );
+                    let prim = &snapshot.data.prims[snapshot.data.prim_indices[path.as_str()]];
+                    if authored_transform {
+                        assert_eq!(prim.transform_matrix_d.unwrap().w_axis.x, 1_000_000_999.125);
+                        assert!(prim.transform.is_some());
+                    } else {
+                        assert!(prim.transform_matrix_d.is_none() && prim.transform.is_none());
+                    }
+                    std::hint::black_box(snapshot);
+                }
+                durations.sort_unstable();
+                println!(
+                    "authored_transform={authored_transform} complete_recipe={complete_recipe} snapshot_ns={durations:?} median_ns={}",
+                    durations[2]
                 );
-                std::hint::black_box(snapshot);
             }
-            durations.sort_unstable();
-            println!(
-                "complete_recipe={complete_recipe} snapshot_ns={durations:?} median_ns={}",
-                durations[2]
-            );
         }
     }
 
