@@ -116,6 +116,12 @@ paths and typed values; it contains no lunar fragment or vertex shader path.
 The source reflection publishes typed shader defaults, so an omitted DEM
 albedo uses its shader-owned default. The exterior composes the site base
 colour with its authored raster weight before fading to the body appearance.
+Both continuation shaders use `terrain_continuation_gradients` for the colour
+and packed surface maps: inside the crop it retains the screen footprint;
+outside, the footprint grows with distance from coverage. Mip filtering averages
+the clamped edge before the spatial fade, preventing edge texels from stretching
+into long stripes. This is an appearance continuation, not additional measured
+coverage.
 `ShaderLookSourceInterface` belongs to the render binder's source-reflection
 path, independently of material binding and render readiness. Retiring a
 material or invalidating `ShaderLookReady` preserves those loaded-source facts.
@@ -133,7 +139,9 @@ A body fragment shader that accepts these local roles declares
 identifier as `info:wesl:interface` on its USD Shader prim. The optional vertex
 asset remains USD-owned. Omitting it uses Bevy's standard mesh vertex stage;
 the generated collar has its own final geometry and carries no CDLOD morph
-attributes. Shader assets remain hot-reloadable and the USD binding can be
+attributes. The globe shader guards forward lighting imports and fragment
+entrypoints out of `PREPASS_PIPELINE`; its native prepass vertex entrypoint
+remains available for depth, normal, motion-vector and shadow passes. Shader assets remain hot-reloadable and the USD binding can be
 changed while the scene is running.
 
 The required Rhai hook `terrain.lunar_surface_continuation` receives the USD
@@ -206,7 +214,10 @@ diagnostic replacement:
    `1 - weight_albedo`. The measured raster owns the colour frequencies it
    resolves. Authored `micro_albedo` modulates its mean only for grain periods
    smaller than a raster texel, with a smooth frequency gate derived from the
-   bound albedo dimensions and terrain width. The same stable coordinates and
+   bound albedo dimensions and terrain width. Clump, micro and fine colour
+   bands share the already evaluated relief samples, each with its own footprint
+   and raster-frequency gate; a disappearing fine band does not remove resolved
+   clump texture. The same stable coordinates and
    pixel-footprint fade filter grain colour and normals. Relief normals,
    roughness, ambient occlusion, and photometry remain independent, so camera
    footprint or CDLOD replacement cannot introduce unrelated colour changes.
@@ -214,6 +225,13 @@ diagnostic replacement:
    Bevy's `PbrInput.diffuse_occlusion`, where it modulates indirect diffuse
    light only. It must never be multiplied into base albedo: doing so turns a
    broad derived field into false colour patches and also darkens direct sun.
+   Lunar powder materials use diffuse lunar scattering without an additional
+   smooth dielectric GGX reflection. That separate lobe can dominate dark
+   regolith at grazing angles and erase map contrast. The continuation blends
+   the site's zero dielectric reflectance into the body's authored `reflectance`
+   along with its photometry. The standard Moon material authors zero; the
+   generic blueprint default remains 0.5 for other materials.
+   Exposure remains authored camera/environment intent, independent of albedo.
 2. `terrain_debug.wesl` remains the only diagnostic replacement. LOD depth and
    slope are analysis data, not branches or uniforms added to the production
    material.

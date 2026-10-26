@@ -9,7 +9,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
+import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
 
 //!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
@@ -51,7 +51,7 @@ import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter
 //!@ui      micro_bump        0 0.05      "Regolith micro-relief amplitude (m)"
 //!@default micro_bump        0.0005
 //!@ui      micro_albedo      0 0.2       "Regolith micro-albedo strength"
-//!@default micro_albedo      0.002
+//!@default micro_albedo      0.12
 //!@ui      roughness         0 1         "Base regolith roughness"
 //!@default roughness         0.88
 //!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
@@ -335,11 +335,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
         albedo = mix(albedo, a, authored_albedo_weight);
     }
+    @if((VERTEX_UVS_A)) let site_grad = terrain_continuation_gradients(uv);
     @if((VERTEX_UVS_A)) var continuation_color = mat.site_base_color.rgb;
     @if((VERTEX_UVS_A)) if (mat.site_weight_albedo > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
-        let site_albedo = textureSample(
-            continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
+        let site_albedo = textureSampleGrad(
+            continuation_albedo_tex, continuation_albedo_smp, site_uv, site_grad[0], site_grad[1]).rgb;
         continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
     @if((VERTEX_UVS_A)) albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_material_weight);
@@ -356,8 +357,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
     @if((VERTEX_UVS_A)) if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
-        let site_surface = textureSample(
-            continuation_surface_tex, continuation_surface_smp, site_uv);
+        let site_surface = textureSampleGrad(
+            continuation_surface_tex, continuation_surface_smp, site_uv, site_grad[0], site_grad[1]);
         roughness = clamp(mix(
             roughness,
             site_surface.r,
@@ -389,12 +390,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Resolved sub-texel grain modulates the material colour around its mean.
     // The same stable position and footprint fade used for its normal prevent
     // view-dependent speckle; broad colour remains owned by the orthophoto.
-    if (micro_fade > 0.0 && micro_albedo > 0.0) {
-        var grain_source_weight = 1.0;
+    if (micro_albedo > 0.0) {
+        var grain_source_weight = vec3(1.0);
         @if((VERTEX_UVS_A)) let albedo_texel_m = 2.0 * mat.terrain_half_extent / f32(textureDimensions(albedo_tex).x);
-        @if((VERTEX_UVS_A)) grain_source_weight = mix(1.0,
-            smoothstep(1.0, 2.0, micro_scale * albedo_texel_m), authored_albedo_weight);
-        albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade * grain_source_weight;
+        @if((VERTEX_UVS_A)) grain_source_weight = mix(vec3(1.0),
+            smoothstep(vec3(1.0), vec3(2.0),
+                vec3(macro_scale, micro_scale, fine_scale) * albedo_texel_m), authored_albedo_weight);
+        let grain = vec3(macro_h - 0.5, micro_h - 0.5, fine_h - 0.5)
+            * vec3(macro_fade, micro_fade, fine_fade) * grain_source_weight;
+        albedo *= 1.0 + micro_albedo * dot(grain, vec3(0.5, 0.35, 0.15));
     }
 
     // Keep the high-frequency normal detail stable as it leaves the pixel
@@ -429,7 +433,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
-    pbr_input.material.reflectance = vec3(0.5);
+    // The lunar scattering response owns the powder's reflection. A separate
+    // smooth dielectric GGX lobe washes out raster contrast at grazing angles.
+    pbr_input.material.reflectance = vec3(0.0);
 
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
     var sun_vis = 1.0;

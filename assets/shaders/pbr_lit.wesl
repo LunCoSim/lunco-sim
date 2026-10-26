@@ -79,7 +79,7 @@ fn lit_n_occluded(
 ) -> vec4<f32> {
     return lit_n_occluded_sun_response(in, is_front, n, base_color,
         perceptual_roughness, metallic, emissive, diffuse_occlusion,
-        vec3(0.0), 1.0);
+        vec3(0.0), 1.0, 0.5);
 }
 
 // Shared direct-sun response; indirect light remains under Bevy's PBR owner.
@@ -87,6 +87,7 @@ fn lit_n_occluded_sun_response(
     in: VertexOutput, is_front: bool, n: vec3<f32>, base_color: vec3<f32>,
     perceptual_roughness: f32, metallic: f32, emissive: vec3<f32>,
     diffuse_occlusion: vec3<f32>, sun_dir_world: vec3<f32>, sun_factor: f32,
+    reflectance: f32,
 ) -> vec4<f32> {
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags; // keep SHADOW_RECEIVER etc.
@@ -106,7 +107,7 @@ fn lit_n_occluded_sun_response(
     pbr_input.material.perceptual_roughness = perceptual_roughness;
     pbr_input.material.metallic = metallic;
     pbr_input.material.emissive = vec4(emissive, 1.0);
-    pbr_input.material.reflectance = vec3(0.5);
+    pbr_input.material.reflectance = vec3(reflectance);
     pbr_input.diffuse_occlusion = diffuse_occlusion;
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
     if (sun_factor != 1.0) {

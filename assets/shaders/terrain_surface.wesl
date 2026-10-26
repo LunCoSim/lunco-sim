@@ -48,6 +48,21 @@ fn terrain_morph_weight(
     return max(morph, max(max(edge.x, edge.y), max(edge.z, edge.w)));
 }
 
+/// Preserve the measured crop's texture footprint, then progressively average
+/// its edge outside coverage. A clamped coordinate alone stretches individual
+/// edge texels across the entire transition surface. Both continuation materials
+/// use this footprint for colour and surface maps before their spatial fade.
+fn terrain_continuation_gradients(uv: vec2<f32>) -> mat2x2<f32> {
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    let outside = max(abs(uv - vec2(0.5)) - vec2(0.5), vec2(0.0));
+    let blur = 2.0 * length(outside);
+    if (blur > max(length(dx), length(dy))) {
+        return mat2x2(vec2(blur, 0.0), vec2(0.0, blur));
+    }
+    return mat2x2(dx, dy);
+}
+
 /// Linear, clamped remap for authored colour layers. Relief applies its own
 /// smooth height remap in `layer_gradient` so its normal remains continuous.
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {

@@ -235,7 +235,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
-    pbr_input.material.reflectance = vec3(0.5);
+    // Powder reflection is supplied by the lunar scattering response.
+    pbr_input.material.reflectance = vec3(0.0);
 
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
 

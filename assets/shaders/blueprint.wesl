@@ -3,9 +3,10 @@ import bevy_pbr::render::{
     view_transformations::position_world_to_clip,
     forward_io::VertexOutput,
 };
-import super::pbr_lit::lit;
+@if((!PREPASS_PIPELINE))
 import super::pbr_lit::lit_n_occluded_sun_response;
 import super::lunar_brdf::regolith_factor;
+import super::terrain_surface::terrain_continuation_gradients;
 import bevy_pbr::render::{pbr_functions, mesh_view_bindings::view};
 @if((PREPASS_PIPELINE))
 import bevy_pbr::prepass::io as prepass_io;
@@ -110,6 +111,8 @@ fn vertex(vertex: GlobeVertex) -> prepass_io::VertexOutput {
 //!@default surface_color    0.2,0.2,0.2
 //!@ui      roughness        0 1   "Roughness"
 //!@default roughness        0.9
+//!@ui      reflectance      0 1   "Dielectric reflectance"
+//!@default reflectance      0.5
 //!@ui      high_line_color  color "Line colour (high alt / sphere)"
 //!@default high_line_color  0.0,0.5,1.0
 //!@ui      transition       0 1   "Transition (sphere 0 ↔ grid 1)"
@@ -176,6 +179,7 @@ struct Material {
     site_base_color: vec4<f32>,
     site_photometry: vec4<f32>,
     sun_dir_world: vec3<f32>,
+    reflectance: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
@@ -226,6 +230,7 @@ fn rotate_by_quaternion(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
     return v + q.w * t + cross(q.xyz, t);
 }
 
+@if((!PREPASS_PIPELINE))
 fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f32> {
     var base = mat.surface_color;
     var grid_mask = 0.0;
@@ -306,17 +311,18 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
     @if((VERTEX_UVS_A)) let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
     @if((VERTEX_UVS_A)) let site_weight = 1.0 - smoothstep(0.0, 1.0, transition);
     @if((VERTEX_UVS_A)) continuation_weight = mat.site_base_color.a * site_weight;
+    @if((VERTEX_UVS_A)) let site_grad = terrain_continuation_gradients(in.uv);
     @if((VERTEX_UVS_A)) let site_uv = clamp(in.uv, vec2(0.0), vec2(1.0));
     @if((VERTEX_UVS_A)) var continuation_color = mat.site_base_color.rgb;
     @if((VERTEX_UVS_A)) if (mat.site_weight_albedo > 0.0) {
-        let site_albedo = textureSample(
-            continuation_albedo_tex, continuation_albedo_smp, site_uv).rgb;
+        let site_albedo = textureSampleGrad(
+            continuation_albedo_tex, continuation_albedo_smp, site_uv, site_grad[0], site_grad[1]).rgb;
         continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
     @if((VERTEX_UVS_A)) albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_weight);
     @if((VERTEX_UVS_A)) if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
-        let site_surface = textureSample(
-            continuation_surface_tex, continuation_surface_smp, site_uv);
+        let site_surface = textureSampleGrad(
+            continuation_surface_tex, continuation_surface_smp, site_uv, site_grad[0], site_grad[1]);
         roughness = mix(
             roughness,
             site_surface.r,
@@ -344,15 +350,15 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
         0.0,
         vec3(0.0),
         vec3(ao),
-        mat.sun_dir_world, sun_factor,
+        mat.sun_dir_world, sun_factor, mix(mat.reflectance, 0.0, continuation_weight),
     );
 }
 
-@if((LUNCO_GLOBE_DIRECTION)) @fragment
+@if((LUNCO_GLOBE_DIRECTION) && (!PREPASS_PIPELINE)) @fragment
 fn fragment(in: GlobeVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     return shade(globe_pbr_input(in), is_front, in.globe_direction);
 }
-@if((!(LUNCO_GLOBE_DIRECTION))) @fragment
+@if((!(LUNCO_GLOBE_DIRECTION)) && (!PREPASS_PIPELINE)) @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     return shade(in, is_front, vec3<f32>(0.0));
 }

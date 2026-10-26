@@ -147,6 +147,14 @@ GPU acceptance still require the rendered fixture and a clean process log.
    tangent slope; use full weight when the measured map owns those slopes.
    The layered material allows filtered `micro_albedo` grain only below an authored
    raster's texel size; broad procedural colour is suppressed by raster weight.
+   Check the clump, micro and fine colour bands independently: each reuses its
+   relief sample and filters against both pixel footprint and raster spacing.
+   Lunar powder uses diffuse scattering without a separate smooth dielectric
+   lobe; a bright grazing sheen can hide a correctly loaded colour map. Verify
+   with a temporary raw-albedo diagnostic, then restore production lighting and
+   compare the same camera/exposure. Inspect both Sun-facing and opposite views.
+   Match the Moon globe material's authored `reflectance` to the diffuse local
+   terrain; an exterior dielectric lobe can leave a bright horizon.
    `inputs:roughness` owns the base, with centred procedural variation.
    Scatter boulder reflectance is linear, and shared boulders cast shadows.
    For close terrain breakup, inspect the High profile's first-cascade bound
@@ -330,7 +338,13 @@ For DEM continuation colour seams, compare the site base colour and authored
 raster weight with the exterior composition. Source reflection owns omitted
 parameter defaults; the exterior must compose that site colour and lunar
 photometry before fading to the body appearance. Preserve the DEM material
-inside the crop.
+inside the crop. Inspect from above beyond the crop: exterior map sampling
+must use the shared distance-growing mip footprint before the spatial fade,
+so the last row and column do not stretch into stripes. The continuation
+contains no measured regional relief; do not describe it as a regional DEM.
+Enable depth, normal and motion-vector prepasses on a scene containing the
+globe as well as the DEM: the globe vertex shader shares its source with the
+forward fragment, whose lighting imports must be excluded from prepass builds.
 
 For finite DEM joins, compare the collar native perimeter and the rendered DEM
 boundary/morph vertices using bounded `TerrainLodStatus` pages. Inspect each
