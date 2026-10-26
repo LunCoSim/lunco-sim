@@ -251,6 +251,25 @@ impl<T: Copy> PortMap<T> {
         encode_port_slot(self.layout_id, index)
     }
 
+    /// Resolve unique requested names in this map's live slot order.
+    /// Missing names are omitted; declared, unsampled ports retain their slots.
+    /// Selection uses the existing name index without scanning unrelated ports.
+    pub fn slots_for_names<'a, 'n>(
+        &'a self,
+        names: impl IntoIterator<Item = &'n str>,
+    ) -> impl Iterator<Item = (&'a str, u64)> {
+        let mut selected: Vec<_> = names
+            .into_iter()
+            .filter_map(|name| self.by_name.get(name).copied())
+            .collect();
+        selected.sort_unstable();
+        selected.dedup();
+        selected.into_iter().filter_map(|index| {
+            let name = self.slots.get(index)?.name.as_deref()?;
+            Some((name, encode_port_slot(self.layout_id, index)?))
+        })
+    }
+
     /// Return the process-local layout identity used by resolved slots.
     /// Appending names preserves existing handles; clone, clear, and compaction
     /// replace this identity.
@@ -1152,14 +1171,8 @@ pub fn declare_map<T: Copy>(
         names: Some(names), ..
     } = &out.target
     {
-        let mut selected: Vec<_> = names
-            .iter()
-            .filter_map(|&name| map.by_name.get(name).map(|&index| (index, name)))
-            .collect();
-        // Inspection order belongs to the map, independent of request/hash order.
-        selected.sort_unstable_by_key(|(index, _)| *index);
-        for (_, name) in selected {
-            publish(out, name, map.resolve_slot(name));
+        for (name, slot) in map.slots_for_names(names.iter().copied()) {
+            publish(out, name, Some(slot));
         }
     } else {
         for name in map.keys() {
@@ -2515,6 +2528,57 @@ mod tests {
         PortNameSetKey, PortRegistry, PortTopologyRevision, PortValueType, ScalarPortMap,
         port_name_set_key,
     };
+
+    #[test]
+    fn selected_slots_preserve_live_order_samples_and_layout_identity() {
+        let mut ports = ScalarPortMap::default();
+        ports.insert("last_requested".into(), -0.0);
+        ports.declare("unsampled".into());
+        ports.insert("first_requested".into(), 3.25);
+        let requested = [
+            "first_requested",
+            "missing",
+            "unsampled",
+            "last_requested",
+            "first_requested",
+        ];
+        let selected = ports.slots_for_names(requested).collect::<Vec<_>>();
+        assert_eq!(
+            selected.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            ["last_requested", "unsampled", "first_requested"]
+        );
+        for (name, slot) in &selected {
+            assert_eq!(ports.resolve_slot(name), Some(*slot));
+        }
+        let last_slot = selected[0].1;
+        let unsampled_slot = selected[1].1;
+        assert_eq!(
+            ports.get_slot(last_slot).unwrap().to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert!(ports.get_slot_entry(unsampled_slot).is_none());
+        drop(selected);
+        ports.insert("unsampled".into(), 7.5);
+        assert_eq!(ports.resolve_slot("unsampled"), Some(unsampled_slot));
+        assert_eq!(ports.get_slot(unsampled_slot), Some(&7.5));
+        ports.remove("last_requested");
+        ports.insert("last_requested".into(), 9.5);
+        assert!(ports.get_slot(last_slot).is_none());
+        assert_eq!(
+            ports
+                .slots_for_names(requested)
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["unsampled", "first_requested", "last_requested"]
+        );
+        let clone = ports.clone();
+        for (name, slot) in clone.slots_for_names(requested) {
+            assert_eq!(clone.get_slot(slot), ports.get(name));
+            assert!(ports.get_slot(slot).is_none());
+        }
+        ports.clear();
+        assert_eq!(ports.slots_for_names(requested).count(), 0);
+    }
 
     /// Measure complete staging and commit while reusing the transaction buffer.
     #[test]

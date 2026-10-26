@@ -1,5 +1,22 @@
 # High-quality realtime performance handover
 
+## Indexed public output selection
+
+The [public-output projection change](runtime-public-output-selection-2026-10-26.md)
+reuses the port owner's indexed, ordered selection for the authored HUD subset.
+The complete output map and exact scalar values remain available. Twenty
+alternating independent fixture runs reduce complete projection time by 32.8%.
+Focused port tests, 25 production UI/scene checks and nine Roadster crash/HUD
+checks pass; every published Roadster HUD property matches its baseline.
+
+The regular build passes Griffin's source-preserved sleeping landing handoff
+with clear diagnostics. After concurrent simulator/video workloads stop,
+readiness is 7.486 s, coupled-tick p50/p95 is 3.549/4.146 ms and application-frame
+p50/p95 is 9.090/11.436 ms. The preceding contended startup takes 29.967 s.
+These are distinct workload/view cohorts, not an isolated scene speedup.
+All owned sessions close; raw evidence stays ignored. Requested targets and
+the existing articulated replay issue remain open.
+
 ## Live declaration metadata slots
 
 The [port metadata change](live-port-metadata-slots-2026-10-26.md) carries the

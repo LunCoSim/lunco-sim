@@ -402,11 +402,13 @@ contract within that declaration's group. Indexed owners query
 that name directly; static owners publish borrowed names through the same
 boundary. Inspection retains the declared slot in its owner handle. Selected
 inspection filters declarations before copying names or sampling metadata and
-values. Selections through `declare_map` use the existing name index, then
-publish in live slot order so request/hash iteration cannot change the
-backend's row order. The backend validates each selected entry's optional
-stored value through the same generic helper. Runtime output aliases require
-a live `Port` endpoint; scalar declarations remain visible before their first
+values. Selections through `declare_map` use `PortMap::slots_for_names`, which
+resolves unique names through the existing index and yields opaque handles in
+live slot order. Request/hash iteration cannot change the backend's row order. Missing
+names are omitted; declared unsampled ports remain selectable. Runtime UI
+projection uses the same selection and reads only available samples. The backend
+validates each selected entry's optional stored value through the same generic
+helper. Runtime output aliases require a live `Port` endpoint; scalar declarations remain visible before their first
 sample. Endpoint membership is checked against the current World.
 Every declared direction and owner of a selected name remains visible. Named
 validation does not materialize or copy the complete surface, and metadata

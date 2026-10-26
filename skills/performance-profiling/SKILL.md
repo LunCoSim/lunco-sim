@@ -367,6 +367,13 @@ For runtime UI policy work, compare actual immutable input snapshots as well as
 producer change ticks. Equal facts must not schedule another projection merely
 because a presentation component received an equal-value write. Preserve hook
 generation, source lifetime, caller identity and derived vessel invalidation.
+Attribute `exposure_runtime_surface_facts` separately from its publisher and
+worker policy spans. Public output selection uses the port owner's name index
+and live slot order; preserve complete output facts and unsampled-port semantics.
+The ignored `runtime_output_facts_diagnostic` in `lunco-luncosim-exposures`
+measures complete output projection, including all-value allocation. Compare
+independent binaries and qualify the authored public-output consumer in a
+production session; fixture timing alone does not establish a scene speedup.
 The default communication period is one physics tick; longer periods must be
 authored explicitly.
 Physical celestial sampling uses `CelestialClock::epoch_at_tick`, with

@@ -581,6 +581,11 @@ program source metadata, and per-participant declared public output names.
 Simulation status, telemetry, participant outputs, and Rhai policy results
 remain live at the bounded publication cadence. Do not reread composed USD to
 rebuild those static facts on each publication or add a second revision owner.
+Public output projection resolves that authored name set through
+`PortMap::slots_for_names` and reads the selected live samples in map order.
+Missing or unsampled names produce no value. The complete output map remains
+available to policy alongside this subset; scalar values retain their exact
+`f64` representation. Selection needs no retained handles or second index.
 
 The render-world readiness acknowledgement keeps its derived set of visible
 required namespaces at that same revision boundary. Stable frames therefore

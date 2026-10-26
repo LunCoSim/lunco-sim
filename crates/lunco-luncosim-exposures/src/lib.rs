@@ -29,7 +29,7 @@ use lunco_exposure_core::{
 };
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
-use lunco_port_core::InputPorts;
+use lunco_port_core::{InputPorts, ScalarPortMap};
 use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_scene::scene_root_ancestor;
@@ -442,17 +442,7 @@ fn runtime_ui_facts(
             let public_names = cached_public_output_names(public_output_names, entity, || {
                 authored_output_names(entity, q_paths, stages, canonical)
             });
-            let outputs = sim
-                .outputs
-                .iter()
-                .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
-                .collect::<Vec<_>>();
-            let public_outputs = sim
-                .outputs
-                .iter()
-                .filter(|(name, _)| public_names.is_some_and(|names| names.contains(*name)))
-                .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
-                .collect::<Vec<_>>();
+            let (outputs, public_outputs) = runtime_output_facts(&sim.outputs, public_names);
             let (status, error) = sim_status_facts(&sim.status);
             let gid = q_gid
                 .get(entity)
@@ -468,8 +458,8 @@ fn runtime_ui_facts(
                     ("status", HookValue::str(status)),
                     ("error", error.map_or(HookValue::Unit, HookValue::str)),
                     ("inputs", scalar_hook_map(&sim.inputs)),
-                    ("outputs", HookValue::Map(outputs)),
-                    ("public_outputs", HookValue::Map(public_outputs)),
+                    ("outputs", outputs),
+                    ("public_outputs", public_outputs),
                 ]),
             ));
         }
@@ -566,6 +556,26 @@ fn runtime_program_facts(
             ])
         })
         .collect()
+}
+
+fn runtime_output_facts(
+    outputs: &ScalarPortMap,
+    public_names: Option<&HashSet<String>>,
+) -> (HookValue, HookValue) {
+    let all = outputs
+        .iter()
+        .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
+        .collect();
+    let public = outputs
+        .slots_for_names(
+            public_names
+                .into_iter()
+                .flat_map(|names| names.iter().map(String::as_str)),
+        )
+        .filter_map(|(_, slot)| outputs.get_slot_entry(slot))
+        .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
+        .collect();
+    (HookValue::Map(all), HookValue::Map(public))
 }
 
 fn scalar_hook_map<'a, I, N>(values: I) -> HookValue
@@ -1302,6 +1312,49 @@ mod exposure_schedule_tests {
 mod public_output_cache_tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    #[ignore = "manual complete output-fact projection measurement"]
+    fn runtime_output_facts_diagnostic() {
+        let mut outputs = ScalarPortMap::default();
+        for index in 0..8192 {
+            outputs.insert(format!("output{index:05}"), index as f64 * 0.25);
+        }
+        outputs.declare("unsampled".into());
+        let mut public_names: HashSet<_> = (0..32)
+            .map(|index| format!("output{:05}", index * 251))
+            .collect();
+        public_names.extend(["missing".to_owned(), "unsampled".to_owned()]);
+        let (all, public) = runtime_output_facts(&outputs, Some(&public_names));
+        let HookValue::Map(all) = all else {
+            panic!("complete output map")
+        };
+        let HookValue::Map(public) = public else {
+            panic!("public output map")
+        };
+        assert_eq!(all.len(), 8192);
+        assert_eq!(public.len(), 32);
+        for (index, (name, value)) in public.iter().enumerate() {
+            assert_eq!(name, &format!("output{:05}", index * 251));
+            let HookValue::Float(value) = value else {
+                panic!("scalar output")
+            };
+            assert_eq!(value.to_bits(), (index as f64 * 251.0 * 0.25).to_bits());
+        }
+        let (_, absent) = runtime_output_facts(&outputs, None);
+        assert!(matches!(absent, HookValue::Map(values) if values.is_empty()));
+        let started = std::time::Instant::now();
+        for _ in 0..512 {
+            std::hint::black_box(runtime_output_facts(
+                std::hint::black_box(&outputs),
+                std::hint::black_box(Some(&public_names)),
+            ));
+        }
+        println!(
+            "RUNTIME_OUTPUT_FACTS outputs=8192 public=32 iterations=512 elapsed_ns={}",
+            started.elapsed().as_nanos()
+        );
+    }
 
     #[test]
     fn caches_authored_names_and_missing_authored_names() {
