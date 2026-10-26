@@ -1,5 +1,27 @@
 # High-quality realtime performance handover
 
+## Current USD and coupled-exchange attribution
+
+The [parent-path proposal](usd-parent-path-preparation-2026-10-26.md) records a
+new complete, source-preserved Griffin landing capture. Native USD facts take
+1.732 s; metadata is the largest group at 414.954 ms, ahead of identity and
+connections. Transform preparation is 48.602 ms. An application-only hint-query
+reordering has no measurable benefit and is removed. Native path parsing and
+validation remain prominent in metadata CPU samples. Extending immutable parent
+derivation in `../openusd` is awaiting explicit approval; the dependency is
+unchanged. The regular application build is restored after profiling.
+
+In the same qualified capture's 46–52 s settled interval, 375 coupled exchanges
+spend p50/p95 0.963/1.340 ms in `cosim_exchange_write`. Accumulation is
+0.100/0.230 ms; topology, holds and diagnostic publication are each below
+0.010 ms p95. Exact write zones contain 371 CPU samples with no missing stacks.
+Named owner lookup, live metadata validation, indexed-name lookup and ECS
+component lookup are visible costs. These are profiler owner measurements,
+not sub-ms physics acceptance. The next application investigation is validated
+port staging; it must preserve live ownership precedence, metadata checks and
+atomic commit, including mutations without a published topology revision.
+Raw evidence stays ignored beside the new capture and its production receipt.
+
 ## Shared native transform preparation
 
 The [paired snapshot reader](usd-paired-transform-preparation-2026-10-26.md)
