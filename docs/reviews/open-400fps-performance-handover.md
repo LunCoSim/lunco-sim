@@ -19,6 +19,14 @@ failures remain open. Raw evidence stays ignored.
 
 ## Current constructor attribution
 
+The prepared-cache zone is now separately attributed in the
+[same proposal](rumoca-assignment-producer-index-2026-10-26.md): 1.089 s and 876
+samples include structural dependency propagation (179), Serde (94), and the
+same producer-range tree (76). These overlapping groups show that a cache hit
+includes native reconstruction/validation, not merely file decoding. They do
+not justify skipping checks or replacing the cache codec as the main repair.
+The native index proposal remains pending permission; no dependency edit is made.
+
 The [assignment-producer index proposal](rumoca-assignment-producer-index-2026-10-26.md)
 uses a fresh `ce8b553ec` / `aae2bbdd` capture. The initializer takes 3.585 s with
 16,482 native hits and zero compilations. Of 3,034 exact-zone CPU samples,

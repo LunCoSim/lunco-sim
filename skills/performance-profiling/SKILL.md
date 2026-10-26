@@ -1119,7 +1119,11 @@ initialization. Qualify changes with the `modelica_initialization_network` and
 `modelica_initialization_failure` production gates.
 
 For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
-`prepare_fmi_component`, and ordered result commit. When equivalent requests share the
+`prepare_fmi_component`, and ordered result commit. Prepared-cache lookup includes
+Rumoca's checked FMI reconstruction, artifact derivation and model validation;
+separate native CPU samples from JSON/Zstd work before attributing it to I/O or
+changing codecs. A disk hit does not bypass construction checks.
+When equivalent requests share the
 same structural solve key, coalesce in-flight lowering instead of occupying a
 second worker; preserve one result position per participant in the existing
 stable commit queue. Keep the combined compiler/root/lowering admission bounded

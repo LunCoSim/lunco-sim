@@ -43,6 +43,50 @@ It therefore does not justify treating whole-model copying as the dominant cost.
 Executable cache hits still build/hash Cranelift IR and prepare checked native
 structures; zero compilation is not zero construction work.
 
+## Prepared-cache reconstruction attribution
+
+A separate exact-zone export from the same capture isolates the initializer's
+`modelica_solve_preparation_disk_cache_lookup` on OS thread 554983 / CSV thread
+22. The zone takes **1.089 s**. Export selects one complete zone, 876 samples,
+zero missing stacks and the same 1 ms sampling period. Application addresses
+are resolved from the capture's recorded ELF load base and symbol table.
+Of these samples, 485 have only one frame, limiting caller attribution.
+
+Inclusive groups overlap and must not be summed:
+
+| Native operation | Samples |
+| --- | ---: |
+| Structural dependency propagation | 179 |
+| Serde, including JSON parsing | 94 |
+| Assignment producer-range tree operations | 76 |
+| Assignment shape and exact refresh coverage | 55 |
+| Jacobian output catalog/seed domain | 35 |
+| Zstd/checksum routines | 15 |
+
+The application `PreparedSolveCache::load_disk_at` reads bounded compressed bytes
+and invokes Rumoca's canonical `deserialize_fmi_component`. That owner invokes
+`deserialize_solve_model`: it validates correlations, derives executable
+artifacts, reconstructs reduced charts and validates the model before constructing
+the checked FMI component. Thus the cache-lookup label includes reconstruction
+and semantic validation, not just disk I/O or parsing. The regular production
+run at application `646ea228f` observes 1.188 s for this lookup and 3.604 s for
+the subsequent initializer construction; those sequential measurements have
+different owners and must not be conflated.
+
+This adds a second measured consumer for the proposed producer index. It does
+not justify bypassing native validation or a broad cache-codec replacement.
+Structural dependency work needs its own concrete proposal and permission
+before dependency changes beyond the producer index. No dependency source is
+modified. Exact exports and resolved sample tables are ignored under
+`.cache/codex-evidence/performance-20261026/griffin-direct-terms-tracy/`, using
+`initializer-cache-*` and `prepared-cache-*` names.
+
+The separate 267 ms `dataset_twin_manifest_scan` zone yields only 25 CPU samples,
+all resolving to hardware SHA-256 compression. Source inspection identifies
+manifest integrity checking of raw terrain inputs. The small sample count
+does not attribute the remaining elapsed time or establish that this concurrent
+scan delays scene admission. Integrity checks remain unchanged.
+
 ## Confirmed owner and proposed repair
 
 `rumoca-ir-solve/src/refresh/assignment_shape/producers.rs` owns
