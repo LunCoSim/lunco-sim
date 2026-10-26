@@ -1,5 +1,23 @@
 # High-quality realtime performance handover
 
+## Current constructor attribution
+
+The [assignment-producer index proposal](rumoca-assignment-producer-index-2026-10-26.md)
+uses a fresh `ce8b553ec` / `aae2bbdd` capture. The initializer takes 3.585 s with
+16,482 native hits and zero compilations. Of 3,034 exact-zone CPU samples,
+shared-value preparation appears in 530, Cranelift/SHA work in 442, and immutable
+producer-range tree operations in 193; these inclusive groups overlap. Most
+stacks are shallow, so whole-model cloning is not established as the dominant
+cost. A checked compact interval index is proposed at the native owner, pending
+explicit permission. No new dependency edit is made.
+
+The trace passes native framing and zone/CPU export checks and preserves all
+271 source hashes. It contains complete startup and handoff, but the settled
+driver exits 1 when terrain reports a pending tile. It is startup diagnostic
+evidence only, not a qualified steady-state or graphics window. Both processes
+close and the exact regular production binary is restored. The preceding
+production qualification below remains the functional result for this pin.
+
 ## Direct native proof terms
 
 The [published Rumoca storage optimization](rumoca-direct-proof-terms-2026-10-26.md)
