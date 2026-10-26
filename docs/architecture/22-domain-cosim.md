@@ -309,8 +309,9 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   admission boundary, with unchanged rejection ordering.
   Avian named discovery derives immutable candidate slots from its authoritative
   `AVIAN` group/port table, retaining declaration order. Resolution, named
-  declarations and metadata selection share that index and check matching
-  groups' membership live. Full inspection enumerates the table directly.
+  declarations use that index and check matching groups' membership live.
+  Metadata consumes the selected table slot under the same immutable World
+  borrow. Full inspection enumerates the table directly.
   No entity membership, permissions, bounds or numeric samples are cached by
   this schema index.
   Native joint lower `-infinity` and upper `+infinity` limits map
@@ -393,7 +394,11 @@ The registry resolves each named write from the owners' live declarations.
 collects every row or an exact-name selection, while a named query borrows one
 exact name and causality side. Each declaration includes its optional
 process-local slot; this single query supplies ownership, direction and slot
-together. Indexed owners query
+together. `PortBackend::metadata` receives that live slot as its final argument,
+so indexed owners use the declared location without repeating name resolution.
+Coalesced owner inspection retains the first declaration's slot while merging
+directions; owners with distinct input/output entries select their shared
+contract within that declaration's group. Indexed owners query
 that name directly; static owners publish borrowed names through the same
 boundary. Inspection retains the declared slot in its owner handle. Selected
 inspection filters declarations before copying names or sampling metadata and

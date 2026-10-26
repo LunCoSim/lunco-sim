@@ -79,7 +79,7 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
             }
         }
     },
-    metadata: |world, entity, name, direction| {
+    metadata: |world, entity, name, direction, _slot| {
         let contract = world
             .get::<lunco_port_core::ScalarPortContracts>(entity)
             .and_then(|contracts| contracts.get(name));

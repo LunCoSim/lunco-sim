@@ -168,7 +168,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
             out.declare(name, PortDirection::In, resolve_shader_input(look, name));
         }
     },
-    metadata: |world, entity, name, direction| {
+    metadata: |world, entity, name, direction, _slot| {
         let authored_scalar = world.get::<ShaderLook>(entity).and_then(|look| {
             if !look.driven().contains(name) {
                 return None;

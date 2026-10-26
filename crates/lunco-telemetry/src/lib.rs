@@ -1528,6 +1528,7 @@ mod tests {
         _entity: Entity,
         _name: &str,
         direction: PortDirection,
+        _slot: Option<u64>,
     ) -> lunco_port_core::ports::PortMetadata {
         lunco_port_core::ports::PortMetadata::scalar(
             direction,

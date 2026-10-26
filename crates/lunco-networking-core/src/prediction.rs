@@ -2714,7 +2714,7 @@ mod tests {
                         out.declare("frame", lunco_port_core::ports::PortDirection::In, Some(0));
                     }
                 },
-                metadata: |_, _, _, direction| {
+                metadata: |_, _, _, direction, _slot| {
                     lunco_port_core::ports::PortMetadata::scalar(
                         direction,
                         None,

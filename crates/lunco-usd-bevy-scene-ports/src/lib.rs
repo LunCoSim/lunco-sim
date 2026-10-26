@@ -275,12 +275,14 @@ fn transform_translation_frame(
 fn scene_property_metadata(
     world: &World,
     entity: Entity,
-    name: &str,
+    _name: &str,
     direction: PortDirection,
+    slot: Option<u64>,
 ) -> PortMetadata {
     let float_max = f32::MAX as f64;
-    let slot = ScenePropertySlot::from_name(name)
-        .expect("scene property metadata is requested only for a declared slot");
+    let slot =
+        ScenePropertySlot::from_slot(slot.expect("scene property declarations supply a slot"))
+            .expect("scene property metadata is requested only for a declared slot");
     let (unit, min, max, frame) = match slot {
         ScenePropertySlot::LightIntensity => (
             Some(EngineUnit::Lumen.reference()),
@@ -490,6 +492,7 @@ mod tests {
                     entity,
                     std::hint::black_box(name),
                     PortDirection::In,
+                    Some(ScenePropertySlot::from_name(name).unwrap() as u64),
                 ));
             }
         }

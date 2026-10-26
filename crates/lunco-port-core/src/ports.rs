@@ -1241,7 +1241,11 @@ pub struct PortBackend {
     /// Describe every port published by `declare_ports`. This callback is mandatory so
     /// the owning backend, rather than a registry fallback, defines each port's
     /// value, unit, bounds, authority, source, and writability contract.
-    pub metadata: fn(&World, Entity, &str, PortDirection) -> PortMetadata,
+    /// Receives the live declaration's slot under the same immutable World
+    /// borrow. Coalesced inspection directions retain the first declaration's
+    /// slot; an owner with distinct input/output slots selects its shared
+    /// contract for that merged direction.
+    pub metadata: fn(&World, Entity, &str, PortDirection, Option<u64>) -> PortMetadata,
     /// Read the **output** named `name`, or `None`.
     pub read_output: fn(&World, Entity, &str) -> Option<f64>,
     /// Read the **input** named `name`, or `None`.
@@ -1599,7 +1603,7 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
             declare_map(out, &inputs.values, PortDirection::In, |_| true);
         }
     },
-    metadata: |_world, _entity, _name, direction| {
+    metadata: |_world, _entity, _name, direction, _slot| {
         PortMetadata::scalar(
             direction,
             None,
@@ -1651,8 +1655,13 @@ impl PortRegistry {
         owner: PortOwner,
         side: ResolvedPortSide,
     ) -> Option<ResolvedPort> {
-        let metadata =
-            (self.backends[owner.backend].metadata)(world, entity, name, owner.direction);
+        let metadata = (self.backends[owner.backend].metadata)(
+            world,
+            entity,
+            name,
+            owner.direction,
+            owner.slot,
+        );
         let revision = world.get_resource::<PortTopologyRevision>()?.0;
         Some(ResolvedPort {
             backend: owner.backend,
@@ -1805,7 +1814,13 @@ impl PortRegistry {
                 out.push((
                     handle,
                     PortInfo {
-                        metadata: (backend.metadata)(world, entity, &port.name, port.direction),
+                        metadata: (backend.metadata)(
+                            world,
+                            entity,
+                            &port.name,
+                            port.direction,
+                            port.slot,
+                        ),
                         name: port.name,
                         direction: port.direction,
                         value,
@@ -1833,17 +1848,17 @@ impl PortRegistry {
             for port in ports {
                 by_name
                     .entry(port.name)
-                    .and_modify(|direction| {
+                    .and_modify(|(direction, _)| {
                         *direction = match (*direction, port.direction) {
                             (PortDirection::In, PortDirection::In)
                             | (PortDirection::Out, PortDirection::Out) => *direction,
                             _ => PortDirection::InOut,
                         };
                     })
-                    .or_insert(port.direction);
+                    .or_insert((port.direction, port.slot));
             }
-            for (name, direction) in by_name {
-                let metadata = (backend.metadata)(world, entity, &name, direction);
+            for (name, (direction, slot)) in by_name {
+                let metadata = (backend.metadata)(world, entity, &name, direction, slot);
                 out.push(PortOwnerInfo {
                     name,
                     direction,
@@ -2087,6 +2102,7 @@ impl PortRegistry {
             entity,
             name,
             owner.direction,
+            owner.slot,
         ))
     }
 
@@ -2147,7 +2163,8 @@ impl PortRegistry {
             });
         };
         let direction = owner.direction;
-        let metadata = (self.backends[owner.backend].metadata)(world, entity, &name, direction);
+        let metadata =
+            (self.backends[owner.backend].metadata)(world, entity, &name, direction, owner.slot);
         metadata
             .validate_contract()
             .map_err(|error| PortWriteError {
@@ -2316,6 +2333,7 @@ impl PortRegistry {
             prepared.entity,
             &prepared.name,
             direction,
+            owner.slot,
         );
         if direction != prepared.direction || metadata != prepared.metadata {
             return Err(stale());
@@ -2646,6 +2664,7 @@ mod tests {
         _entity: Entity,
         _name: &str,
         direction: PortDirection,
+        _slot: Option<u64>,
     ) -> PortMetadata {
         PortMetadata::scalar(
             direction,
@@ -2664,6 +2683,7 @@ mod tests {
         _entity: Entity,
         _name: &str,
         direction: PortDirection,
+        _slot: Option<u64>,
     ) -> PortMetadata {
         PortMetadata::scalar(
             direction,
@@ -2972,6 +2992,7 @@ mod tests {
         _entity: Entity,
         _name: &str,
         direction: PortDirection,
+        _slot: Option<u64>,
     ) -> PortMetadata {
         PortMetadata::scalar(
             direction,
@@ -2990,6 +3011,7 @@ mod tests {
         _entity: Entity,
         _name: &str,
         direction: PortDirection,
+        _slot: Option<u64>,
     ) -> PortMetadata {
         PortMetadata::scalar(
             direction,
@@ -3282,7 +3304,8 @@ mod tests {
                         ports.declare("signal", PortDirection::In, Some(7));
                     }
                 },
-                metadata: |world, entity, _, direction| {
+                metadata: |world, entity, _, direction, slot| {
+                    assert_eq!(slot, Some(7), "metadata consumes the live declared slot");
                     world
                         .resource::<MetadataReads>()
                         .0
@@ -3874,6 +3897,43 @@ mod tests {
         assert_eq!(collisions.len(), 1);
         assert_eq!(collisions[0].direction, PortCollisionDirection::InOut);
         assert_eq!(collisions[0].owners.len(), 2);
+    }
+
+    #[test]
+    fn metadata_receives_live_slots_for_selected_and_coalesced_directions() {
+        let mut world = test_world();
+        let entity = world.spawn_empty().id();
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            declare_ports: |_, _, ports| {
+                ports.declare("release", PortDirection::Out, Some(3));
+                ports.declare("release", PortDirection::In, Some(7));
+            },
+            metadata: |world, entity, name, direction, slot| {
+                assert_eq!(name, "release");
+                assert_eq!(
+                    slot,
+                    Some(if direction == PortDirection::In { 7 } else { 3 })
+                );
+                owner_a_metadata(world, entity, name, direction, slot)
+            },
+            ..OWNER_A_INPUT
+        });
+        assert!(
+            registry
+                .input_port_metadata(&world, entity, "release")
+                .is_some()
+        );
+        assert!(
+            registry
+                .output_port_metadata(&world, entity, "release")
+                .is_some()
+        );
+        let infos = registry.entity_port_infos(&world, entity);
+        assert_eq!(infos.len(), 2);
+        let owners = registry.entity_port_owners(&world, entity);
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].direction, PortDirection::InOut);
     }
 
     #[derive(Resource, Default)]

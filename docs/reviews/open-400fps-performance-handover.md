@@ -1,5 +1,22 @@
 # High-quality realtime performance handover
 
+## Live declaration metadata slots
+
+The [port metadata change](live-port-metadata-slots-2026-10-26.md) carries the
+already-selected live slot into the backend metadata callback. Indexed owners
+avoid repeated name lookup while retaining current membership, engineering
+contracts and atomic write checks. Twenty alternating independent fixture runs
+reduce complete scalar-surface transaction median time by 3.4%, with identical
+final f64 bits. This is a fixture gain, not a measured whole-scene speedup.
+
+The regular production build passes the six-check connection gate, Summer's
+102 checks, Roadster's eight and Griffin's source-preserved landing handoff.
+Griffin diagnostics are clear and rendering is inspected; ramp unfolding is
+still active. Readiness is 13.363 s, coupled-tick p50/p95 5.239/12.162 ms and
+application-frame p50/p95 14.609/20.714 ms under concurrent workloads.
+All owned sessions close. Performance targets and the two articulated replay
+failures remain open. Raw evidence stays ignored.
+
 ## Current constructor attribution
 
 The [assignment-producer index proposal](rumoca-assignment-producer-index-2026-10-26.md)

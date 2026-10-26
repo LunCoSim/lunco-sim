@@ -491,7 +491,7 @@ mod tests {
                 out.declare("rate", PortDirection::Out, Some(2));
             }
         },
-        metadata: |_world, _entity, name, direction| {
+        metadata: |_world, _entity, name, direction, _slot| {
             let (unit, min, max, writable) = match name {
                 "target" => (
                     unit("cm", Dimension::LENGTH, 0.01),

@@ -377,13 +377,16 @@ fn avian_metadata(
     entity: Entity,
     name: &str,
     direction: PortDirection,
+    slot: Option<u64>,
 ) -> PortMetadata {
-    let (_, group, _) = avian_named_port(world, entity, name, |port_direction| {
-        direction == PortDirection::InOut || port_direction == direction
-    })
-    .expect("Avian metadata is requested only for a listed owner port");
-    let port = avian_metadata_port(group, name, direction)
-        .expect("selected Avian declaration has its engineering contract");
+    let slot = slot.expect("Avian declarations supply their table slot");
+    let group = &AVIAN[(slot >> 16) as usize];
+    let port = if direction == PortDirection::InOut {
+        avian_coalesced_metadata_port(group, name)
+            .expect("coalesced Avian declaration has its shared engineering contract")
+    } else {
+        &group.ports[(slot & 0xffff) as usize]
+    };
     let (min, max) = match port.contract.range {
         AvianRange::Unbounded => (None, None),
         AvianRange::Positive => (
@@ -495,11 +498,7 @@ fn avian_metadata(
 /// public name into `InOut`; in that case the Avian port table must provide one
 /// shared engineering contract for both sides. The input declaration supplies
 /// write authority, while the output declaration supplies the measured sample.
-fn avian_metadata_port(
-    group: &AvianGroup,
-    name: &str,
-    direction: PortDirection,
-) -> Option<&'static AvianPort> {
+fn avian_coalesced_metadata_port(group: &AvianGroup, name: &str) -> Option<&'static AvianPort> {
     let find = |direction| {
         group
             .ports
@@ -507,24 +506,19 @@ fn avian_metadata_port(
             .find(|port| port.name == name && port.dir == direction)
     };
 
-    match direction {
-        PortDirection::In | PortDirection::Out => find(direction),
-        PortDirection::InOut => {
-            if let Some(port) = find(PortDirection::InOut) {
-                return Some(port);
-            }
-            match (find(PortDirection::In), find(PortDirection::Out)) {
-                (Some(input), Some(output)) => {
-                    debug_assert_eq!(
-                        input.contract, output.contract,
-                        "Avian input/output declarations for `{name}` must share one owner contract"
-                    );
-                    Some(input)
-                }
-                (Some(port), None) | (None, Some(port)) => Some(port),
-                (None, None) => None,
-            }
+    if let Some(port) = find(PortDirection::InOut) {
+        return Some(port);
+    }
+    match (find(PortDirection::In), find(PortDirection::Out)) {
+        (Some(input), Some(output)) => {
+            debug_assert_eq!(
+                input.contract, output.contract,
+                "Avian input/output declarations for `{name}` must share one owner contract"
+            );
+            Some(input)
         }
+        (Some(port), None) | (None, Some(port)) => Some(port),
+        (None, None) => None,
     }
 }
 
@@ -660,7 +654,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             declare_map(out, &c.inputs, PortDirection::In, |_| true);
         }
     },
-    metadata: |world, entity, name, direction| {
+    metadata: |world, entity, name, direction, _slot| {
         let source = "Co-simulation participant";
         let authority = if matches!(direction, PortDirection::Out) {
             "solver"
@@ -826,7 +820,7 @@ const PORT_BACKEND: PortBackend = PortBackend {
             out.declare(PORT_NAME, PortDirection::InOut, Some(0));
         }
     },
-    metadata: |world, entity, _name, direction| {
+    metadata: |world, entity, _name, direction, _slot| {
         scalar_endpoint_metadata(world, entity, direction, "scalar endpoint", "port owner")
     },
     read_output: |w, e, n| {
@@ -903,10 +897,15 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
             endpoint.is_some_and(|endpoint| world.get::<Port>(endpoint).is_some())
         });
     },
-    metadata: |world, entity, name, direction| {
+    metadata: |world, entity, _name, direction, slot| {
         let endpoint = world
             .get::<OutputPorts>(entity)
-            .and_then(|ports| ports.get(name))
+            .and_then(|ports| {
+                ports
+                    .ports
+                    .get_slot(slot.expect("runtime output declarations supply a slot"))
+            })
+            .copied()
             .expect("metadata requires a declared runtime output");
         scalar_endpoint_metadata(world, endpoint, direction, "runtime producer", "producer")
     },
@@ -992,10 +991,15 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
             }
         }
     },
-    metadata: |world, entity, name, direction| {
+    metadata: |world, entity, _name, direction, slot| {
         let endpoint = world
             .get::<PortSurface>(entity)
-            .and_then(|surface| surface.get(name))
+            .and_then(|surface| {
+                surface
+                    .ports
+                    .get_slot(slot.expect("component port declarations supply a slot"))
+            })
+            .map(|port| port.endpoint)
             .expect("metadata requires a declared component port");
         scalar_endpoint_metadata(
             world,
@@ -1111,7 +1115,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
             out.declare("piloted", PortDirection::Out, Some(0));
         }
     },
-    metadata: |_world, _entity, _name, direction| {
+    metadata: |_world, _entity, _name, direction, _slot| {
         PortMetadata::scalar(
             direction,
             None,

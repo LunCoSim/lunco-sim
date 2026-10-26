@@ -1283,7 +1283,7 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
                 );
             }
         },
-        metadata: |_world, _entity, name, direction| {
+        metadata: |_world, _entity, name, direction, _slot| {
             let unit = if name.ends_with("_m") {
                 Some(("m", Dimension::LENGTH))
             } else if name.ends_with("_s") {

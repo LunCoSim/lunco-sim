@@ -937,8 +937,8 @@ native slot order and validate the selected stored values through their owner.
 Keep declared but unsampled scalars distinct from missing runtime endpoints;
 verify every direction/owner row, endpoint removal and missing-name rejection. Measure
 selected reads on a large surface and the consuming production behavior tree.
-Avian resolution, named declarations and metadata selection share immutable
-name candidates derived from `AVIAN`. Preserve candidate order and live group
+Avian resolution and named declarations use immutable name candidates derived
+from `AVIAN`; metadata consumes the selected live slot. Preserve candidate order and live group
 membership on removal, re-admission and mobility edits; full inspection retains
 table order. The index does not authorize a write or cache world membership.
 `write_resolved` shares its locator's `Arc<str>` with canonical input-write
@@ -955,6 +955,9 @@ World borrow. Handle creation, preparation and batch preflight consume that
 result without repeating the winner's resolver. Verify one resolver call per
 admission, declared owners without a slot, readable input-side sources, stale
 layouts and metadata edits; do not substitute a persistent ownership cache.
+The metadata callback receives the declaration's slot in that same immutable
+World borrow. Coalesced inspection keeps the first slot and merged direction;
+preserve each owner's shared input/output contract when consuming that slot.
 The shell's steady `WorkbenchSnapshot` check compares borrowed dock and
 perspective iterators before materializing owned vectors; preserve that
 allocation-free stable path when changing layout publication.

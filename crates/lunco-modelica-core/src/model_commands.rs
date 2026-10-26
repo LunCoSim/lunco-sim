@@ -638,7 +638,7 @@ mod tests {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 1,
             declare_ports: list_declared_input,
-            metadata: |_world, _entity, _name, direction| {
+            metadata: |_world, _entity, _name, direction, _slot| {
                 PortMetadata::scalar(
                     direction,
                     None,
