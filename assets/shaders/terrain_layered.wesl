@@ -9,7 +9,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
+import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
 
 //!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
@@ -302,16 +302,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     @if((VERTEX_UVS_A)) var map_n = textureSample(normal_tex, normal_smp, uv);
     @if((VERTEX_UVS_A)) var map_s = textureSample(surface_tex, surface_smp, uv);
     @if((VERTEX_UVS_A)) let map_footprint = pw / mat.map_texel_size_m;
-    @if((VERTEX_UVS_A)) let outside_site_uv = vec2(
-        max(max(-uv.x, uv.x - 1.0), 0.0),
-        max(max(-uv.y, uv.y - 1.0), 0.0),
-    );
-    // The exterior material uses the same rectangle as the geometry.
-    @if((VERTEX_UVS_A)) let outside_m = outside_site_uv * 2.0 * mat.terrain_half_extent;
-    @if((VERTEX_UVS_A)) let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, uv.x < 0.0);
-    @if((VERTEX_UVS_A)) let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, uv.y < 0.0);
-    @if((VERTEX_UVS_A)) let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
-    @if((VERTEX_UVS_A)) site_material_weight = 1.0 - smoothstep(0.0, 1.0, transition);
+    @if((VERTEX_UVS_A)) site_material_weight = terrain_continuation_weight(
+        uv, mat.terrain_half_extent, mat.site_blend_widths_m);
     @if((VERTEX_UVS_A)) let map_weights = terrain_map_weights(
         map_footprint,
         mat.derived_surface_on,

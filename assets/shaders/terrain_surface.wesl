@@ -48,6 +48,17 @@ fn terrain_morph_weight(
     return max(morph, max(max(edge.x, edge.y), max(edge.z, edge.w)));
 }
 
+/// C1 material fade across a rectangular crop. Multiplying the axial weights
+/// keeps the corner diagonal smooth and reaches zero on every exterior edge.
+/// Width order is west, east, south, north, matching the geometry owner.
+fn terrain_continuation_weight(uv: vec2<f32>, half_extent: f32, widths: vec4<f32>) -> f32 {
+    let outside = max(abs(uv - vec2(0.5)) - vec2(0.5), vec2(0.0)) * 2.0 * half_extent;
+    let width = vec2(select(widths.y, widths.x, uv.x < 0.0),
+                     select(widths.z, widths.w, uv.y < 0.0));
+    let weight = 1.0 - smoothstep(vec2(0.0), vec2(1.0), outside / max(width, vec2(1e-6)));
+    return weight.x * weight.y;
+}
+
 /// Preserve the measured crop's texture footprint, then progressively average
 /// its edge outside coverage. A clamped coordinate alone stretches individual
 /// edge texels across the entire transition surface. Both continuation materials

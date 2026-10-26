@@ -6,7 +6,7 @@ import bevy_pbr::render::{
 @if((!PREPASS_PIPELINE))
 import super::pbr_lit::lit_n_occluded_sun_response;
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::terrain_continuation_gradients;
+import super::terrain_surface::{terrain_continuation_gradients, terrain_continuation_weight};
 import bevy_pbr::render::{pbr_functions, mesh_view_bindings::view};
 @if((PREPASS_PIPELINE))
 import bevy_pbr::prepass::io as prepass_io;
@@ -300,16 +300,8 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
     var continuation_weight = 0.0;
     var roughness = mat.roughness;
     var ao = 1.0;
-    @if((VERTEX_UVS_A)) let outside_uv = vec2(
-        max(max(-in.uv.x, in.uv.x - 1.0), 0.0),
-        max(max(-in.uv.y, in.uv.y - 1.0), 0.0),
-    );
-    // Width order matches the geometry: west, east, south, north.
-    @if((VERTEX_UVS_A)) let outside_m = outside_uv * 2.0 * max(mat.terrain_half_extent, 1.0);
-    @if((VERTEX_UVS_A)) let width_x = select(mat.site_blend_widths_m.y, mat.site_blend_widths_m.x, in.uv.x < 0.0);
-    @if((VERTEX_UVS_A)) let width_z = select(mat.site_blend_widths_m.z, mat.site_blend_widths_m.w, in.uv.y < 0.0);
-    @if((VERTEX_UVS_A)) let transition = max(outside_m.x / max(width_x, 1e-6), outside_m.y / max(width_z, 1e-6));
-    @if((VERTEX_UVS_A)) let site_weight = 1.0 - smoothstep(0.0, 1.0, transition);
+    @if((VERTEX_UVS_A)) let site_weight = terrain_continuation_weight(
+        in.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
     @if((VERTEX_UVS_A)) continuation_weight = mat.site_base_color.a * site_weight;
     @if((VERTEX_UVS_A)) let site_grad = terrain_continuation_gradients(in.uv);
     @if((VERTEX_UVS_A)) let site_uv = clamp(in.uv, vec2(0.0), vec2(1.0));

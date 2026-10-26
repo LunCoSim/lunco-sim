@@ -102,7 +102,9 @@ from sampling its own surface inside the filter footprint. Depth bias remains
 ### USD-authored DEM-to-globe continuation
 
 Exterior smoothing preserves the first native posting and filters only the
-continuation in its preparation worker, without increasing mesh density. Keep
+continuation in its preparation worker. Geometry and material fades multiply
+the two axial weights, keeping corner diagonals smooth. The existing bounded
+ring tessellator accounts for the product fade's curvature. Keep
 the DEM appearance visibly distinct. See [the geometry contract](60-curvature-elevation-and-gravity.md)
 for ownership and sampling.
 

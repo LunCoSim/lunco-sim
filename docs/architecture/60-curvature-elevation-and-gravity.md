@@ -43,17 +43,32 @@ The render shell closes the finite crop; it does not describe measured terrain
 outside it. One collar width is sized from the largest measured edge relief and
 outward slope continuation over the crop's posting spacing. Every side uses
 that width. The exterior shoulder continues the measured slope over one
-posting, then uses a cubic fade to the sphere over at least one full crop width.
+posting, then multiplies cubic fades along the two exterior axes to reach the
+sphere over at least one full crop width. The fade and its first derivative are
+continuous across corner diagonals and vanish at every outer rectangle edge.
 This preserves the horizontal scale of broad landforms instead of compressing
 them into an artificial perimeter rim. Larger relief can increase that width
 to retain the 0.60 relief-grade sizing bound. Exterior relief and gradients use
 periodic binomial scales prepared once by `lunco-celestial-spatial` in the
-handoff worker. The filter footprint grows sublinearly with exterior distance
-and the native posting spacing, preserving broad edge shape. Mesh sampling
-interpolates two scales without per-vertex filtering, extra vertices, or
-per-frame smoothing. DEM appearance remains visibly distinct. The sizing bound
+handoff worker. After the first posting, the filter footprint grows as
+`(distance - posting)^2 / distance`, spreading each boundary feature laterally
+as it relaxes. Shape-preserving Hermite interpolation across the retained scales
+keeps height and scale derivatives continuous without introducing overshoot.
+Mesh sampling uses adjacent levels without per-vertex filtering or per-frame
+smoothing. The bounded radial tessellation uses the product fade's
+corner curvature bound to retain half-posting interpolation accuracy. DEM
+appearance remains visibly distinct. The sizing bound
 is not a measured terrain slope limit and does not depend on Sun or camera position.
 Interior DEM samples, mission queries, and colliders are never feathered or altered.
+Continuation filtering and fade derivatives are geometry math owned by
+`lunco-celestial-spatial`, prepared on its bounded handoff worker and consumed
+by the shared visual/contact mesh. They introduce no selection policy or hook.
+The existing typed Rhai admission hook retains material readiness decisions.
+The `terrain_surface_continuation.rhai` production gate compares native collar
+and DEM morph vertices against the mission height queries, including negative
+boundary and width validators. Pure corner derivatives and filtering are tested
+at the geometry owner.
+
 Each Twin derives its shell datum, posting spacing, measured relief envelope,
 and collar geometry from its own crop. No body-wide raster, download, or
 Apollo-specific identity is part of this contract.

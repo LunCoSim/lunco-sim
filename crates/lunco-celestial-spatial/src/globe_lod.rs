@@ -272,10 +272,11 @@ struct BoundaryBlendSource {
     boundary_posting_m: f64,
 }
 
-/// Grow the filter footprint sublinearly so broad edge relief stays local.
+/// Preserve the first posting, then widen the footprint toward exterior distance.
+/// An edge feature spreads laterally as it relaxes instead of remaining a ridge.
 fn boundary_smoothing_sigma(distance_m: f64, posting_m: f64) -> f64 {
     let exterior_m = (distance_m - posting_m).max(0.0);
-    exterior_m / ((1.0 + exterior_m / posting_m).sqrt() + 1.0)
+    exterior_m * (exterior_m / (exterior_m + posting_m))
 }
 
 /// Build periodic binomial scales once in the handoff preparation worker.
@@ -351,7 +352,7 @@ fn boundary_signal_at(
         .expect("validated perimeter signal lattice");
     let lower = boundary_perimeter_index(side, lower, n).expect("valid perimeter side");
     let upper = boundary_perimeter_index(side, upper, n).expect("valid perimeter side");
-    let mix = |a: [f64; 3], b: [f64; 3], t: f64| {
+    let mix = |a: [f64; 3], b: [f64; 3], t: f64| -> [f64; 3] {
         std::array::from_fn(|axis| a[axis] + (b[axis] - a[axis]) * t)
     };
     let sample =
@@ -366,11 +367,46 @@ fn boundary_signal_at(
     } else {
         let a = &profile.levels[low];
         let b = &profile.levels[high];
-        mix(
-            sample(a),
-            sample(b),
-            smoothstep((sigma_m - a.sigma_m) / (b.sigma_m - a.sigma_m)),
-        )
+        // Shape-preserving Hermite tangents keep the scale derivative continuous
+        // and nonzero through a monotone sequence of filtered heights. The native
+        // level and the widest retained level have zero scale derivative.
+        let tangent = |index: usize| -> [f64; 3] {
+            if index == 0 || index + 1 == profile.levels.len() {
+                return [0.0; 3];
+            }
+            let previous = &profile.levels[index - 1];
+            let current = &profile.levels[index];
+            let next = &profile.levels[index + 1];
+            let h0 = current.sigma_m - previous.sigma_m;
+            let h1 = next.sigma_m - current.sigma_m;
+            let v0 = sample(previous);
+            let v1 = sample(current);
+            let v2 = sample(next);
+            std::array::from_fn(|axis| {
+                let d0 = (v1[axis] - v0[axis]) / h0;
+                let d1 = (v2[axis] - v1[axis]) / h1;
+                if d0 == 0.0 || d1 == 0.0 || d0.signum() != d1.signum() {
+                    0.0
+                } else {
+                    let w0 = 2.0 * h1 + h0;
+                    let w1 = h1 + 2.0 * h0;
+                    (w0 + w1) / (w0 / d0 + w1 / d1)
+                }
+            })
+        };
+        let span = b.sigma_m - a.sigma_m;
+        let t = ((sigma_m - a.sigma_m) / span).clamp(0.0, 1.0);
+        let t2 = t * t;
+        let v0 = sample(a);
+        let v1 = sample(b);
+        let m0 = tangent(low);
+        let m1 = tangent(high);
+        std::array::from_fn(|axis| {
+            (2.0 * t - 3.0) * t2 * (v0[axis] - v1[axis])
+                + v0[axis]
+                + ((t - 2.0) * t + 1.0) * t * span * m0[axis]
+                + (t - 1.0) * t2 * span * m1[axis]
+        })
     };
     BoundarySignalValue {
         relief_m: value[0],
@@ -397,12 +433,11 @@ impl HeightSource for BoundaryBlendSource {
         let distance = distance_x.hypot(distance_z);
         let x_side = if distance_x < 0.0 { 0 } else { 1 };
         let z_side = if distance_z < 0.0 { 3 } else { 2 };
-        let radial_fraction = (distance_x.abs() / self.collar_widths[x_side])
-            .max(distance_z.abs() / self.collar_widths[z_side]);
-        if radial_fraction >= 1.0 {
+        if distance_x.abs() >= self.collar_widths[x_side]
+            || distance_z.abs() >= self.collar_widths[z_side]
+        {
             return self.globe.height_at(x, z);
         }
-        let local_collar_m = distance / radial_fraction;
         // The nearest perimeter point is unique. At a corner either incident
         // side reads the same sample; never add two copies of its relief.
         let (side, along) = if distance_x != 0.0 {
@@ -434,9 +469,14 @@ impl HeightSource for BoundaryBlendSource {
                 + edge_slope * posting_m * integrated_inverse_smootherstep(distance / posting_m)
         } else {
             let continued = edge_relief + edge_slope * posting_m * 0.5;
-            let fade_start = posting_m;
-            let fade_width = (local_collar_m - fade_start).max(f64::EPSILON);
-            continued * (1.0 - smoothstep((distance - fade_start) / fade_width))
+            // A product of axial fades is C1 across the corner diagonal and
+            // reaches the sphere with zero slope on each outer rectangle edge.
+            let fade = |distance: f64, width: f64| {
+                1.0 - smoothstep((distance.abs() - posting_m) / (width - posting_m))
+            };
+            continued
+                * fade(distance_x, self.collar_widths[x_side])
+                * fade(distance_z, self.collar_widths[z_side])
         };
         self.globe.height_at(x, z) + relief
     }
@@ -465,13 +505,13 @@ fn collar_radial_segments(collar_m: f64, posting_m: f64) -> Result<usize, &'stat
     if !collar_m.is_finite() || !posting_m.is_finite() || posting_m <= 0.0 || collar_m < posting_m {
         return Err("DEM exterior dimensions must be finite with at least one posting of width");
     }
-    // Resolve the one-posting slope continuation and bound radial cubic-fade
-    // interpolation error by a half posting under the quadratic ring schedule.
+    // Resolve the one-posting slope continuation and bound the product fade
+    // along corner rays by a half posting under the quadratic ring schedule.
     let near_edge = (2.0 * collar_m / posting_m).sqrt();
     let fade_width = collar_m - posting_m;
     let relief = fade_width * MAX_GLOBE_HANDOFF_RELIEF_GRADE / 1.5;
     let fade = if fade_width > 0.0 {
-        (6.0 * relief / posting_m).sqrt() * collar_m / fade_width
+        (12.0 * relief / posting_m).sqrt() * collar_m / fade_width
     } else {
         0.0
     };
@@ -1899,6 +1939,99 @@ pub(crate) fn update_globe_lod(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn collar_scale_interpolation_retains_filtered_surface_slope() {
+        let profile = BoundarySignalProfile {
+            resolution: 2,
+            levels: [0.0, 4.0, 8.0, 16.0]
+                .into_iter()
+                .map(|sigma_m| BoundarySignalLevel {
+                    sigma_m,
+                    samples: vec![[10.0 - 0.5 * sigma_m, 0.0, 0.0]; 4],
+                })
+                .collect(),
+        };
+        let sample = |sigma| boundary_signal_at(&profile, 0, 1.0, 0.0, sigma).relief_m;
+        let epsilon = 0.0001;
+        for sigma in [4.0, 8.0] {
+            let left = (sample(sigma) - sample(sigma - epsilon)) / epsilon;
+            let right = (sample(sigma + epsilon) - sample(sigma)) / epsilon;
+            assert!((left + 0.5).abs() < 0.0001 && (right + 0.5).abs() < 0.0001);
+        }
+        for pair in profile.levels.windows(2) {
+            for i in 0..=100 {
+                let value = sample(
+                    pair[0].sigma_m + (pair[1].sigma_m - pair[0].sigma_m) * i as f64 / 100.0,
+                );
+                assert!(value >= pair[1].samples[0][0] && value <= pair[0].samples[0][0]);
+            }
+        }
+    }
+
+    #[test]
+    fn visual_collar_filters_ridges_and_has_continuous_corner_fade() {
+        let posting = 4.0;
+        assert_eq!(boundary_smoothing_sigma(posting, posting), 0.0);
+        let sigma = boundary_smoothing_sigma(128.0, posting);
+        let wave: Vec<_> = (0..256)
+            .map(|i| {
+                [
+                    10.0 + 5.0 * (std::f64::consts::TAU * i as f64 / 16.0).cos(),
+                    0.0,
+                    0.0,
+                ]
+            })
+            .collect();
+        let profile = BoundarySignalProfile {
+            resolution: 65,
+            levels: boundary_signal_levels(wave, posting, sigma).unwrap(),
+        };
+        for along in [-128.0, -100.0, 0.0, 100.0, 128.0] {
+            let value = boundary_signal_at(&profile, 1, 128.0, along, sigma);
+            assert!((value.relief_m - 10.0).abs() < 0.01);
+        }
+
+        // A constant perimeter isolates the rectangular fade from the sampled
+        // landform. Its normal must be continuous through every corner bisector.
+        let collar = BoundaryBlendSource {
+            site: SiteSurfaceSource::Flat {
+                height_m: 10.0,
+                datum_m: 0.0,
+            },
+            globe: MeanSphereSource {
+                radius_m: 1_737_400.0,
+            },
+            region: Square {
+                center: [0.0, 0.0],
+                half: 128.0,
+            },
+            boundary_signal: BoundarySignalProfile {
+                resolution: 65,
+                levels: boundary_signal_levels(vec![[10.0, 0.0, 0.0]; 256], posting, 1024.0)
+                    .unwrap(),
+            },
+            collar_widths: [512.0; 4],
+            boundary_posting_m: posting,
+        };
+        let relief = |x, z| collar.height_at(x, z) - collar.globe.height_at(x, z);
+        let epsilon = 0.001;
+        for sx in [-1.0, 1.0] {
+            for sz in [-1.0, 1.0] {
+                let x = sx * 384.0;
+                let z = sz * 384.0;
+                let center = relief(x, z);
+                let left = (center - relief(x - epsilon, z)) / epsilon;
+                let right = (relief(x + epsilon, z) - center) / epsilon;
+                assert!(
+                    (left - right).abs() < 1e-5,
+                    "corner derivative jump: {left} vs {right}"
+                );
+                assert_eq!(relief(sx * 640.0, z), 0.0);
+                assert!((relief(sx * (640.0 - epsilon), z) / epsilon).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
     fn collar_smoothing_preserves_native_join_and_removes_periodic_ripples() {
         let native: Vec<_> = (0..128)
             .map(|i| [17.0 + if i % 2 == 0 { 3.0 } else { -3.0 }, 1.0, -2.0])
@@ -2189,7 +2322,7 @@ mod tests {
         let radial_segments = collar_radial_segments(collar_m, posting_m).unwrap();
         let first_step = collar_m / (radial_segments * radial_segments) as f64;
         let relief = (collar_m - posting_m) * MAX_GLOBE_HANDOFF_RELIEF_GRADE / 1.5;
-        let fade_error_bound = 3.0 * relief * (collar_m / (collar_m - posting_m)).powi(2)
+        let fade_error_bound = 6.0 * relief * (collar_m / (collar_m - posting_m)).powi(2)
             / (radial_segments * radial_segments) as f64;
         assert!(first_step <= posting_m * 0.5);
         assert!(fade_error_bound <= posting_m * 0.5);
