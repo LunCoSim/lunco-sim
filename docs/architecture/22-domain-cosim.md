@@ -59,7 +59,10 @@ one component. Topology fingerprints include complete unit definitions and
 bounds, update at contract mutation, and exclude changing scalar samples.
 `UnitReference` shares its immutable identity and complete definition across
 metadata clones. Equality and serialized values retain the full unit contract;
-owner replacement creates a distinct reference. Fixed engine endpoint units
+owner replacement creates a distinct reference. `CoordinateFrameId` likewise
+shares immutable text across clones while retaining exact text equality, hashing
+and string serialization. Empty frame identities are still rejected on input.
+Fixed engine endpoint units
 come from `lunco-port-core::EngineUnit`, including scene-property metre,
 lumen and dimensionless contracts; authored participants retain their own
 resolved unit definitions. Owner precedence, group

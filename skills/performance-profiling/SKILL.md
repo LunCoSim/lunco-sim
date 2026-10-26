@@ -302,8 +302,10 @@ retained command preparation has no such borrow guarantee and must still be
 revalidated at commit. Do not replace either proof with a revision-only cache.
 The scoped transaction's Bevy hash table stores indexes into its staged writes;
 duplicate checks compare full identities without cloning the port names again.
-Unit-reference clones share immutable definitions, and Avian reuses its fixed
-built-in unit references. This storage sharing never caches the live port
+Unit-reference clones share immutable definitions, coordinate-frame clones share
+immutable text, and Avian reuses its fixed built-in unit references. Preserve
+exact text/hash/serialization behavior and reject blank frame identities. This
+storage sharing never caches the live port
 owner, bounds, frame or permission. The bounded debug spans
 `port_input_transaction_stage` and `port_input_transaction_commit` separate
 validation from application when `lunco_port_core::ports=debug` is enabled.

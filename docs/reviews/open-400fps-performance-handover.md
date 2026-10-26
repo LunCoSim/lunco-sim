@@ -1,5 +1,22 @@
 # High-quality realtime performance handover
 
+## Shared coordinate-frame identity
+
+The [immutable frame-text change](shared-coordinate-frame-identity-2026-10-26.md)
+removes repeated string allocation from metadata clones at the existing value
+owner. Alternating independent binaries reduce the complete resolved-write
+fixture median from 221.500 to 201.347 ms (9.1%), retaining exact final bits and
+all live contract checks. Focused serialization/frame checks and the six-check
+production connection gate pass. The regular build passes Summer's 102 checks,
+Roadster's eight and Griffin's source-preserved sleeping landing handoff with
+clear diagnostics and inspected rendering. All owned sessions close.
+
+Griffin readiness is 12.708 s, coupled-tick p50/p95 is 3.402/4.089 ms and
+application-frame p50/p95 is 11.143/13.686 ms under concurrent workloads.
+These are functional qualification observations, not an isolated scene speedup
+or GPU measurement. All requested performance targets and the intermittent
+articulated exact-replay issue remain open. Raw evidence stays ignored.
+
 ## Current USD and coupled-exchange attribution
 
 The [parent-path proposal](usd-parent-path-preparation-2026-10-26.md) records a

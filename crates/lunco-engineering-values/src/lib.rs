@@ -16,9 +16,10 @@ use std::sync::Arc;
 /// named, while consumers compare identities or resolve a transform between
 /// them. Coordinate values must not be compared across different frames
 /// without an explicit transform.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
-#[serde(transparent)]
-pub struct CoordinateFrameId(String);
+/// Clones share immutable text; independently constructed identities compare
+/// by their full text.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CoordinateFrameId(Arc<str>);
 
 impl CoordinateFrameId {
     /// Construct a non-empty coordinate-frame identity.
@@ -27,7 +28,7 @@ impl CoordinateFrameId {
         if id.trim().is_empty() {
             return Err(FrameIdError::Empty);
         }
-        Ok(Self(id))
+        Ok(Self(id.into()))
     }
 
     /// Stable source-owned frame name.
@@ -45,6 +46,15 @@ impl AsRef<str> for CoordinateFrameId {
 impl fmt::Display for CoordinateFrameId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for CoordinateFrameId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.as_str().serialize(serializer)
     }
 }
 
@@ -1218,6 +1228,27 @@ fn finite(value: f64) -> Result<f64, UnitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coordinate_frame_identity_shares_text_and_validates_serialization() {
+        let frame = CoordinateFrameId::new(" mission/測定 frame ").unwrap();
+        let clone = frame.clone();
+        assert!(Arc::ptr_eq(&frame.0, &clone.0));
+        let encoded = serde_json::to_string(&frame).unwrap();
+        assert_eq!(encoded, "\" mission/測定 frame \"");
+        let decoded: CoordinateFrameId = serde_json::from_str(&encoded).unwrap();
+        assert!(!Arc::ptr_eq(&frame.0, &decoded.0));
+        assert_eq!(frame, decoded);
+        let identities = std::collections::HashSet::from([frame, clone, decoded]);
+        assert_eq!(identities.len(), 1);
+        for invalid in ["", " \t\n"] {
+            assert_eq!(CoordinateFrameId::new(invalid), Err(FrameIdError::Empty));
+            assert!(
+                serde_json::from_str::<CoordinateFrameId>(&serde_json::to_string(invalid).unwrap())
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn converts_only_compatible_injected_units() {
