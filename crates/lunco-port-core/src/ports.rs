@@ -2580,6 +2580,76 @@ mod tests {
         assert_eq!(ports.slots_for_names(requested).count(), 0);
     }
 
+    #[test]
+    #[ignore = "manual multi-port atomic transaction measurement"]
+    fn multi_port_transaction_diagnostic() {
+        use super::*;
+        #[derive(Component)]
+        struct OtherOwner;
+        for width in [1, 8, 32] {
+            let mut world = test_world();
+            world.register_component::<OtherOwner>();
+            let names: Vec<_> = (0..width).map(|i| format!("input{i:03}")).collect();
+            let borrowed: Vec<_> = names.iter().map(String::as_str).collect();
+            let mut registry = PortRegistry {
+                backends: Arc::new(Vec::new()),
+            };
+            for _ in 0..5 {
+                registry.register(PortBackend {
+                    list_entities: |_, _| {},
+                    topology_key: |_, _| 0,
+                    declare_ports: |world, entity, out| {
+                        if world.get::<OtherOwner>(entity).is_some() {
+                            out.declare("other", PortDirection::In, Some(0));
+                        }
+                    },
+                    metadata: test_metadata,
+                    read_output: no_read,
+                    read_input: no_read,
+                    initial_expression: None,
+                    read_slot: None,
+                    read_input_slot: None,
+                    write_slot: None,
+                });
+            }
+            registry.register(INPUT_PORTS_BACKEND);
+            let mut targets = Vec::new();
+            for _ in 0..32 {
+                let entity = world.spawn(InputPorts::new(&borrowed)).id();
+                for name in &names {
+                    let locator = registry.resolve_input(&world, entity, name).unwrap();
+                    assert_eq!(locator.backend, 5);
+                    targets.push((entity, locator));
+                }
+            }
+            let mut buffer = InputWriteBuffer::default();
+            let began = std::time::Instant::now();
+            for tick in 1..=2048 {
+                registry
+                    .input_transaction(&mut world, &mut buffer, |transaction| {
+                        for (entity, locator) in &targets {
+                            transaction.stage_resolved(*entity, locator, f64::from(tick) * 0.25)?;
+                        }
+                        Ok::<_, PortWriteError>(())
+                    })
+                    .unwrap();
+            }
+            let elapsed = began.elapsed().as_nanos();
+            for (entity, locator) in &targets {
+                assert_eq!(
+                    registry
+                        .read_resolved(&world, *entity, locator)
+                        .unwrap()
+                        .to_bits(),
+                    512.0_f64.to_bits()
+                );
+            }
+            println!(
+                "MULTI_PORT_TRANSACTION preceding=5 entities=32 width={width} iterations=2048 elapsed_ns={elapsed}"
+            );
+        }
+    }
+
     /// Measure complete staging and commit while reusing the transaction buffer.
     #[test]
     #[ignore = "manual scoped input transaction measurement"]

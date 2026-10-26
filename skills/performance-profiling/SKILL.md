@@ -106,6 +106,12 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   `PortRegistry::default()` installs the generic input owner first; registering
   other backends afterward does not make them precede it. A synthetic
   precedence fixture must verify its resolved owner index.
+  The ignored `lunco-port-core` `multi_port_transaction_diagnostic` measures
+  2,048 complete atomic transactions over 32 entities with 1, 8 or 32 inputs
+  each, behind five registered but absent component owners. It asserts the
+  winning backend and exact final scalar bits. Report every width, including
+  regressions, and qualify the actual scene separately: a multi-input fixture
+  gain does not establish a faster production exchange.
 - Attribute CPU, GPU, physics, terrain, and UI separately. Never disable
   shadows, lower authored terrain quality, change BigSpace, or change the
   standard substep count to make a graph look better.

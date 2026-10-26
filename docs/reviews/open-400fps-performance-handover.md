@@ -1,5 +1,21 @@
 # High-quality realtime performance handover
 
+## Current Griffin baseline and transaction diagnostic
+
+The [transaction investigation](input-transaction-measurement-2026-10-26.md)
+adds a reusable complete-transaction benchmark. An entity-grouped discovery
+experiment improves multi-input fixtures by 11–13% but regresses singleton
+transactions by 7%; production supplies no gain, so the runtime change is
+removed. No alternate write API remains.
+
+The regular baseline reaches source-preserved sleeping four-pad handoff with
+clear diagnostics: readiness 8.634 s, coupled-tick p50/p95 3.404/4.276 ms and
+application-frame p50/p95 9.198/13.160 ms. Initializer cache lookup is 0.717 s;
+live construction is 2.373 s despite 16,482 native hits and zero compilation.
+These are measured owners, not a full attribution of readiness time. Both
+comparison sessions close. Requested performance targets and the existing
+articulated replay issue remain open; raw evidence remains ignored.
+
 ## Indexed public output selection
 
 The [public-output projection change](runtime-public-output-selection-2026-10-26.md)
