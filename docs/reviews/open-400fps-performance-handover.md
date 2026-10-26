@@ -1,5 +1,40 @@
 # High-quality realtime performance handover
 
+## Native loading indexes and shared parents
+
+Published Rumoca `41637b1e` uses compact sorted assignment-producer intervals;
+OpenUSD `38fd797` shares immutable parent derivation. The application pins both
+portable commits. See the [Rumoca review](rumoca-assignment-producer-index-2026-10-26.md)
+and [USD review](usd-parent-path-preparation-2026-10-26.md) for measured scope.
+Native tests, Clippy and numerical canary checks pass. Production passes 46
+initialization/receipt checks, two expected faults, ten reference-edit checks,
+Summer's 102 checks, Roadster's eight and all ten unchanged exact-replay profiles.
+The historical intermittent articulated failure is not claimed fixed.
+
+Complete USD projection fixtures improve 16–19%, with 3.1 MiB higher peak RSS.
+Producer construction plus queries improves 65–88% in native fixtures. Griffin's
+regular warm readiness is 8.295 s versus 8.341 s baseline: this pair establishes
+no meaningful mission-loading improvement. Both preserve all 271 source hashes
+and reach sleeping four-pad handoff with clear diagnostics and inspected views.
+The candidate first fill takes 14.568 s. All performance targets remain open.
+
+The new Tracy run captures startup and handoff but loses its settled window to
+one pending terrain tile; it is not steady-state acceptance. It also shows cache
+churn after the numerical matrix: 8,518 native compilations/evictions during the
+initializer and a prepared-cache miss. Investigate the existing application
+cache owner and budgets before adding another mechanism. The raw capture,
+receipts, executables and exports remain ignored; all owned sessions close.
+
+The final regular build uses the published Git pins. Roadster and Griffin pass
+loading windows at 2.984 s and 9.120 s readiness, with clear diagnostics and
+inspected rendering. Summer reaches readiness in 2.803 s but fails its settled
+window on one pending terrain tile while remaining ready and unpaused. All
+source hashes stay unchanged; all sessions close. This failed window remains
+open. The final views differ from baseline and do not qualify a matched graphics
+speedup. Griffin's fully warm initializer still takes 2.487 s plus a separate
+0.744 s prepared-cache lookup. The reviews retain exact scope and raw receipts.
+
+
 ## Current Griffin baseline and transaction diagnostic
 
 The [transaction investigation](input-transaction-measurement-2026-10-26.md)
@@ -58,7 +93,7 @@ samples include structural dependency propagation (179), Serde (94), and the
 same producer-range tree (76). These overlapping groups show that a cache hit
 includes native reconstruction/validation, not merely file decoding. They do
 not justify skipping checks or replacing the cache codec as the main repair.
-The native index proposal remains pending permission; no dependency edit is made.
+The native index is published; its review records qualification and measurement limits.
 
 The [assignment-producer index proposal](rumoca-assignment-producer-index-2026-10-26.md)
 uses a fresh `ce8b553ec` / `aae2bbdd` capture. The initializer takes 3.585 s with
@@ -66,8 +101,8 @@ uses a fresh `ce8b553ec` / `aae2bbdd` capture. The initializer takes 3.585 s wit
 shared-value preparation appears in 530, Cranelift/SHA work in 442, and immutable
 producer-range tree operations in 193; these inclusive groups overlap. Most
 stacks are shallow, so whole-model cloning is not established as the dominant
-cost. A checked compact interval index is proposed at the native owner, pending
-explicit permission. No new dependency edit is made.
+cost. The checked compact interval index is published at the native owner under
+the user's explicit approval.
 
 The trace passes native framing and zone/CPU export checks and preserves all
 271 source hashes. It contains complete startup and handoff, but the settled
@@ -120,9 +155,8 @@ new complete, source-preserved Griffin landing capture. Native USD facts take
 1.732 s; metadata is the largest group at 414.954 ms, ahead of identity and
 connections. Transform preparation is 48.602 ms. An application-only hint-query
 reordering has no measurable benefit and is removed. Native path parsing and
-validation remain prominent in metadata CPU samples. Extending immutable parent
-derivation in `../openusd` is awaiting explicit approval; the dependency is
-unchanged. The regular application build is restored after profiling.
+validation remain prominent in metadata CPU samples. Shared immutable parent
+derivation in `../openusd` is published; qualification and measurement limits are recorded in its review. The regular application build is restored after profiling.
 
 In the same qualified capture's 46–52 s settled interval, 375 coupled exchanges
 spend p50/p95 0.963/1.340 ms in `cosim_exchange_write`. Accumulation is

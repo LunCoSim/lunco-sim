@@ -123,3 +123,7 @@ disallowed-methods = [
     { path = "bevy_ecs::system::EntityCommands::insert", reason = "Use `try_insert`: a deferred insert can apply after another system despawned the entity (live USD re-instantiation, ClearScene, scene reload) and PANICS. `remove` is already despawn-safe; `insert` is not." },
     { path = "bevy_ecs::system::EntityCommands::despawn", reason = "Use `try_despawn`: the entity may already be gone by the time the command applies." },
 ]
+
+# USD paths hash and compare immutable text; derived parent storage does not
+# participate in key identity.
+ignore-interior-mutability = ["openusd::sdf::Path"]

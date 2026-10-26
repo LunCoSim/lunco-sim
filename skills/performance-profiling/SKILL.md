@@ -1136,6 +1136,12 @@ For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 Rumoca's checked FMI reconstruction, artifact derivation and model validation;
 separate native CPU samples from JSON/Zstd work before attributing it to I/O or
 changing codecs. A disk hit does not bypass construction checks.
+For immutable assignment ownership, measure native `producer_index_diagnostic`
+construction together with prefix queries and preserve overlap, sparse-register
+and full-range checks. For USD parent sharing, pair native
+`parent_derivation_timing` with `native_projection_snapshot_benchmark`; include
+first-read construction, retained memory and scene-edit invalidation. Fixture
+gains alone do not qualify Twin loading.
 When equivalent requests share the
 same structural solve key, coalesce in-flight lowering instead of occupying a
 second worker; preserve one result position per participant in the existing
