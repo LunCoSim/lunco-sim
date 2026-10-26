@@ -1008,6 +1008,19 @@ The `lunco:wheelType` attribute on the **chassis prim** determines wheel behavio
 - `physical`: `RigidBody`, `Collider`, authored USD joints, and the generic
   Modelica/engine shaft boundary.
 
+Physical wheel geometry is independent of its shaft axis. Analytic axial
+primitives need the USD axis basis because their native meshes/colliders use
+local +Y; an authored Mesh already contains its local orientation. Initial
+projection and parameter resynchronization share that basis decision, while
+joint and inertia orientation continue to use the shaft axis.
+
+For authored profile geometry, `RevolveProfileMesh` accepts an explicit finite,
+nonzero local axis direction (default +Y). Rhai supplies the small meridian and
+the native geometry owner rotates points and normals together, then expands the
+intent into ordinary Mesh attributes through the USD document journal. This
+keeps tessellation out of script-sized point/index payloads and avoids rotating
+a component's body or joint frames to orient its geometry.
+
 #### Entity Layout (Raycast Rover)
 Raycast wheels need identity rotation so `RayCaster` casts straight down. The system splits the USD wheel into:
 1. **Physics entity**: identity rotation, NO mesh.

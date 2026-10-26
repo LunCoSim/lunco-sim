@@ -16,14 +16,14 @@ package IconFixture
         extent = DynamicSelect({{-40, 40}, {40, -70}},
           {{-40, -70 + 110 * (m / 4000)}, {40, -70}}),
         fillColor = {120, 160, 220}),
-      Text(textString = DynamicSelect("kg", String(m) + " kg"))
+      Text(extent={{-40,40},{40,20}},textString = DynamicSelect("kg", String(m) + " kg"))
     }));
   end Tank;
 
   model Valve
     input Real opening;
     annotation(Icon(graphics = {
-      Text(textString = DynamicSelect("Valve", "Valve " + String(opening)))
+      Text(extent={{-40,40},{40,20}},textString = DynamicSelect("Valve", "Valve " + String(opening)))
     }));
   end Valve;
 end IconFixture;
@@ -45,6 +45,49 @@ fn class_annotations(
 }
 
 #[test]
+fn dynamic_icon_references_preserve_array_and_nested_instance_subscripts() {
+    let source = r#"model Bank
+      annotation(Icon(graphics={
+        Text(extent={{-40,40},{40,20}},textString=DynamicSelect("opening",String(valve[2]))),
+        Rectangle(extent=DynamicSelect({{0,0},{0,1}},{{0,0},{bank[2].valve[1],1}}))
+      }));
+    end Bank;"#;
+    let ast = rumoca_phase_parse::parse_to_ast(source, "bank.mo").unwrap();
+    let icon = extract_icon(&class_annotations(&ast.classes, "Bank").unwrap()).unwrap();
+    let resolve = |name: &str| match name {
+        "valve[2]" => Some(0.25),
+        "bank[2].valve[1]" => Some(0.75),
+        _ => None,
+    };
+    let GraphicItem::Text(text) = &icon.graphics[0] else {
+        panic!("text")
+    };
+    assert_eq!(
+        text.text_string_dynamic
+            .as_ref()
+            .unwrap()
+            .eval(&resolve)
+            .unwrap()
+            .to_display(),
+        "0.25"
+    );
+    let GraphicItem::Rectangle(rectangle) = &icon.graphics[1] else {
+        panic!("rectangle")
+    };
+    assert_eq!(
+        rectangle
+            .extent_dynamic
+            .as_ref()
+            .unwrap()
+            .eval(&resolve)
+            .unwrap()
+            .p2
+            .x,
+        0.75
+    );
+}
+
+#[test]
 fn tank_icon_mass_is_dynamic() {
     // The tank shows a static "Propellant" title plus a live mass readout
     // `DynamicSelect("kg", String(m) + " kg")` — the latter is the dynamic text.
@@ -62,7 +105,15 @@ fn tank_icon_mass_is_dynamic() {
         mass.text_string_dynamic.is_some(),
         "mass text should have a DynamicSelect dynamic branch; got {mass:#?}",
     );
-    eprintln!("mass dynamic = {:#?}", mass.text_string_dynamic);
+    assert_eq!(
+        mass.text_string_dynamic
+            .as_ref()
+            .unwrap()
+            .eval(&|name| (name == "m").then_some(42.0))
+            .unwrap()
+            .to_display(),
+        "42 kg",
+    );
 }
 
 #[test]

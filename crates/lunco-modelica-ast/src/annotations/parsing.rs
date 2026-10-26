@@ -629,13 +629,9 @@ fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
             _ => None,
         },
         Expression::ComponentReference(cref) => {
-            let s = cref
-                .parts
-                .iter()
-                .map(|p| p.ident.text.as_ref())
-                .collect::<Vec<_>>()
-                .join(".");
-            Some(DynExpr::Var(s))
+            // Runtime signal identities retain every array subscript. Dropping
+            // them makes distinct valves resolve to the same nonexistent scalar.
+            Some(DynExpr::Var(cref.to_string()))
         }
         Expression::Unary {
             op: OpUnary::Minus,

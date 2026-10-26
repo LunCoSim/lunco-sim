@@ -911,6 +911,9 @@ omitted; an explicit `physxRigidBody:enableCCD` boolean is honored. Collider-axi
 rotations consume the shared USD geometry orientation in native double
 precision; the visual child narrows that same basis at the rendering boundary.
 Malformed axes and stage conventions reject projection.
+Analytic axial wheel primitives use their geometry-axis basis; Mesh wheel
+points remain in their authored local frame. Shaft/inertia axes remain separate
+from that render/collision basis, including after wheel-parameter resynchronization.
 
 Generated primitive proxies carry `LunCoDerivedGeometryAPI` and exactly one
 `lunco:derived:source` targeting their sibling Cube or Cylinder. The shared
