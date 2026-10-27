@@ -145,6 +145,11 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   individual point/spot views; camera events include that camera's directional
   cascades. Check all four names and their event counts before attributing total
   shadow cost. Late spans can contain only timestamp overhead. Use the
+  existing Tracy build for native GPU export: Bevy 0.20's `trace_tracy` enables
+  the render diagnostics recorder through `bevy_render/tracing-tracy`.
+  Inspect timestamp support and recorded pass coverage before claiming a
+  complete GPU total; a sum of recorded passes excludes uninstrumented work
+  and inter-pass gaps. Use the
   early shared child spans `lunco_light_depth/<pass_name>` when attributing
   individual maps; native exports prefix them with `lunco_shadow_shared_early/`.
   Do not sum child and parent times. `lunco_shadow_view_work` supplies admitted

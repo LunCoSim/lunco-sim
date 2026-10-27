@@ -1,5 +1,16 @@
 # High-quality realtime performance handover
 
+## Cache and GPU attribution
+
+The [cache and GPU review](griffin-cache-and-gpu-attribution-2026-10-27.md)
+records native GPU events already present in the qualified capture: camera
+early shadows and opaque 3D have diagnostic medians of 1.717 and 1.531 ms.
+Their recorded pass costs do not establish complete frame acceptance. The
+prepared-solver cache is full with two compiler cohorts and already has
+recency and publication locking; eviction is plausible, not proven. Native
+observation name/map allocation is another measured cost, with no new
+dependency change authorized or applied. Current captures remain ignored.
+
 ## Compact input transaction storage
 
 The port registry retains compact commit records within its exclusive World
