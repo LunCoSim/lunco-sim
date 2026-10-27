@@ -81,11 +81,37 @@ No dependency source is modified under the pending chain-preparation request.
 
 ## Evidence and cleanup
 
+Exact `usd_projection_facts` sampling from the same capture selects two zones,
+2,177 samples and zero missing stacks. Leading resolved leaves are character
+iteration (355), path-component traversal (174), identifier validation (108),
+and native owning-prim construction (49). These identify native path work but
+do not assign every validation sample to one caller.
+
+Six alternating pairs of independent application test binaries measure the
+complete 1,001-prim snapshot fixture, with and without authored transforms and
+with and without recipe construction. Reusing retained native attribute
+handles for UI metadata changes median times by +0.50%, +0.03%, -0.57%, and
++0.82%, respectively (positive means faster). This is not a consistent gain;
+the experiment is removed. The regular production executable is unchanged,
+SHA-256 `24386a6979fde9b46cbb2d90cae1def42f42500ca030afaa90b8ca87fe10060b`.
+Comparison receipts and logs remain ignored in `projection-metadata/`; the
+two executable snapshots are obsolete and removed after comparison.
+
+Current Summer/Tesla acceptance is still outstanding. The Summer driver run
+on API 5535/PID 1243576 used the directory name as its expected Twin name
+instead of the authored `SummerSpaceSchool`, so it timed out without a
+qualified measurement. Its owned process and API port are confirmed closed.
+Do not treat that harness error as a simulation failure. Tesla was not launched;
+its current dirty source selects `roadster_cinematic.usda`, so a future run
+must record that source cohort rather than assume the previous default scene.
+Work is paused at the user's request.
+
 Raw GPU exports and cycle inventories remain ignored under
 `.cache/codex-evidence/performance-20261027/current-tracy/`; the cache header
 inventory is under `cache-retention/`. The existing cleanup receipt records
 21 obsolete captures, raw exports and executable snapshots removed, freeing
 15,004,036,162 bytes (13.97 GiB). The current capture, baseline summaries,
-regular executable, sources and shared caches are retained. No new app session
-or build is needed for this read-only analysis, and no behavioral test is
-invalidated.
+regular executable, sources and shared caches are retained. The GPU/cache
+analysis reuses the saved capture. The metadata experiment uses focused test
+builds only; no production rebuild or retained runtime change invalidates the
+existing passing behavioral evidence.
