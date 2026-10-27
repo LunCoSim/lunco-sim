@@ -321,6 +321,9 @@ retained command preparation has no such borrow guarantee and must still be
 revalidated at commit. Do not replace either proof with a revision-only cache.
 The scoped transaction's Bevy hash table stores indexes into its staged writes;
 duplicate checks compare full identities without cloning the port names again.
+Its compact records retain only the admitted callback, entity, name, slot and
+value. Preserve full metadata snapshots for independently retained preparations;
+only the uninterrupted transaction borrow permits releasing admission metadata.
 Unit-reference clones share immutable definitions, coordinate-frame clones share
 immutable text, and Avian reuses its fixed built-in unit references. Preserve
 exact text/hash/serialization behavior and reject blank frame identities. This

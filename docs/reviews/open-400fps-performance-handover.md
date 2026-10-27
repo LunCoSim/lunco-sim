@@ -1,5 +1,15 @@
 # High-quality realtime performance handover
 
+## Compact input transaction storage
+
+The port registry retains compact commit records within its exclusive World
+borrow while preserving full live validation and atomic rejection. The
+[transaction review](compact-input-transactions-2026-10-27.md) records a
+3.9–5.2% complete-transaction fixture improvement, twelve focused input checks,
+eleven production fail-stop assertions and all 360 unchanged exact replay
+checks. Griffin passes its source-preserved landing window. Its prepared-cache
+miss and concurrent rendering workloads prevent a whole-scene speed claim.
+
 ## Typed hook conversion
 
 The hook adapter constructs Rhai native strings directly from borrowed text.

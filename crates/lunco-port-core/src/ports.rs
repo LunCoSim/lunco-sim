@@ -1490,9 +1490,19 @@ impl PreparedPortWrite {
 /// It retains capacity, not permission to commit a write in a later world state.
 #[derive(Default)]
 pub struct InputWriteBuffer {
-    writes: Vec<PreparedPortWrite>,
+    writes: Vec<StagedInputWrite>,
     /// Indexes into `writes`; duplicate checks borrow its admitted identities.
     unique: HashTable<usize>,
+}
+
+/// Commit data admitted under the transaction's uninterrupted world borrow.
+/// Metadata is checked during staging; it cannot change before these writes.
+struct StagedInputWrite {
+    commit: fn(&mut World, Entity, u64, f64),
+    entity: Entity,
+    name: Arc<str>,
+    slot: u64,
+    value: f64,
 }
 
 /// Input staging with an immutable view of the transaction's exclusive world.
@@ -1556,7 +1566,15 @@ impl InputWriteTransaction<'_> {
                 entry.insert(writes.len());
             }
         }
-        self.buffer.writes.push(write);
+        self.buffer.writes.push(StagedInputWrite {
+            commit: self.registry.backends[write.backend]
+                .write_slot
+                .expect("prepared input write has an admitted commit callback"),
+            entity: write.entity,
+            name: write.name,
+            slot: write.slot,
+            value: write.value,
+        });
         Ok(())
     }
 }
@@ -2262,7 +2280,7 @@ impl PortRegistry {
         if result.is_ok() {
             let _span = bevy::log::debug_span!("port_input_transaction_commit").entered();
             for write in &buffer.writes {
-                self.commit_validated_input_write(world, write);
+                (write.commit)(world, write.entity, write.slot, write.value);
             }
         }
         buffer.unique.clear();
