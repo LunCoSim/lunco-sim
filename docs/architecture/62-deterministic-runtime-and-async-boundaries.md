@@ -61,6 +61,11 @@ The shared headless and graphical compositions install those native plugins.
 Application integration owns authored SI conversion, validated admission,
 BigSpace frame transport, ordered multi-body gear relations, and typed telemetry.
 Contact provenance and impulses come from native `ContactGraph` pairs.
+Native XPBD passes order each joint type by ascending live entity index, so
+unrelated component changes and disable/re-enable operations cannot change the
+order of corrections to shared bodies. This world-local ordering still relies
+on deterministic application entity creation and topology admission; it is not
+a source identity or a cross-platform numerical guarantee.
 The `native_force_drives`, joint, differential, and continuous-contact production
 scenes qualify behavior; compilation alone does not qualify physics.
 

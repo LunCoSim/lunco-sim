@@ -1,5 +1,30 @@
 # High-quality realtime performance handover
 
+## Native joint replay repair
+
+Avian `ba8978b` fixes the confirmed first-step query-order defect and is published
+and pinned. The [native joint review](physics-first-step-joint-replay-2026-10-25.md)
+records actual pass/input comparisons, a failing negative control, and the native
+regression. The regular published-pin build passes all 360 exact replay checks,
+three extra repeats of the intermittent profile, and 49 joint/contact checks.
+No reference, tolerance, equation, precision or solver iteration setting changes.
+
+Velocity relaxation reuses ordered borrowed query items within each invocation.
+Its 20-rover diagnostic median falls from 1.897 to 1.237 ms compared with sorting
+inside every pass. This is an instrumented owner comparison, not complete
+coupled-step acceptance. Rumoca scratch reuse now needs separate requalification
+against the repaired native solver. Loading and complete-step targets remain open.
+
+Integration preserves main's presentation-clock repair and repeats the 360
+replay checks, 49 joint/contact checks and 13 production presentation-clock
+checks. The integrated Griffin window preserves 271 source hashes, reaches
+sleeping four-pad handoff, and has clear diagnostics and inspected rendering.
+Readiness is 21.302 s, with 3.397 s initializer construction and all 16,482 native
+cache lookups hitting. Fixed-schedule median/p95 is 3.767/4.408 ms; MainPropulsion
+worker service averages 7.132 ms. No isolated whole-product speed comparison
+is established. The review retains the distinct native, fixed-schedule, worker
+and frame timings.
+
 ## Shader input lookup and solver attribution
 
 The [shader input review](shader-input-live-slots-2026-10-26.md) records reuse
@@ -15,8 +40,8 @@ initializer artifacts after cache eviction. Its 27.658 s readiness and
 12.899/22.991 ms frame median/p95 are not isolated performance comparisons.
 The qualified Tracy capture identifies torn sweeps, residual evaluation and
 allocation inside Modelica integration. MainPropulsion remains the critical
-worker. Mutable scratch reuse is still held by its exact replay investigation;
-no numerical checks or dependency source are changed here. Raw data stays ignored.
+worker. Mutable scratch reuse awaits separate qualification against the native
+joint repair above. Raw data stays ignored.
 
 ## Timing boundary
 
@@ -59,7 +84,8 @@ and [USD review](usd-parent-path-preparation-2026-10-26.md) for measured scope.
 Native tests, Clippy and numerical canary checks pass. Production passes 46
 initialization/receipt checks, two expected faults, ten reference-edit checks,
 Summer's 102 checks, Roadster's eight and all ten unchanged exact-replay profiles.
-The historical intermittent articulated failure is not claimed fixed.
+The native joint repair above resolves the confirmed query-order cause of the
+intermittent articulated failure.
 
 Complete USD projection fixtures improve 16–19%, with 3.1 MiB higher peak RSS.
 Producer construction plus queries improves 65–88% in native fixtures. Griffin's
