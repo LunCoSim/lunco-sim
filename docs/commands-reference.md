@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**277 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**280 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -117,7 +117,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-bevy-runtime-core`](#lunco-usd-bevy-runtime-core) (5 commands)
 - [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
-- [`lunco-viz`](#lunco-viz) (4 commands)
+- [`lunco-viz`](#lunco-viz) (7 commands)
 - [`lunco-workbench-core`](#lunco-workbench-core) (12 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
@@ -3733,6 +3733,41 @@ actually call, with the fields the deserializer actually accepts. See the
 | `signals` | `Vec < SignalGridEntry >` |   |
 | `sync_time_axes` | `Option < bool >` |  Link the time axes and follow one common history interval. Defaults to  true for a new grid; false leaves independently framed plots. |
 
+#### `CreateGraphHud`
+
+ Add an independent, initially empty telemetry HUD. Returns its instance id.
+
+- *defined in:* `crates/lunco-viz/src/ui/graph_hud.rs`
+- *fields:* none — call with `CreateGraphHud` (no params)
+
+#### `RemoveGraphHud`
+
+ Close one HUD and release only its native grid and plots.
+
+- *defined in:* `crates/lunco-viz/src/ui/graph_hud.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `hud` | `u64` |   |
+
+#### `SetGraphHud`
+
+ Choose measured parameters and control their native viewport graphs.
+ Omitted fields retain state; an empty signal list clears the selection.
+
+- *defined in:* `crates/lunco-viz/src/ui/graph_hud.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `hud` | `Option < u64 >` |  Omission selects the primary HUD, creating it on first use. |
+| `visible` | `Option < bool >` |   |
+| `signals` | `Option < Vec < SignalGridEntry > >` |   |
+| `columns` | `Option < u32 >` |  One or two columns, at most the selected parameter count. |
+| `width` | `Option < f32 >` |  Card dimensions in logical pixels, including its frame. |
+| `height` | `Option < f32 >` |   |
+| `x` | `Option < f32 >` |  Optional paired logical-pixel position inside the application window. |
+| `y` | `Option < f32 >` |   |
+
 #### `SetTelemetryBrowserView`
 
  Select the telemetry browser's signal filter and focused signal.
@@ -4232,7 +4267,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 277 commands from the runtime schema; scanned 1040 .rs files for docs (0 parse failure(s) skipped).
+<!-- 280 commands from the runtime schema; scanned 1043 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->
