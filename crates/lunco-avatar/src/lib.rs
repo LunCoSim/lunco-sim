@@ -177,7 +177,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<lunco_interaction_core::TerrainToolActive>();
         app.init_resource::<lunco_interaction_core::ArmedScriptTool>();
         app.init_resource::<lunco_interaction_core::SceneInteractionMode>();
-        app.init_resource::<lunco_input_core::InputBindingsSettings>();
+        app.init_resource::<lunco_input_core::ActiveInputBindings>();
         app.add_observer(avatar_raycast_possession);
         // Native avatar construction receives the resolved command policy;
         // composed USD avatars receive the same policy from their `Controls` scope.
@@ -375,7 +375,7 @@ fn is_vessel_control_endpoint(
 pub struct SceneInteractionGate<'w> {
     mode: Res<'w, lunco_interaction_core::SceneInteractionMode>,
     egui_focus: Res<'w, lunco_control_core::EguiFocus>,
-    input_bindings: Res<'w, lunco_input_core::InputBindingsSettings>,
+    input_bindings: Res<'w, lunco_input_core::ActiveInputBindings>,
 }
 
 /// Plain scene clicks acquire control for a hit entity whose authored hierarchy

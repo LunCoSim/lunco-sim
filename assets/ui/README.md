@@ -9,6 +9,14 @@ The committed baseline is `bevy_hui 0.8.0` with `bevy_flair 0.9.0` on Bevy
 `0.20.0`. HUI is the template/event layer and Flair is the retained Bevy CSS
 style layer; neither is a browser DOM.
 
+Twins can provide their own JSON manifest with
+`kind: "lunco.runtime-ui-manifest.v1"`. Normal Twin loading composes it over
+application surfaces by stable ID; closing the Twin restores shared surfaces.
+Paths in each manifest resolve from its application or Twin root. Shared
+imports from a Twin use explicit addresses such as
+`lunco://ui/runtime_fonts.css`. See the architecture's Twin-owned presentation
+contract for admission, validation and teardown.
+
 ## Stable surface contract
 
 Runtime templates currently rely on:

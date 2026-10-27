@@ -17,7 +17,7 @@ use lunco_control_core::{ControlBinding, UserIntent};
 use lunco_core::GlobalEntityId;
 use lunco_core_session::{SessionProfiles, SessionRegistry};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
-use lunco_input_core::{InputBindingsSettings, resolved_input_label};
+use lunco_input_core::resolved_input_label;
 use lunco_notifications_core::ScreenNotifications;
 
 use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
@@ -310,7 +310,7 @@ impl Panel for AvatarStatusPanel {
         }
 
         ui.separator();
-        let settings = ctx.resource::<InputBindingsSettings>();
+        let settings = ctx.resource::<lunco_input_core::ActiveInputBindings>();
         if let Some(vessel) = view.possessing_vessel {
             ui.heading("Vehicle controls");
             if let Some(binding) = ctx.get::<ControlBinding>(vessel) {

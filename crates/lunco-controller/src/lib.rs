@@ -546,7 +546,7 @@ fn logical_key(key_code: KeyCode, text: Option<&str>) -> Key {
 #[on_command(InjectWindowInput)]
 fn on_inject_window_input(
     trigger: On<InjectWindowInput>,
-    settings: Res<InputBindingsSettings>,
+    settings: Res<lunco_input_core::ActiveInputBindings>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
     mut pending: MessageWriter<PendingWindowInput>,
 ) -> Result<Ack, String> {
@@ -570,7 +570,7 @@ fn on_inject_window_input(
 fn emit_pending_window_input(
     mut pending: MessageReader<PendingWindowInput>,
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
-    settings: Res<InputBindingsSettings>,
+    settings: Res<lunco_input_core::ActiveInputBindings>,
     mut window_events: MessageWriter<WindowEvent>,
     mut cursor_moved: MessageWriter<CursorMoved>,
     mut keyboard_input: MessageWriter<KeyboardInput>,
@@ -1402,7 +1402,7 @@ pub struct LunCoControllerPlugin;
 fn initialize_local_controller(
     trigger: On<Add<lunco_embodiment_core::roles::LocalEmbodiment>>,
     mut commands: Commands,
-    settings: Res<InputBindingsSettings>,
+    settings: Res<lunco_input_core::ActiveInputBindings>,
     state: Query<(
         Option<&ActionState<UserIntent>>,
         Option<&InputMap<UserIntent>>,
@@ -2505,7 +2505,7 @@ mod tests {
             .add_message::<MouseWheel>()
             .add_message::<MouseMotion>()
             .add_message::<PinchGesture>()
-            .init_resource::<InputBindingsSettings>()
+            .init_resource::<lunco_input_core::ActiveInputBindings>()
             .init_resource::<WindowInputObserved>()
             .add_systems(
                 Update,
@@ -2592,7 +2592,7 @@ mod tests {
     fn injected_window_input_is_safe_without_window_event_stream() {
         let mut app = App::new();
         app.add_message::<PendingWindowInput>()
-            .init_resource::<InputBindingsSettings>()
+            .init_resource::<lunco_input_core::ActiveInputBindings>()
             .add_systems(
                 Update,
                 emit_pending_window_input.run_if(any_with_component::<PrimaryWindow>),

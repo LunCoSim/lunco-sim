@@ -740,7 +740,7 @@ pub(super) fn observer_camera_needed(
 pub(super) fn setup_observer_camera(
     mut commands: Commands,
     config: Res<crate::CelestialConfig>,
-    bindings: Res<lunco_input_core::InputBindingsSettings>,
+    bindings: Res<lunco_input_core::ActiveInputBindings>,
     quality: Res<lunco_render::RenderingQualitySettings>,
     grid_config: Res<lunco_spatial::WorldGridConfig>,
     sun: Res<lunco_environment::LunarSun>,

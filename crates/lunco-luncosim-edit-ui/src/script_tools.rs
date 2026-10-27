@@ -1248,7 +1248,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     q_lod_tiles: Query<'w, 's, &'static lunco_terrain_surface::stream_viz::LodTileOf>,
     viewport: Res<'w, lunco_viewport_core::SceneViewport>,
     surface: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
-    input_bindings: Res<'w, InputBindingsSettings>,
+    input_bindings: Res<'w, lunco_input_core::ActiveInputBindings>,
     scene_interaction: Res<'w, lunco_interaction_core::SceneInteractionMode>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     coordinates: ActiveFrameCoordinates<'w, 's>,

@@ -20,7 +20,8 @@ use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
     TemplateProperties, UiId,
 };
-use lunco_assets_runtime::{TextAsset, TextAssetCatalog};
+use lunco_assets_runtime::{JsonAssetContent, JsonAssetScopeChanged};
+use lunco_core::AppSceneExt;
 use lunco_exposure_core::EngineExposures;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
@@ -29,6 +30,7 @@ use lunco_workbench_core::scene_pick::ScenePickGate;
 use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
 use lunco_workbench_state::{RuntimeSurfaceLayout, RuntimeSurfaceLayouts};
+use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -221,20 +223,27 @@ pub enum RuntimeUiPerspectiveFilter {
 
 impl RuntimeUiPerspectiveFilter {
     fn validates(&self) -> Result<(), String> {
-        let values: &[String] = match self { Self::One(value) => std::slice::from_ref(value), Self::Many(values) => values };
+        let values: &[String] = match self {
+            Self::One(value) => std::slice::from_ref(value),
+            Self::Many(values) => values,
+        };
         if values.is_empty() || values.len() > 32 {
             return Err("visible_in_perspective must contain 1–32 perspective ids".into());
         }
         let mut seen = HashSet::new();
         for value in values {
             require_non_empty("visible_in_perspective", value)?;
-            if !seen.insert(value) { return Err("visible_in_perspective repeats an id".into()); }
+            if !seen.insert(value) {
+                return Err("visible_in_perspective repeats an id".into());
+            }
         }
         Ok(())
     }
 
     fn allows(&self, layout: Option<&WorkbenchSnapshot>) -> bool {
-        let Some(active) = layout.and_then(WorkbenchSnapshot::active_perspective) else { return false; };
+        let Some(active) = layout.and_then(WorkbenchSnapshot::active_perspective) else {
+            return false;
+        };
         match self {
             Self::One(value) => active.as_str() == value,
             Self::Many(values) => values.iter().any(|value| active.as_str() == value),
@@ -551,6 +560,11 @@ fn require_non_empty(label: &str, value: &str) -> Result<(), String> {
 
 fn require_asset_path(label: &str, value: &str) -> Result<(), String> {
     require_non_empty(label, value)?;
+    if value.starts_with("lunco://") || value.starts_with("twin://") {
+        lunco_assets_core::asset_path::load_asset_path(value, None, None, None)
+            .map_err(|error| format!("{label}: {error}"))?;
+        return Ok(());
+    }
     if value.contains('\\')
         || value.contains(':')
         || value.starts_with('/')
@@ -637,11 +651,11 @@ impl Plugin for RuntimeUiPlugin {
                 restore_runtime_ui_cursor.after(bevy::ui::UiSystems::Focus),
             ),
         )
-        // Manifest discovery is asynchronous after the move to the shared
-        // TextAsset catalog, but the update systems still own the state from
-        // their first scheduled frame. Initialize the lifecycle resource at
-        // plugin installation rather than relying on a removed Startup loader.
-        .init_resource::<RuntimeUiManifestState>()
+        // Asset-scope events publish validated source snapshots. Scene teardown
+        // clears resolved presentation while open source scopes remain reusable.
+        .init_scene_resource::<RuntimeUiManifestState>()
+        .add_observer(admit_runtime_ui_manifest)
+        .add_observer(retire_runtime_ui_manifest)
         .add_systems(
             Update,
             (
@@ -703,14 +717,23 @@ fn install_runtime_ui_style_handoff(app: &mut App) {
 
 #[derive(Resource, Default)]
 pub struct RuntimeUiManifestState {
-    handle: Option<Handle<TextAsset>>,
-    source_path: Option<String>,
-    candidates: Vec<(String, Handle<TextAsset>)>,
-    scan_started: bool,
+    // Application source survives scene teardown; Twin sources survive restart
+    // and are retired by exact TwinClosed identity.
+    scopes: HashMap<Option<TwinId>, Result<Option<RuntimeUiManifest>, String>>,
+    revision: u64,
+    selected: Option<TwinId>,
     manifest: Option<RuntimeUiManifest>,
     error: Option<String>,
-    applied: Option<AssetId<TextAsset>>,
+    applied: Option<u64>,
     rebuild_pending: bool,
+}
+impl lunco_core::SceneResource for RuntimeUiManifestState {
+    fn clear_scene(&mut self) {
+        self.manifest = None;
+        self.applied = None;
+        self.error = None;
+        self.rebuild_pending = true;
+    }
 }
 
 impl RuntimeUiManifestState {
@@ -732,7 +755,7 @@ impl RuntimeUiManifestState {
 #[derive(Resource, Debug, Default)]
 struct RuntimeUiRecordingContract {
     required_namespaces: HashSet<String>,
-    manifest_id: Option<AssetId<TextAsset>>,
+    manifest_id: Option<u64>,
     exposure_revision: u64,
     hook_generation: u64,
     recording_active: bool,
@@ -1289,9 +1312,13 @@ fn report_runtime_ui_readiness(
         if !surface_ready {
             pending_details.push(format!(
                 "{}: mounted={} placement={} properties={} projected={} target={} layout={}",
-                surface.layout_id, surface.mounted, surface.applied_placement.is_some(),
-                properties.is_some(), surface.has_projected_exposure,
-                target_ready, layout_ready,
+                surface.layout_id,
+                surface.mounted,
+                surface.applied_placement.is_some(),
+                properties.is_some(),
+                surface.has_projected_exposure,
+                target_ready,
+                layout_ready,
             ));
         }
         presentation_generation.start_if_visible(&mut surface, surface_ready);
@@ -1310,7 +1337,10 @@ fn report_runtime_ui_readiness(
         bus.remove_progress(lunco_status_core::status_bus::RUNTIME_UI_SOURCE);
     } else {
         let message = if ready < required {
-            format!("mounting recorded UI surfaces {ready}/{required}: {}", pending_details.join("; "))
+            format!(
+                "mounting recorded UI surfaces {ready}/{required}: {}",
+                pending_details.join("; ")
+            )
         } else {
             "waiting for recorded UI render extraction".to_string()
         };
@@ -1498,152 +1528,145 @@ fn spawn_runtime_ui_surface(
     }
 }
 
+fn admit_runtime_ui_manifest(
+    event: On<JsonAssetScopeChanged>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut state: ResMut<RuntimeUiManifestState>,
+) {
+    let scope = event.event();
+    if let Some(id) = scope.twin_id {
+        if !workspace.as_ref().is_some_and(|w| w.twin(id).is_some()) {
+            return;
+        }
+    }
+    let result = (|| -> Result<Option<RuntimeUiManifest>, String> {
+        let mut selected = None;
+        for asset in &scope.assets {
+            let JsonAssetContent::Source(Ok(text)) = &asset.content else {
+                continue;
+            };
+            // Other JSON domains report their own invalid source. Only this
+            // kind belongs to the runtime-surface owner.
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+                continue;
+            };
+            if value.get("kind").and_then(|v| v.as_str()) != Some(RUNTIME_UI_MANIFEST_KIND) {
+                continue;
+            }
+            let Some(mut manifest) = parse_runtime_ui_manifest(&asset.asset_uri, text)? else {
+                continue;
+            };
+            if selected.is_some() {
+                return Err(format!(
+                    "{} contains multiple {RUNTIME_UI_MANIFEST_KIND} documents",
+                    scope.asset_root_uri
+                ));
+            }
+            for surface in &mut manifest.surfaces {
+                for path in [&mut surface.template, &mut surface.stylesheet] {
+                    if !path.contains("://") {
+                        *path = format!("{}{path}", scope.asset_root_uri);
+                    }
+                }
+                for collection in &mut surface.collections {
+                    if !collection.template.contains("://") {
+                        collection.template =
+                            format!("{}{}", scope.asset_root_uri, collection.template);
+                    }
+                }
+            }
+            selected = Some(manifest);
+        }
+        if scope.twin_id.is_none() && selected.is_none() {
+            return Err(format!(
+                "{} contains no {RUNTIME_UI_MANIFEST_KIND} document",
+                scope.asset_root_uri
+            ));
+        }
+        Ok(selected)
+    })();
+    state.scopes.insert(scope.twin_id, result);
+    state.revision += 1;
+}
+
+fn retire_runtime_ui_manifest(event: On<TwinClosed>, mut state: ResMut<RuntimeUiManifestState>) {
+    state.scopes.remove(&Some(event.twin));
+    state.revision += 1;
+    if state.selected == Some(event.twin) {
+        state.manifest = None;
+        state.applied = None;
+    }
+}
+
 fn sync_runtime_ui_manifest(
     mut commands: Commands,
-    catalog: Option<Res<TextAssetCatalog>>,
-    assets: Option<Res<Assets<TextAsset>>>,
-    mut events: MessageReader<AssetEvent<TextAsset>>,
+    workspace: Option<Res<WorkspaceResource>>,
     mut state: ResMut<RuntimeUiManifestState>,
     roots: Query<Entity, With<RuntimeUiSurface>>,
     server: Res<AssetServer>,
     mut functions: HtmlFunctions,
     mut surface_layouts: ResMut<RuntimeSurfaceLayouts>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
-    let (Some(catalog), Some(assets)) = (catalog, assets) else {
+    let selected = workspace.as_ref().and_then(|w| w.active_twin);
+    if state.applied == Some(state.revision) && state.selected == selected {
+        return;
+    }
+    let Some(application) = state.scopes.get(&None) else {
         return;
     };
-    if !catalog.ready() {
-        return;
-    }
-
-    let changed_assets = events
-        .read()
-        .filter_map(|event| match event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::LoadedWithDependencies { id }
-            | AssetEvent::Removed { id } => Some(*id),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    if !state.scan_started {
-        state.candidates = catalog
-            .entries()
-            .iter()
-            .filter(|entry| entry.twin_id.is_none() && entry.asset_path.ends_with(".json"))
-            .filter_map(|entry| {
-                entry
-                    .source_handle()
-                    .map(|handle| (entry.asset_path.clone(), handle.clone()))
-            })
-            .collect();
-        state.scan_started = true;
-    }
-
-    if state.handle.is_none() {
-        if state.error.is_some() && !changed_assets.is_empty() {
-            state.error = None;
-            state.scan_started = false;
-            state.candidates.clear();
-            state.applied = None;
-            state.manifest = None;
-            return;
-        }
-        if state.error.is_some() {
-            return;
-        }
-
-        let mut pending = false;
-        let mut found = None;
-        let mut error = None;
-        for (path, handle) in &state.candidates {
-            let Some(asset) = assets.get(handle) else {
-                if !server
-                    .get_load_state(handle.id())
-                    .is_some_and(|load_state| load_state.is_failed())
-                {
-                    pending = true;
-                }
-                continue;
-            };
-            match parse_runtime_ui_manifest(path, &asset.text) {
-                Ok(Some(manifest)) if found.is_none() => {
-                    found = Some((path.clone(), handle.clone(), manifest));
-                }
-                Ok(Some(_)) => {
-                    error = Some(format!(
-                        "runtime asset listing contains more than one asset marked {RUNTIME_UI_MANIFEST_KIND}"
-                    ));
-                    break;
-                }
-                Ok(None) => {}
-                Err(error_message) => {
-                    error = Some(error_message);
-                    break;
+    let resolved = (|| -> Result<RuntimeUiManifest, String> {
+        let mut manifest = application
+            .as_ref()
+            .map_err(Clone::clone)?
+            .clone()
+            .ok_or_else(|| "application UI manifest is missing".to_string())?;
+        if let Some(twin) = selected.and_then(|id| state.scopes.get(&Some(id))) {
+            if let Some(twin) = twin.as_ref().map_err(Clone::clone)? {
+                for surface in &twin.surfaces {
+                    if let Some(existing) =
+                        manifest.surfaces.iter_mut().find(|s| s.id == surface.id)
+                    {
+                        *existing = surface.clone();
+                    } else {
+                        manifest.surfaces.push(surface.clone());
+                    }
                 }
             }
         }
-        if let Some(error) = error {
-            error!("runtime UI manifest rejected: {error}");
-            state.error = Some(error);
-            return;
-        }
-        if let Some((path, handle, manifest)) = found {
-            state.source_path = Some(path);
-            state.handle = Some(handle);
-            state.manifest = Some(manifest);
-        } else if pending {
-            return;
-        } else {
-            let error = format!(
-                "runtime asset listing contains no asset marked {RUNTIME_UI_MANIFEST_KIND}"
-            );
-            error!("runtime UI manifest unavailable: {error}");
-            state.error = Some(error);
-            return;
-        }
+        manifest.validate()?;
+        Ok(manifest)
+    })();
+    state.selected = selected;
+    state.applied = Some(state.revision);
+    state.rebuild_pending = true;
+    for root in &roots {
+        commands.entity(root).try_despawn();
     }
-
-    let Some(handle) = state.handle.clone() else {
-        return;
-    };
-    let changed = state.applied.is_none() || changed_assets.contains(&handle.id());
-    if !changed {
-        return;
-    }
-    let Some(asset) = assets.get(&handle) else {
-        return;
-    };
-    let Some(path) = state.source_path.as_deref() else {
-        return;
-    };
-    let Some(manifest) = (match parse_runtime_ui_manifest(path, &asset.text) {
+    let manifest = match resolved {
         Ok(manifest) => manifest,
         Err(error) => {
-            error!("runtime UI manifest rejected: {error}");
-            state.error = Some(error);
+            state.manifest = None;
+            state.error = Some(error.clone());
+            faults.raise(
+                "runtime-ui-manifest-invalid",
+                None,
+                "active runtime UI manifest",
+                &error,
+            );
+            lunco_core::trigger_runtime_error(&mut commands, "runtime-ui-manifest-invalid", error);
             return;
         }
-    }) else {
-        state.handle = None;
-        state.source_path = None;
-        state.manifest = None;
-        state.applied = None;
-        return;
     };
     state.manifest = Some(manifest.clone());
     state.error = None;
-
     register_dynamic_action(&mut functions);
-
     let ids = manifest
         .surfaces
         .iter()
         .map(|surface| surface.id.clone())
         .collect::<HashSet<_>>();
     surface_layouts.retain_ids(&ids);
-
     for surface in &manifest.surfaces {
         for action in &surface.actions {
             register_action(
@@ -1652,16 +1675,8 @@ fn sync_runtime_ui_manifest(
                 action.action.clone(),
             );
         }
+        spawn_runtime_ui_surface(&mut commands, surface, &server);
     }
-
-    for root in &roots {
-        commands.entity(root).try_despawn();
-    }
-    for definition in &manifest.surfaces {
-        spawn_runtime_ui_surface(&mut commands, definition, &server);
-    }
-    state.applied = Some(handle.id());
-    state.rebuild_pending = true;
 }
 
 fn parse_runtime_ui_manifest(
@@ -2848,9 +2863,21 @@ mod tests {
     fn perspective_filter_accepts_one_or_many_and_rejects_ambiguous_lists() {
         use super::*;
         let mut layout = WorkbenchSnapshot::default();
-        layout.replace(Some(lunco_workbench_core::PerspectiveId::new("twin/report-analysis")),
-            None, vec![], vec![], vec![], vec![], vec![]);
-        for json in [r#""twin/report-analysis""#, r#"["sandbox_view","twin/report-analysis"]"#] {
+        layout.replace(
+            Some(lunco_workbench_core::PerspectiveId::new(
+                "twin/report-analysis",
+            )),
+            None,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        for json in [
+            r#""twin/report-analysis""#,
+            r#"["sandbox_view","twin/report-analysis"]"#,
+        ] {
             let filter: RuntimeUiPerspectiveFilter = serde_json::from_str(json).unwrap();
             assert!(filter.validates().is_ok());
             assert!(filter.allows(Some(&layout)));
@@ -2858,7 +2885,11 @@ mod tests {
         }
         let other: RuntimeUiPerspectiveFilter = serde_json::from_str(r#""sandbox_view""#).unwrap();
         assert!(!other.allows(Some(&layout)));
-        for json in [r#"[]"#, r#"["", "sandbox_view"]"#, r#"["sandbox_view","sandbox_view"]"#] {
+        for json in [
+            r#"[]"#,
+            r#"["", "sandbox_view"]"#,
+            r#"["sandbox_view","sandbox_view"]"#,
+        ] {
             let filter: RuntimeUiPerspectiveFilter = serde_json::from_str(json).unwrap();
             assert!(filter.validates().is_err());
         }
@@ -3523,7 +3554,7 @@ mod tests {
         app.insert_resource(exposures)
             .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
-                applied: Some(AssetId::default()),
+                applied: Some(1),
                 rebuild_pending: false,
                 ..Default::default()
             });
@@ -3640,7 +3671,7 @@ mod tests {
         app.insert_resource(exposures)
             .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
-                applied: Some(AssetId::default()),
+                applied: Some(1),
                 rebuild_pending: false,
                 ..Default::default()
             });
@@ -3706,7 +3737,7 @@ mod tests {
         app.insert_resource(exposures)
             .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
-                applied: Some(AssetId::default()),
+                applied: Some(1),
                 rebuild_pending: false,
                 ..Default::default()
             });

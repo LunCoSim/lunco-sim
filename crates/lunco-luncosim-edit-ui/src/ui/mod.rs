@@ -275,7 +275,7 @@ fn sync_editor_session_selection(
 /// binding into the existing View Help popup. This is presentation only: it
 /// reads the public input-port surface and never changes control state.
 fn refresh_view_help_controls(
-    bindings: Res<lunco_input_core::InputBindingsSettings>,
+    bindings: Res<lunco_input_core::ActiveInputBindings>,
     local_avatar: Res<TheLocalEmbodiment>,
     q_avatar: Query<
         &ControlLink,

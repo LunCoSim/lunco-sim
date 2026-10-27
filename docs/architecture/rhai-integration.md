@@ -662,8 +662,8 @@ Rhai owns policy and frame-safe composition.
 ### Semantic pointer intents
 
 Scene tools receive the generic `pointer_intents` array in their pointer
-context. It is derived from the persisted `input_bindings` settings, not from
-tool code. A binding is an exact button/modifier chord, for example:
+context. It is derived from `ActiveInputBindings`, the application/user keymap
+composed with the active Twin profile, not from tool code. A binding is an exact button/modifier chord, for example:
 
 ```json
 {

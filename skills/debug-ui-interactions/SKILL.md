@@ -21,6 +21,15 @@ part of the failure.
 
 ## Use the real application input path
 
+For a Twin-specific keymap, use one Twin JSON document with
+`kind: "lunco.input-bindings.v1"` and the normal semantic bindings/chords.
+Normal Twin loading discovers it. `InputBindingsSettings` retains user
+preferences; all input consumers and `input_binding(...)` read the composed
+`ActiveInputBindings`. Omitted entries inherit; explicit empty lists unbind.
+Verify a fresh direct `OpenTwin` without launcher configuration, actual actuator
+response and release, then replacement/restoration of user bindings. Scene
+profiles must never be copied into the global settings file.
+
 Launch timed synthetic gestures with `--no-throttle` when the owned window may
 be unfocused. Power-save frame pacing can stretch a press/release beyond the
 native click-duration limit. For an ordinary click after layout settles, use

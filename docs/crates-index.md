@@ -680,11 +680,13 @@ Physical actuator and sensor implementations. Bridges `Port` values to the `avia
 
 **`lunco-input-core`**
 Shared input settings and projection. It owns the persisted `InputBindingsSettings`
-section, semantic labels, pointer-chord resolution, and Leafwing `InputMap`
-construction. The application supplies the authored default document through
-the runtime asset pipeline (`lunco.input-bindings.v1`); this contract crate has
-no compiled-in asset path or product keymap. UI, avatar, controller, and Rhai
-consumers use this focused contract directly.
+section and composes `SceneInputBindings` into the non-persisted
+`ActiveInputBindings` snapshot before input processing. Every UI, avatar,
+controller, injection and Rhai consumer reads that snapshot. Semantic labels,
+pointer-chord resolution and Leafwing `InputMap` construction share this owner.
+`lunco-luncosim-simulation` admits application defaults and active-Twin overrides
+from `lunco.input-bindings.v1` documents through `JsonAssetScopeChanged`. The
+contract crate has no compiled-in asset path or product keymap.
 
 **`lunco-input-ui`**
 Optional egui adapter for the shared input state. It owns the input overlay

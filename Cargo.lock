@@ -8749,6 +8749,7 @@ dependencies = [
  "bevy",
  "leafwing-input-manager",
  "lunco-control-core",
+ "lunco-core",
  "lunco-settings",
  "serde",
  "serde_json",
@@ -9223,6 +9224,7 @@ dependencies = [
  "lunco-usd-sim-celestial",
  "lunco-usd-sim-core",
  "lunco-usd-terrain",
+ "lunco-workspace",
  "serde_json",
 ]
 

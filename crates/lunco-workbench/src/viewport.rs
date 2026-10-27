@@ -79,6 +79,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{CameraMainTextureUsages, ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{EguiGlobalSettings, PrimaryEguiContext, egui};
 use lunco_control_core::{IntentState, LocalIntentSurface};
+#[cfg(test)]
 use lunco_input_core::InputBindingsSettings;
 use lunco_render::SceneCamera;
 use lunco_status_core::status_bus::{INPUT_SOURCE, StatusBus, StatusLevel};
@@ -303,7 +304,7 @@ fn ensure_egui_host(
     mut commands: Commands,
     mut egui_global: ResMut<EguiGlobalSettings>,
     existing: Query<(), With<PrimaryEguiContext>>,
-    bindings: Res<InputBindingsSettings>,
+    bindings: Res<lunco_input_core::ActiveInputBindings>,
     mut status: ResMut<StatusBus>,
     mut bindings_status: ResMut<InputBindingsStatus>,
 ) {
@@ -347,7 +348,7 @@ fn ensure_egui_host(
 }
 
 fn report_input_bindings_status(
-    bindings: Res<InputBindingsSettings>,
+    bindings: Res<lunco_input_core::ActiveInputBindings>,
     mut status: ResMut<StatusBus>,
     mut bindings_status: ResMut<InputBindingsStatus>,
 ) {
@@ -734,7 +735,7 @@ fn filter_context_action_events(
 /// use the same key for focus traversal. Bevy's physical input remains intact;
 /// an actual focused UI editor retains its complete keyboard stream.
 fn reserve_scene_context_actions(
-    settings: Res<lunco_input_core::InputBindingsSettings>,
+    settings: Res<lunco_input_core::ActiveInputBindings>,
     controllers: Query<
         (),
         (
@@ -999,10 +1000,12 @@ mod tests {
     fn invalid_input_settings_do_not_panic_egui_host_startup() {
         let mut app = App::new();
         app.init_resource::<EguiGlobalSettings>()
-            .insert_resource(InputBindingsSettings {
-                look_button: Some(String::new()),
-                ..Default::default()
-            })
+            .insert_resource(lunco_input_core::ActiveInputBindings(
+                InputBindingsSettings {
+                    look_button: Some(String::new()),
+                    ..Default::default()
+                },
+            ))
             .add_plugins(lunco_status_core::status_bus::StatusBusPlugin)
             .init_resource::<InputBindingsStatus>()
             .add_systems(Startup, ensure_egui_host);
@@ -1025,10 +1028,12 @@ mod tests {
     fn input_status_warning_clears_after_settings_are_corrected() {
         let mut app = App::new();
         app.add_plugins(lunco_status_core::status_bus::StatusBusPlugin)
-            .insert_resource(InputBindingsSettings {
-                look_button: Some(String::new()),
-                ..Default::default()
-            })
+            .insert_resource(lunco_input_core::ActiveInputBindings(
+                InputBindingsSettings {
+                    look_button: Some(String::new()),
+                    ..Default::default()
+                },
+            ))
             .init_resource::<InputBindingsStatus>()
             .add_systems(Update, report_input_bindings_status);
 
@@ -1036,7 +1041,7 @@ mod tests {
         assert!(app.world().resource::<InputBindingsStatus>().unavailable);
 
         app.world_mut()
-            .resource_mut::<InputBindingsSettings>()
+            .resource_mut::<lunco_input_core::ActiveInputBindings>()
             .look_button = Some("Right".to_string());
         app.update();
 

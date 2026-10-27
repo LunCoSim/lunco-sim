@@ -217,7 +217,8 @@ fall through to the 3D scene.
 
 ### 2. Add the template and stylesheet
 
-Place files under `assets/ui/`. The stable contract is:
+Place application files under `assets/ui/`, or Twin files under its own `ui/`.
+The stable contract is:
 
 - HUI `<template>`, `<property>`, `<node>`, `<text>`, and `<button>`;
 - stable `id` values and `{property}` interpolation;
@@ -265,7 +266,15 @@ minimal `default_font` or a host-installed fallback.
 
 ### 3. Register bindings, gates, actions, and placement
 
-Add a surface entry to `assets/ui/runtime_surfaces.json`:
+Add a surface entry to the application manifest or a Twin-owned JSON document
+with `kind: "lunco.runtime-ui-manifest.v1"`. Normal Twin loading discovers it
+through the shared JSON asset lifecycle. Twin entries replace matching shared
+surface IDs and add new ones; paths resolve from that scope's root. Use explicit
+`lunco://` references for shared imports. Do not compose a launcher-local copy
+of the application assets. Verify direct `OpenTwin`, same-Twin reopen and
+replacement with another Twin, including UI retirement and real button input.
+
+Example surface entry:
 
 ```json
 {

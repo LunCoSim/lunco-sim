@@ -10,6 +10,7 @@ name = "lunco_luncosim_simulation"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-workspace = { path = "../lunco-workspace" }
 bevy_transform_interpolation = "0.6.0"
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-render = { path = "../lunco-render" }

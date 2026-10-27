@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::InputMap;
 use lunco_control_core::UserIntent;
+use lunco_core::AppSceneExt;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -76,7 +77,7 @@ struct InputBindingsDocument {
 /// input injection, and authored pointer tools.
 ///
 /// The application supplies defaults from its authored input document through
-/// [`Self::apply_defaults_json`]. An omitted look button uses the documented
+/// [`Self::overridden_by`]. An omitted look button uses the documented
 /// schema default, while an explicit value overrides the authored default. This
 /// contract crate deliberately contains no asset path or compiled product keymap.
 #[derive(Resource, Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -166,23 +167,17 @@ impl InputBindingsSettings {
         Ok(settings)
     }
 
-    /// Merge an authored default document into this settings section.
-    ///
-    /// Persisted values remain authoritative, while omitted values inherit the
-    /// current application defaults. This is intentionally a runtime operation:
-    /// the application owns which asset is the default and can reload it without
-    /// recompiling this input contract crate.
-    pub fn apply_defaults_json(&mut self, json: &str) -> Result<(), String> {
-        let mut resolved = Self::from_json(json)?;
-        resolved.bindings.extend(self.bindings.clone());
-        resolved.key_chords.extend(self.key_chords.clone());
+    /// Compose a partial profile over this map. Explicit empty lists unbind an
+    /// intent; omitted entries inherit this map. Validation remains at admission.
+    pub fn overridden_by(&self, overrides: &Self) -> Self {
+        let mut resolved = self.clone();
+        resolved.bindings.extend(overrides.bindings.clone());
+        resolved.key_chords.extend(overrides.key_chords.clone());
         resolved
             .pointer_bindings
-            .extend(self.pointer_bindings.clone());
-        resolved.look_button = self.look_button.clone().or(resolved.look_button);
-        resolved.validate_section()?;
-        *self = resolved;
-        Ok(())
+            .extend(overrides.pointer_bindings.clone());
+        resolved.look_button = overrides.look_button.clone().or(resolved.look_button);
+        resolved
     }
 
     /// Build the live leafwing map from the resolved settings section.
@@ -354,6 +349,36 @@ fn build_input_map(
     input_map
 }
 
+/// Effective input map used by every controller, label and input consumer.
+/// Scene overrides are composed here and never persisted as user preferences.
+#[derive(Resource, Reflect, Default, Clone, Debug, PartialEq, Deref, DerefMut)]
+#[reflect(Resource)]
+pub struct ActiveInputBindings(pub InputBindingsSettings);
+
+/// Optional scene-owned binding overrides, supplied by the application asset owner.
+#[derive(Resource, Default, Clone, PartialEq)]
+pub struct SceneInputBindings(pub Option<InputBindingsSettings>);
+impl lunco_core::SceneResource for SceneInputBindings {}
+
+/// Resolve input once before native input processing, including while paused.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InputBindingsSet;
+
+fn resolve_active_input_bindings(
+    settings: Res<InputBindingsSettings>,
+    scene: Res<SceneInputBindings>,
+    mut active: ResMut<ActiveInputBindings>,
+) {
+    if !settings.is_changed() && !scene.is_changed() {
+        return;
+    }
+    let resolved = scene.0.as_ref().map_or_else(
+        || settings.clone(),
+        |profile| settings.overridden_by(profile),
+    );
+    active.set_if_neq(ActiveInputBindings(resolved));
+}
+
 /// Install the settings resource and project changed settings to all live
 /// semantic input surfaces.
 pub struct InputBindingsPlugin;
@@ -363,12 +388,21 @@ impl Plugin for InputBindingsPlugin {
         app.init_resource::<InputBindingsSettings>()
             .register_type::<InputBindingsSettings>()
             .register_settings_section::<InputBindingsSettings>()
-            .add_systems(Update, refresh_live_input_maps);
+            .init_scene_resource::<SceneInputBindings>()
+            .init_resource::<ActiveInputBindings>()
+            .register_type::<ActiveInputBindings>()
+            .add_systems(
+                PreUpdate,
+                (resolve_active_input_bindings, refresh_live_input_maps)
+                    .chain()
+                    .in_set(InputBindingsSet)
+                    .before(leafwing_input_manager::plugin::InputManagerSystem::Unify),
+            );
     }
 }
 
 fn refresh_live_input_maps(
-    settings: Res<InputBindingsSettings>,
+    settings: Res<ActiveInputBindings>,
     mut maps: Query<&mut InputMap<UserIntent>>,
 ) {
     if !settings.is_changed() {
@@ -611,15 +645,15 @@ mod tests {
         assert_eq!(settings.look_button_value(), Some(MouseButton::Right));
         assert!(settings.key_bindings().unwrap().is_empty());
 
-        settings
-            .apply_defaults_json(
-                r#"{
+        settings = InputBindingsSettings::from_json(
+            r#"{
                     "kind": "lunco.input-bindings.v1",
                     "look_button": "Middle",
                     "forward": ["KeyW"]
                 }"#,
-            )
-            .expect("authored defaults are valid");
+        )
+        .expect("authored defaults are valid")
+        .overridden_by(&settings);
 
         let resolved = settings.input_map().expect("resolved map is valid");
         assert_eq!(settings.look_button_value(), Some(MouseButton::Middle));
@@ -627,15 +661,17 @@ mod tests {
     }
 
     #[test]
-    fn invalid_override_does_not_partially_apply_authored_defaults() {
-        let mut settings = InputBindingsSettings {
+    fn invalid_override_remains_invalid_without_mutating_preferences() {
+        let settings = InputBindingsSettings {
             look_button: Some(String::new()),
             ..Default::default()
         };
         let before = settings.clone();
         assert!(
-            settings
-                .apply_defaults_json(r#"{"look_button":"Middle","forward":["KeyW"]}"#)
+            InputBindingsSettings::from_json(r#"{"look_button":"Middle","forward":["KeyW"]}"#)
+                .unwrap()
+                .overridden_by(&settings)
+                .validate_section()
                 .is_err()
         );
         assert_eq!(settings, before);

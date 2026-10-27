@@ -178,6 +178,31 @@ of domain calculations. Modelica and Rhai own domain values and
 policy, while `lunco-workbench` supplies the
 egui host camera, dock rectangles, and scene-pick ownership.
 
+## Twin-owned presentation assets
+
+The shared `JsonAssetScopeChanged` lifecycle admits one typed
+`lunco.runtime-ui-manifest.v1` document per application or open Twin scope.
+The application manifest supplies shared surfaces; the active Twin's manifest
+replaces matching surface IDs and adds new ones. Duplicate IDs/namespaces within
+a composed manifest, duplicate manifests in one scope, and invalid contracts
+produce a structured runtime fault. No generated copy of application assets is
+needed. Unrelated JSON kinds retain their own owners.
+
+Template, stylesheet and collection-template paths in a manifest are relative
+to that scope's asset root. The owner qualifies them with the exact `lunco://`
+or `twin://` authority before publishing the retained tree. Explicit logical
+URIs are also accepted; a Twin stylesheet can import shared fonts with
+`@import "lunco://ui/runtime_fonts.css";`. The native asset readers own subsequent
+HTML/CSS dependencies and reloads.
+
+The manifest cache belongs to open source scopes. Scene teardown retires the
+resolved presentation and republishes it even while paused; exact `TwinClosed`
+identity removes that Twin's source. Late snapshots from a retired Twin are
+rejected. Replacing the active Twin rebuilds the retained surface roots from the
+current composition, restoring application surfaces when no override exists.
+Rhai still owns exposure contents, visibility and action meaning. Rust owns only
+source admission, validated composition and retained-tree lifecycle.
+
 ## Authoring a surface
 
 ### 1. Register the surface

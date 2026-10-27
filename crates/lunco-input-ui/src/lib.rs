@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 use lunco_core::{Command, on_command, register_commands};
-use lunco_input_core::{InputBindingsSettings, key_label};
+use lunco_input_core::key_label;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_workbench_widgets::{UiIcon, paint_icon};
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ fn on_toggle_input_overlay(
 pub fn draw_input_overlay(
     mut egui_ctx: EguiContexts,
     settings: Res<InputOverlaySettings>,
-    bindings: Res<InputBindingsSettings>,
+    bindings: Res<lunco_input_core::ActiveInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,

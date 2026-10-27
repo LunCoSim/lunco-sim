@@ -2345,7 +2345,7 @@ fn build_world_engine_base(
     engine.register_fn("input_binding", |binding: ImmutableString| -> Dynamic {
         bridge_core::with_world(|world| {
             world
-                .get_resource::<lunco_input_core::InputBindingsSettings>()
+                .get_resource::<lunco_input_core::ActiveInputBindings>()
                 .and_then(|settings| settings.label(binding.as_str()))
                 .map(Dynamic::from)
         })

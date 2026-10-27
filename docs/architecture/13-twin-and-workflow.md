@@ -389,6 +389,22 @@ Twin settings are project-owned and are reset with Twin lifecycle; user-global
 preferences such as diagnostics, theme, input visualisation, and window
 geometry remain in `~/.lunco/settings.json`.
 
+### Twin input and runtime UI
+
+A Twin may contain one `lunco.input-bindings.v1` JSON document and one
+`lunco.runtime-ui-manifest.v1` JSON document. The shared asset-scope lifecycle
+discovers these on ordinary `OpenTwin`, without a launcher or user-settings copy.
+Bindings/chords override matching application/user intents only while that Twin
+is active; omitted entries inherit and explicit empty lists unbind. The
+`ActiveInputBindings` snapshot is the common reader for controllers, input
+injection, help labels and Rhai. Persisted `InputBindingsSettings` stays unchanged.
+Closing a Twin retires its contribution; paused scene replacement republishes
+the effective settings before input processing. Invalid or ambiguous typed
+profiles report an owner fault and stop simulation admission without crashing.
+
+Runtime UI composition and scoped asset paths are documented in
+[runtime-authored UI](runtime-authored-ui.md#twin-owned-presentation-assets).
+
 ## 3a. Twin is the simulation control surface — ASPIRATIONAL (not yet built)
 
 > **Status: design / not implemented.** Today the Twin is a plain filesystem
