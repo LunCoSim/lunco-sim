@@ -1,5 +1,26 @@
 # High-quality realtime performance handover
 
+## Typed hook conversion
+
+The hook adapter constructs Rhai native strings directly from borrowed text.
+The [string-construction review](rhai-hook-string-construction-2026-10-27.md)
+records 5.4–11.3% faster complete nested-map conversion across nine fixture
+cases, 25 passing production UI/scene checks and a source-preserved Griffin
+landing. Its contended production timings do not establish a whole-scene gain.
+The regular build is installed and owned sessions are closed.
+
+## Current constructor attribution
+
+The qualified, source-preserved Griffin capture at application `c4841c194`
+has all initializer native kernels hitting. Checked preparation and compiler
+input hashing still consume substantial construction work. The
+[chain-preparation review](rumoca-chain-probe-preparation-2026-10-27.md)
+records exact-zone samples, their caller-attribution limits and a proposed
+native fix for optimization of discarded membership probes. This is pending
+approval and validation; it establishes no new product speedup. Obsolete raw
+measurements and executable snapshots were removed, freeing 13.97 GiB;
+current evidence stays ignored.
+
 ## Native Modelica sweep storage
 
 Rumoca `eca39484` retains per-runtime torn-sweep buffers while preserving all

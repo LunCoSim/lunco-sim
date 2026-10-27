@@ -49,6 +49,11 @@ and query parameters. Pure policy hooks retain the closed default ABI.
 This is value conversion at the interpreter boundary, with no policy selection,
 new execution context or additional scheduling path.
 
+In the opposite direction, `hook_to_dynamic` constructs Rhai's native
+`ImmutableString` directly from borrowed text. Short strings use its inline
+storage without an intermediate owned `String`. Values remain owned by the
+invocation, and nested containers retain their scalar types and map semantics.
+
 ## When behavior should be a hook
 
 Hook candidacy is part of every design review. Use a hook when behavior is

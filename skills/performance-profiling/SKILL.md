@@ -115,6 +115,13 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 - Attribute CPU, GPU, physics, terrain, and UI separately. Never disable
   shadows, lower authored terrain quality, change BigSpace, or change the
   standard substep count to make a graph look better.
+  For typed hook conversion, `lunco-hooks-rhai`'s ignored
+  `map_conversion_diagnostic` measures complete nested-map conversion at 8,
+  128 and 2,048 entries in sorted, reverse and permuted order. Compare every
+  case with independent executable snapshots and alternating runs, without a
+  concurrent build. This fixture uses the test allocator; pair it with the
+  production UI-preparation gate and an owned scene before claiming runtime
+  effects. A fixture improvement is not a whole-frame or loading improvement.
   Snapshot compiler-managed executables with independent copies, for example
   `cp --reflink=auto`, never hard links. Rebuilding can overwrite every hard link
   to a test artifact. Verify separate device/inode identities and record hashes

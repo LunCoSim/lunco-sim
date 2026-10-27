@@ -294,7 +294,7 @@ pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
         HookValue::UInt(value) => Dynamic::from(*value),
         HookValue::Float(f) => Dynamic::from_float(*f),
         HookValue::Bool(b) => Dynamic::from_bool(*b),
-        HookValue::Str(s) => s.clone().into(),
+        HookValue::Str(s) => rhai::ImmutableString::from(s.as_str()).into(),
         HookValue::Array(a) => {
             let arr: rhai::Array = a.iter().map(hook_to_dynamic).collect();
             Dynamic::from_array(arr)
@@ -377,6 +377,9 @@ pub fn dynamic_to_hook_with_native(
         })
     }
 }
+
+#[cfg(test)]
+mod map_conversion_tests;
 
 #[cfg(test)]
 mod tests {
