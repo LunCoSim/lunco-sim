@@ -58,7 +58,6 @@ impl Plugin for UsdAnimationPlugin {
             (sample_usd_animation, sample_usd_material_animation)
                 .chain()
                 .run_if(lunco_time::scene_time_ready)
-                .after(lunco_time::SimulationPresentationTimeSet)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
     }

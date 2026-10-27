@@ -357,9 +357,11 @@ remains valid. Exercise `scripts/api/test_contact_force_hold.py` through the
 production scene-test host when changing this boundary; its authored observer
 checks loaded contact, held time, retained force and an unavailable surface.
 Physical render easing consumes the time owner's bounded
-`simulation_presentation_fraction`; full queued cycles are never a render
-extrapolation factor. The common application plugin uses native endpoint
-capture/restore with public custom-easing markers. Do not remove queued time or
+`SimulationPresentationTime.interpolation` snapshot; full queued cycles are
+never a render extrapolation factor. Compare successive sample ticks across coupling waits and
+pause/resume: they must not decrease within one mission. Celestial and
+interaction clocks retain their separate owners. The common application plugin
+uses native endpoint capture/restore with public custom-easing markers. Do not remove queued time or
 loosen quaternion admission to conceal an invalid render pose.
 For scene-test diagnostics, `--tick-hz` varies manual update pacing; use the
 runtime's `Time<Fixed>` quantum and elapsed time when interpreting physics cost.

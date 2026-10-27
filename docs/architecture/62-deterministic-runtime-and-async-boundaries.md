@@ -22,10 +22,15 @@ architectures, compiler versions, or solver profiles. Those numerical promises
 need an explicit deterministic profile and their own cross-platform evidence.
 Rendering and interpolated presentation samples are outside authoritative state.
 
-`lunco-time::simulation_presentation_fraction` owns the bounded interval between
-completed physics states. The presentation-time sample and application physical
-easing both consume that owner. Retained fixed backlog never becomes an
-extrapolation fraction and is not discarded by a presentation read. The shared
+`lunco-time::SimulationPresentationTime` is the single published sample between
+completed physical states. The time owner publishes it after fixed execution,
+before physical easing; animation and physical easing consume that same sample.
+Within a mission it advances monotonically, including across pause/resume and
+coupling waits. Participant completion readiness admits fixed steps but never
+selects the render fraction. Celestial physical inputs retain their exact
+master-tick clock, celestial rendering retains its scaled `WorldTime` child,
+and interaction remains wall-clock driven. Retained fixed backlog never becomes
+an extrapolation fraction and is not discarded by a presentation read. The shared
 headless/headful application composes native endpoint capture, invalidation and
 FixedFirst restore with its easing consumer through the public nonlinear-easing
 markers. Invalid endpoints fault and hold physics before quaternion math. This

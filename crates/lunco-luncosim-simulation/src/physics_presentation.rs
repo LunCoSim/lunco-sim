@@ -24,6 +24,7 @@ impl Plugin for PhysicsPresentationPlugin {
                 RunFixedMainLoop,
                 ease_physics_presentation
                     .in_set(bevy::app::RunFixedMainLoopSystems::AfterFixedMainLoop)
+                    .after(lunco_time::SimulationPresentationTimeSet)
                     .after(bevy_transform_interpolation::reset_easing_states_on_transform_change)
                     .before(TransformEasingSystems::Ease),
             );
@@ -63,7 +64,7 @@ mod tests {
         app.insert_resource(Time::<Fixed>::from_seconds(0.02))
             .insert_resource(Time::<Virtual>::default())
             .insert_resource(Time::<Physics>::default())
-            .insert_resource(lunco_time::MissionClock::anchored(2451545.0, 0))
+            .init_resource::<lunco_time::SimulationPresentationTime>()
             .init_resource::<lunco_physics::PhysicsHolds>()
             .init_resource::<lunco_core::RuntimeFaults>()
             .init_resource::<InvalidEndpoint>()
@@ -94,12 +95,14 @@ mod tests {
     }
 
     #[test]
-    fn retained_backlog_holds_completed_endpoints_without_consuming_simulation_time() {
+    fn physical_easing_consumes_published_sample_without_consuming_simulation_time() {
         let (mut app, body) = fixture();
         app.world_mut()
             .resource_mut::<Time<Fixed>>()
             .accumulate_overstep(Duration::from_secs(1));
-        app.world_mut().run_schedule(RunFixedMainLoop); // mission reset
+        app.world_mut()
+            .resource_mut::<lunco_time::SimulationPresentationTime>()
+            .interpolation = 1.0;
         app.world_mut().run_schedule(RunFixedMainLoop);
         let transform = app.world().get::<Transform>(body).unwrap();
         assert_eq!(transform.translation, Vec3::X * 10.0);
@@ -120,11 +123,13 @@ mod tests {
         );
 
         app.world_mut()
-            .resource_mut::<Time<Fixed>>()
-            .discard_overstep(Duration::from_millis(990));
+            .resource_mut::<lunco_time::SimulationPresentationTime>()
+            .interpolation = 0.5;
         app.world_mut().run_schedule(RunFixedMainLoop);
         assert!((app.world().get::<Transform>(body).unwrap().translation.x - 5.0).abs() < 1e-6);
-        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.world_mut()
+            .resource_mut::<lunco_time::SimulationPresentationTime>()
+            .interpolation = 1.0;
         app.world_mut().run_schedule(RunFixedMainLoop);
         assert_eq!(
             app.world().get::<Transform>(body).unwrap().translation,
@@ -161,10 +166,7 @@ mod tests {
 }
 
 fn ease_physics_presentation(
-    fixed: Res<Time<Fixed>>,
-    virtual_time: Res<Time<Virtual>>,
-    mission: Res<lunco_time::MissionClock>,
-    barrier: Option<Res<lunco_core_runtime::SimulationBarrier>>,
+    presentation: Res<lunco_time::SimulationPresentationTime>,
     mut bodies: ParamSet<(
         Query<
             (Entity, &mut Transform, &TranslationEasingState),
@@ -194,12 +196,7 @@ fn ease_physics_presentation(
     }
     // Transform is the explicit f32 render boundary. The clock owner provides
     // a finite [0, 1] interval, so this conversion cannot change its range.
-    let render_fraction = lunco_time::simulation_presentation_fraction(
-        &fixed,
-        &virtual_time,
-        barrier.as_deref(),
-        mission.is_changed(),
-    ) as f32;
+    let render_fraction = presentation.interpolation as f32;
     let mut invalid = None;
     for (entity, mut transform, easing) in &mut bodies.p0() {
         if let (Some(start), Some(end)) = (easing.start, easing.end) {

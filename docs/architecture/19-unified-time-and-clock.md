@@ -213,25 +213,39 @@ rates are rendered consistently by every UI.
 
 ## 2. Physical-time presentation sample
 
-Render-only consumers read `SimulationPresentationTime`, published after
-`WorldTime` and the fixed loop, before transform propagation. If the latest
-completed tick is `n`, the running presentation sample is:
+Render-only physical consumers read one `SimulationPresentationTime` snapshot.
+`SimulationPresentationTimeSet` publishes it in `RunFixedMainLoop` after fixed
+execution, before physical transform easing. USD animation consumes the same
+snapshot in `PostUpdate`; follow cameras consume the eased body transforms.
+For the latest completed master tick `n`, the requested running sample is
+`n - 1 + clamp(Time<Fixed>.overstep_fraction(), 0, 1)`. The published cursor
+cannot move behind its previous sample within the same mission. Its
+`interpolation` field identifies that cursor inside the completed interval.
 
-```text
-sample tick = n - 1 + Time<Fixed>.overstep_fraction()
-```
+Coupling readiness only admits fixed execution: it does not select a render
+phase. While a participant is pending, retained pacing demand advances the
+sample toward the completed endpoint and then holds there. Explicit transport
+or admission pause presents that endpoint immediately. Resuming cannot rewind
+it; interpolation continues when a newer completed interval is available.
+Mission re-anchoring resets this presentation history at the current completed
+tick. No render read consumes or discards queued simulation duration.
 
-`simulation_presentation_fraction` supplies this same interval to the physical
-Transform easing consumer in the shared application composition. Native
+The physical easing consumer reads the snapshot's fraction directly. Native
 interpolation retains endpoint capture, change invalidation and FixedFirst
 restore; its public nonlinear-easing markers select the application consumer.
-No render read consumes or discards queued simulation duration.
+The sample's simulation seconds, MET, and Julian date use the same
+`MissionClock` mapping as `WorldTime`.
 
-The fraction is bounded to `[0, 1]`, so the sample stays between two completed
-physics states and never predicts beyond `SimTick`. On pause or a simulation
-barrier it presents the upper endpoint, `n`, then remains fixed. The sample's
-simulation seconds, MET, and Julian date all come from the same `MissionClock`
-mapping as `WorldTime`.
+This presentation cursor does not change the master timestep, Avian substeps,
+Modelica communication periods, or the wall-rooted interaction clock.
+`CelestialClock::epoch_at_tick` continues to evaluate physical celestial inputs
+at their exact master-tick boundary. Celestial rendering uses `CelestialTime`,
+the separately rate-scaled child of `WorldTime`, under its angular-error budget;
+it does not consume the physical interpolation fraction. Explicit `TimeBinding`
+playback retains its own seek/rate semantics. The production
+`scripts/api/test_physical_presentation_time.py` gate covers fractional samples,
+pause/resume, single steps, transport rates, epoch reset and a 100,000x celestial
+child through the existing scene-test host and authored Rhai verdict.
 
 Ordinary USD time-sampled transforms, visibility, and material channels use
 this physical presentation sample. Avian and other causal simulation state

@@ -68,8 +68,20 @@ fn make_app() -> App {
     ));
     app.init_asset::<Mesh>();
     app.insert_resource(lunco_time::MissionClock::anchored(2451545.0, 0))
+        .init_resource::<lunco_core_runtime::SimTick>()
+        .init_resource::<lunco_time::SimulationPresentationTime>()
         .init_resource::<lunco_physics::PhysicsHolds>()
-        .init_resource::<lunco_core::RuntimeFaults>();
+        .init_resource::<lunco_core::RuntimeFaults>()
+        .add_systems(
+            FixedLast,
+            |mut tick: ResMut<lunco_core_runtime::SimTick>| tick.0 += 1,
+        )
+        .add_systems(
+            RunFixedMainLoop,
+            lunco_time::update_simulation_presentation_time
+                .in_set(lunco_time::SimulationPresentationTimeSet)
+                .in_set(bevy::app::RunFixedMainLoopSystems::AfterFixedMainLoop),
+        );
     app.add_plugins((
         big_space::plugin::BigSpaceMinimalPlugins,
         crate::luncosim_physics_plugins(),
@@ -175,6 +187,7 @@ fn queued_fixed_cycles_do_not_extrapolate_the_render_pose() {
             time.accumulate_overstep(Duration::from_secs(5));
         })
         .after(bevy::app::RunFixedMainLoopSystems::FixedMainLoop)
+        .before(lunco_time::SimulationPresentationTimeSet)
         .before(avian3d::interpolation::TransformEasingSystems::Ease),
     );
     app.update();

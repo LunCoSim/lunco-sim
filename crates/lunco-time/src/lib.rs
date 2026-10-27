@@ -878,9 +878,9 @@ pub struct CelestialTime {
 
 /// Render-time sample interpolated between completed physical ticks.
 ///
-/// `sim_tick` is `completed_tick - 1 + overstep_fraction`, clamped to the
-/// mission origin. This is the same one-step-behind interpolation used by
-/// physics rendering: it never predicts a state beyond a completed tick.
+/// `sim_tick` advances monotonically within completed physical intervals,
+/// using the retained fixed accumulator. A mission change starts a new sample
+/// history. Physics rendering and authored animation consume this same sample.
 /// Causal simulation continues to read [`WorldTime`] at integral `SimTick`s.
 #[derive(Resource, Debug, Clone, Copy, Default, Reflect, PartialEq)]
 #[reflect(Resource)]
@@ -899,7 +899,8 @@ pub struct SimulationPresentationTime {
     pub interpolation: f64,
 }
 
-/// System set publishing the physical-time render sample after the fixed loop.
+/// Publishes the physical-time render sample in `RunFixedMainLoop`, after
+/// fixed execution and before physical transform easing.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SimulationPresentationTimeSet;
 
@@ -911,39 +912,35 @@ fn interpolated_sim_tick(completed_tick: u64, mission_tick0: u64, alpha: f64) ->
     }
 }
 
-/// Interpolation between completed simulation states. Queued fixed cycles are
-/// backlog, never permission to extrapolate beyond the latest completed state.
-/// Render easing and the presentation-time sample share this clock boundary.
-pub fn simulation_presentation_fraction(
-    fixed: &Time<Fixed>,
-    virtual_time: &Time<Virtual>,
-    coupling: Option<&lunco_core_runtime::SimulationBarrier>,
-    reset: bool,
-) -> f64 {
-    let held = virtual_time.is_paused() || coupling.is_some_and(|state| state.held);
-    if reset {
-        0.0
-    } else if held {
-        1.0
-    } else {
-        fixed.overstep_fraction_f64().clamp(0.0, 1.0)
-    }
-}
-
-fn update_simulation_presentation_time(
+/// Publish one bounded, monotonic sample for every physical presentation reader.
+/// Coupling readiness admits fixed steps; it does not select the render phase.
+/// Pause presents the completed endpoint, which remains displayed on resume
+/// until a newer completed interval is available. No pacing demand is consumed.
+pub fn update_simulation_presentation_time(
     tick: Res<SimTick>,
     mission: Res<MissionClock>,
     fixed: Res<Time<Fixed>>,
     virtual_time: Res<Time<Virtual>>,
-    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     mut presentation: ResMut<SimulationPresentationTime>,
 ) {
     let reset = mission.is_changed();
-    let alpha = simulation_presentation_fraction(&fixed, &virtual_time, coupling.as_deref(), reset);
+    let requested_alpha = if virtual_time.is_paused() {
+        1.0
+    } else {
+        fixed.overstep_fraction_f64().clamp(0.0, 1.0)
+    };
+    let interval_start = tick.0.saturating_sub(1) as f64;
     let sim_tick = if reset {
         tick.0 as f64
     } else {
-        interpolated_sim_tick(tick.0, mission.mission_tick0, alpha)
+        interpolated_sim_tick(tick.0, mission.mission_tick0, requested_alpha)
+            .max(presentation.sim_tick)
+            .clamp(interval_start, tick.0 as f64)
+    };
+    let alpha = if tick.0 <= mission.mission_tick0 {
+        1.0
+    } else {
+        sim_tick - interval_start
     };
     let sim_secs = (sim_tick - mission.mission_tick0 as f64) * SECS_PER_TICK;
     let epoch_jd = mission.anchor.epoch0_jd
@@ -1112,10 +1109,6 @@ impl Plugin for TimePlugin {
             .register_type::<WorldTime>()
             .register_type::<CelestialTime>()
             .register_type::<SimulationPresentationTime>()
-            .configure_sets(
-                PostUpdate,
-                (WorldTimeSet, SimulationPresentationTimeSet).chain(),
-            )
             .add_observer(domain::on_apply_scene_time_selection)
             .add_observer(domain::on_scene_transition_started)
             .add_observer(domain::on_scene_transition_failed)
@@ -1147,10 +1140,10 @@ impl Plugin for TimePlugin {
 
         app.add_systems(PostUpdate, advance_world_clock.in_set(WorldTimeSet));
         app.add_systems(
-            PostUpdate,
+            RunFixedMainLoop,
             update_simulation_presentation_time
                 .in_set(SimulationPresentationTimeSet)
-                .before(bevy::transform::TransformSystems::Propagate),
+                .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop),
         );
 
         stepping::install(app);
@@ -1231,6 +1224,70 @@ mod tests {
             64.0,
             "presentation remains fixed while the physical tick is paused"
         );
+    }
+
+    #[test]
+    fn render_time_never_rewinds_when_a_hold_clears() {
+        let mut app = App::new();
+        let mut fixed = Time::<Fixed>::from_seconds(1.0);
+        fixed.accumulate_overstep(Duration::from_millis(250));
+        app.insert_resource(SimTick(0))
+            .insert_resource(MissionClock::anchored(J2000_JD, 0))
+            .insert_resource(Time::<Virtual>::default())
+            .insert_resource(fixed)
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<SimulationPresentationTime>()
+            .add_systems(PostUpdate, update_simulation_presentation_time);
+        app.update();
+
+        for paused in [false, true] {
+            app.world_mut().resource_mut::<SimTick>().0 += 1;
+            app.update();
+            if paused {
+                app.world_mut().resource_mut::<Time<Virtual>>().pause();
+            } else {
+                app.world_mut()
+                    .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+                    .held = true;
+            }
+            app.update();
+            if !paused {
+                assert_eq!(
+                    app.world()
+                        .resource::<SimulationPresentationTime>()
+                        .interpolation,
+                    0.25,
+                    "a pending participant must not select a different render phase"
+                );
+                app.world_mut()
+                    .resource_mut::<Time<Fixed>>()
+                    .accumulate_overstep(Duration::from_millis(750));
+                app.update();
+                app.world_mut()
+                    .resource_mut::<Time<Fixed>>()
+                    .discard_overstep(Duration::from_millis(750));
+            }
+            let held = *app.world().resource::<SimulationPresentationTime>();
+            assert_eq!(held.interpolation, 1.0);
+            app.world_mut().resource_mut::<Time<Virtual>>().unpause();
+            app.world_mut()
+                .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+                .held = false;
+            app.update();
+            let resumed = *app.world().resource::<SimulationPresentationTime>();
+            assert_eq!(
+                resumed.sim_tick, held.sim_tick,
+                "hold release rewound rendering"
+            );
+            assert_eq!(resumed.interpolation, 1.0);
+            assert_eq!(resumed.delta_secs, 0.0);
+
+            app.world_mut().resource_mut::<SimTick>().0 += 1;
+            app.update();
+            let advanced = *app.world().resource::<SimulationPresentationTime>();
+            assert_eq!(advanced.sim_tick, held.sim_tick + 0.25);
+            assert_eq!(advanced.interpolation, 0.25);
+        }
     }
 
     #[test]

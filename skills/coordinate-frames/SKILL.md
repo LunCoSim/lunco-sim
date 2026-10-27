@@ -116,7 +116,12 @@ before generating cell-local geometry. For authored motion directly beneath a
 BigSpace `Grid`, use standard USD `double3 xformOp:translate` samples and split
 the f64 position with `Grid::translation_to_grid` before writing the local
 `Transform`. Unbound samples use `SimulationPresentationTime`, which stays
-between completed physical ticks and holds while transport is paused. Do not
+between completed physical ticks and holds while transport is paused. The same
+snapshot drives physical easing before camera follow. Compare native motion,
+rendered motion and that sample when diagnosing jitter: readiness transitions
+must not rewind the presentation cursor. Celestial physical providers still
+read their exact tick clock; celestial rendering keeps its separate scaled
+`CelestialTime` sample. Do not
 introduce a mission-specific trajectory component or independent clock for
 motion already represented by USD animation.
 
