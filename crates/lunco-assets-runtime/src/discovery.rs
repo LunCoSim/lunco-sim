@@ -188,9 +188,8 @@ pub fn resolve_asset(
 /// `_test` suffix convention is a rule every new file has to remember.
 ///
 /// This states the FACT. Whether a given browser shows them is a user setting
-/// (`AssetVisibilitySettings`, off by default): test scenes bury the handful of
-/// scenes a person actually opens, but they must stay one checkbox away —
-/// hiding them from their author is how a broken one goes unnoticed.
+/// (`AssetVisibilitySettings`, off by default). The Scenarios menu keeps Twin
+/// tests in a dedicated submenu; its library tests follow that preference.
 ///
 /// Loading is never filtered. A scene referencing `scenarios/tests/x.rhai`
 /// resolves it whether or not any browser lists it.

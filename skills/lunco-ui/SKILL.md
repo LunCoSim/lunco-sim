@@ -70,6 +70,16 @@ Verify the saved width and rendered stroke in the actual plot panel.
 
 ## Core Principles
 
+The Scenarios menu offers **Scenario** and **Test Scenarios** as peer submenus.
+Scene rows use a single-selection marker from `CurrentScenePath`; dispatch the
+existing typed `LoadScene` command when another row is chosen. With multiple
+Twins, disambiguate lists by their stable logical names from `TwinRoots`, never
+transport mount authorities. Twin tests remain accessible regardless of the
+asset-browser visibility preference; that preference controls **Library tests**.
+Twin `[usd].scenes` globs curate loadable scenes, and `discovery::is_test_asset`
+classifies test directories. Keep explanatory text and numeric counts out of
+this compact navigation menu. Render dividers only between populated sections.
+
 For retained runtime UI capture, `runtime.ui.recording` receives only surfaces
 allowed by their exposure, perspective, gate and active Twin setting. Switching
 perspectives refreshes this selection without requiring an exposure change.

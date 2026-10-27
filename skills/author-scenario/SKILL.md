@@ -416,8 +416,10 @@ remember:
 | `assets/scenes/tests/<name>.usda` | the rig |
 | `assets/scenarios/tests/<name>.rhai` | its scenario |
 
-`scripts/run_scene_tests.sh` runs everything in `scenes/tests/`, the Scene menu
-hides it (`AssetVisibilitySettings`, one checkbox in Settings), and
+`scripts/run_scene_tests.sh` runs the engine fixtures in `scenes/tests/`.
+The Scenarios menu exposes Twin tests through **Test Scenarios**, alongside
+**Scenario**; **Library tests** follows `AssetVisibilitySettings`.
+The asset gate
 `every_test_scene_carries_a_scenario` fails on any of them that asserts nothing.
 A rig written into `scenes/luncosim/` instead gates nothing however carefully it
 asserts — `no_test_scene_hides_outside_the_tests_directory` is the check that
