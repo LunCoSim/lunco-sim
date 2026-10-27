@@ -62,5 +62,10 @@ Ctrl+P and renders the Roadster air, fan, refill and course controls.
 
 Local captures, reports and runtime logs are under
 `.runtime-check/tesla-default-loading/`. The before/after screenshots were
-visually inspected. Runtime controls were tested with the original native
-solver revision; integration with newer local main is qualified separately.
+visually inspected. The integrated tree includes local main `d101543b2` and its native solver
+revision `ba8978bd`. Its production rebuild passed; the 31 control/HUD checks
+and 21 lifecycle checks were repeated successfully on that binary. The Twin's
+`default_loading.rhai` also passed all 19 direct-load assertions. Input-owner
+tests compile with `cargo check -p lunco-input-core --tests -j 4`. API 4520
+closed through the gate's Exit path; the visible API 4519 session was closed
+after acceptance. The integrated render log contains no GPU failure or panic.

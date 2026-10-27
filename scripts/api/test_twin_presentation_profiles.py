@@ -33,7 +33,7 @@ def main():
             result = q('RunRhai', code=code)
             if result.get('error'): raise RuntimeError(result)
             return result['stdout']
-        def verdict(call, title, count, fault=False):
+        def verdict(call, title, count):
             source = (ROOT / 'assets/scenarios/tests/twin_presentation_profiles.rhai').read_text()
             output = rhai(source + '\n' + call + ';')
             if f'TESTS_OK {count}' not in output or f'{title}: PASS' not in output:
@@ -72,7 +72,7 @@ def main():
             open_fixture(name, kind)
             tick = rhai('clock_snapshot().sim_tick')
             time.sleep(.2)
-            verdict('rejected(' + json.dumps(kind) + ',' + tick + ')', 'TWIN PRESENTATION REJECTION', 2, True)
+            verdict('rejected(' + json.dumps(kind) + ',' + tick + ')', 'TWIN PRESENTATION REJECTION', 2)
             open_fixture('plain')
         verdict('preferences(' + before + ')', 'TWIN INPUT PREFERENCES', 1)
         assert_render_log_clean(args.log)
