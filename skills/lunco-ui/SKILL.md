@@ -27,6 +27,28 @@ and design decisions. This skill is a quick-reference summary.
 
 ## Graph readability
 
+For a viewport demonstration, enable **Settings → HUD → Telemetry graphs**.
+Use the card's **Parameters** picker to browse source/component groups or
+filter names and descriptions, then choose up to four parameters. The selected
+parameters stay pinned above the groups. Units and Y scales
+stay independent; time axes stay aligned. The browser's **Show in HUD** starts
+with its selected channel. The title-bar history dropdown selects the retained time window;
+**Style** exposes layout and native per-plot appearance controls. Use **+** for
+another independent HUD; drag an edge or corner to resize, and use **×** to close it.
+Settings → HUD visibility toggles retain parameters while hidden. The picker stays
+open while browsing and selecting; **Done** or an outside click dismisses it. Each instance has
+its own position, dimensions, visibility and parameters. No document
+or dock tab opens. A Twin calls `SetGraphHud { signals, visible: true }`, where
+signals contain explicit `target_gid`, `signal` and `caption` entries. Inspect
+with `InspectGraphHud` (the `huds` collection); style its native plot ids with
+`ConfigureLinePlot`. Omitting `hud` addresses the primary HUD. Allocate others
+with `CreateGraphHud` and close them with `RemoveGraphHud`.
+Selections validate atomically, retained channels preserve their styles, and
+scene teardown releases the HUD-owned grid and plots. Verify parameter choice,
+units, hide/show, invalid batches, instance isolation, native drag resizing,
+unchanged history and scene retirement with
+`scripts/api/test_graph_hud.py`, plus native-click and screenshot review.
+
 Telemetry browser rows reserve the measured value and unit at the right edge
 before allocating the channel name and hierarchy indentation. Bound each row
 with an explicit visible rectangle and the theme's window padding at the right

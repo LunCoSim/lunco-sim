@@ -1320,7 +1320,7 @@ Twin closure retire visible history and work handles while retaining counters.
 Reusable UI infrastructure. Provides the `WidgetSystem` for cached ECS widgets, support for typed commands, and `WorldPanel` for 3D in-scene UI elements attached to entities.
 
 **`lunco-viz`**
-Domain-agnostic visualization framework. Collects simulation data into a `SignalRegistry` and renders it via `Visualization` kinds (LinePlots, Gauges) into various view targets like 2D panels or the 3D viewport.
+Domain-agnostic visualization framework. Collects simulation data into a `SignalRegistry` and renders it via `Visualization` kinds into view targets. Scene-scoped independent telemetry HUDs reuse native grids, plot controls, scene-area anchors and native window resizing without opening a document.
 
 **`lunco-canvas`**
 2D scene editor substrate. Provides the stateful viewport and tool foundation for diagramming and node-based editing, powering the Modelica diagram editor and other schematic-based tools.

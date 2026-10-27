@@ -2822,6 +2822,18 @@ impl TelemetryBrowserState {
         let description = metadata.and_then(|m| m.description.as_deref());
         let hist = registry.scalar_history(sel);
         let latest = hist.and_then(ScalarHistory::back).copied();
+
+        // Native tab and HUD hosts share VizPanel/LinePlot and measured history.
+        let (open_tab, show_hud) = ui
+            .horizontal_wrapped(|ui| {
+                (
+                    ui.button("Open as plot tab").clicked(),
+                    ui.add_enabled(crate::ui::graph_hud::signal_entry(ctx, sel).is_ok(), egui::Button::new("Show in HUD"))
+                        .on_hover_text("Show this channel over the scene in View, then add parameters on the card.")
+                        .clicked(),
+                )
+            })
+            .inner;
         ui.vertical(|ui| {
             ui.label(
                 egui::RichText::new(&sel.path)
@@ -2908,9 +2920,18 @@ impl TelemetryBrowserState {
             }
         }
 
-        // In-crate door that needs no canvas at all: a dedicated
-        // plot tab through the existing VizPanel/LinePlot substrate.
-        if ui.button("Open as plot tab").clicked() {
+        if show_hud {
+            match crate::ui::graph_hud::signal_entry(ctx, sel) {
+                Ok(entry) => ctx.trigger(crate::SetGraphHud {
+                    visible: Some(true),
+                    signals: Some(vec![entry]),
+                    ..Default::default()
+                }),
+                Err(error) => {
+                    ui.label(error);
+                }
+            }
+        } else if open_tab {
             let Some(viz_registry) = ctx.resource::<VisualizationRegistry>() else {
                 return;
             };

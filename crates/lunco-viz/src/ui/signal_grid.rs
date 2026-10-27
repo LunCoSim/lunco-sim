@@ -52,6 +52,33 @@ struct SignalGrid {
 #[derive(Resource, Default)]
 pub(crate) struct SignalGrids(HashMap<u64, SignalGrid>);
 
+impl SignalGrids {
+    pub(super) fn allocate_id(&self) -> u64 {
+        loop {
+            let id = VizId::next().raw();
+            if !self.0.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
+    pub(super) fn plots(&self, id: u64) -> Option<&[VizId]> {
+        self.0.get(&id).map(|grid| grid.plots.as_slice())
+    }
+
+    pub(super) fn columns(&self, id: u64) -> Option<u32> {
+        self.0.get(&id).map(|grid| grid.columns as u32)
+    }
+
+    pub(super) fn remove(&mut self, id: u64, plots: &mut VisualizationRegistry) {
+        if let Some(grid) = self.0.remove(&id) {
+            for plot in grid.plots {
+                plots.remove(plot);
+            }
+        }
+    }
+}
+
 fn validate_shape(columns: u32, count: usize) -> Result<(), String> {
     if !(1..=64).contains(&count) || !(1..=8).contains(&columns) || columns as usize > count {
         return Err(
@@ -69,7 +96,23 @@ fn on_configure_signal_grid(
     mut registry: ResMut<VisualizationRegistry>,
     mut grids: ResMut<SignalGrids>,
 ) -> Result<Ack, String> {
-    let request = trigger.event();
+    configure_signal_grid(
+        trigger.event(),
+        &entities,
+        &signals,
+        &mut registry,
+        &mut grids,
+    )
+}
+
+/// Shared native grid mutation; all consumers validate before changing plots.
+pub(super) fn configure_signal_grid(
+    request: &ConfigureSignalGrid,
+    entities: &lunco_api::registry::ApiEntityRegistry,
+    signals: &SignalRegistry,
+    registry: &mut VisualizationRegistry,
+    grids: &mut SignalGrids,
+) -> Result<Ack, String> {
     validate_shape(request.columns, request.signals.len())?;
     if request.grid == 0 {
         return Err("signal grid identity must be nonzero".into());

@@ -268,22 +268,22 @@ fn signal_hint(meta: Option<&SignalMeta>) -> Option<String> {
 }
 
 #[derive(Debug)]
-struct ToolbarSignal {
-    source: SignalRef,
-    meta: Option<SignalMeta>,
-    hint: Option<String>,
+pub(crate) struct ToolbarSignal {
+    pub(crate) source: SignalRef,
+    pub(crate) meta: Option<SignalMeta>,
+    pub(crate) hint: Option<String>,
 }
 
 #[derive(Debug)]
-struct ToolbarSignalCatalog {
+pub(crate) struct ToolbarSignalCatalog {
     registry_address: usize,
     revision: u64,
-    signals: Vec<ToolbarSignal>,
+    pub(crate) signals: Vec<ToolbarSignal>,
 }
 
 /// Build the signal-picker entries only when a picker is open, then reuse them
 /// until the signal catalog changes.
-fn toolbar_signal_catalog(
+pub(crate) fn toolbar_signal_catalog(
     ctx: &egui::Context,
     registry: &SignalRegistry,
 ) -> std::sync::Arc<ToolbarSignalCatalog> {

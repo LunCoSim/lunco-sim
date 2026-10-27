@@ -254,6 +254,7 @@ fn register_hud_settings_menu(world: &mut World) {
             return;
         };
         let original_overlays = overlays;
+        lunco_viz::graph_hud_menu_ui(ui, ctx);
         ui.checkbox(&mut overlays.sky_clock, "Time HUD (top-left)")
             .on_hover_text("Show the celestial time HUD and its current epoch.");
         ui.checkbox(

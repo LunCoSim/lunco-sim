@@ -958,7 +958,25 @@ the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
 
 LunCoSim's Settings ▸ HUD submenu is the discoverable view for the shipped
-visibility controls. It edits the existing `OverlaySettings`, `PerfHudSettings`,
+visibility controls. Its Telemetry graphs row calls `SetGraphHud` over
+`lunco-viz`'s registered scene resource. A searchable Parameters picker selects
+up to four measured channels through the shared native grid mutation owner;
+source filtering and an explicit internal-variable option keep discovery usable.
+The browser's **Show in HUD** action starts with its selected channel. Each
+quantity retains an independent unit and Y scale, with linked time axes.
+The card's History and Style controls use existing native plot appearance
+commands. No document or tab opens and no additional history is recorded.
+`GraphHuds` owns independent HUD identities, each with its own grid, parameter
+selection, visibility and measured native window geometry. `CreateGraphHud`
+allocates another instance; `RemoveGraphHud` releases only its grid and plots.
+The title-bar **×** dispatches removal; Settings → HUD visibility toggles retain
+the instance and selection. The picker dismisses only on Done or an outside click.
+The native egui window owns move/resize gestures; typed measurements publish
+actual dimensions before queued user intents so a size preset remains pending.
+Each instance scopes its picker cache and UI identity separately. Scene teardown
+releases every HUD-owned grid and plot, including while hidden. These native
+windows use the measured View scene area and exclude offline capture.
+The submenu also edits the existing `OverlaySettings`, `PerfHudSettings`,
 and `InputOverlaySettings` resources and the active Twin's generic
 `ui.camera_status` value. It also removes the `celestial-view` entry from the
 existing `RuntimeSurfaceLayouts` resource when the user requests a position

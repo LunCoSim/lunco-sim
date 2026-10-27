@@ -415,6 +415,10 @@ impl Plugin for LunCoSimUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (
+                    lunco_viz::draw_graph_hud
+                        .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
+                        .run_if(not(recording_offline))
+                        .run_if(in_view_perspective),
                     celestial_time::draw_celestial_time
                         .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
                         .run_if(not(recording_offline))

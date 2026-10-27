@@ -2,6 +2,69 @@
 
 Domain-agnostic visualization framework for LunCoSim.
 
+## Viewport telemetry HUD
+
+Turn on a graph HUD in **Settings → HUD → Telemetry graphs** in View. On the card, open
+**Parameters** to browse sources and component groups, optionally filter names,
+descriptions and source paths, and select up to four parameters. Selected
+parameters stay pinned above the groups. Each uses its own native plot,
+unit and Y scale, with a shared time axis. Internal model variables are an
+explicit picker option. The telemetry browser's **Show in HUD** action starts
+with its selected parameter. No document or dock tab opens.
+
+The presentation uses compact captions, current values, sparse grids, thick
+curves and a short following history, as in the Roadster native analysis
+scenarios. The title-bar history dropdown chooses 5/15/30/60 seconds or all retained data. **Style**
+provides card-size presets, one/two-column layout and each plot's ordinary
+appearance controls: caption, colour, line width, text size, ranges and follow
+mode. Drag empty header space to move it and drag an edge or corner to resize.
+The title-bar **+** creates an independent HUD; **×** closes and releases that
+instance. Up to eight HUDs can coexist. The Settings menu lists their individual
+visibility controls, which retain selections while hidden. The parameter picker
+stays open while browsing or selecting; use **Done** or click outside to dismiss it.
+
+A Twin uses the same typed command. Omitting `hud` selects the primary HUD
+(identity 1), creating it on first use:
+
+```rhai
+cmd("SetGraphHud", #{visible: true, signals: [
+    #{target_gid: owner, signal: "power.battery_soc", caption: "Battery charge"},
+    #{target_gid: owner, signal: "power.battery_net", caption: "Battery power"}
+]});
+```
+
+Use `CreateGraphHud {}` to allocate another instance; its acknowledgement data
+contains `hud`. Pass that identity in `SetGraphHud { hud, ... }`. Explicit
+unknown identities reject. `RemoveGraphHud { hud }` closes one instance.
+Optional paired `x` and `y` set its logical-pixel position; widths and heights
+apply through the native resize owner, which also publishes operator drag
+measurements. Each HUD has independent parameter selection, layout and history
+window. A parameter keeps its chosen colour when added to another HUD.
+
+Use actual owners and exact measured names from `ListTelemetryChannels`.
+`SetGraphHud` validates the complete selection and dimensions before mutation;
+missing, inactive, unsampled, duplicate and over-budget selections reject
+without changing existing graphs. Omitted fields preserve state; `signals: []`
+clears it. Optional `columns`, `width` and `height` control layout. Width and
+height must be finite and at least 320 × 240 logical pixels.
+
+`InspectGraphHud` returns a `huds` collection containing instance identity,
+parameters, units, native plot ids, appearance, visibility and painted bounds. `ConfigureLinePlot` styles those ids directly;
+changing parameters retains the identity and style of channels still selected.
+The HUD shares `ConfigureSignalGrid`'s mutation owner and renderer, the native
+picker catalog, and `SignalRegistry` history. It records no second measurement
+stream. Its grid and plots retire at scene teardown, including while hidden.
+The workbench's `panel.center` anchor supplies the measured scene area;
+`hud.graph.<id>` reports each painted window. The application draws it in View outside
+offline recording.
+
+Run `python3 scripts/api/test_graph_hud.py --port <free-port>` with a built
+production binary (`LUNCOSIM_BIN`). Its authored Rhai verdicts cover parameter
+selection, independent units, style retention, atomic rejection, history and
+document/tab preservation, instance isolation, native drag resizing, rendering
+bounds and scene retirement. Inspect the
+captures in `target/graph-hud-evidence/` for visual acceptance.
+
 ## Native signal grids
 
 `ConfigureSignalGrid` composes 1–64 active, sampled scalar channels as small

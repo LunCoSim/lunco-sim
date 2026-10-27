@@ -9311,6 +9311,7 @@ dependencies = [
  "lunco-usd-ui",
  "lunco-usd-viewport-runtime",
  "lunco-usd-viewport-ui",
+ "lunco-viz",
  "lunco-web",
  "lunco-workbench",
  "lunco-workbench-browser",
