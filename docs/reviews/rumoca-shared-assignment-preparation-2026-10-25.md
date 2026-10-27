@@ -1,17 +1,11 @@
 # Shared assignment preparation qualification
 
-Status: native construction-only patch `45d66677bd1e287491279823c039e1da954880be`
-is tested and published on LunCoSim/rumoca branch
-`fix/shared-assignment-preparation`. The application pin is qualified for local integration; the separate mutable
-workspace candidate remains held.
+Immutable assignment preparation is qualified independently of mutable sweep
+storage. Its original native commit is `45d66677bd1e287491279823c039e1da954880be`;
+current pins retain it. Mutable storage has a separate
+[integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
 
 ## Scope and ownership
-
-The previously approved immutable assignment-preparation change is isolated
-from the separate runtime sweep-workspace change. The latter remains on the
-published `fix/shared-refresh-runtime-preparation` branch and retains its exact
-replay investigation. The new candidate's sweep implementation and its shared
-fixture helpers are byte-identical to application base `b825929b`.
 
 `rumoca-ir-solve::SharedAssignmentSchedule` owns checked immutable scalar
 programs, source provenance and per-program solver targets. The equivalence

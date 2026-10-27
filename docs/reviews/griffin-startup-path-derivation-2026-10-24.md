@@ -116,7 +116,7 @@ Rumoca's exact refresh schedule owner now retains one proven
 `SharedAssignmentSchedule` per issued runtime sequence. Interpreter and native
 compilation consume that immutable typed result. The checked block shares its
 operation storage; solver values and outputs remain runtime-owned. The native
-change is published as `fbfbcdc908bec19fa9b2f2b63486e1c8838e5340`.
+construction contract is retained by the current native pin.
 See the [current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md)
 for native checks, the twenty-model canary boundary, and production qualification.
 The source/owner validation and complete symbolic equivalence proof remain at

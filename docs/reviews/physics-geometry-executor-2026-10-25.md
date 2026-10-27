@@ -77,8 +77,8 @@ host pressure and presentation counts. This is diagnostic attribution, not a
 claim of that whole-cycle gain. The normal A/B/A cohort bounds the observed
 product effect. Candidate native physics, physical solar visibility and Modelica
 integration remain measured leads. The separate
-[Rumoca workspace proposal](rumoca-torn-sweep-workspace-2026-10-25.md) awaits
-explicit dependency authorization.
+[authorized Rumoca workspace change](rumoca-refresh-runtime-preparation-2026-10-25.md)
+has its own numerical and production qualification.
 
 The canonical regular build is restored, SHA-256
 `1cda691ae3b10c167f4d0fd3cba70b8f6736c85d404a6300d024683006111163`.

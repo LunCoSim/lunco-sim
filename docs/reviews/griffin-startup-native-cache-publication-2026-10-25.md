@@ -1,8 +1,9 @@
 # Griffin native compiler cache publication
 
 Status: application-owned cache repair passes focused and production qualification on
-main's Rumoca `b825929b` dependency. The separate `fbfbcdc9` upgrade remains
-published and held for its exact-replay investigation.
+the measured Rumoca `b825929b` dependency. Current native preparation and sweep
+storage qualification is in the
+[runtime review](rumoca-refresh-runtime-preparation-2026-10-25.md).
 
 ## Measured loading path
 
@@ -135,8 +136,9 @@ lookup (85), `Terms::key` (68), `SymbolicSlots::run` (60), shared-value builder
 append (52), and `ExactRefreshAssignmentSchedule::shared_segments` (51).
 Cranelift verification remains visible (78). Kernel reuse therefore leaves
 native IR construction, proof preparation, hashing and allocation costs.
-The published, held schedule-sharing upgrade addresses an observed owner;
-its integration still requires resolving the exact-replay failure.
+The qualified immutable schedule-sharing change addresses this measured owner;
+its current contract is in the
+[construction review](rumoca-shared-assignment-preparation-2026-10-25.md).
 
 The initializer's disk-lookup zone is 1.520 s. A separate exact-zone selection
 has 664 samples, zero missing stacks and one matching zone. Dependency-state

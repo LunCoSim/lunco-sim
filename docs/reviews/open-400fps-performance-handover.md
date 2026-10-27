@@ -1,5 +1,30 @@
 # High-quality realtime performance handover
 
+## Native Modelica sweep storage
+
+Rumoca `eca39484` retains per-runtime torn-sweep buffers while preserving all
+independent numerical checks. Native runtime tests, Clippy and the fixed MSL
+canary pass; production has 360 exact replay checks, 52 coupled initialization
+and drive assertions, and the expected terminal initialization-failure verdict.
+The shared Rhai fixture explicitly imports its assembly tool dependency.
+
+Two regular Griffin runs preserve all 271 source hashes and land at four-pad
+handoff. First-fill/warm readiness is 24.349/11.534 s; the warm initializer still
+constructs for 3.403 s with zero native compilations. Native physics median is
+0.432 ms, fixed-schedule service 4.672 ms, and MainPropulsion worker mean
+8.779 ms. A foreign rendering workload prevents an isolated speed comparison.
+The [current qualification](rumoca-refresh-runtime-preparation-2026-10-25.md)
+separates these intervals and cache conditions. All original targets remain open.
+
+The final tree also preserves main `936375974` and passes 21 additional Twin
+presentation/lifecycle checks. Its controlled windowed Griffin repeat loads in
+7.778 s with all native kernels hitting; initializer construction is 2.132 s,
+MainPropulsion worker mean 6.139 ms, and frame median/p95 9.630/12.853 ms.
+Default and focused views render correctly. An earlier black windowed capture
+is not reproduced and remains unqualified; lighter host load and different
+cache conditions prevent an isolated speed claim. The integration review
+retains both observations and the cache-eviction evidence.
+
 ## Native joint replay repair
 
 Avian `ba8978b` fixes the confirmed first-step query-order defect and is published
@@ -12,8 +37,8 @@ No reference, tolerance, equation, precision or solver iteration setting changes
 Velocity relaxation reuses ordered borrowed query items within each invocation.
 Its 20-rover diagnostic median falls from 1.897 to 1.237 ms compared with sorting
 inside every pass. This is an instrumented owner comparison, not complete
-coupled-step acceptance. Rumoca scratch reuse now needs separate requalification
-against the repaired native solver. Loading and complete-step targets remain open.
+coupled-step acceptance. Rumoca scratch reuse is qualified separately above.
+Loading and complete-step targets remain open.
 
 Integration preserves main's presentation-clock repair and repeats the 360
 replay checks, 49 joint/contact checks and 13 production presentation-clock
@@ -40,8 +65,8 @@ initializer artifacts after cache eviction. Its 27.658 s readiness and
 12.899/22.991 ms frame median/p95 are not isolated performance comparisons.
 The qualified Tracy capture identifies torn sweeps, residual evaluation and
 allocation inside Modelica integration. MainPropulsion remains the critical
-worker. Mutable scratch reuse awaits separate qualification against the native
-joint repair above. Raw data stays ignored.
+worker. Mutable scratch reuse has separate qualification above. Raw data
+stays ignored.
 
 ## Timing boundary
 
@@ -351,7 +376,7 @@ coupled-tick p50/p95 remains 3.394/4.162 ms. These observations are host-qualifi
 not an isolated speedup ratio. A validated native warm capture still attributes
 construction to native IR, hashing and proof preparation. The regular artifact
 is restored exactly and owned sessions close. Sub-second loading and sub-ms
-ticks remain open. The independent mutable-workspace candidate below stays held.
+ticks remain open. Mutable workspace qualification has its own review below.
 
 ## Independent construction preparation
 
@@ -389,19 +414,14 @@ Sub-second loading and sub-ms coupled ticks remain open.
 
 ## Shared native runtime preparation qualification
 
-Rumoca `fbfbcdc9` is tested and published: interpreter/native assignment
-preparation shares one proven immutable schedule, and each runtime retains its
-torn-sweep workspace with independent numerical checks intact. The
+Interpreter/native assignment preparation consumes one checked immutable
+schedule. The authorized per-runtime torn-sweep storage change retains
+independent numerical checks. The
 [current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md)
-records 130 solver tests, five Cranelift assignment tests and scoped Clippy.
-Twelve of the twenty MSL canary models compare strictly against OpenModelica;
-the other eight are refused before runtime and have no asserted baseline delta.
-
-Application integration is held for an intermittent first-step articulated
-replay failure. See the [owner investigation](physics-first-step-joint-replay-2026-10-25.md).
-No reference or tolerance changes, numerical workaround or timing benefit is
-claimed. Temporary source probes are removed, and the normal candidate is
-restored exactly. All original performance targets remain open.
+owns its native canary, exact replay and production timing evidence.
+The [Avian repair](physics-first-step-joint-replay-2026-10-25.md) fixes the
+independently established first-step joint ordering fault. References and
+tolerances remain unchanged. All original performance targets remain open.
 
 ## Native child-collider invalidation
 
@@ -419,7 +439,7 @@ timing benefit. A separate validated Tracy capture measures 0.002465 ms child
 propagation and 0.036719 ms moved-bound update; the complete tick target remains
 open. The regular artifact is restored exactly. The slower static-scatter
 grouping experiment is removed. Immutable proof sharing is qualified separately above; mutable torn-sweep
-workspace reuse remains held in its
+workspace reuse has its own
 [integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
 
 ## Native physical commit executor

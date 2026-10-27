@@ -1,8 +1,8 @@
 # Rumoca torn-sweep workspace
 
 The user-authorized native change is published as
-`fbfbcdc908bec19fa9b2f2b63486e1c8838e5340` on LunCoSim/rumoca branch
-`fix/shared-refresh-runtime-preparation`. The
+`eca3948416fa90d8695e2f91557ee9db18dbe75d` on LunCoSim/rumoca branch
+`fix/torn-sweep-workspace`. The
 [current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md)
 owns implementation, qualification and production timing status.
 

@@ -1,3 +1,5 @@
+import "lunco://scripting/tools/assembly_edit" as assembly_edit;
+
 const ROOT = "/ModelicaRuntimeContracts";
 const SOURCE = "lunco://models/tests/InitialFeedback.mo";
 const PAUSE_PROBE = "lunco.test.modelica_network.pause_probe";

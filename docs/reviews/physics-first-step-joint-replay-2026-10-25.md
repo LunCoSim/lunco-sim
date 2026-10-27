@@ -66,8 +66,9 @@ owned API 5515 and exit normally. The final receipt is
 `portable-validation.json` in the ignored evidence directory below.
 The reference SHA-256 remains
 `6247db0dfefbd0eaedad3d712c359578f30a75addb6daea4a79584b784a70451`.
-No tolerance or expected state is changed. Rumoca `fbfbcdc9` still requires
-separate requalification against this native repair.
+No tolerance or expected state is changed. Rumoca workspace qualification
+against this native repair belongs to the
+[runtime integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
 
 The application integration preserves main's `532243895` presentation-clock
 repair. The rebuilt combined tree repeats all 360 exact replay checks, the 49
@@ -82,7 +83,8 @@ the process exits and its port closes. Its receipt and screenshot are under
 `griffin-integrated/` in the ignored evidence directory.
 
 Readiness takes 21.302 s; the initializer constructs with 16,482 native hits,
-zero compilations and 3.397 s measured session construction. The latest native
+zero compilations and 3.397 s measured session construction. Prepared IR is a
+cache miss, distinct from native kernel reuse. The latest native
 physics history has median/p95 0.388/0.525 ms, while fixed-schedule service is
 3.767/4.408 ms and MainPropulsion worker service averages 7.132 ms (last 5.504 ms).
 Frame median/p95 is 9.967/13.055 ms. These distinct timing boundaries are not

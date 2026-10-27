@@ -1774,6 +1774,12 @@ the component during sampling. The host owns derivative-capability activation,
 accepted-step validation, and the complete initial-equation solve. A raw lowered
 start vector is not an initialized participant.
 
+Rumoca owns reusable torn-sweep scratch per runtime. It reinitializes every
+live value and retains independent per-row numerical checks; runtime clones
+start with empty independent storage. The application consumes this through
+the same Model Exchange host and does not duplicate solver buffers or cache
+numerical results. Reentry and allocation failures remain native runtime errors.
+
 Native GJK simplex projection uses adaptive tetrahedron orientation predicates
 for containment and native triangle queries for boundary witnesses and feature
 identity. EPA uses the same orientation owner for seed winding and the existing

@@ -798,6 +798,12 @@ programs to interpreter and native construction. Preserve that shared storage,
 source provenance and target order when attributing proof/IR costs. Treat
 immutable preparation sharing separately from mutable runtime workspace changes;
 qualify each against the unchanged exact reference and fixed MSL canary.
+Native torn-sweep scratch belongs to each Rumoca runtime. Preserve complete
+buffer initialization, clone isolation, backend-decline recovery and independent
+per-row f64 checks. Use changed-input/reentry tests at the native owner, then
+production coupled admission and an owned Twin run. Distinguish `FixedFirst`
+through `FixedLast` service time from complete coupled-step latency, including
+Modelica worker completion and response; never add overlapping worker intervals.
 Read `GetReadiness` alongside compact `CosimStatus` during loading. A terminal
 participant error, including a rejected generated network with no solver,
 must expose its named `program_failed` readiness item. Preserve the full error
