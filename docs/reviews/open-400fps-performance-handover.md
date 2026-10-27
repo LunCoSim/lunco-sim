@@ -1,5 +1,34 @@
 # High-quality realtime performance handover
 
+## Shader input lookup and solver attribution
+
+The [shader input review](shader-input-live-slots-2026-10-26.md) records reuse
+of the already-selected live slot during metadata admission. Twenty alternating
+fixture processes reduce complete shader write time by about 15%, preserving
+type authority, live ownership, stale-slot checks and atomic writes. Eight
+low-level checks and the six-check production plume gate pass. The normal
+Griffin run preserves all 271 source hashes and reaches sleeping four-pad
+handoff with clear diagnostics and inspected rendering; owned sessions close.
+
+That normal launch is contended by a separate build and recompiles 12,135
+initializer artifacts after cache eviction. Its 27.658 s readiness and
+12.899/22.991 ms frame median/p95 are not isolated performance comparisons.
+The qualified Tracy capture identifies torn sweeps, residual evaluation and
+allocation inside Modelica integration. MainPropulsion remains the critical
+worker. Mutable scratch reuse is still held by its exact replay investigation;
+no numerical checks or dependency source are changed here. Raw data stays ignored.
+
+## Timing boundary
+
+`SimulationTimingProfile` measures fixed-schedule service from `FixedFirst` to
+`FixedLast`. Earlier entries calling this a coupled tick do not include the
+asynchronous Modelica worker critical path or completion admission outside that
+interval. Use `CosimStatus` service/response diagnostics and a matching trace
+for the complete coupled-step target; never sum overlapping worker spans.
+The source-preserved normal Griffin run below reports MainPropulsion worker
+service averaging 6.187 ms (last 5.581 ms), despite 3.607 ms median fixed-schedule
+service. The sub-ms coupled-step target is still open.
+
 ## Native attribute handle reuse
 
 The [attribute-handle review](usd-attribute-handle-reuse-2026-10-26.md) records
@@ -10,7 +39,7 @@ and samples, including blocked and unset values. No dependency source changes.
 
 The regular production build passes Griffin's settled landing window at 8.653 s
 readiness, with 271 unchanged source hashes, sleeping four-pad handoff, clear
-diagnostics and inspected rendering. Coupled-tick p50/p95 is 3.607/4.163 ms;
+diagnostics and inspected rendering. Fixed-schedule p50/p95 is 3.607/4.163 ms;
 application-frame p50/p95 is 9.490/11.872 ms. The baseline launch overlaps a
 focused test compilation, so this pair does not establish isolated mission
 speedup. Initializer construction remains 2.417 s plus a separate 0.641 s

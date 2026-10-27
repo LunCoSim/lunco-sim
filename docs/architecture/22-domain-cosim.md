@@ -333,6 +333,10 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   are refreshed only by structural setters. Active manual holds map to dense
   targets only when the hold set or compiled wiring changes; physics ticks read
   the retained target-aligned buffer without hashing port names.
+  Shader metadata consumes the slot from the live declaration under the same
+  immutable World borrow. Only a driven declaration supplies that slot; the
+  metadata reader checks its current authored type, or the live type when no
+  authored value exists. It does not retain permission across transactions.
   Modelica output snapshots are copied on `ModelicaModel` changes; the last
   admitted values remain the propagation source between solver responses.
   Modelica and scripted output copies use `ScalarPortMap::upsert_samples`.

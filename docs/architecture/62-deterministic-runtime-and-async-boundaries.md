@@ -331,7 +331,12 @@ plus per-app-update fixed-loop duration, completed-step count, remaining
 pending simulation duration (whole ticks and fractional overstep), and
 simulation-time demand omitted if a consumer alters `Time<Virtual>::max_delta`.
 The profile is read through telemetry's query registry, does not emit per-tick
-events, and never feeds simulation decisions. Its capped-time total describes
+events, and never feeds simulation decisions. Tick service is measured between
+`FixedFirst` and `FixedLast`; it excludes asynchronous Modelica execution and
+completion admission outside that interval. A complete coupled-step performance
+claim must also measure the causal workers and their response/commit latency
+through `CosimStatus` and the corresponding trace. Worker spans can overlap;
+their sum is not elapsed coupled-step time. Its capped-time total describes
 wall-time demand already clipped, distinct from the recoverable pending duration.
 The time owner's configured admission produces zero clipped demand. The profile
 still does not move fixed work off the GUI thread or guarantee real-time cadence.

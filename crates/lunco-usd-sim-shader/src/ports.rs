@@ -155,8 +155,14 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
             return;
         };
         if let Some(name) = out.requested_name() {
-            if look.driven().contains(name) || look.values().contains_key(name) {
-                out.declare(name, PortDirection::In, resolve_shader_input(look, name));
+            let driven = look.driven().contains(name);
+            if driven || look.values().contains_key(name) {
+                let slot = if driven {
+                    look.live().resolve_slot(name)
+                } else {
+                    None
+                };
+                out.declare(name, PortDirection::In, slot);
             }
             return;
         }
@@ -168,15 +174,13 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
             out.declare(name, PortDirection::In, resolve_shader_input(look, name));
         }
     },
-    metadata: |world, entity, name, direction, _slot| {
-        let authored_scalar = world.get::<ShaderLook>(entity).and_then(|look| {
-            if !look.driven().contains(name) {
-                return None;
-            }
-            look.values()
-                .get(name)
-                .copied()
-                .or_else(|| look.live_value(name))
+    metadata: |world, entity, _name, direction, slot| {
+        // Only a live driven declaration supplies a slot. The registry retains
+        // the same immutable World borrow through metadata admission.
+        let authored_scalar = slot.and_then(|slot| {
+            let look = world.get::<ShaderLook>(entity)?;
+            let (name, live) = look.live().get_slot_entry(slot)?;
+            look.values().get(name).copied().or(*live)
         });
         let writable = matches!(authored_scalar, Some(ParamValue::F32(_)));
         PortMetadata::scalar(

@@ -280,6 +280,9 @@ and changing values. Its declaration and material-intent packages use regular
 development optimization level three. Preserve live validation and no-op change
 detection; a large visual binding count alone does not authorize changing clocks
 or skipping writes.
+The shader metadata callback uses the already-selected live slot. Preserve
+authored-type precedence over a differently typed live override, rejection of
+untyped drives, and current drive membership before accepting a faster result.
 
 When comparing native CPU/GPU instance preparation, retain the same PBR,
 shadows, meshes and quality. The desktop composition selects native CPU
@@ -1742,7 +1745,12 @@ batch. This fairness boundary does not make an individual slow tick fast. Its se
 detects unexpected clipping and should remain zero. Pair this with
 `QueryTelemetryHistory` for `engine.frame_time`, which covers the full app frame.
 Use `CosimStatus` step diagnostics to separate solver service from end-to-end
-response latency. `SimulationCompletions` runs in `First`, after message
+response latency. Fixed-tick service brackets `FixedFirst` through `FixedLast`;
+it excludes asynchronous solver work and completion admission outside that
+interval. Do not label that number complete coupled-step time or use it alone
+to certify a coupled-step budget. Trace the causal worker critical path and
+response/commit boundary without adding overlapping worker spans.
+`SimulationCompletions` runs in `First`, after message
 rotation and before `ClockProjectionSet`, and in the native driver's bounded
 completion wait. The shared fixed runner also services it once before checking
 admission for a held pending cycle; compile requests remain in
