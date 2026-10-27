@@ -695,5 +695,5 @@ bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "1df9fc155f97223
 # Pinned upstream source with the approved public path-tracing ordering hook.
 # See third_party/bevy_solari/VENDOR.md for identity and the exact patch.
 bevy_solari = { path = "third_party/bevy_solari" }
-avian3d = { git = "https://github.com/LunCoSim/avian", rev = "95d02b32d30a8f3636d70b260a39f05758efbc29" }
+avian3d = { git = "https://github.com/LunCoSim/avian", rev = "ba8978bd647a5e9f911d9160219cc2f9c1795f83" }
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "01302a171ac3db662c0c322ef9e98fe7d5f33a6a" }

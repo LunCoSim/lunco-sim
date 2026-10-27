@@ -1688,6 +1688,18 @@ comparison. Rerun the production joint, drive, gear and continuous-contact gates
 when changing those owners. Preserve native scheduling and enhanced determinism;
 thread or batch count is not a correctness verdict.
 
+For first-step joint replay differences, compare actual native pass order and
+prepared constraint/body inputs before changing tolerances or blaming coupled
+solver workspace reuse. XPBD corrections share body state: ECS table packing is
+not a valid execution order. The native owner sorts each joint type by live
+entity index in position and velocity passes. Preserve deterministic entity
+admission. Velocity relaxation borrows and orders query items once per call,
+then reuses them across its iterations without a persistent cache. Preserve
+the exact production replay reference; exercise unrelated
+archetype moves and joint disable/re-enable in the native regression. Include
+the unchanged serial/default-thread and jitter profiles in qualification, and
+measure ordering cost separately from numerical correctness.
+
 ## Evidence
 
 For frame distributions, query `EnginePerformance` after a quiet measurement
