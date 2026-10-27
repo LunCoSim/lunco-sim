@@ -265,6 +265,14 @@ Everything the mission needs lives under that folder: the scene, referenced
 vehicle assets, `.mo` models, `.rhai` scenarios. Open the Twin and the default
 scene loads.
 
+Keep interactive stages in `scenes/` and verdict fixtures in `scenes/tests/`,
+paired with `scenarios/tests/` observers. Declare both directories in
+`[usd].scenes` (for example `["scenes/*.usda", "scenes/tests/*.usda"]`).
+Scenarios offers **Scenario** and **Test Scenarios** as peer submenus; use
+explicit paths or narrow globs to curate the interactive list.
+Update verification registry paths and runners when relocating a fixture,
+and preserve its asset dependencies through typed USD document operations.
+
 ### Reuse the closest working composition
 
 Copy the *composition shape* through USD references; do not copy a whole example

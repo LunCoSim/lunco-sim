@@ -2,9 +2,8 @@
 //!
 //! Test scenes and scenarios live under `tests/` directories
 //! (`assets/scenes/tests/`, `assets/scenarios/tests/`) and outnumber the scenes a
-//! person actually opens. Off by default so the Scene menu is the list of things
-//! worth opening; ONE checkbox away, because a test scene hidden from its own
-//! author is how a broken one goes unnoticed.
+//! person actually opens. Asset browsers and the Scenarios library hide them
+//! by default. Scenarios always exposes Twin tests through Test Scenarios.
 //!
 //! The setting governs LISTING only. Loading is never filtered — `scene_test`
 //! takes a path, and a scene referencing `scenarios/tests/…` resolves it whether
@@ -45,10 +44,8 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
         let original = settings;
         ui.checkbox(&mut settings.show_test_assets, "Show test scenes")
             .on_hover_text(
-                "Scenes and scenarios under `tests/` — rigs that exist to be run by \
-                 `scripts/run_scene_tests.sh` and assert a verdict, not to be opened \
-                 and looked at. Hidden by default so the Scene menu lists what is \
-                 worth opening.",
+                "Show assets under `tests/` in file browsers and add Library tests to Scenarios. \
+                 Test Scenarios from open Twins are always available.",
             );
         if settings != original {
             ctx.set_resource(settings);

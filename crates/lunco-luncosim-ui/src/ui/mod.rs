@@ -1487,7 +1487,6 @@ fn register_downloadable_assets_settings(world: &mut World) {
     });
 }
 
-const SCENARIO_MENU_MIN_WIDTH: f32 = 300.0;
 const SCENARIO_MENU_MAX_WIDTH: f32 = 420.0;
 const SCENARIO_MENU_HEIGHT: f32 = 360.0;
 const SCENARIO_REGISTRY_ERROR_EVENT: &str = "scenario-registry-unavailable";
@@ -1535,16 +1534,11 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         return;
     };
     menus.register_custom_menu("Scenarios", |ui, ctx| {
-        ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
-        ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
-        ui.label(
-            bevy_egui::egui::RichText::new("Scenarios load a world or demo.")
-                .weak(),
-        );
-        ui.separator();
-        let has_scene = ctx
+        let current_scene = ctx
             .resource::<CurrentScenePath>()
-            .is_some_and(|path| !path.0.is_empty());
+            .filter(|path| !path.0.is_empty())
+            .map(|path| lunco_assets_core::engine_asset_uri(&path.0));
+        let has_scene = current_scene.is_some();
 
         ui.add_enabled_ui(has_scene, |ui| {
             if ui.button("Restart Scenario").clicked() {
@@ -1570,7 +1564,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .map(|r| r.entries.clone())
                 .unwrap_or_default();
             ui.menu_button(format!("Downloaded Twins ({})", entries.len()), |ui| {
-                ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
+                ui.set_min_width(ui.spacing().menu_width);
                 ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 if entries.is_empty() {
                     ui.label(
@@ -1641,9 +1635,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                         }
                     });
             });
+            ui.separator();
         }
-
-        ui.separator();
 
         let Some(roots) = ctx
             .resource::<lunco_assets_core::twin_source::TwinRoots>()
@@ -1694,7 +1687,15 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             }
         };
         // Names copied out here so every click can dispatch through `MenuCtx`.
-        let twin_names = match roots.names() {
+        let twin_names = match roots.names().and_then(|names| {
+            names
+                .into_iter()
+                .map(|authority| {
+                    let label = roots.logical_name(&authority)?;
+                    Ok((authority, label))
+                })
+                .collect::<Result<Vec<_>, lunco_assets_core::TwinRootsError>>()
+        }) {
             Ok(names) => names,
             Err(error) => {
                 report_scenario_registry_error(ctx, error.to_string());
@@ -1703,17 +1704,16 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             }
         };
 
-        // Test scenes are hidden unless the user asks for them: they are rigs
-        // `scripts/run_scene_tests.sh` runs for a verdict, and there are more of
-        // them than there are scenes worth opening. Orthogonal to the globs
-        // above — a project's `scenes` pattern says what IS a scene, this says
-        // which of them this menu offers. The pref is one checkbox in the
-        // Settings menu, so a test scene is never unreachable.
+        // Twin tests stay reachable in their own submenu. The browser preference
+        // controls the engine library's test collection, independently of Twins.
         let show_tests = ctx
             .resource::<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>()
             .is_some_and(|s| s.show_test_assets);
         if !show_tests {
-            assets.retain(|asset| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel));
+            assets.retain(|asset| {
+                asset.twin.is_some()
+                    || !lunco_assets_runtime::discovery::is_test_asset(&asset.rel)
+            });
         }
         assets.sort_by(|a, b| a.stem.cmp(&b.stem));
 
@@ -1748,32 +1748,32 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             |ui: &mut bevy_egui::egui::Ui,
              ctx: &mut MenuCtx,
              items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
-                ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
                 ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 bevy_egui::egui::ScrollArea::vertical()
                     .max_height(SCENARIO_MENU_HEIGHT)
-                    .auto_shrink([false, false])
+                    .auto_shrink([true, true])
                     .show(ui, |ui| {
-                        for (asset, desc) in items {
-                            let label = clean_scene_name(&asset.stem);
-                            let resp = ui.add_sized(
-                                [ui.available_width(), 0.0],
-                                bevy_egui::egui::Button::new(label).wrap(),
-                            );
-                            // Show the plain-language "what is this demo" blurb on hover.
-                            // `on_hover_text` consumes and returns the `Response` (chaining API).
-                            let resp = match desc {
-                                Some(d) => resp.on_hover_text(d.as_str()),
-                                None => resp,
-                            };
-                            if resp.clicked() {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            for (asset, desc) in items {
+                                let label = clean_scene_name(&asset.stem);
+                                let path = lunco_assets_core::engine_asset_uri(&asset.asset_path);
+                                let selected = current_scene.as_deref() == Some(path.as_str());
+                                let resp = ui.radio(selected, label);
+                                // Show the plain-language "what is this demo" blurb on hover.
+                                // `on_hover_text` consumes and returns the `Response` (chaining API).
+                                let resp = match desc {
+                                    Some(d) => resp.on_hover_text(d.as_str()),
+                                    None => resp,
+                                };
+                                if resp.clicked() {
                                     ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
-                                    path: lunco_assets_core::engine_asset_uri(&asset.asset_path),
-                                    root_prim: String::new(),
-                                });
-                                ui.close();
+                                        path,
+                                        root_prim: String::new(),
+                                    });
+                                    ui.close();
+                                }
                             }
-                        }
+                        });
                     });
             };
 
@@ -1790,21 +1790,42 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .filter(|(asset, _)| lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
             .collect();
 
-        // Open Twins FIRST as submenus: the twin you have open is
-        // the project you are working in, and its scenarios are what you came to
-        // the menu for. The engine library is the reference collection below it.
-        for name in &twin_names {
-            let group: Vec<_> = regular
-                .iter()
-                .copied()
-                .filter(|(a, _)| a.twin.as_deref() == Some(name.as_str()))
-                .collect();
-            if group.is_empty() {
-                continue;
-            }
-            ui.menu_button(format!("{name}  ({})", group.len()), |ui| {
-                render(ui, ctx, &group);
-            });
+        // Presentation labels never expose mount authorities. With several open
+        // Twins, their stable logical names disambiguate the nested lists.
+        let render_twins =
+            |ui: &mut bevy_egui::egui::Ui,
+             ctx: &mut MenuCtx,
+             items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
+                if twin_names.len() == 1 {
+                    render(ui, ctx, items);
+                } else {
+                    for (authority, label) in &twin_names {
+                        let group: Vec<_> = items
+                            .iter()
+                            .copied()
+                            .filter(|(asset, _)| asset.twin.as_deref() == Some(authority.as_str()))
+                            .collect();
+                        if !group.is_empty() {
+                            ui.menu_button(label, |ui| render(ui, ctx, &group));
+                        }
+                    }
+                }
+            };
+        let twin_scenes: Vec<_> = regular
+            .iter()
+            .copied()
+            .filter(|(asset, _)| asset.twin.is_some())
+            .collect();
+        if !twin_scenes.is_empty() {
+            ui.menu_button("Scenario", |ui| render_twins(ui, ctx, &twin_scenes));
+        }
+        let twin_tests: Vec<_> = tests
+            .iter()
+            .copied()
+            .filter(|(asset, _)| asset.twin.is_some())
+            .collect();
+        if !twin_tests.is_empty() {
+            ui.menu_button("Test Scenarios", |ui| render_twins(ui, ctx, &twin_tests));
         }
 
         let library: Vec<_> = regular
@@ -1813,22 +1834,21 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .filter(|(a, _)| a.twin.is_none())
             .collect();
         if !library.is_empty() {
-            ui.menu_button(format!("Library  ({})", library.len()), |ui| {
+            if !twin_scenes.is_empty() || !twin_tests.is_empty() {
+                ui.separator();
+            }
+            ui.menu_button("Library", |ui| {
                 render(ui, ctx, &library);
             });
         }
-        if show_tests {
-            ui.separator();
-            ui.menu_button(format!("Test scenes  ({})", tests.len()), |ui| {
-                if tests.is_empty() {
-                    ui.label(
-                        bevy_egui::egui::RichText::new("(no test scenes discovered)")
-                            .weak()
-                            .italics(),
-                    );
-                } else {
-                    render(ui, ctx, &tests);
-                }
+        let library_tests: Vec<_> = tests
+            .iter()
+            .copied()
+            .filter(|(a, _)| a.twin.is_none())
+            .collect();
+        if show_tests && !library_tests.is_empty() {
+            ui.menu_button("Library tests", |ui| {
+                render(ui, ctx, &library_tests);
             });
         }
     });

@@ -306,6 +306,15 @@ project content. Rigid folder layouts fight user intuition.
 
 ## 3. The `twin.toml` manifest
 
+The Scenarios menu uses `[usd].scenes` globs to discover loadable stages.
+Keep verification fixtures in `scenes/tests/` with Rhai observers in
+`scenarios/tests/`. Curate the interactive list with explicit scene paths or
+narrow globs, and include the fixture directory. **Scenario** and **Test Scenarios** are peer submenus; each marks the current scene with a single-selection
+control. Multiple open Twins are distinguished by stable logical names inside
+these lists, never by transient mount authorities. Twin tests remain accessible
+when asset browsers hide test content. **Show test scenes** controls asset
+browsers and **Library tests**.
+
 The only file a Twin *must* have. It declares:
 
 ```toml
@@ -340,6 +349,8 @@ externals = [
 # `.usda` files. The Rhai Twin loading policy selects this scene. Other `.usda`
 # files in the Twin are indexed but not mounted automatically.
 default_scene = "main_scene.usda"
+# Loadable scene globs include both interactive stages and verification fixtures.
+scenes = ["scenes/*.usda", "scenes/tests/*.usda"]
 
 [environment]
 default = "moon"                  # or path to environment.ron
