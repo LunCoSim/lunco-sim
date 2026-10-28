@@ -54,6 +54,7 @@ pub struct SetTheme {
 #[Command(default)]
 pub struct ConfigureDiagramPresentation {
     pub show_controls: Option<bool>,
+    pub semantic_zoom: Option<bool>,
     pub use_authored_colors: Option<bool>,
     pub show_hover_values: Option<bool>,
 }
@@ -65,6 +66,9 @@ fn on_configure_diagram_presentation(
 ) {
     let request = trigger.event();
     let mut next = settings.clone();
+    if let Some(value) = request.semantic_zoom {
+        next.semantic_zoom = value;
+    }
     if let Some(value) = request.show_controls {
         next.show_controls = value;
     }

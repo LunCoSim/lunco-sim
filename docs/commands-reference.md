@@ -1250,6 +1250,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `show_controls` | `Option < bool >` |   |
+| `semantic_zoom` | `Option < bool >` |   |
 | `use_authored_colors` | `Option < bool >` |   |
 | `show_hover_values` | `Option < bool >` |   |
 
@@ -4334,7 +4335,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 286 commands from the runtime schema; scanned 1045 .rs files for docs (0 parse failure(s) skipped).
+<!-- 286 commands from the runtime schema; scanned 1046 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

@@ -119,6 +119,8 @@ pub(super) fn project_scene(
             ),
             kind: "modelica.icon".into(),
             data: std::sync::Arc::new(IconNodeData {
+                semantic: None,
+                value_instance: node.instance_name.clone(),
                 qualified_type: node.component_def.name.clone(),
                 partial: node.component_def.partial,
                 expandable_connector: node.component_def.is_expandable_connector(),
@@ -512,6 +514,7 @@ pub(super) fn projection_relevant_source_hash(source: &str) -> u64 {
 ///   live via `spawned_at.elapsed() > deadline`.
 pub struct ProjectionTask {
     pub gen_at_spawn: u64,
+    pub semantic_epoch: Option<u64>,
     /// Document the projection was spawned for. Captured at spawn
     /// because the world's "active document" can drift while the
     /// task runs off-thread (user switches tabs, duplicates a doc,

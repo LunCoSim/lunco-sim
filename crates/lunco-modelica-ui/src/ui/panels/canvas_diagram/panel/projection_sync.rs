@@ -54,6 +54,17 @@ pub(crate) fn poll_and_swap_projection(
         }
     }
 
+    if docstate.projection_task.as_ref().is_some_and(|task| {
+        task.semantic_epoch
+            .is_some_and(|epoch| epoch != lunco_modelica_ast::source_memo::source_epoch())
+    }) {
+        if let Some(task) = docstate.projection_task.take() {
+            task.cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        ui.ctx().request_repaint();
+        return;
+    }
     let done_task = docstate.projection_task.as_mut().and_then(|t| {
         t.task.poll_once().map(|projected| {
             (
@@ -284,7 +295,14 @@ pub(crate) fn trigger_projection_if_needed(
         }
         // One-shot re-projection requested when source library became resident — forces a
         // re-project so standard-library icons resolve, independent of gen/target.
-        let forced = docstate.force_reproject;
+        let dependency_changed = docstate.semantic_mode
+            && docstate.semantic_epoch != lunco_modelica_ast::source_memo::source_epoch();
+        let forced = dependency_changed
+            || docstate.force_reproject
+            || docstate.semantic_mode
+                != ctx
+                    .resource::<lunco_theme::DiagramPresentationSettings>()
+                    .is_some_and(|s| s.semantic_zoom);
 
         !task_in_flight
             && (first_render
@@ -412,6 +430,33 @@ fn spawn_projection_task(
         docstate.projection_task = None;
     }
 
+    let semantic_zoom = ctx
+        .resource::<lunco_theme::DiagramPresentationSettings>()
+        .is_some_and(|s| s.semantic_zoom);
+    state
+        .get_mut_for_render(render_tab_id, Some(doc_id))
+        .semantic_mode = semantic_zoom;
+    // Editor overlays own exact text; the compiler's parsed-only document
+    // entries deliberately do not retain it. Freeze matching generations here.
+    let resident_sources: Vec<_> = ctx
+        .resource::<ModelicaDocuments>()
+        .into_iter()
+        .flat_map(|registry| registry.iter())
+        .filter(|(_, host)| !host.document().ast_is_stale())
+        .filter_map(|(document, host)| {
+            host.document()
+                .strict_ast()
+                .map(|ast| super::super::semantic::ResidentSource {
+                    document,
+                    source: host.document().source_arc(),
+                    ast,
+                })
+        })
+        .collect();
+    let semantic_epoch = lunco_modelica_ast::source_memo::source_epoch();
+    state
+        .get_mut_for_render(render_tab_id, Some(doc_id))
+        .semantic_epoch = semantic_epoch;
     let spawned_at = web_time::Instant::now();
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel_for_task = std::sync::Arc::clone(&cancel);
@@ -493,7 +538,18 @@ fn spawn_projection_task(
                         &layout,
                     )?;
                 bevy::tasks::futures_lite::future::yield_now().await;
-                let (scene, _) = project_scene(&diagram);
+                let (mut scene, _) = project_scene(&diagram);
+                if semantic_zoom {
+                    let mut engine = handle.lock();
+                    super::super::semantic::prepare(
+                        &mut scene,
+                        &mut engine,
+                        max_nodes,
+                        &layout,
+                        &cancel_for_task,
+                        &resident_sources,
+                    )?;
+                }
                 Ok(ProjectedScene {
                     scene,
                     target_unit_instance: unit_instance,
@@ -516,6 +572,7 @@ fn spawn_projection_task(
     docstate.force_reproject = false;
     docstate.projection_task = Some(ProjectionTask {
         gen_at_spawn: r#gen,
+        semantic_epoch: semantic_zoom.then_some(semantic_epoch),
         doc_at_spawn: doc_id,
         target_at_spawn: target_class,
         spawned_at,
