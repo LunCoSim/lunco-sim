@@ -41,6 +41,16 @@ passes that sampled span to `GeoTransform::centred_square`; for example,
 513 nodes at 4 m spacing cover 2048 m. Processor bake keys include the pipeline
 version, so a georeferencing change invalidates previously processed output.
 
+Missing elevation samples are owned by the native DEM processor. Polar
+reprojection adapters preserve unresolved coverage as NaN rather than copying
+nearby postings. The processor admits gaps within 64 neighbour rings, then
+solves the eight-neighbour discrete Laplace equation only at missing nodes,
+holding measured heights fixed. A bounded deterministic relaxation must
+converge before output is written. Pipeline version 9 invalidates prior bake
+stamps. Filled heights are interpolated estimates, not measured crater relief;
+the preparation provenance records their count. The same solver precedes
+normal-map derivation so geometry and shading share the repaired surface.
+
 `GeoTransform` is the in-memory form — `pixel_size_m` (one spacing, both axes),
 `origin_x_m`/`origin_y_m` (model position of the upper-left sample; +X east,
 +Y north, Y decreasing per row), `body_radius_m`, and the crop-centre

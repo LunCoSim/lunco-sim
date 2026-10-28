@@ -24,7 +24,7 @@ use crate::tile_mesh::{TileMesh, bake_tile_mesh_with_boundary};
 /// Current geometry/layout contract for persisted visual tile bakes. Bump on
 /// changes to sampling math, boundary topology, normals, morphs, or blob layout.
 /// The revision is part of the content key; incompatible bakes cannot be read.
-const CACHE_FORMAT_VERSION: u64 = 13;
+const CACHE_FORMAT_VERSION: u64 = 14;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {

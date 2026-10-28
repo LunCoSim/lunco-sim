@@ -2262,7 +2262,7 @@ dependencies = [
 [[package]]
 name = "bevy_render"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=1df9fc155f97223600ae3f3aecfeede32ab986ce#1df9fc155f97223600ae3f3aecfeede32ab986ce"
+source = "git+https://github.com/LunCoSim/bevy?rev=fc11207b6f179574575c23efd8e43e7b03d86cd2#fc11207b6f179574575c23efd8e43e7b03d86cd2"
 dependencies = [
  "async-channel",
  "bevy_app",

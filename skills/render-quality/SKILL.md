@@ -87,6 +87,22 @@ GPU acceptance still require the rendered fixture and a clean process log.
    uniform bound in depth-only passes. Run the `vertex_shadow_alignment`
    graphics fixture: both lit-vacated and shadowed-displaced probes must appear,
    with no red disagreement pixels.
+   For displaced crater-rim shadows or jumps during fast Sun motion, verify
+   Bevy's view-uniform camera lookup uses retained `MainEntity` identity, not a
+   main-world ID as a render-world entity. Run
+   `scripts/api/test_shadow_lod_origin.py --output <evidence-dir>` to check
+   camera-dependent deformation with an inactive camera and changing Sun
+   directions. The native camera index is shared by all cascades each frame;
+   increasing shadow resolution cannot repair mismatched terrain geometry.
+   For LOD transition pops, check interior morph targets against the parent's
+   indexed triangles, not just its grid postings or boundary edges. Run the
+   pure `morphed_child_matches_every_parent_triangle` test in
+   `lunco-terrain-surface`; changes to bake math also require a tile-cache
+   version bump and a settled production camera traversal.
+   If a crater remains irregular with native shadows disabled, inspect albedo
+   and geometric normals separately. Missing orthophoto coverage can coincide
+   with stereo-DEM voids. Follow `skills/geo-assets/SKILL.md` to regenerate those
+   gaps through the native processor; shadow bias cannot repair source heights.
    For point/spot shared shadow roots, retain native uniform allocation before
    bin unpacking. Run the `shared_shadow_allocation` graphics fixture: its point
    light, two differently sized caster meshes and all camera prepasses must

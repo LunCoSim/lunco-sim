@@ -1,4 +1,4 @@
-import bevy_pbr::render::{forward_io::VertexOutput, mesh_functions, shadows, mesh_view_bindings::view};
+import bevy_pbr::render::{forward_io::VertexOutput, mesh_functions, shadows, mesh_view_bindings::{view, lights}};
 
 // Green: the vacated position is lit. Cyan: the displaced caster casts here.
 // Red is a shadow/visible-geometry disagreement; gray is outside the probes.
@@ -11,8 +11,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         view.view_from_world[2].z, view.view_from_world[3].z), in.world_position);
     let visibility = shadows::fetch_directional_shadow(0u, in.world_position,
         in.world_normal, view_z, in.position.xy);
-    let old_position = abs(p.x) < 0.25 && abs(p.z + 2.0) < 0.25;
-    let new_position = abs(p.x - 3.0) < 0.25 && abs(p.z + 2.0) < 0.25;
+    // Project the caster centre onto the plane with the current light, so a
+    // moving-Sun test checks the current shadow rather than a frozen location.
+    let sun = lights.directional_lights[0].direction_to_light;
+    let shadow_offset = -2.0 * sun.xz / sun.y;
+    let old_position = all(abs(p.xz - shadow_offset) < vec2(0.2));
+    let new_position = all(abs(p.xz - shadow_offset - vec2(3.0, 0.0)) < vec2(0.2));
     if (old_position) {
         return select(vec4(1.0, 0.0, 0.0, 1.0), vec4(0.0, 1.0, 0.0, 1.0), visibility > 0.9);
     }

@@ -60,6 +60,11 @@ downloading its raw TIF and label does not create `terrain/nobile03`.
 Polar adapters prepare a local raster for the native processor. Keep void
 interpolation and its coverage rejection in that processor, record its filled
 sample count, and verify the emitted node span: `(resolution - 1) * spacing`.
+Adapters must preserve unresolved samples as NaN, without a nearest-neighbour
+fill. Native processing uses bounded harmonic interpolation with measured
+nodes fixed; failed convergence rejects the bake. Use pipeline version 9 or
+newer, retain the interpolated-node count in provenance, and compare measured
+postings before and after regeneration. Filled regions are estimates.
 For a crop enlargement, compare the retained operating area's heights before
 and after processing and again through `TerrainHeights` in the production app.
 
@@ -341,6 +346,12 @@ These values are copied into the typed terrain-generation request and used by
 native, worker, GUI, and headless physics. They are deliberately independent
 of `RenderingQualitySettings`, camera-driven visual LOD, and `targetRes`; a
 graphics preset must never change collider tile count or resolution.
+
+Visual CDLOD morph targets sample the parent's indexed triangles for height
+and normal. Preserve that interpolation at interior vertices and stitched
+edges, and advance the visual tile-cache revision when bake math changes.
+The pure `morphed_child_matches_every_parent_triangle` regression covers this
+contract without involving authored terrain assets or physics resolution.
 
 Asset paths are **scene-root-relative** and resolve through `twin://`, so they
 travel with the twin. The generic USD shader projection walks

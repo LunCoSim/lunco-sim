@@ -3,7 +3,7 @@
     defaultPrim = "VertexShadowAlignment"
     upAxis = "Y"
     metersPerUnit = 1.0
-    documentation = "Native shadow probes for a uniform-driven authored vertex deformation; green and cyan are success, red is failure."
+    doc = "Native shadow probes for a uniform-driven authored vertex deformation; green and cyan are success, red is failure."
 )
 
 def Xform "VertexShadowAlignment" (
@@ -32,6 +32,7 @@ def Xform "VertexShadowAlignment" (
                 custom float3 inputs:offset = (3.0, 0.0, 0.0)
                 custom asset info:wesl:sourceAsset = @lunco://shaders/tests/vertex_shadow_alignment.wesl@
                 custom asset info:wesl:vertexAsset = @lunco://shaders/tests/vertex_shadow_alignment.wesl@
+                custom float inputs:lod_weight = 1.0
             }
         }
         def Material "Receiver"

@@ -58,9 +58,22 @@ passes. It selects Bevy's forward or prepass output interface using
 the same morph uniforms are available. CDLOD distance uses
 `view.lod_view_world_position`, the viewing camera's origin shared with its
 shadow cascades. Edge stitching and morph interpolation therefore describe the
-same surface in every pass. The `vertex_shadow_alignment` GPU fixture displaces
-an authored caster and requires its native shadow at the displaced position,
-with the vacated position lit.
+same surface in every pass. Bevy's view-uniform owner resolves a directional
+shadow view's retained camera identity through a per-frame index of extracted
+cameras keyed by `MainEntity`. Main-world IDs cannot address render-world
+entities directly. Shared point/spot shadow origins retain their native owner.
+The `vertex_shadow_alignment` GPU fixture deforms an authored caster using the
+camera LOD origin and requires its native shadow at the displaced position,
+with the vacated position lit. `scripts/api/test_shadow_lod_origin.py` exercises
+this contract with an inactive camera present and twelve changing Sun directions.
+
+The CPU tile bake evaluates morph targets on the parent's indexed triangles,
+including the diagonal shared by each pair. The same barycentric weights select
+the target height and normal. A fully morphed child therefore covers the parent
+surface at interior vertices as well as stitched edges. The persisted tile-bake
+revision changes with this interpolation contract; no extra geometry or shader
+samples are needed. The pure `morphed_child_matches_every_parent_triangle` test
+checks every child target against actual parent mesh indices on curved relief.
 
 Native depth, normal, and motion-vector components are registered by the camera
 binder and can be enabled through the shared reflected component interface.

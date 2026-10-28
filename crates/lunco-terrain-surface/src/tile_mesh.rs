@@ -3,7 +3,7 @@
 //! Each quadtree node bakes a real grid mesh from the DEM. Every vertex carries
 //! two positions: its **own** LOD position (`POSITION`, `y = DEM height`) and a
 //! **`MORPH_TARGET`** — the same vertex evaluated on the parent node's coarser
-//! lattice by bilinear interpolation. The CDLOD vertex shader lerps
+//! triangles by barycentric interpolation. The CDLOD vertex shader lerps
 //! `pos = mix(POSITION, MORPH_TARGET, morph)` by a camera-distance morph factor,
 //! so a tile geomorphs smoothly into its parent with no popping and no
 //! texture fetch. The physics collider ring is deliberately a separate product:
@@ -198,12 +198,9 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
             let y = (h_at(ix as isize, iz as isize) - origin_y) as f32;
             positions.push([(wx - ox) as f32, y, (wz - oz) as f32]);
 
-            // Evaluate the PARENT-gated surface at this vertex's exact position.
-            // The parent tile is a regular grid whose triangles linearly
-            // interpolate between its lattice samples. Repeating the lower even
-            // sample for an odd child vertex (the old implementation) created a
-            // stepped edge and therefore a T-junction even when explicitly
-            // stitched.
+            // Evaluate the parent mesh at this vertex's exact position. Its
+            // grid_indices diagonal joins the upper-right and lower-left
+            // postings; height and normal use that triangle's barycentrics.
             let ex = ix / 2;
             let ez = iz / 2;
             let ex1 = (ex + 1).min(even - 1);
@@ -218,35 +215,24 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
             } else {
                 (iz & 1) as f32 * 0.5
             };
-            let sy = {
-                let a = parent_y[ez * even + ex];
-                let b = parent_y[ez * even + ex1];
-                let c = parent_y[ez1 * even + ex];
-                let d = parent_y[ez1 * even + ex1];
-                let ab = a + (b - a) * tx;
-                let cd = c + (d - c) * tx;
-                ab + (cd - ab) * tz
+            let postings = [
+                ez * even + ex,
+                ez * even + ex1,
+                ez1 * even + ex,
+                ez1 * even + ex1,
+            ];
+            let weights = if tx + tz <= 1.0 {
+                [1.0 - tx - tz, tx, tz, 0.0]
+            } else {
+                [0.0, 1.0 - tz, 1.0 - tx, tx + tz - 1.0]
             };
+            let sy = (0..4).map(|i| weights[i] * parent_y[postings[i]]).sum();
             let pn = {
-                let a = parent_n[ez * even + ex];
-                let b = parent_n[ez * even + ex1];
-                let c = parent_n[ez1 * even + ex];
-                let d = parent_n[ez1 * even + ex1];
-                let ab = [
-                    a[0] + (b[0] - a[0]) * tx,
-                    a[1] + (b[1] - a[1]) * tx,
-                    a[2] + (b[2] - a[2]) * tx,
-                ];
-                let cd = [
-                    c[0] + (d[0] - c[0]) * tx,
-                    c[1] + (d[1] - c[1]) * tx,
-                    c[2] + (d[2] - c[2]) * tx,
-                ];
-                let p = [
-                    ab[0] + (cd[0] - ab[0]) * tz,
-                    ab[1] + (cd[1] - ab[1]) * tz,
-                    ab[2] + (cd[2] - ab[2]) * tz,
-                ];
+                let p: [f32; 3] = std::array::from_fn(|axis| {
+                    (0..4)
+                        .map(|i| weights[i] * parent_n[postings[i]][axis])
+                        .sum()
+                });
                 let len = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
                 [p[0] / len, p[1] / len, p[2] / len]
             };
@@ -900,6 +886,38 @@ mod tests {
     }
 
     #[test]
+    fn morphed_child_matches_every_parent_triangle() {
+        struct Curved;
+        impl HeightSource for Curved {
+            fn height_at(&self, x: f64, z: f64) -> f64 {
+                x * z + 0.2 * x * x - 0.3 * z * z
+            }
+        }
+        let region = Square {
+            center: [0.0, 0.0],
+            half: 2.0,
+        };
+        let parent = bake_tile_mesh(&Curved, &Curved, region, 3, 10.0, [0.0, 0.0], 0.0);
+        let child = bake_tile_mesh(&Curved, &Curved, region, 5, 10.0, [0.0, 0.0], 0.0);
+        for triangle in parent.indices.chunks_exact(3) {
+            let [a, b, c] = std::array::from_fn(|i| parent.positions[triangle[i] as usize]);
+            let det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+            for p in &child.morph_targets {
+                let u = ((b[2] - c[2]) * (p[0] - c[0]) + (c[0] - b[0]) * (p[2] - c[2])) / det;
+                let v = ((c[2] - a[2]) * (p[0] - c[0]) + (a[0] - c[0]) * (p[2] - c[2])) / det;
+                let w = 1.0 - u - v;
+                if u >= 0.0 && v >= 0.0 && w >= 0.0 {
+                    let expected = u * a[1] + v * b[1] + w * c[1];
+                    assert!(
+                        (p[1] - expected).abs() < 1e-6,
+                        "morphed vertex {p:?} must lie on parent triangle {triangle:?}: {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn flat_dem_bakes_flat_no_morph() {
         let res = 5;
         let dem = flat_dem();
@@ -1420,7 +1438,7 @@ mod tests {
                 // fine edge coincide with the coarse neighbour.
                 assert!((m.morph_targets[i][0] - m.positions[i][0]).abs() < 1e-3);
                 assert!((m.morph_targets[i][2] - m.positions[i][2]).abs() < 1e-3);
-                // The ramp is linear, so bilinear parent interpolation is still
+                // The ramp is linear, so parent-triangle interpolation is still
                 // exactly height == world X at every child coordinate.
                 assert!((m.morph_targets[i][1] - (x0 + ix as f64 * step) as f32).abs() < 1e-2);
             }

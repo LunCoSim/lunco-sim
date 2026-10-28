@@ -801,30 +801,14 @@ fn roi_samples(
     Ok(out)
 }
 
-/// Interpolate DEM voids from their valid neighbours. Returns how many were filled.
+/// Interpolate bounded DEM voids without modifying measured postings.
 ///
-/// WHY A DEM MUST NEVER SHIP A VOID. A NaN height is not a cosmetic gap: the
-/// heightmap drives the render mesh AND the collider, so it becomes a hole in the
-/// world that a rover can drive into. That is categorically different from a void
-/// in an ortho or normal map, which bakes to a neutral value and merely looks flat.
-///
-/// WHY VOIDS EXIST AT ALL — and they are NOT our bug. `NAC_DTM_APOLLO15.TIF` is
-/// derived from a STEREO PAIR, and stereo matching fails where there is no texture
-/// to match: shadowed crater floors above all. Gaps are a normal property of every
-/// stereo-derived DTM, present in the source as shipped.
-///
-/// WHY NOT JUST SHRINK THE WINDOW. That was the first instinct and it is wrong: it
-/// discards hundreds of metres of good terrain to dodge a handful of bad samples,
-/// and it is luck-dependent — the next site, or the same site re-centred, lands on
-/// a void again. Void-fill is what DEM pipelines do; the window should be chosen
-/// for coverage, not to route around correlation failures.
-///
-/// Iterative neighbour averaging (8-connected): each pass replaces every void that
-/// has at least one valid neighbour with their mean, so fills grow inward from the
-/// rim one ring per pass. Converges in `radius` passes for a void of that radius.
-/// The cap bounds the work and, more usefully, refuses to invent a large interior:
-/// a gap that survives it is too big to fill honestly and is a real authoring
-/// error, not a speckle.
+/// A 64-ring admission bound rejects large unsupported interiors. Admitted
+/// nodes solve the eight-neighbour discrete Laplace equation with measured
+/// heights held fixed. This preserves planar slopes through missing coverage
+/// and avoids ridges where independently advancing fill fronts meet. The
+/// deterministic relaxation is offline processing, shared by DEM and normal
+/// map generation; an unconverged solve fails instead of publishing geometry.
 fn fill_dem_voids(
     v: &mut [f64],
     n: usize,
@@ -832,13 +816,19 @@ fn fill_dem_voids(
     control: &ProcessControl,
 ) -> Result<usize, std::io::Error> {
     const MAX_PASSES: usize = 64;
+    const MAX_RELAXATION_SWEEPS: usize = 4096;
+    const HEIGHT_TOLERANCE_M: f64 = 1e-7;
     let idx = |x: usize, y: usize| y * n + x;
+    let missing: Vec<usize> = (0..v.len()).filter(|&i| !v[i].is_finite()).collect();
+    if missing.is_empty() {
+        return Ok(0);
+    }
     let mut filled = 0usize;
     for _ in 0..MAX_PASSES {
         control.check()?;
         let holes: Vec<usize> = (0..v.len()).filter(|&i| !v[i].is_finite()).collect();
         if holes.is_empty() {
-            return Ok(filled);
+            break;
         }
         let snapshot = v.to_vec();
         let mut progressed = false;
@@ -883,7 +873,56 @@ fn fill_dem_voids(
              inventing terrain; re-centre the window or pick a source with coverage here."
         )));
     }
-    Ok(filled)
+    // Cache the stencil once; only missing nodes are unknowns in the solve.
+    let stencils: Vec<_> = missing
+        .iter()
+        .map(|&i| {
+            let (x, y) = (i % n, i / n);
+            let mut neighbours = [0; 8];
+            let mut count = 0;
+            for dy in -1isize..=1 {
+                for dx in -1isize..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let (nx, ny) = (x as isize + dx, y as isize + dy);
+                    if nx >= 0 && ny >= 0 && nx < n as isize && ny < n as isize {
+                        neighbours[count] = idx(nx as usize, ny as usize);
+                        count += 1;
+                    }
+                }
+            }
+            (i, neighbours, count)
+        })
+        .collect();
+    for _ in 0..MAX_RELAXATION_SWEEPS {
+        control.check()?;
+        let mut largest_change = 0.0f64;
+        for (index, &(i, neighbours, count)) in stencils.iter().enumerate() {
+            if index.is_multiple_of(4096) {
+                control.check()?;
+            }
+            let mean = neighbours[..count]
+                .iter()
+                .map(|&j| v[j] / count as f64)
+                .sum::<f64>();
+            // Successive over-relaxation of the fixed-boundary Laplacian.
+            let change = 1.5 * (mean - v[i]);
+            if !change.is_finite() {
+                return Err(io_err(format!(
+                    "{kind} pipeline: non-finite DEM void interpolation"
+                )));
+            }
+            v[i] += change;
+            largest_change = largest_change.max(change.abs());
+        }
+        if largest_change <= HEIGHT_TOLERANCE_M {
+            return Ok(filled);
+        }
+    }
+    Err(io_err(format!(
+        "{kind} pipeline: harmonic interpolation of {filled} void samples did not converge after {MAX_RELAXATION_SWEEPS} sweeps"
+    )))
 }
 
 /// Reject a crop that is mostly padding.
@@ -1744,6 +1783,33 @@ mod tests {
     /// A stereo DTM has voids where matching failed — shadowed crater floors
     /// above all. They must be FILLED, never shipped: a NaN height is a hole in
     /// the render mesh AND the collider, i.e. a hole in the world.
+    #[test]
+    fn dem_voids_preserve_slopes_and_measured_nodes() {
+        let n = 25;
+        let plane: Vec<f64> = (0..n * n)
+            .map(|i| 5000.0 + 0.3 * (i % n) as f64 - 0.7 * (i / n) as f64)
+            .collect();
+        let mut heights = plane.clone();
+        for y in 6..19 {
+            for x in 7..18 {
+                heights[y * n + x] = f64::NAN;
+            }
+        }
+        let missing: Vec<bool> = heights.iter().map(|h| !h.is_finite()).collect();
+        let count = fill_dem_voids(&mut heights, n, "dem", &control()).unwrap();
+        assert_eq!(count, 13 * 11);
+        for (i, (&height, &expected)) in heights.iter().zip(&plane).enumerate() {
+            if missing[i] {
+                assert!(
+                    (height - expected).abs() < 1e-5,
+                    "void fill must preserve the boundary slope at {i}: {height} != {expected}"
+                );
+            } else {
+                assert_eq!(height.to_bits(), expected.to_bits(), "measured node {i}");
+            }
+        }
+    }
+
     #[test]
     fn dem_voids_are_filled_from_their_neighbours() {
         let n = 7;
