@@ -192,8 +192,12 @@ and before accessing it. This commits access in serialized simulation order;
 Modelica participants retain the same shared clock when access is added.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
-unvisited colour is bright green and its visited colour is gray in standard
-`primvars:displayColor`; `route_follow` applies the visited colour through
+default unvisited colour is green and its visited colour is gray. A constant
+`color3f[] primvars:displayColor` on the route scope colors its line and points;
+a direct point root can override it. Colored visited points dim without losing
+their hue. The native route context menu exposes both choices and inheritance
+reset. See `docs/architecture/waypoints-in-usd.md` for the authoring planner.
+`route_follow` applies progress colors to the Dome through
 `waypoint_editor`'s transient USD view operation. Route progress is keyed by USD
 point path and survives autopilot stop/start. At `on_start`, the program reads
 the current Avian contact for only the first unvisited route point through the

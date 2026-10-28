@@ -589,7 +589,10 @@ fn refresh_route_view(me, state, snapshot) {
             state: state,
         };
     }
-    if state.route_view_key == view_key && !state.marker_sync_pending
+    let style_key = waypoint_editor::route_style_key(read);
+    let style_changed = state.route_style_key != style_key;
+    if style_changed { state.marker_sync_pending = true; }
+    if state.route_view_key == view_key && !style_changed && !state.marker_sync_pending
         && !state.ribbon_sync_pending {
         return #{ result: #{ ok: true, revision: revision, view_key: view_key }, state: state };
     }
@@ -599,10 +602,14 @@ fn refresh_route_view(me, state, snapshot) {
     state.subject_path = ();
     state.route_points = read.paths;
     state.safe_stopped = false;
-    // Marker colours do not change the route geometry. Only a changed point
-    // key or an unfinished ribbon admission submits another presentation build.
-    if state.route_view_key != view_key || state.ribbon_sync_pending {
-        let result = waypoint_editor::update_ribbon_view(doc, state.route_path, read.points);
+    // The ribbon's appearance and geometry share one presentation request.
+    // Progress-only marker updates leave the ribbon alone; authored style
+    // changes rebuild presentation without changing the navigation key.
+    if state.route_view_key != view_key || style_changed || state.ribbon_sync_pending {
+        let result = waypoint_editor::update_ribbon_view(
+            doc, state.route_path, read.points, state.ribbon_edit_command,
+        );
+        state.ribbon_edit_command = if result == () { () } else { result.command_id };
         // Presentation admission does not gate authoritative route progression.
         let presentation_ready = result != () && result.ok == true;
         if !presentation_ready {
@@ -630,6 +637,7 @@ fn refresh_route_view(me, state, snapshot) {
         }
     }
     state.route_view_key = view_key;
+    state.route_style_key = style_key;
     let subject_state = route_subject_state_for(me, state);
     state.subject_id = subject_state.subject;
     if subject_state.path != () { state.subject_path = subject_state.path; }
@@ -812,7 +820,9 @@ fn on_start(me, ctx) {
     this.selected = route_is_selected(me);
     this.route_revision = ();
     this.route_view_key = ();
+    this.route_style_key = ();
     this.ribbon_sync_pending = false;
+    this.ribbon_edit_command = ();
     this.route_error = "";
     this.start_requested = false;
     // The mounted USD stage can be projected before it is associated with a
@@ -865,6 +875,8 @@ fn bind_projected_route(me, state, expected_doc) {
     state.route_points = ();
     state.route_revision = ();
     state.route_view_key = ();
+    state.route_style_key = ();
+    state.ribbon_edit_command = ();
     state.enabled = route_enabled_from_usd(me);
     state.selected = route_is_selected(me);
     state.route_index = route_resume_index(me, state);
@@ -931,7 +943,9 @@ fn on_event(me, evt, ctx) {
             this.route_revision = ();
             return;
         }
-        if view_key == this.route_view_key && !this.marker_sync_pending
+        if view_key == this.route_view_key
+            && waypoint_editor::route_style_key(read) == this.route_style_key
+            && !this.marker_sync_pending
             && !this.ribbon_sync_pending {
             this.route_revision = generation;
             return;

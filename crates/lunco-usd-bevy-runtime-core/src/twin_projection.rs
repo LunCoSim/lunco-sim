@@ -3473,7 +3473,22 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                         .map_err(|error| error.to_string())
                 });
             match restored {
-                Some(Ok(())) => refresh_relationship_dependents(world, scene_id, path, name),
+                Some(Ok(())) => {
+                    // RestoreProperty is the journal inverse for attributes as
+                    // well as relationships. Attribute notices already take
+                    // the normal live-update path; treating a restored color
+                    // as a relationship here restarts its physical subtree.
+                    let is_attribute = world
+                        .get_non_send::<CanonicalStages>()
+                        .and_then(|stages| stages.get(scene_id))
+                        .is_some_and(|stage| {
+                            lunco_usd_bevy_stage::UsdRead::attr_type_name(&stage.view(), &sp, name)
+                                .is_some()
+                        });
+                    if !is_attribute {
+                        refresh_relationship_dependents(world, scene_id, path, name);
+                    }
+                }
                 Some(Err(error)) => report_stage_projection_reset_failure(
                     world,
                     scene_id,

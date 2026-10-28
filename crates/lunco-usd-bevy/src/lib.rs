@@ -3367,11 +3367,16 @@ fn refresh_standard_surface_material_intents(
     mut commands: Commands,
 ) {
     let mut edited_stages = std::collections::HashSet::new();
+    let mut edited_prims = std::collections::HashMap::new();
     for change in changes.read() {
         let Some(stage_asset) = stages.get(change.stage_id) else {
             continue;
         };
         let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
+        edited_prims
+            .entry(change.stage_id)
+            .or_insert_with(std::collections::HashSet::new)
+            .extend(change.info_prim_paths.iter().cloned());
         if change.info_prim_paths.iter().any(|path| {
             SdfPath::new(path).ok().is_some_and(|path| {
                 matches!(
@@ -3387,52 +3392,58 @@ fn refresh_standard_surface_material_intents(
     // Shade producers can live outside the bound Material's namespace. A
     // graph edit invalidates this stage's material intents; native UsdShade
     // resolves each terminal rather than an application reverse graph.
-    for stage_id in edited_stages {
+    // Geometry display primvars invalidate only their own material intent.
+    // Shader graph changes still fan out across the owning stage because a
+    // binding can target a producer outside the Material's namespace.
+    for (entity, prim_path, visual_target) in &prims {
+        let stage_id = prim_path.stage_handle.id();
+        if !edited_stages.contains(&stage_id)
+            && !edited_prims
+                .get(&stage_id)
+                .is_some_and(|paths| paths.contains(&prim_path.path))
+        {
+            continue;
+        }
         let Some(stage_asset) = stages.get(stage_id) else {
             continue;
         };
-        for (entity, prim_path, visual_target) in &prims {
-            if prim_path.stage_handle.id() != stage_id {
-                continue;
+        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+            continue;
+        };
+        let (reader, _) = canonical.reader_for(stage_id, stage_asset);
+        let target = visual_target
+            .map(|target| target.0)
+            .filter(|target| looks.get(*target).is_ok())
+            .or_else(|| looks.get(entity).ok().map(|_| entity));
+        let Some(target) = target else {
+            continue;
+        };
+        if let Err(message) = UsdRead::bound_shader(&reader, &sdf_path) {
+            commands.entity(entity).try_insert((
+                UsdSceneProjectionFailed(message.clone()),
+                Visibility::Hidden,
+            ));
+            lunco_core::trigger_runtime_error(&mut commands, "usd-visual-sync-failed", message);
+            continue;
+        }
+        match read_standard_material(
+            &reader,
+            &sdf_path,
+            &asset_server,
+            stage_id,
+            twin_roots.as_deref(),
+        ) {
+            Ok(look) if looks.get(target).is_ok_and(|current| *current == look) => {}
+            Ok(look) => {
+                commands.entity(target).insert(look);
             }
-            let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
-                continue;
-            };
-            let (reader, _) = canonical.reader_for(stage_id, stage_asset);
-            let target = visual_target
-                .map(|target| target.0)
-                .filter(|target| looks.get(*target).is_ok())
-                .or_else(|| looks.get(entity).ok().map(|_| entity));
-            let Some(target) = target else {
-                continue;
-            };
-            if let Err(message) = UsdRead::bound_shader(&reader, &sdf_path) {
-                commands.entity(entity).try_insert((
-                    UsdSceneProjectionFailed(message.clone()),
-                    Visibility::Hidden,
-                ));
-                lunco_core::trigger_runtime_error(&mut commands, "usd-visual-sync-failed", message);
-                continue;
-            }
-            match read_standard_material(
-                &reader,
-                &sdf_path,
-                &asset_server,
-                stage_id,
-                twin_roots.as_deref(),
-            ) {
-                Ok(look) if looks.get(target).is_ok_and(|current| *current == look) => {}
-                Ok(look) => {
-                    commands.entity(target).insert(look);
-                }
-                Err(error) => {
-                    error!(
-                        "[usd-bevy] {} has malformed authored material attribute `{}`; removing stale PbrLook",
-                        sdf_path.as_str(),
-                        error.attribute
-                    );
-                    commands.entity(target).remove::<PbrLook>();
-                }
+            Err(error) => {
+                error!(
+                    "[usd-bevy] {} has malformed authored material attribute `{}`; removing stale PbrLook",
+                    sdf_path.as_str(),
+                    error.attribute
+                );
+                commands.entity(target).remove::<PbrLook>();
             }
         }
     }

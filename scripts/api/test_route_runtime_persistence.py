@@ -52,7 +52,7 @@ def wait_for_runtime_file(path: Path) -> str:
             source = path.read_text(encoding="utf-8")
         except OSError:
             source = ""
-        if '"P0"' in source:
+        if '"P0"' in source and source.count("primvars:displayColor") == 2:
             return source
         time.sleep(0.25)
     raise RuntimeError(f"runtime route point was not saved to {path}")
@@ -110,7 +110,7 @@ def main() -> int:
         runtime_source = wait_for_runtime_file(runtime_path)
         if scene_path.read_bytes() != original_scene:
             raise RuntimeError("route authoring changed the source scene instead of its sidecar")
-        if "primvars:displayColor" in runtime_source or "RouteRibbon" in runtime_source:
+        if '"Dome"' in runtime_source or "RouteRibbon" in runtime_source:
             raise RuntimeError("disposable route presentation leaked into the runtime sidecar")
 
         warm_log = log_root / "route_runtime_persistence.warm.log"
@@ -122,7 +122,7 @@ def main() -> int:
         if '"P0"' not in runtime_source:
             raise RuntimeError("saved runtime layer does not contain the route point")
 
-    print("PASS — route point saved to the Twin runtime sidecar and restored before remount")
+    print("PASS — route point and authored colors saved to the Twin runtime sidecar and restored before remount")
     print(f"    cold: {cold_log}")
     print(f"    warm: {warm_log}")
     if "TESTS_OK" not in cold_output or "TESTS_OK" not in warm_output:

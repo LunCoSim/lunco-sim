@@ -78,8 +78,37 @@ fn runtime_point_committed(me) {
     trigger_zone(this.doc, POINT) == "route_P0"
 }
 
+fn route_colors_match(doc) {
+    let read = waypoint_editor::route_positions(doc, ROUTE);
+    read != () && read.ok == true && read.color != ()
+        && waypoint_editor::vector_equal(read.color, [0.03,0.35,1.0])
+        && read.marker_colors.len() == 1
+        && waypoint_editor::vector_equal(read.marker_colors[0], [1.0,0.45,0.03])
+}
+
+fn author_runtime_colors(me) {
+    let ops = waypoint_editor::color_plan("@runtime@", ROUTE, [0.03,0.35,1.0]).ops;
+    ops += waypoint_editor::color_plan("@runtime@", POINT, [1.0,0.45,0.03]).ops;
+    this.pending_color = waypoint_editor::apply_ops(this.doc, "Author route and point colors", ops);
+    this.waiting_for = "persistent route color projection";
+}
+
+fn runtime_colors_committed(me) {
+    let result = this.pending_color;
+    if result.status == "pending" { result = command_result(result.id); }
+    if result == () || result.status == "pending" { return false; }
+    if result.ok != true {
+        this.failure = "runtime route color edit failed: " + result.to_string();
+        return true;
+    }
+    route_colors_match(this.doc)
+}
+
 fn verify_restored_trigger(me) {
     print("ROUTE_RUNTIME_GATE: RESTORED_AT_START");
+    if !route_colors_match(this.doc) {
+        this.failure = "restored route lost authored route or point color";
+    }
     if trigger_zone(this.doc, POINT) != "route_P0" {
         this.failure = "restored runtime waypoint lost its authored trigger override";
     }
@@ -104,6 +133,7 @@ fn on_start(me, ctx) {
     this.doc = -1;
     this.restored = false;
     this.pending_edit = ();
+    this.pending_color = ();
     this.failure = "";
     this.waiting_for = "route test document";
     subscribe("TASK_FAILED");
@@ -128,6 +158,9 @@ fn task(me, ctx) {
                     once(Fn("create_runtime_point")),
                     check(Fn("test_state_is_valid")),
                     wait_until(Fn("runtime_point_committed")),
+                    check(Fn("test_state_is_valid")),
+                    once(Fn("author_runtime_colors")),
+                    wait_until(Fn("runtime_colors_committed")),
                     check(Fn("test_state_is_valid")),
                     once(Fn("report_new_waypoint_pass")),
                 ]),

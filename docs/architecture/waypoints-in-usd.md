@@ -154,8 +154,9 @@ base-authored or referenced point in the runtime layer; it never tries to
 remove a spec from a layer that does not own it. Durable changes are journaled
 and feed the live ribbon presentation owner. Route moves, adds, deletes, and external
 document edits refresh through the route-follow program after the complete
-projected change event. Visited-marker colors synchronize only when the visited
-set changes; that synchronization does not resubmit unchanged ribbon geometry.
+projected change event. Marker colors synchronize when the visited set or
+an authored color changes; progress-only updates do not resubmit ribbon geometry.
+Color and topology keys are separate, so recoloring does not retarget guidance.
 Runtime-layer snapshots
 are serialized and written asynchronously, with newer revisions coalesced
 while a write is in flight; no whole-scene serialization or file I/O runs in
@@ -442,9 +443,25 @@ semantic intents and apply to any authored subject profile.
 
 ## Presentation
 
-The marker's dome is translucent, unlit, and shadowless. Its authored unvisited colour
-is green; the route program changes the dome's standard
-`primvars:displayColor` to gray when the generic sensor event reaches it. The unlit
+The marker's dome is translucent, unlit, and shadowless. Without a color override,
+unvisited points are green and completed points are gray. Author one constant
+`color3f[] primvars:displayColor` on the route scope to color its line and points.
+A direct point root can override the route color. Completed colored points dim
+to 35 percent brightness while retaining their hue. The point root owns the
+persistent choice; the Dome's display color and ribbon's material remain derived
+`@view@` state, so progress cannot overwrite an authored choice.
+
+Right-click a route line or marker and choose **Route color…**; marker menus also
+provide **Point color…**. Palette edits use the normal `@runtime@` journal,
+undo/redo, and Twin runtime persistence. **Use route color** clears a point's
+local override; **Default color** clears the route override. Arbitrary linear RGB
+values in [0, 1] are supported through the pure
+`waypoint_editor::color_plan(edit_target, path, color)` planner, applied with
+`assembly_edit::batch`; pass `()` to remove the selected-layer opinion. Malformed
+colors are reported rather than replaced silently. Existing default routes need
+no migration. Standard display-color updates refresh material intent in place,
+preserving live sensors, bodies, and programs. The windowed `route_lifecycle`
+gate exercises color projection, point inheritance, progress, reset and undo/redo. The unlit
 surface bypasses light, normal, and shadow processing, and emits no light. Its
 trigger is invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight

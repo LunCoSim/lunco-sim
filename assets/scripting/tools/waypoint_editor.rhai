@@ -16,6 +16,56 @@ fn route_ribbon_width() { 0.12 }
 fn unvisited_marker_color() { [0.10, 0.95, 0.22] }
 fn visited_marker_color() { [0.55, 0.55, 0.55] }
 
+// A route scope supplies the default constant USD color. A direct point may
+// override it on its own root; Dome colors remain disposable progress state.
+fn valid_color(color) {
+    if type_of(color) != "array" || color.len() != 3 { return false; }
+    for channel in color {
+        if type_of(channel) != "f64" && type_of(channel) != "i64" { return false; }
+        if !(channel >= 0.0 && channel <= 1.0) { return false; }
+    }
+    true
+}
+
+fn color_plan(edit_target, path, color) {
+    if type_of(path) != "string" || !path.starts_with("/") || path == "/"
+        || (color != () && !valid_color(color)) {
+        return #{ok:false, error:"color requires a prim path and three linear RGB channels in [0, 1]"};
+    }
+    if color == () {
+        return #{ok:true, ops:[#{RemoveAttribute:#{edit_target:edit_target,
+            path:path, name:"primvars:displayColor"}}]};
+    }
+    #{ok:true, ops:[#{SetAttribute:#{edit_target:edit_target, path:path,
+        name:"primvars:displayColor", type_name:"color3f[]",
+        value:"[" + point_literal(color) + "]"}}]}
+}
+
+fn record_color(record) {
+    if record == () || record.attrs == () { return #{ok:false, error:"color record is unavailable"}; }
+    let colors = record.attrs["primvars:displayColor"];
+    if colors == () { return #{ok:true, color:()}; }
+    if type_of(colors) != "array" || colors.len() != 1 || !valid_color(colors[0]) {
+        return #{ok:false, error:"route displayColor requires one linear RGB color in [0, 1]"};
+    }
+    #{ok:true, color:colors[0]}
+}
+
+fn marker_state_color(color, visited) {
+    if color == () {
+        return if visited { visited_marker_color() } else { unvisited_marker_color() };
+    }
+    if !visited { return color; }
+    // Dim completed points while retaining the route's hue.
+    [color[0] * 0.35, color[1] * 0.35, color[2] * 0.35]
+}
+
+fn route_style_key(read) {
+    let key = read.color.to_string();
+    for color in read.marker_colors { key += ";" + color.to_string(); }
+    key
+}
+
 fn vector_equal(left, right) {
     if left == () || right == () || left.len() != right.len() { return false; }
     for i in 0..left.len() {
@@ -170,29 +220,30 @@ fn apply_view_ops(doc, label, ops) {
         label: label,
         ops: ops,
     });
+    if result != () && result.status == "pending" && result.id != () {
+        return #{ok:true, pending:true, command_id:result.id, changed:false};
+    }
     if result == () || result.ok != true {
-        return #{ ok: false, retryable: false,
-            error: if result == () { "USD view edit returned no result" } else {
-                result.error
-            } };
+        let error = if result == () { "USD view edit returned no result" } else { result.error };
+        // The native document owner admits one dependency-preparation lease
+        // at a time. Another route's seed is a temporary admission conflict,
+        // not a terminal failure of this route's presentation.
+        let busy = type_of(error) == "string"
+            && error.contains("already has an edit awaiting dependency preparation");
+        return #{ ok: false, retryable: busy, error:error };
     }
     #{ ok: true, changed: true }
 }
 
 // Synchronize all route-point marker colours from the policy-owned visited
-// set. The map is keyed by canonical USD point path, so adding a point starts
-// it green and editing a route cannot accidentally transfer state by index.
+// set. The map is keyed by canonical USD point path, so new points inherit
+// the route color and editing cannot accidentally transfer state by index.
 // This is called only at a document/view revision boundary by the route
 // program; it is not a per-frame render update.
 fn sync_marker_states(doc, route, visited) {
-    let snapshot = route_child_snapshot(doc, route, [], false);
+    let snapshot = route_positions(doc, route);
     if snapshot.ok != true { return snapshot; }
-    let points = [];
-    for record in snapshot.records {
-        if record.active == true && route_point_record(record) {
-            points.push(record.path);
-        }
-    }
+    let points = snapshot.paths;
     if points.len() == 0 {
         return apply_view_ops(doc, "Update route-point states", []);
     }
@@ -212,8 +263,7 @@ fn sync_marker_states(doc, route, visited) {
     for i in 0..points.len() {
         let point = points[i];
         let marked = if visited == () { () } else { visited[point] };
-        let color = if marked == true { visited_marker_color() }
-            else { unvisited_marker_color() };
+        let color = marker_state_color(snapshot.marker_colors[i], marked == true);
         let marker = markers.records[i];
         if marker.path != marker_paths[i] || marker.attrs == ()
             || marker.attrs["primvars:displayColor"] == () {
@@ -647,7 +697,7 @@ fn route_child_snapshot(doc, route, attrs, validate_scope) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: route,
-        attrs: [],
+        attrs: ["primvars:displayColor"],
         children: true,
     });
     if result == () {
@@ -692,8 +742,10 @@ fn route_child_snapshot(doc, route, attrs, validate_scope) {
             }
         }
     }
+    let style = record_color(result);
+    if !style.ok { return style; }
     #{ ok: true, children: result.children, records: batch.records,
-        route_scope: route_scope }
+        route_scope: route_scope, color:style.color }
 }
 
 fn route_point_record(record) {
@@ -708,7 +760,7 @@ fn route_positions(doc, route) {
         return #{ ok: false, retryable: true,
             error: "route document generation is unavailable" };
     }
-    let snapshot = route_child_snapshot(doc, route, ["xformOp:translate"], true);
+    let snapshot = route_child_snapshot(doc, route, ["xformOp:translate", "primvars:displayColor"], true);
     if snapshot.ok != true { return snapshot; }
     if snapshot.route_scope != true {
         return #{ ok: false, retryable: false,
@@ -716,6 +768,7 @@ fn route_positions(doc, route) {
     }
     let positions = [];
     let paths = [];
+    let colors = [];
     for record in snapshot.records {
         if record.active != true || !route_point_record(record) { continue; }
         if record.attrs == () {
@@ -727,11 +780,14 @@ fn route_positions(doc, route) {
             return #{ ok: false, retryable: true,
                 error: "route point has no authored position" };
         }
+        let style = record_color(record);
+        if !style.ok { return style; }
+        colors.push(if style.color == () { snapshot.color } else { style.color });
         positions.push(position);
         paths.push(record.path);
     }
     #{ ok: true, paths: paths, points: positions, children: snapshot.children,
-        route_scope: true }
+        route_scope: true, color:snapshot.color, marker_colors:colors }
 }
 
 // A route view depends on authored point identity and placement, not on the
@@ -787,11 +843,42 @@ fn ribbon_seed_ops(route, anchor) {
 // terrain frame and coverage facts. The document contains the standard USD curve
 // identity and interaction schema needed for picking and material binding.
 fn update_ribbon_view(doc, route, points) {
+    update_ribbon_view(doc, route, points, ())
+}
+
+fn update_ribbon_view(doc, route, points, pending_command) {
+    if pending_command != () {
+        let result = command_result(pending_command);
+        if result == () || result.status == "pending" {
+            return #{ok:true, pending:true, command_id:pending_command};
+        }
+        if result.ok != true {
+            return #{ok:false, retryable:false, error:result.error};
+        }
+    }
     let ribbon = ribbon_path(route);
     let geometry = ribbon_geometry_path(route);
     let root_entity = find_path_in_document(doc, ribbon);
     let curve_entity = find_path_in_document(doc, geometry);
     if root_entity >= 0 && curve_entity >= 0 {
+        let style = query("QueryUsdPrim", #{doc_id:doc, path:route,
+            attrs:["primvars:displayColor"]});
+        let color = record_color(style);
+        if !color.ok { return color; }
+        let rgb = if color.color == () { [0.2, 1.4, 0.55] } else { color.color };
+        let shader = ribbon + "/Looks/RouteRibbon_Mat/Surface";
+        let material = query("QueryUsdPrim", #{doc_id:doc, path:shader,
+            attrs:["inputs:emissiveColor"]});
+        if material == () || material.attrs == () {
+            return #{ok:false, retryable:true, error:"route ribbon material is not synchronized"};
+        }
+        if !vector_equal(material.attrs["inputs:emissiveColor"], rgb) {
+            let painted = apply_view_ops(doc, "Update route ribbon color", [#{SetAttribute:#{
+                edit_target:"@view@", path:shader, name:"inputs:emissiveColor",
+                type_name:"color3f", value:point_literal(rgb)}}]);
+            if !painted.ok || painted.pending == true { return painted; }
+            return #{ok:true, pending:true};
+        }
         let result = cmd("UpdateUsdCurveView", #{
             doc_id: doc,
             root_entity_id: root_entity,
@@ -805,10 +892,17 @@ fn update_ribbon_view(doc, route, points) {
         }
         return #{ ok: true, pending: false };
     }
-    if !prim_exists(doc, ribbon) {
+    // The document may have committed the seed while its referenced subtree
+    // is still entering the live scene. Test authored identity, not only a
+    // possibly older projection, before proposing another AddPrim.
+    let authored = target_record(doc, ribbon, "@view@");
+    if !authored.ok {
+        return #{ok:false, retryable:true, error:authored.error};
+    }
+    if !authored.exists {
         if points.len() < 2 { return #{ ok: true, pending: false }; }
         let result = apply_view_ops(doc, "Create route ribbon view", ribbon_seed_ops(route, points[0]));
-        if result.ok != true { return result; }
+        if result.ok != true || result.pending == true { return result; }
         return #{ ok: true, pending: true };
     }
     #{ ok: true, pending: true }
@@ -1426,6 +1520,47 @@ fn on_move_begin(context) {
     result
 }
 
+// Reuse the native context-menu host. Palette choices are normal journaled
+// USD edits, with the same persistence and undo semantics as moving a point.
+fn on_color_menu(context) {
+    let items = [];
+    let names = ["Green", "Blue", "Amber", "Red", "Violet", "White"];
+    let colors = [[0.10,0.95,0.22], [0.03,0.35,1.0], [1.0,0.45,0.03],
+        [1.0,0.05,0.03], [0.55,0.12,1.0], [0.9,0.9,0.9]];
+    for i in 0..names.len() {
+        let args = context;
+        args.color = colors[i];
+        items.push(#{label:names[i], tool:"waypoint_editor", hook:"on_set_color", args:args});
+    }
+    let inherited = context;
+    inherited.color = ();
+    items.push(#{label:if context.color_path == context.route_path {
+        "Default color" } else { "Use route color" },
+        tool:"waypoint_editor", hook:"on_set_color", args:inherited});
+    #{ok:open_context_menu(context.screen_position, items)}
+}
+
+fn on_set_color(context) {
+    if context == () || context.doc_id == () { return failure("color edit has no document"); }
+    let read = route_positions(context.doc_id, context.route_path);
+    if !read.ok { return read; }
+    let path = context.color_path;
+    if path != context.route_path && !read.paths.contains(path) {
+        return failure("color target is not this route or a direct route point");
+    }
+    let plan = color_plan("@runtime@", path, context.color);
+    if !plan.ok { return plan; }
+    apply_ops(context.doc_id, "Change route color", plan.ops)
+}
+
+fn color_menu_item(context, route, point) {
+    let args = #{doc_id:context.doc_id, route_path:route,
+        color_path:if point == () { route } else { point },
+        screen_position:context.screen_position};
+    #{label:if point == () { "Route color…" } else { "Point color…" },
+        tool:"waypoint_editor", hook:"on_color_menu", args:args}
+}
+
 // Secondary pointer context opens a generic authored menu without changing
 // scene selection. Selection remains an explicit menu action, so opening the
 // menu cannot also activate the transform gizmo.
@@ -1460,7 +1595,7 @@ fn on_context(context) {
             tool: "waypoint_editor",
             hook: "on_add_here",
             args: action_context,
-        }]);
+        }, color_menu_item(context, route, ())]);
         if !opened { return failure("the scene context-menu host is unavailable"); }
         return #{ ok: true, path: ribbon_geometry_path(route), menu: true, selected: false };
     }
@@ -1484,6 +1619,8 @@ fn on_context(context) {
         hook: "on_move_begin",
         args: action_context,
     });
+    items.push(color_menu_item(context, route, ()));
+    items.push(color_menu_item(context, route, point));
     let route_read = route_positions(context.doc_id, route);
     if route_read.ok == true && route_read.paths.len() >= 2 {
         if insertion_position(route_read, point, true) != () {

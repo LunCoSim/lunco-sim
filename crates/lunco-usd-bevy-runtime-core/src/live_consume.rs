@@ -1041,7 +1041,7 @@ mod translate_seat_tests {
 /// - **live curve geometry** — skipped. The generic USD visual projector rebuilds
 ///   the existing curve mesh from the canonical stage revision in place, so a
 ///   point/topology/width edit does not tear down the entity or its render binding.
-/// - **standard `UsdPreviewSurface` inputs** — the render owner re-reads the
+/// - **standard display color/opacity and `UsdPreviewSurface` inputs** — the render owner re-reads the
 ///   affected bound `PbrLook` values from `UsdSceneChangeBatch`; scene entities
 ///   and unrelated behavior owners stay live.
 /// - **other `Shader` / `Material` prim properties** — their consumers may span
@@ -1144,6 +1144,13 @@ pub(crate) fn refresh_edited_prims_live(
             continue;
         }
         if standard_preview_surface_input_edit(world, id, prim, attr) {
+            continue;
+        }
+        // Standard display primvars are appearance, even when authored on a
+        // structural parent for a policy to consume. The visual owner reads
+        // the batch in place; rebuilding this subtree can retire live programs
+        // or physical bodies for a color-only edit.
+        if matches!(attr, "primvars:displayColor" | "primvars:displayOpacity") {
             continue;
         }
         if authored_ui_metadata_attribute(world, id, prim, attr) {

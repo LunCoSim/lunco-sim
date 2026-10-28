@@ -285,6 +285,7 @@ fn on_start(me, ctx) {
     this.nested_admission_entity_unindexed = false;
     this.nested_admission_pause_observed = false;
     this.nested_admission_first_tick_checked = false;
+    this.color_phase = 0;
     this.route_step_route_fixture_finished = false;
     this.route_step_hud_projection_finished = false;
     this.route_step_switch_program_source_finished = false;
@@ -1845,12 +1846,89 @@ fn route_step_nested_projection_verdict_action(me) {
 fn route_step_nested_projection_verdict_complete(me) { this.done || this.route_step_nested_projection_verdict_finished == true }
 
 
+// Native authored color acceptance: edits, projection, progress, inheritance,
+// point override and undo all use the same document lifecycle as navigation.
+fn route_color_phase(me) {
+    if this.done { return; }
+    this.waiting_for = "native route color projection phase " + this.color_phase.to_string();
+    let blue = [0.03,0.35,1.0];
+    let amber = [1.0,0.45,0.03];
+    let point = ROUTE + "/P1";
+    if this.color_phase == 0 {
+        let context = #{doc_id:this.doc, route_path:ROUTE, color_path:ROUTE, color:blue};
+        let result = waypoint_editor::on_set_color(context);
+        if result.retryable == true { return; }
+        if result.ok != true { print("ROUTE_COLOR_EDIT|" + result.to_string()); }
+        this.checks.push(t_true(result.ok, "route palette journals an authored color edit"));
+        this.color_phase = 1;
+        return;
+    }
+    let shader = query("QueryUsdPrim", #{doc_id:this.doc,
+        path:ROUTE + "/RouteRibbon/Looks/RouteRibbon_Mat/Surface",
+        attrs:["inputs:emissiveColor"]});
+    let line = if shader == () || shader.attrs == () { () } else {
+        shader.attrs["inputs:emissiveColor"] };
+    if this.color_phase == 1 {
+        if !color_matches(marker_color(this.doc, point), blue) || !color_matches(line, blue)
+            || !ribbon_view_ready(this.doc, 3) { return; }
+        this.checks.push(t_true(true, "route color updates projected markers and ribbon"));
+        let result = waypoint_editor::on_set_color(#{doc_id:this.doc, route_path:ROUTE,
+            color_path:point, color:amber});
+        this.checks.push(t_true(result.ok, "a waypoint can override its route color"));
+        this.color_phase = 2;
+        return;
+    }
+    if this.color_phase == 2 {
+        if !color_matches(marker_color(this.doc, point), amber) { return; }
+        this.checks.push(t_true(color_matches(line, blue), "a point override leaves the route line unchanged"));
+        let visited = #{};
+        visited[point] = true;
+        let result = waypoint_editor::sync_marker_states(this.doc, ROUTE, visited);
+        this.checks.push(t_true(result.ok, "progress styling accepts authored colors"));
+        this.color_phase = 3;
+        return;
+    }
+    if this.color_phase == 3 {
+        if !color_matches(marker_color(this.doc, point),
+            waypoint_editor::marker_state_color(amber, true)) { return; }
+        this.checks.push(t_true(true, "visited waypoint dims its own authored hue"));
+        let result = cmd("UndoDocument", #{doc_id:this.doc});
+        this.checks.push(t_true(result != () && result.ok != false, "point color supports undo"));
+        this.color_phase = 4;
+        return;
+    }
+    if this.color_phase == 4 {
+        if !color_matches(marker_color(this.doc, point), blue) { return; }
+        this.checks.push(t_true(true, "undo restores route color inheritance"));
+        let result = cmd("RedoDocument", #{doc_id:this.doc});
+        this.checks.push(t_true(result != () && result.ok != false, "point color supports redo"));
+        this.color_phase = 5;
+        return;
+    }
+    if this.color_phase == 5 {
+        if !color_matches(marker_color(this.doc, point), amber) { return; }
+        this.checks.push(t_true(true, "redo restores waypoint color"));
+        let ops = waypoint_editor::color_plan("@runtime@", ROUTE, ()).ops;
+        ops += waypoint_editor::color_plan("@runtime@", point, ()).ops;
+        let reset = waypoint_editor::apply_ops(this.doc, "Restore default route colors", ops);
+        this.checks.push(t_true(reset.ok, "colors can return to inherited defaults"));
+        this.color_phase = 6;
+        return;
+    }
+    if !color_matches(marker_color(this.doc, point), [0.10,0.95,0.22])
+        || !color_matches(line, [0.2,1.4,0.55]) || !ribbon_view_ready(this.doc, 3) { return; }
+    this.checks.push(t_true(true, "clearing colors restores legacy marker and ribbon appearance"));
+    this.color_phase = 7;
+}
+fn route_color_complete(me) { this.done || this.color_phase == 7 }
+
 fn route_lifecycle_steps() {
     seq([
         once(Fn("record_first_behavior_tick")),
 
         step(Fn("route_step_route_fixture_action"), Fn("route_step_route_fixture_complete")),
         step(Fn("route_step_hud_projection_action"), Fn("route_step_hud_projection_complete")),
+        step(Fn("route_color_phase"), Fn("route_color_complete")),
         step(Fn("route_step_switch_program_source_action"), Fn("route_step_switch_program_source_complete")),
         step(Fn("route_step_replacement_program_ready_action"), Fn("route_step_replacement_program_ready_complete")),
         step(Fn("route_step_restore_program_source_action"), Fn("route_step_restore_program_source_complete")),
