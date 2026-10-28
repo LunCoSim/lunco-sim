@@ -50,7 +50,8 @@ use bevy::prelude::*;
 pub struct UsdBillboard {
     /// Template with `{...}` placeholders; see the module docs.
     pub template: String,
-    /// Metres above the prim origin to float the label.
+    /// Metres along active-scene up from the prim's render origin. Independent
+    /// of object attitude; the viewport maps the scene axis into render space.
     pub offset_y: f32,
     /// Distance (m) past which the label is not drawn. Labels are cheap but not
     /// free, and a hundred of them at 5 km is unreadable clutter, not context.

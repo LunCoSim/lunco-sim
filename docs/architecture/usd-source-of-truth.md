@@ -244,6 +244,10 @@ fade edits update the reflected `UsdBillboard` component without replacing
 children. Disabling or invalidating a label removes its component; invalid
 values publish the owner's structured diagnostics. The owner is installed by
 `UsdSimPlugin` in every host and its stage-scoped paths retire with the scene.
+The viewport offsets the subject's current render origin along active-scene
+up transformed through BigSpace. The offset uses neither render-world Y nor
+the subject's own attitude. Rotated lunar sites and overturned vehicles retain
+the same above-surface label semantics.
 The `usd_billboard_live` production scene checks live child state, actual label
 updates, disable, and invalid-input rejection. Owners can also promote a local reset to a full-stage reset
 when their derived topology crosses the edited subtree, and retire their state

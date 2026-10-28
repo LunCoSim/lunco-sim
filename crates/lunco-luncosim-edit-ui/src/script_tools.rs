@@ -55,6 +55,29 @@ use lunco_usd_document::document::{LayerId, UsdDocument};
 use lunco_usd_geometry::ribbon::{RibbonPoint, build_ribbon_mesh};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// Shared curve and terrain-annotation presentation for every rendering host.
+/// It does not install pointer tools, egui panels, or a workbench.
+pub struct UsdCurveViewPlugin;
+
+impl Plugin for UsdCurveViewPlugin {
+    fn build(&self, app: &mut App) {
+        use lunco_core::AppSceneExt;
+        app.init_scene_resource::<PendingUsdCurveViews>();
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(InspectUsdCurveViewProvider);
+        app.add_systems(
+            Update,
+            (
+                poll_pending_usd_curve_views,
+                prepare_pending_usd_curve_views,
+            )
+                .chain(),
+        );
+        __register_on_update_usd_curve_view(app);
+    }
+}
+
 /// Build the language-neutral map passed to a script tool. The map is an
 /// interaction contract, not an API serialization format; the scripting
 /// backend converts it directly to the target runtime's native value.
@@ -2366,8 +2389,7 @@ fn merge_pointer_move_context(
 register_commands!(
     on_set_usd_view_preview_transform,
     on_set_scene_pointer_move_hook,
-    on_clear_scene_pointer_move_hook,
-    on_update_usd_curve_view
+    on_clear_scene_pointer_move_hook
 );
 
 #[cfg(test)]

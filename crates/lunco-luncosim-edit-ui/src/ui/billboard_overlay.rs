@@ -39,7 +39,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
-use lunco_spatial::coords::world_vector;
+use lunco_spatial::coords::{GridPos, GridRot, grid_absolute_pose_to_render, world_vector};
+use lunco_spatial::world::ActivePhysicsFrame;
 use lunco_usd_bevy_scene::billboard::{
     BillboardFacts, BillboardGeo, BillboardIndex, UsdBillboard, render_billboard,
 };
@@ -49,13 +50,24 @@ use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 /// labels at panel edges without painting any text over the retained surface.
 fn subtract_cover(rect: egui::Rect, cover: egui::Rect) -> Vec<egui::Rect> {
     let cut = rect.intersect(cover);
-    if !cut.is_positive() { return vec![rect]; }
+    if !cut.is_positive() {
+        return vec![rect];
+    }
     [
         egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, cut.min.y)),
         egui::Rect::from_min_max(egui::pos2(rect.min.x, cut.max.y), rect.max),
-        egui::Rect::from_min_max(egui::pos2(rect.min.x, cut.min.y), egui::pos2(cut.min.x, cut.max.y)),
-        egui::Rect::from_min_max(egui::pos2(cut.max.x, cut.min.y), egui::pos2(rect.max.x, cut.max.y)),
-    ].into_iter().filter(|part| part.is_positive()).collect()
+        egui::Rect::from_min_max(
+            egui::pos2(rect.min.x, cut.min.y),
+            egui::pos2(cut.min.x, cut.max.y),
+        ),
+        egui::Rect::from_min_max(
+            egui::pos2(cut.max.x, cut.min.y),
+            egui::pos2(rect.max.x, cut.max.y),
+        ),
+    ]
+    .into_iter()
+    .filter(|part| part.is_positive())
+    .collect()
 }
 
 const BILLBOARD_MAX_WIDTH: f32 = 220.0;
@@ -67,8 +79,8 @@ const BILLBOARD_ANCHOR_GUARD: egui::Vec2 = egui::vec2(12.0, 12.0);
 /// Resolve the screen-space anchor from the same render pose as the subject's
 /// mesh. Keeping this small and explicit prevents callers from accidentally
 /// substituting an authoritative grid pose during visual projection.
-fn render_anchor(gtf: &GlobalTransform, offset_y: f32) -> Vec3 {
-    gtf.translation() + Vec3::Y * offset_y
+fn render_anchor(gtf: &GlobalTransform, scene_up_render: Vec3, offset_y: f32) -> Vec3 {
+    gtf.translation() + scene_up_render * offset_y
 }
 
 /// Paint every visible [`UsdBillboard`].
@@ -92,6 +104,7 @@ pub fn draw_billboard_overlay(
     q_camera: Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
+    active_frame: Res<ActivePhysicsFrame>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     surface_pose: lunco_celestial_spatial_core::SurfacePoseQuery,
     scene_viewport: Res<lunco_viewport_core::SceneViewport>,
@@ -122,6 +135,18 @@ pub fn draw_billboard_overlay(
     if !camera.is_active {
         return;
     }
+    // offsetY is a metre-valued displacement along scene up, independent of
+    // the labelled object's attitude. BigSpace rotates site frames as well as
+    // translating them; render-world Y is not lunar-site up.
+    let Ok(grid) = q_grids.get(active_frame.0) else {
+        return;
+    };
+    let (_, scene_rotation) = grid_absolute_pose_to_render(
+        grid,
+        GridPos(bevy::math::DVec3::ZERO),
+        GridRot(bevy::math::DQuat::IDENTITY),
+    );
+    let scene_up_render = (scene_rotation.0 * bevy::math::DVec3::Y).as_vec3();
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let origin = ctx.content_rect().min.to_vec2();
     let clip_rect = panel_rects
@@ -163,7 +188,7 @@ pub fn draw_billboard_overlay(
         // ticks; reconstructing them here while projecting through the
         // camera's already-propagated GlobalTransform mixes two pose phases
         // and makes a label jitter against the body it annotates.
-        let anchor_render = render_anchor(gtf, bb.offset_y);
+        let anchor_render = render_anchor(gtf, scene_up_render, bb.offset_y);
         let Some(distance) = world_vector(camera_entity, entity, &q_parents, &q_grids, &q_spatial)
             .map(|vector| vector.length())
         else {
@@ -258,14 +283,20 @@ pub fn draw_billboard_overlay(
     // egui chrome stays above retained HUDs, so its entire render pass also
     // sits above Bevy UI. Exclude the visible HUD rectangles from the lowest
     // label paint layer rather than moving HUDs above menus and dialogs.
-    let occluders: Vec<_> = retained_surfaces.iter()
+    let occluders: Vec<_> = retained_surfaces
+        .iter()
         .filter(|(surface, _, _, visibility)| visibility.get() && surface.occludes_scene_labels())
-        .filter_map(|(_, node, transform, _)| lunco_workbench_runtime_ui::runtime_ui_input_rect(node, transform))
+        .filter_map(|(_, node, transform, _)| {
+            lunco_workbench_runtime_ui::runtime_ui_input_rect(node, transform)
+        })
         .collect();
     for label in placed {
         let mut visible = vec![label.bg.intersect(clip_rect)];
         for cover in &occluders {
-            visible = visible.into_iter().flat_map(|rect| subtract_cover(rect, *cover)).collect();
+            visible = visible
+                .into_iter()
+                .flat_map(|rect| subtract_cover(rect, *cover))
+                .collect();
         }
         for visible_rect in visible {
             let painter = painter.with_clip_rect(visible_rect);
@@ -349,7 +380,10 @@ mod tests {
         assert_eq!(parts.len(), 4);
         assert!(parts.iter().all(|part| !part.intersect(hud).is_positive()));
         let area: f32 = parts.iter().map(|part| part.width() * part.height()).sum();
-        assert_eq!(area, label.width() * label.height() - hud.width() * hud.height());
+        assert_eq!(
+            area,
+            label.width() * label.height() - hud.width() * hud.height()
+        );
         assert!(super::subtract_cover(label, label).is_empty());
         let outside = label.translate(egui::vec2(200.0, 0.0));
         assert_eq!(super::subtract_cover(label, outside), vec![label]);
@@ -362,7 +396,24 @@ mod tests {
     #[test]
     fn billboard_anchor_is_derived_from_the_render_pose() {
         let gtf = GlobalTransform::from(Transform::from_xyz(4.0, 2.0, -7.0));
-        assert_eq!(render_anchor(&gtf, 3.0), Vec3::new(4.0, 5.0, -7.0));
+        assert_eq!(render_anchor(&gtf, Vec3::Y, 3.0), Vec3::new(4.0, 5.0, -7.0));
+    }
+
+    #[test]
+    fn billboard_offset_follows_rotated_scene_up_independently_of_body_attitude() {
+        let scene = Quat::from_rotation_z(3.025);
+        let position = Vec3::new(4.0, 2.0, -7.0);
+        for body in [Quat::IDENTITY, Quat::from_rotation_x(std::f32::consts::PI)] {
+            let gtf = GlobalTransform::from(Transform {
+                translation: position,
+                rotation: scene * body,
+                ..default()
+            });
+            let up = scene * Vec3::Y;
+            let displacement = render_anchor(&gtf, up, 0.8) - position;
+            assert!((displacement.dot(up) - 0.8).abs() < 1e-6);
+            assert!(displacement.y < 0.0);
+        }
     }
 
     #[test]

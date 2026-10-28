@@ -34,6 +34,19 @@ annotation system. The two ownership models must not be mixed.
 
 ## Route ribbons are derived annotations
 
+Landing targets use the same surface annotation owner. The kinematic target
+retains the vehicle's touchdown-reference position; its hidden `Dome` supplies
+the footprint radius and material. A referenced `SurfaceMark` curve supplies
+stable USD identity, and `landing_target_presentation.rhai` submits a filled
+footprint through `UpdateUsdCurveView` on the explicit presentation clock.
+Document projection events refresh changed target footprints; the program does
+not acquire simulation-time entity access or Modelica dependencies. Terrain fragments place the mark on
+slopes and across LOD transitions. Headless hosts retain navigation facts and
+do not prepare the visual. Flat scenes use measured collider support and the
+existing three-dimensional curve path. Publication failures remain visible.
+`UsdCurveViewPlugin` installs the same command, query, preparation and teardown
+owner in windowed and offscreen rendering, independently of pointer/editor UI.
+
 The route-point prims and the Rhai task program are the authored facts. The
 `waypoint_editor` tool derives a route view from those facts and materializes a
 standard `BasisCurves` identity from

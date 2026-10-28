@@ -393,7 +393,7 @@ impl Plugin for SceneEditUiPlugin {
             .init_scene_resource::<scene_context_menu::SceneContextMenuState>()
             .init_scene_resource::<lunco_interaction_core::ArmedScriptTool>()
             .init_scene_resource::<crate::script_tools::ScenePointerDispatch>()
-            .init_scene_resource::<crate::script_tools::PendingUsdCurveViews>()
+            .add_plugins(crate::script_tools::UsdCurveViewPlugin)
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
         app.add_systems(
             lunco_core::SceneTeardown,
@@ -404,19 +404,8 @@ impl Plugin for SceneEditUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(crate::diagnostic_visuals::DiagnosticVisualsQueryProvider);
-        app.world_mut()
-            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
-            .register(crate::script_tools::InspectUsdCurveViewProvider);
         app.add_systems(Startup, crate::physics_viz::configure_gizmo_overlay);
         app.register_type::<crate::physics_viz::PhysicsArrows>();
-        app.add_systems(
-            Update,
-            (
-                crate::script_tools::poll_pending_usd_curve_views,
-                crate::script_tools::prepare_pending_usd_curve_views,
-            )
-                .chain(),
-        );
         app.add_systems(
             PostUpdate,
             (

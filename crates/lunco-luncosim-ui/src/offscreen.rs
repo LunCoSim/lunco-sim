@@ -34,6 +34,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // The trail has no egui or picking dependency, but it is still part of
         // the rendered presentation and must be present in offscreen captures.
         app.add_plugins(lunco_luncosim_edit_ui::ui::VehicleTrailPlugin);
+        app.add_plugins(lunco_luncosim_edit_ui::script_tools::UsdCurveViewPlugin);
 
         // The workspace session (WorkspaceResource + journal persistence) —
         // the GUI gets this from `WorkbenchPlugin`, which this mode skips.
