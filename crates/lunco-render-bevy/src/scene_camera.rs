@@ -28,6 +28,7 @@ pub(crate) fn build(app: &mut App) {
         .init_resource::<lunco_render::SceneBloomOverride>()
         .add_observer(configure_added_scene_camera)
         .add_observer(bind_scene_camera)
+        .add_observer(bind_camera_feed)
         .add_observer(bind_camera_cluster_config)
         .add_observer(track_clusterable_object_added::<PointLight>)
         .add_observer(track_clusterable_object_added::<SpotLight>)
@@ -59,6 +60,22 @@ fn tonemapping_of(t: ToneMap) -> Tonemapping {
         ToneMap::AgX => Tonemapping::AgX,
         ToneMap::AcesFitted => Tonemapping::AcesFitted,
         ToneMap::Reinhard => Tonemapping::Reinhard,
+    }
+}
+
+fn bind_camera_feed(
+    add: On<Add<lunco_render::camera::CameraFeedCamera>>,
+    feeds: Query<&lunco_render::camera::CameraFeedCamera>,
+    profile: Res<RenderProfile>,
+    mut commands: Commands,
+) {
+    if let Ok(feed) = feeds.get(add.entity) {
+        apply(&mut commands, add.entity, &feed.0, *profile);
+        commands.entity(add.entity).try_insert(Camera {
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::BLACK),
+            ..default()
+        });
     }
 }
 

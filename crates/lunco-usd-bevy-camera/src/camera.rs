@@ -355,7 +355,7 @@ pub fn instantiate_camera_prim(
         }
     };
 
-    let camera_exposure = if is_viewport {
+    let camera_exposure = if is_viewport || is_sensor {
         match read_camera_exposure_ev100(reader, sdf_path) {
             Ok(exposure) => exposure,
             Err(_) => {
@@ -388,7 +388,10 @@ pub fn instantiate_camera_prim(
         ));
     }
     if is_sensor {
-        camera.try_insert(UsdSensorCamera);
+        camera.try_insert((
+            UsdSensorCamera,
+            lunco_render::scene_camera_look_with_profile(camera_exposure, quality).1,
+        ));
     }
 
     // Conform the authored horizontal aperture against the real window aspect

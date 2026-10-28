@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**280 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**286 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -89,7 +89,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-assets-datasets`](#lunco-assets-datasets) (3 commands)
 - [`lunco-camera-core`](#lunco-camera-core) (7 commands)
-- [`lunco-capture`](#lunco-capture) (4 commands)
+- [`lunco-capture`](#lunco-capture) (9 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
 - [`lunco-control-core`](#lunco-control-core) (2 commands)
 - [`lunco-core-runtime`](#lunco-core-runtime) (1 command)
@@ -120,7 +120,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-viz`](#lunco-viz) (7 commands)
 - [`lunco-workbench-core`](#lunco-workbench-core) (12 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
-- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (13 commands)
+- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (8 commands)
@@ -2039,6 +2039,60 @@ actually call, with the fields the deserializer actually accepts. See the
 | `save_to_file` | `bool` |  Write the PNG to `path` instead of returning the bytes to the caller. |
 | `path` | `String` |  Destination when `save_to_file`. Empty ⇒ a timestamped name in the cwd. |
 | `region` | `Vec < u32 >` |  Optional crop `[x, y, w, h]` in physical pixels, applied before save/encode. Empty ⇒  the full frame. Cropping server-side lets a caller zoom into a panel without an  external image tool. |
+
+#### `CreateCameraFeed`
+
+ Allocate an independent camera window. Select its camera with SetCameraFeed.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+- *fields:* none — call with `CreateCameraFeed` (no params)
+
+#### `InspectCameraFeeds`
+
+ Inspect exact identities, resolution modes and target allocations of all views.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+- *fields:* none — call with `InspectCameraFeeds` (no params)
+
+#### `RemoveCameraFeed`
+
+ Release one window, its render camera and image.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `feed` | `u64` |   |
+
+#### `SetCameraFeed`
+
+ Select an exact camera identity; omit source to stop rendering this view.
+ Omitted feed selects the primary view, creating it on first use. Resolution
+ is retained unless width or height is supplied, which selects fixed pixels.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `feed` | `Option < u64 >` |   |
+| `source` | `Option < GlobalEntityId >` |   |
+| `label` | `String` |   |
+| `width` | `Option < u32 >` |   |
+| `height` | `Option < u32 >` |   |
+
+#### `SetCameraFeedResolution`
+
+ Set fixed pixels or follow the view's displayed image area. In match mode
+ the UI supplies physical pixel measurements after resizing finishes.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `feed` | `u64` |   |
+| `match_window` | `bool` |   |
+| `width` | `Option < u32 >` |   |
+| `height` | `Option < u32 >` |   |
 
 #### `StartOfflineRecording`
 
@@ -4047,6 +4101,19 @@ actually call, with the fields the deserializer actually accepts. See the
 | `hook` | `String` |  One-argument function in that namespace, without `/1`. |
 | `actions` | `Vec < GuidedHudAction >` |  Current button set in display order. |
 
+#### `SetGuidedHudLayout`
+
+ Configure one named scene-owned card. Omitted fields retain their values.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/hud.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `hud` | `String` |   |
+| `width` | `Option < f32 >` |   |
+| `text_scale` | `Option < f32 >` |   |
+| `draggable` | `Option < bool >` |   |
+
 #### `SetGuidedHudPerspectives`
 
  Set the whole card's perspective scope. Empty `perspectives` allows all.
@@ -4267,7 +4334,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 280 commands from the runtime schema; scanned 1043 .rs files for docs (0 parse failure(s) skipped).
+<!-- 286 commands from the runtime schema; scanned 1045 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

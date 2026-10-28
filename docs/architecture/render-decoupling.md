@@ -35,6 +35,51 @@ wgpu, naga, or `bevy_render` — achieved **without a single `#[cfg(feature = "r
 code.** The gate is *which plugins you add*, not conditional compilation sprinkled through the
 simulation.
 
+## Live camera observations
+
+`lunco-capture::camera_feed` owns `CreateCameraFeed`, `SetCameraFeed`,
+`SetCameraFeedResolution`, `RemoveCameraFeed` and `InspectCameraFeeds` in windowed hosts installing
+`CameraFeedPlugin`. Up to eight independent scene-scoped views observe the
+active physical world. Each selects an exact live `GlobalEntityId` with a
+projected `Projection`, its exposure and render layers. Selection validates the
+source, label and resolution before replacing that view's target. Dimensions
+must be 64–8192 pixels, with at most 8,294,400 pixels per view and 16,588,800
+pixels across allocated targets. Missing/non-camera sources and invalid budgets reject terminally.
+Omitting `feed` selects primary view 1, creating it if absent. Omitting `source`
+stops that view's render target; removing a view closes its window entirely.
+
+Each view owns one bounded image and a scene-owned camera child at the source
+pose. It never opens or projects another USD stage. `CameraFeedCamera` carries
+look intent in `lunco-render`; `lunco-render-bevy` binds the pipeline. It has no
+`SceneCamera` marker and cannot replace the main viewport. Native USD sensor
+cameras retain authored exposure through the standard camera projector.
+Optics are sampled when selected; physical source and joint motion remain live.
+Stereo uses two real camera prims at their authored baseline, without image
+shifting or a second physical solver.
+
+The native UI provides an independent camera picker, new-view button, resize,
+move and close for each image window. It reads projected camera identities,
+uses weak egui textures and submits typed commands. Selection and equipment
+validity policy remain authored Rhai. The capture collection resets at scene
+teardown. A retired source releases its view's image/camera and clears its
+selection; other views continue. Bevy/egui retire released textures. No source
+identity lives in application preference state.
+
+`SetCameraFeedResolution` changes one target in place. Fixed presets and an
+app-window physical-size snapshot select fixed pixels. The default live mode
+matches the view's available image area in physical pixels after pointer
+release. Camera selection retains that resolution policy when dimensions are
+omitted. Rejected resizing keeps the last valid image and exposes its error;
+the UI retries the same measured size only when allocation capacity changes.
+The UI measurement cache is scene scoped and retires with the collection.
+
+`assets/scenarios/tests/camera_feed_live.rhai` is the parameterized production
+render-host acceptance: concurrent identities, switching, independent close,
+rejected sources/resolution, bounded allocation and complete release. Supply
+two camera identities and a non-camera from the owning scene. Pixel evidence
+requires a windowed screenshot; allocation alone does not prove pixels. Scene
+replacement must empty `InspectCameraFeeds.views` before new scene selection.
+
 ## Presentation health and performance evidence
 
 `lunco-render-recovery` owns native GPU failure and presentation-stop state.

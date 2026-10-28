@@ -9,3 +9,6 @@ pub mod screenshot;
 
 #[cfg(feature = "api")]
 pub mod presentation;
+
+#[cfg(feature = "api")]
+pub mod camera_feed;

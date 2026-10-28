@@ -149,6 +149,11 @@ pub struct SceneCamera {
     pub bloom: Option<BloomLook>,
 }
 
+/// Offscreen observation camera. It shares the renderer's look contract but
+/// never participates in interactive viewport camera selection.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct CameraFeedCamera(pub SceneCamera);
+
 /// Marks a concrete camera whose presentation ownership has ended.
 ///
 /// Retirement is a transition state, not a replacement camera contract. The

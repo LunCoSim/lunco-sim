@@ -95,6 +95,32 @@ input visualisation, and window preferences in `lunco-settings`. Missing Twin
 keys use the surface's authored default, so Rust does not grow a field for
 each new preference.
 
+## Camera views and configurable mission cards
+
+Windowed LunCoSim supports up to eight live camera windows. Call
+`CreateCameraFeed` for an independent id, then
+`SetCameraFeed { feed, source: <exact camera gid>, label, width, height }`.
+Omitted `feed` selects primary view 1. `RemoveCameraFeed` releases a window;
+`InspectCameraFeeds` reports all selections. Native windows provide a camera
+picker, resolution menu, new-view button, move, resize and close. Use
+`SetCameraFeedResolution { feed, match_window, width, height }` for fixed pixels
+or live image-area matching. The menu also copies the app window's current
+physical dimensions. Omitted dimensions in `SetCameraFeed` preserve the view's
+resolution policy. Allocation limits and rejection details are reported by
+`InspectCameraFeeds`; an invalid request preserves the last valid target.
+Use two physically separated
+native sensor cameras for stereo, and verify both rendered views in the owned
+session. See the [render owner contract](../../docs/architecture/render-decoupling.md#live-camera-observations)
+and `camera_feed_live.rhai` production acceptance.
+
+Named guided cards accept `SetGuidedHudLayout { hud, width, text_scale,
+draggable }`. Layout is scene scoped and exposed in `InspectGuidedHud`; invalid
+bounds reject before mutation. A card's context menu changes the same settings.
+Twin Rhai owns which telemetry lines to publish, and can retain chosen groups
+through existing Twin settings. `guided_hud_layout.rhai` covers layout admission
+and rejection. HUI control surfaces remain configurable through their Twin
+manifest, template and stylesheet.
+
 ## Authoring workflow
 
 ### 1. Define a generic capability namespace
