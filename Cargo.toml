@@ -402,18 +402,18 @@ lunco-web = { path = "crates/lunco-web" }
 # Rumoca 0.10.2 with shared native ME admission and checked source discovery.
 # Rumoca event transactions and live deadlines: all consumers share one published revision.
 # See docs/reviews/modelica-semantic-zoom-2026-10-28.md.
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
-rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "cdba2537fd21a3f9794e2ebd58b8ae018790bb54" }
+rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
+rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "7191bffc001a1f1362f2425f095798b9b004b8fa" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.

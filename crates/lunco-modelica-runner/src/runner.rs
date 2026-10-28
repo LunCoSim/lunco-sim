@@ -824,16 +824,17 @@ fn run_batch_sim(
             return;
         }
     };
-    let admission = budget
-        .sample_capacity(model.runtime_view().model().visible_names.len())
-        .and_then(|capacity| {
-            rumoca_solver::timeline::output_sample_count(
-                opts.t_start,
-                opts.t_end,
-                output_dt,
-                capacity,
-            )
-        });
+    // Count the canonical grid without allocating, then admit all output
+    // columns and the separate time vector through the solver's budget.
+    let admission = rumoca_solver::timeline::output_sample_count(
+        opts.t_start,
+        opts.t_end,
+        output_dt,
+        usize::MAX,
+    )
+    .and_then(|samples| {
+        budget.validate_dimensions(model.runtime_view().model().visible_names.len(), samples)
+    });
     if let Err(error) = admission {
         sink.emit(RunUpdate::Failed {
             error: error.to_string(),
