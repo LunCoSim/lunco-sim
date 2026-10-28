@@ -23,13 +23,16 @@ fn assemble(facts) {
             scene_visible: true, restore: false,
         });
     }
-    let plots = canonical_plot(facts, "center");
+    let live_scene = has_panel(facts, "workbench::viewport");
+    let plots = canonical_plot(facts, if live_scene { "bottom" } else { "center" });
     if plots.len() > 0 && has_panel(facts, "telemetry_browser") {
         let analysis = #{
-            id: "analysis", title: "↗ Analyze", interaction: "editor",
+            id: "analysis", title: "↗ Analyze", interaction: "editor", revision: 1,
+            scene_visible: true,
             description: "Compare signals in Graphs. Check or drag channels from Telemetry into the active plot. Select an entity to narrow the signal list; use Ports for current values and manual inputs. View → Analyze exposes the additional analysis tools.",
             left: ["telemetry_browser"], instances: plots,
         };
+        if live_scene { analysis.center = ["workbench::viewport"]; }
         if has_panel(facts, "entity_list") { analysis.left_bottom = ["entity_list"]; }
         if has_panel(facts, "port_inspector") { analysis.right = ["port_inspector"]; }
         result.push(analysis);

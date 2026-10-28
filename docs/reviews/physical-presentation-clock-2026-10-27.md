@@ -61,11 +61,8 @@ rewinds. Each API observation reads a coherent world; the follow-camera value
 belongs to the preceding completed presentation pass, so these measurements
 compare successive motion, not a simultaneous camera/body offset.
 
-Evidence is retained under
-`.runtime-check/roadster-presentation-2026-10-27/`, including the numeric samples,
-summary, moving-view screenshots and production logs. Screenshot inspection
-confirms the intended Roadster follow view; the numeric series establishes the
-temporal reversal result.
+Screenshot inspection during validation confirmed the intended Roadster
+follow view; the numeric series established the temporal reversal result.
 
 - `cargo test -p lunco-time --lib render_time_ -j 4`: the regression fails before
   the change; all three focused clock tests pass afterward.

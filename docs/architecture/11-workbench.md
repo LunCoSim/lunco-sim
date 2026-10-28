@@ -401,7 +401,7 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | Perspective | Task | Initial presentation |
 |---|---|---|
 | View (`sandbox_view`) | Observe and operate a mission | Full-window live scene |
-| Analyze (`analysis`) | Inspect and compare simulation signals | Telemetry above Entities; Graphs center; Ports right |
+| Analyze (`analysis`) | Inspect and compare simulation signals | Live scene center; Graphs below the scene; Telemetry above Entities left; Ports right |
 | Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Editor (`editor`) | Edit an explicitly opened document | Prim/Twin tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
 | Lunica (`modelica_analyze`) | Engineer continuous models | Twin/Files browser; Welcome or open model views center |
@@ -527,10 +527,12 @@ switcher. This does not remove or duplicate either authoring mode.
 
 The layout's viewport visibility is also an explicit perspective contract.
 Perspectives with a central editor surface keep the scene hidden unless their
-slot intent includes `ViewportPanel`. A full-window presentation perspective
-such as luncosim's View sets `Perspective::scene_visible_when_docked()` so
-focused tutorial or user panels can be painted over the live scene without
-turning the scene camera off.
+slot intent includes `ViewportPanel` or their authored definition sets
+`scene_visible`. Analyze uses the same central `ViewportPanel` as Build, with
+Graphs in the bottom dock. A host without a live viewport keeps Graphs in the
+center. A full-window presentation perspective such as luncosim's View also sets
+`Perspective::scene_visible_when_docked()` so focused tutorial or user panels
+can be painted over the live scene without turning the scene camera off.
 
 ### Guided presentation ownership
 

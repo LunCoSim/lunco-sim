@@ -7664,9 +7664,9 @@ they are owner-level diagnostics, not product FPS acceptance. Another terrain
 simulator was active throughout; a sibling Cargo build also overlapped the
 aborted UI attempt, whose frame numbers are excluded. Griffin later reaches
 tick 3600 without further steps, so its retained physics history after that
-point is not fresh measurement of five/ten-editor windows. The maintained
-`usd_editor_tabs.py --compare-first` driver records advanced steps per window
-and keeps the first Visual camera fixed as more source documents stay open.
+point is not fresh measurement of five/ten-editor windows. Editor-count
+comparisons require advanced steps in every window and a fixed first Visual
+camera while additional source documents stay open.
 
 Apollo's full-ready transition was 10.526 s after Twin open in the cold baseline
 and 1.756 s in the warm updated capture, validated by a five-second soak.

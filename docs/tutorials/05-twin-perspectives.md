@@ -4,6 +4,10 @@ A perspective assembles registered engineering views around a task. It shares
 its Twin's documents, signals and simulation. Personal rearrangements are saved
 in the existing local workspace store; the Rhai defaults travel with the Twin.
 
+The simulator's Analyze task keeps the live scene in the center and Graphs
+below it, with Telemetry on the left and Ports on the right. Its graph remains
+in the bottom dock when reopened. View → Reset Layout reapplies this placement.
+
 ## Discover the available views
 
 In a production session with API access, query `InspectWorkbench`. Its `panels`
