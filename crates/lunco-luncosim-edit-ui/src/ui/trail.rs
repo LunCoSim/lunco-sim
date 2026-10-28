@@ -674,8 +674,11 @@ fn trail_signature(lane: &TrailLane) -> u64 {
 }
 fn trail_look() -> PbrLook {
     PbrLook {
-        base_color: LinearRgba::new(0.28, 0.14, 0.05, 0.78),
-        emissive: LinearRgba::new(0.06, 0.025, 0.008, 1.0),
+        // Contact-disturbed soil is a neutral dark mark, including the live
+        // endpoint under a stationary wheel. Both terrain stamps and support
+        // ribbons consume this same look.
+        base_color: LinearRgba::new(0.025, 0.025, 0.025, 0.78),
+        emissive: LinearRgba::BLACK,
         alpha: SurfaceAlpha::Blend,
         unlit: true,
         double_sided: true,
