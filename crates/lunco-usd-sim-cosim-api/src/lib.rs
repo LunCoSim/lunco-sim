@@ -789,6 +789,32 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     .map(construction_profile_to_api_value)
                     .unwrap_or(ApiValue::Unit);
                 if include_values {
+                    let pending_initial_inputs = world
+                        .get::<lunco_cosim_core::initialization::PendingInputConnections>(entity)
+                        .map(|pending| pending.0.iter().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    let mut initial_sources = Vec::new();
+                    if model.is_some_and(|model| !model.is_compiled) {
+                        if let Some(mut query) = QueryState::<&SimConnection>::try_new(world) {
+                            let mut wires: Vec<_> = query.iter(world)
+                                .filter(|wire| wire.end_element == entity).collect();
+                            wires.sort_by(|a, b| a.compare_authoritative(b, world));
+                            for wire in wires {
+                                let sample = world.get_resource::<lunco_port_core::ports::PortRegistry>()
+                                    .and_then(|registry| lunco_cosim_core::initialization::read_causal_sample(
+                                        registry, world, wire.start_element, &wire.start_connector,
+                                        wire.start_is_input));
+                                initial_sources.push(api_value!({
+                                    "input": wire.end_connector.clone(),
+                                    "source": world.get::<Name>(wire.start_element).map(|name| name.as_str().to_owned()),
+                                    "source_port": wire.start_connector.clone(),
+                                    "source_is_input": wire.start_is_input,
+                                    "declaration_pending": world.get::<lunco_port_core::PortSurfacePending>(wire.start_element).is_some(),
+                                    "sample_available": sample.is_some(),
+                                }));
+                            }
+                        }
+                    }
                     api_value!({
                     "name": name.as_str(),
                     "y": tf.translation.y,
@@ -811,6 +837,8 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                         .map(|m| m.next_communication_time)
                         .unwrap_or(0.0),
                     "modelica_is_stepping": model.is_some_and(|m| m.is_stepping),
+                    "pending_initial_inputs": pending_initial_inputs,
+                    "initial_input_sources": initial_sources,
                     "modelica_step_diagnostics": step_diagnostics,
                     "modelica_construction_profile": construction_profile,
                     // The Modelica worker's durable failure verdict is the

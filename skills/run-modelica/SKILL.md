@@ -36,6 +36,16 @@ failures; those errors must leave the application available for inspection.
 Rust panic handling alone cannot contain a native access violation. See the
 [native execution contract](../../docs/architecture/20-domain-modelica.md).
 
+For a participant that stays `Compiling` without a compiler outcome, inspect
+its connected producers and input admission before diagnosing compiler work.
+`PendingInputConnections` also holds compilation while a USD source is being
+projected. Native producers can expose valid ports without a Modelica or
+`PortSurface` component; their owner publishes `PortSurfaceReady` when the
+backend is installed. Inspect `CosimStatus.pending_initial_inputs` and
+`initial_input_sources` on each uncompiled participant to distinguish missing
+connections, a pending source declaration and an unavailable sample. Preserve
+the actual initial-sample gate rather than seeding a value to release admission.
+
 Before creating a new Modelica file, inventory the maintained package roots and
 the closest composed USD network in the current checkout. Reuse existing
 component classes through USD or the generated wrapper when their equations and

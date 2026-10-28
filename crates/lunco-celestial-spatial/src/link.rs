@@ -1232,28 +1232,16 @@ pub(crate) fn check_link_state_structure(
     }
 }
 
-/// Link state as first-class **ports**, read on demand.
-///
-/// This used to be a system that wrote `link_<class>_*` keys into every link node's
-/// `SimComponent` outputs — i.e. into the *Modelica* backend's private storage.
-/// That had three costs, all gone now:
-///
-/// 1. **A scheduling contract.** Pushing a value one tick early or late is a real
-///    bug, and it happened: with no ordering the model read `link_range_m = 0` and
-///    solved a 1 m link at 145 dB SNR, so the writer had to be pinned to
-///    `FixedUpdate` `.before(CosimSet::Propagate)`. A backend is PULLED at read
-///    time, so there is no tick to publish into wrongly and no ordering to keep.
-/// 2. **A Modelica model as a prerequisite.** The old query was
-///    `(&LinkState, &mut SimComponent)`, so a link node without an authored model
-///    published nothing at all. Port identity now exists wherever `LinkNode` does;
-///    a first geometry sample arrives through `LinkState`.
-/// 3. **Silent clobbering.** A model whose own variable was named
-///    `link_earth_range_m` had it overwritten every tick. Registration order is
-///    precedence and Modelica registers first, so now the model wins its own name.
-///
-/// Outputs only: link geometry is computed by the solver and is not writable. The
-/// per-class reduction (connected beats nearer, then nearest) is unchanged — it is
-/// what lets a scalar Modelica port see an N-peer graph.
+/// Publish endpoint admission when the native link declaration is installed.
+pub(crate) fn mark_link_port_surface_ready(trigger: On<Add<LinkNode>>, mut commands: Commands) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(lunco_port_core::PortSurfaceReady);
+}
+
+/// Read-only link geometry ports, declared by LinkNode and sampled from LinkState.
+/// Registry precedence preserves a Modelica producer's ownership of its own
+/// signals. Per-class reduction selects a connected peer first, then the nearest.
 pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
     lunco_port_core::ports::PortBackend {
         list_entities: |world, out| {
