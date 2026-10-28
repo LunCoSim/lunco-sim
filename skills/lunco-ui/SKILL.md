@@ -27,6 +27,14 @@ and design decisions. This skill is a quick-reference summary.
 
 ## Graph readability
 
+Analyze places the live viewport in the center and Graphs in the bottom dock,
+with Telemetry and Ports alongside. Author this through
+`assets/scripting/policy/workbench_perspectives.rhai`; increment the perspective
+revision when changing default placement so saved layouts adopt it. Hosts
+without a live viewport use a central graph. Verify placement and graph reopening
+with `scripts/api/test_workbench_perspectives.py --port <free-port>` and inspect
+its Analyze screenshots.
+
 For a viewport demonstration, enable **Settings → HUD → Telemetry graphs**.
 Use the card's **Parameters** picker to browse source/component groups or
 filter names and descriptions, then choose up to four parameters. The selected

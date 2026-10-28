@@ -71,13 +71,14 @@ fn on_tick(me, ctx) {
     }
     if this.phase == 2 {
         if state.active_perspective != "analysis" { return; }
-        let graph = (); let telemetry = ();
+        let graph = (); let telemetry = (); let viewport = ();
         for panel in state.rendered_panels {
             if panel.id == "modelica_plot" { graph = panel; }
             if panel.id == "telemetry_browser" { telemetry = panel; }
+            if panel.id == "workbench::viewport" { viewport = panel; }
         }
-        if graph == () || telemetry == () { return; }
-        this.checks.push(t_true(graph.width > telemetry.width && graph.height > telemetry.height, "the authored central graph consumes the primary work area"));
+        if graph == () || telemetry == () || viewport == () { return; }
+        this.checks.push(t_true(graph.width > telemetry.width && graph.top >= viewport.top + viewport.height && viewport.height > graph.height && abs(graph.left - viewport.left) < 2.0, "Analyze keeps the live scene above its bottom graph"));
         this.checks.push(t_true(state.docked_panels.contains("modelica_plot") && state.docked_panels.contains("telemetry_browser") && state.docked_panels.contains("port_inspector"), "Analyze consumes the real graph, telemetry and port capabilities"));
         print("PERSPECTIVES_CAPTURE:analyze"); this.resume_at = this.elapsed + 1.5;
         this.phase = 25; return;
@@ -96,15 +97,15 @@ fn on_tick(me, ctx) {
         this.phase = 36; return;
     }
     if this.phase == 36 {
-        let graph = (); let telemetry = (); let ports = (); let joint = ();
+        let graph = (); let telemetry = (); let ports = (); let viewport = ();
         for panel in state.rendered_panels {
             if panel.id == this.plot_kind { graph = panel; }
             if panel.id == "telemetry_browser" { telemetry = panel; }
             if panel.id == "port_inspector" { ports = panel; }
-            if panel.id == "sandbox_joint_state" { joint = panel; }
+            if panel.id == "workbench::viewport" { viewport = panel; }
         }
-        if graph == () || telemetry == () || ports == () || joint == () { return; }
-        this.checks.push(t_true(graph.left > telemetry.left && graph.left < ports.left && graph.width > telemetry.width && joint.top > graph.top + graph.height * 0.5, "reopening the canonical graph restores the authored center without resetting other tools"));
+        if graph == () || telemetry == () || ports == () || viewport == () { return; }
+        this.checks.push(t_true(graph.width >= viewport.width && graph.left <= viewport.left && graph.left + graph.width >= viewport.left + viewport.width && graph.top >= viewport.top + viewport.height && state.docked_panels.contains("sandbox_joint_state"), "reopening the canonical graph restores its bottom dock and preserves other tools"));
         print("PERSPECTIVES_CAPTURE:reopened-graph"); this.resume_at = this.elapsed + 1.5;
         this.phase = 365; return;
     }
@@ -130,7 +131,7 @@ fn on_tick(me, ctx) {
     if this.phase == 33 {
         if state.active_perspective != "analysis" { return; }
         if !contains_id(state.rendered_panels, "modelica_plot") { return; }
-        this.checks.push(t_true(state.docked_panels.contains("sandbox_joint_state"), "a policy with changed initial instances preserves a visited dock and its central graph across navigation"));
+        this.checks.push(t_true(state.docked_panels.contains("sandbox_joint_state"), "a policy with changed initial instances preserves a visited dock and its bottom graph across navigation"));
         print("PERSPECTIVES_POLICY_STIMULUS:restore");
         this.phase = 31; return;
     }
