@@ -20,6 +20,7 @@ use lunco_workbench_core::presentation::{ViewportPlaceholder, ViewportPlaceholde
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::{MenuCtx, PanelCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
 
+mod camera_feed;
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
 mod code_panel;
@@ -196,6 +197,8 @@ fn sync_runtime_ui_capture_state(
 
 impl Plugin for LunCoSimUiPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(lunco_capture::camera_feed::CameraFeedPlugin)
+            .init_scene_resource::<camera_feed::CameraFeedUiState>();
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
@@ -415,6 +418,10 @@ impl Plugin for LunCoSimUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (
+                    camera_feed::draw_camera_feed
+                        .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
+                        .run_if(not(recording_offline))
+                        .run_if(in_view_perspective),
                     lunco_viz::draw_graph_hud
                         .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
                         .run_if(not(recording_offline))

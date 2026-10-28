@@ -895,3 +895,14 @@ It must not label these coordinates
 `MOON_ME` or `MOON_PA`: those require an explicit frame transform. In a scene
 without a site anchor the coordinate mode is explicitly world metres; an
 unresolvable or ambiguous site frame publishes coordinates as unavailable.
+
+### Mission card layout and camera windows
+
+Named guided HUD cards use `SetGuidedHudLayout` for bounded width, text scale
+and dragging. Their native context menu submits this same command; layout and
+content are scene owned and inspectable through `InspectGuidedHud`. Group
+selection and persisted Twin preferences remain authored Rhai policy. See
+`assets/scenarios/tests/guided_hud_layout.rhai` for production admission and
+negative cases. Independent camera image windows are owned by
+[`lunco-capture`](render-decoupling.md#live-camera-observations), with exact
+camera selection and per-window render targets; they are not HUI image nodes.

@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
-use lunco_command_contracts::{Ack, OpId};
+use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_commands};
 use lunco_scripting_bridge_core::ToolHookBinding;
 use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
@@ -52,6 +52,23 @@ struct HudCard {
     actions: Option<BoundActions>,
     // None uses the host default; Some([]) explicitly allows all perspectives.
     perspectives: Option<Vec<String>>,
+    layout: HudLayout,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct HudLayout {
+    width: f32,
+    text_scale: f32,
+    draggable: bool,
+}
+impl Default for HudLayout {
+    fn default() -> Self {
+        Self {
+            width: 320.0,
+            text_scale: 1.0,
+            draggable: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +78,14 @@ struct BoundActions {
 }
 
 impl HudCard {
+    fn interactive(&self, owner: &HudOwner) -> bool {
+        matches!(owner.id, HudId::Named(_))
+            || self
+                .actions
+                .as_ref()
+                .is_some_and(|actions| actions.items.iter().any(|action| action.enabled))
+    }
+
     fn visible(&self, defaults: &GuidedHudVisibility, active: Option<&PerspectiveId>) -> bool {
         match &self.perspectives {
             Some(ids) => {
@@ -187,6 +212,7 @@ pub(crate) fn install(app: &mut App) {
         .mark_client_local::<SetObjectives>()
         .mark_client_local::<SetGuidedHudActions>()
         .mark_client_local::<SetGuidedHudPerspectives>()
+        .mark_client_local::<SetGuidedHudLayout>()
         .mark_client_local::<InspectGuidedHud>();
 }
 
@@ -275,6 +301,50 @@ pub struct SetGuidedHudPerspectives {
 /// Includes the active anchored tour's Twin owner, step and target.
 #[Command(default)]
 pub struct InspectGuidedHud {}
+
+/// Configure one named scene-owned card. Omitted fields retain their values.
+#[Command(default)]
+pub struct SetGuidedHudLayout {
+    pub hud: String,
+    pub width: Option<f32>,
+    pub text_scale: Option<f32>,
+    pub draggable: Option<bool>,
+}
+
+#[on_command(SetGuidedHudLayout)]
+fn on_set_guided_hud_layout(
+    request: On<SetGuidedHudLayout>,
+    mut huds: ResMut<GuidedHuds>,
+    owner: Option<Res<lunco_workspace::WorkspaceResource>>,
+) -> Result<Ack, Reject> {
+    if cmd.hud.trim().is_empty() {
+        return Err(Reject::InvalidOp("HUD layout requires a named card".into()));
+    }
+    if cmd
+        .width
+        .is_some_and(|v| !v.is_finite() || !(200.0..=1000.0).contains(&v))
+        || cmd
+            .text_scale
+            .is_some_and(|v| !v.is_finite() || !(0.75..=2.0).contains(&v))
+    {
+        return Err(Reject::InvalidOp(
+            "HUD width must be 200..1000 and text scale 0.75..2".into(),
+        ));
+    }
+    let twin = publication_owner(owner.as_deref(), false).map_err(Reject::InvalidOp)?;
+    huds.update_card(&cmd.hud, twin, false, |card| {
+        if let Some(width) = cmd.width {
+            card.layout.width = width;
+        }
+        if let Some(scale) = cmd.text_scale {
+            card.layout.text_scale = scale;
+        }
+        if let Some(draggable) = cmd.draggable {
+            card.layout.draggable = draggable;
+        }
+    });
+    Ok(Ack::new(OpId::new()))
+}
 
 /// A guided HUD button was pressed. The application adapter dispatches it
 /// through the normal typed Rhai tool-hook command path.
@@ -400,6 +470,7 @@ struct HudCardReport<'a> {
     perspectives: &'a Option<Vec<String>>,
     visible: bool,
     interactive: bool,
+    layout: &'a HudLayout,
 }
 
 #[derive(serde::Serialize)]
@@ -421,41 +492,39 @@ fn on_inspect_guided_hud(
     overlay: Res<crate::GuidedOverlay>,
 ) -> Result<Ack, String> {
     let active = snapshot.as_ref().and_then(|s| s.active_perspective());
-    let cards: Vec<_> =
-        hud.cards
-            .iter()
-            .map(|(owner, card)| {
-                let visible = card.has_content() && card.visible(&defaults, active.as_ref());
-                HudCardReport {
-                    kind: match &owner.id {
-                        HudId::Named(_) => "scene",
-                        HudId::Script(_) => "script",
-                        HudId::Command => "command",
-                    },
-                    twin: owner.twin.map(|id| id.raw()),
-                    hud: match &owner.id {
-                        HudId::Named(id) => Some(id.as_str()),
-                        _ => None,
-                    },
-                    author: match &owner.id {
-                        HudId::Script(id) => Some(*id),
-                        _ => None,
-                    },
-                    hint: &card.hint,
-                    objectives: &card.objectives,
-                    actions: card
-                        .actions
-                        .as_ref()
-                        .map_or(&[][..], |actions| actions.items.as_slice()),
-                    perspectives: &card.perspectives,
-                    visible,
-                    interactive: visible
-                        && card.actions.as_ref().is_some_and(|actions| {
-                            actions.items.iter().any(|action| action.enabled)
-                        }),
-                }
-            })
-            .collect();
+    let cards: Vec<_> = hud
+        .cards
+        .iter()
+        .map(|(owner, card)| {
+            let visible = card.has_content() && card.visible(&defaults, active.as_ref());
+            HudCardReport {
+                kind: match &owner.id {
+                    HudId::Named(_) => "scene",
+                    HudId::Script(_) => "script",
+                    HudId::Command => "command",
+                },
+                twin: owner.twin.map(|id| id.raw()),
+                hud: match &owner.id {
+                    HudId::Named(id) => Some(id.as_str()),
+                    _ => None,
+                },
+                author: match &owner.id {
+                    HudId::Script(id) => Some(*id),
+                    _ => None,
+                },
+                hint: &card.hint,
+                objectives: &card.objectives,
+                actions: card
+                    .actions
+                    .as_ref()
+                    .map_or(&[][..], |actions| actions.items.as_slice()),
+                perspectives: &card.perspectives,
+                visible,
+                interactive: visible && card.interactive(owner),
+                layout: &card.layout,
+            }
+        })
+        .collect();
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({
@@ -499,17 +568,19 @@ pub(crate) fn draw_guided_hud(
             continue;
         }
         let show_objectives = !hud.objectives.is_empty();
-        let response =
-            lunco_theme::HudTier::Specific
-                .area(ctx, egui::Id::new(("lunco_guided_hud", owner)))
-                .interactable(
-                    hud.actions
-                        .as_ref()
-                        .is_some_and(|actions| actions.items.iter().any(|action| action.enabled)),
-                )
-                .fixed_pos(egui::pos2(screen.left() + 16.0, top))
-                .show(ctx, |ui| {
-                    ui.set_max_width(320.0);
+        let mut area = lunco_theme::HudTier::Specific
+            .area(ctx, egui::Id::new(("lunco_guided_hud", owner)))
+            .interactable(hud.interactive(owner))
+            .movable(hud.layout.draggable);
+        let position = egui::pos2(screen.left() + 16.0, top);
+        area = if hud.layout.draggable {
+            area.default_pos(position)
+        } else {
+            area.fixed_pos(position)
+        };
+        let response = area.show(ctx, |ui| {
+                    ui.set_max_width(hud.layout.width);
+                    for font in ui.style_mut().text_styles.values_mut() {font.size*=hud.layout.text_scale;}
                     egui::Frame::new()
                         .fill(theme.tokens.surface_raised)
                         .corner_radius(10.0)
@@ -573,11 +644,35 @@ pub(crate) fn draw_guided_hud(
                             }
                         });
                 });
+        if let HudId::Named(name) = &owner.id {
+            response.response.context_menu(|ui| {
+                let mut layout = hud.layout.clone();
+                ui.label("HUD layout (this scene)");
+                let mut changed = ui
+                    .checkbox(&mut layout.draggable, "Drag to reposition")
+                    .changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut layout.width, 200.0..=1000.0).text("Width"))
+                    .changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut layout.text_scale, 0.75..=2.0).text("Text size"))
+                    .changed();
+                if changed {
+                    commands.trigger(SetGuidedHudLayout {
+                        hud: name.clone(),
+                        width: Some(layout.width),
+                        text_scale: Some(layout.text_scale),
+                        draggable: Some(layout.draggable),
+                    });
+                }
+            });
+        }
         top = response.response.rect.bottom() + theme.spacing.item_spacing;
     }
 }
 
 register_commands!(
+    on_set_guided_hud_layout,
     on_set_hint,
     on_set_objectives,
     on_set_guided_hud_actions,

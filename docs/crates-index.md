@@ -205,7 +205,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-window`** | Reusable OS-window capability: typed minimize/maximize/close commands, merged-titlebar construction, settings-backed geometry persistence, and explicit native placement. It depends on Bevy window APIs and `lunco-settings`, not the concrete Workbench shell. |
 | **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
-| **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
+| **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, recording status, and bounded independent scene-scoped live camera views. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, shared selection/modal resources, and the bounded log model/renderer. It uses workbench contracts and shell-independent widgets; domain panels own their presentation snapshots. |
 | **`lunco-viz-core`** | Render-free visualization identity substrate: the shared `VizId` used by visualization registries, plot state, and headless consumers. It has no Bevy or rendering dependency. |
 | **`lunco-viz`** | Domain-agnostic visualization: persistent incremental telemetry presentation index with `InspectTelemetryCatalog` diagnostics, `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, scene-scoped widget buffers/tasks/actions, and future 3D/Rerun bridges. |
@@ -1302,8 +1302,7 @@ image, and processing dependencies.
 
 **`lunco-capture`**
 Render-bound application capability for screenshots and deterministic offline
-recording. It owns the typed capture commands, GPU readback, frame pacing, and
-PNG/video sinks. The workbench installs it for windowed API hosts; the
+recording and windowed live camera observations. It owns typed capture/feed commands, GPU readback, frame pacing, image targets and PNG/video sinks. The workbench installs it for windowed API hosts; the
 offscreen application host installs the same capability without the workbench
 shell.
 

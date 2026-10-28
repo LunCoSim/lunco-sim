@@ -8344,6 +8344,7 @@ dependencies = [
  "image",
  "lunco-api",
  "lunco-api-core",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-render",
