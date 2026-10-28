@@ -25,6 +25,9 @@ use super::theme::{canvas_theme_from_ctx, modelica_icon_palette_from_ctx};
 /// directly via a per-domain registry.
 #[derive(Clone, Debug, Default)]
 pub struct IconNodeData {
+    pub(super) semantic: Option<std::sync::Arc<super::semantic::SemanticDiagram>>,
+    /// Runtime path is independent of the local authored label.
+    pub value_instance: String,
     /// Fully-qualified type name (e.g. `Modelica.Electrical.Analog.Basic.Resistor`).
     pub qualified_type: String,
     /// Modelica partial class, rendered with a dashed border.
@@ -89,6 +92,8 @@ pub struct IconNodeData {
 /// Ports render as filled dots on the icon boundary in all cases.
 #[derive(Default)]
 pub(super) struct IconNodeVisual {
+    pub(super) semantic: Option<std::sync::Arc<super::semantic::SemanticDiagram>>,
+    pub(super) value_instance: String,
     /// Type name displayed below the source instance label.
     pub(super) type_label: String,
     /// Modelica partial class, projected from its parsed declaration prefix.
@@ -244,6 +249,11 @@ impl NodeVisual for IconNodeVisual {
             );
             return;
         }
+        if let Some(detail) = self.semantic.as_ref() {
+            if detail.draw(ctx, rect, &self.value_instance, selected) {
+                return;
+            }
+        }
         // Conditional components (`Component X if cond`) — render at
         // reduced opacity so every primitive (icon shapes, text,
         // port markers) inherits the dimming. Matches OMEdit/Dymola
@@ -289,7 +299,7 @@ impl NodeVisual for IconNodeVisual {
             // sub-components / ports. Only Modelica's built-in `time`
             // reads the participant clock outside that instance scope.
             let node_state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
-            let instance = self.instance_name.clone();
+            let instance = self.value_instance.clone();
             let resolver = move |name: &str| -> Option<f64> {
                 scoped_icon_value(&node_state.values, &instance, name)
             };
@@ -558,7 +568,7 @@ impl NodeVisual for IconNodeVisual {
         {
             let cursor = cursor.unwrap();
             let snap = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
-            let prefix = format!("{}.", self.instance_name);
+            let prefix = format!("{}.", self.value_instance);
             let mut rows: Vec<(&String, &f64)> = snap
                 .values
                 .iter()

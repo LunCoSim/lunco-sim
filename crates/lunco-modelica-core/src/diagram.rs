@@ -50,6 +50,77 @@ pub struct DiagramClass {
     pub members: Arc<Vec<ClassComponentDeclaration>>,
 }
 
+/// Resolve a class's source owner through the shared session symbol index.
+pub fn class_source_uri(session: &mut Session, target: &str) -> Result<String, String> {
+    session
+        .workspace_symbol_query(target.rsplit('.').next().unwrap_or(target))
+        .into_iter()
+        .find(|symbol| {
+            let full = symbol
+                .container_name
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|p| format!("{p}.{}", symbol.name))
+                .unwrap_or_else(|| symbol.name.clone());
+            full == target
+                && matches!(
+                    symbol.kind,
+                    rumoca_compile::compile::WorkspaceSymbolKind::Class(_)
+                )
+        })
+        .map(|symbol| symbol.uri)
+        .ok_or_else(|| format!("Modelica source for `{target}` is unavailable"))
+}
+
+// Component declarations already include inherited members. Connections must
+// follow the same inheritance, using Rumoca navigation to resolve each base.
+fn inherited_equations(
+    session: &mut Session,
+    target: &str,
+    ancestry: &mut Vec<String>,
+) -> Result<Vec<Equation>, String> {
+    if ancestry.iter().any(|name| name == target) {
+        return Err(format!("Cyclic Modelica diagram inheritance at `{target}`"));
+    }
+    let definition = session
+        .class_definition_query(target)
+        .ok_or_else(|| format!("Modelica definition `{target}` is unavailable"))?
+        .clone();
+    ancestry.push(target.to_string());
+    let mut equations = Vec::new();
+    if !definition.extends.is_empty() {
+        let uri = class_source_uri(session, target)?;
+        for base in &definition.extends {
+            let token = base
+                .base_name
+                .name
+                .last()
+                .ok_or_else(|| format!("Empty Modelica base name in `{target}`"))?;
+            let location = &token.location;
+            let resolved = session
+                .navigation_class_target_query(
+                    &uri,
+                    location.start_line.saturating_sub(1),
+                    location.start_column.saturating_sub(1),
+                )
+                .ok_or_else(|| {
+                    format!(
+                        "Unresolved Modelica diagram base `{}` in `{target}`",
+                        base.base_name
+                    )
+                })?;
+            equations.extend(inherited_equations(
+                session,
+                &resolved.qualified_name,
+                ancestry,
+            )?);
+        }
+    }
+    ancestry.pop();
+    equations.extend(definition.equations);
+    Ok(equations)
+}
+
 impl DiagramSnapshot {
     /// Capture the selected interface or its component graph. Rumoca owns
     /// declaration resolution and caches member results by session revision.
@@ -58,12 +129,9 @@ impl DiagramSnapshot {
         target: &str,
         scope: DiagramScope,
     ) -> Result<Self, String> {
-        let definition = session
-            .class_definition_query(target)
-            .ok_or_else(|| format!("Modelica diagram target `{target}` is unavailable"))?;
         let equations = match scope {
             DiagramScope::ClassInterface => Vec::new(),
-            DiagramScope::ComponentGraph => definition.equations.clone(),
+            DiagramScope::ComponentGraph => inherited_equations(session, target, &mut Vec::new())?,
         };
         let members = session
             .class_component_declarations_query(target)

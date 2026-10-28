@@ -726,6 +726,18 @@ preserving wires, live values and diagnostics. Do not clear topology or remove
 the navigation overlay object to obtain a clean view. Restore the same setting
 after filming if the operator is returning to editing.
 
+Modelica **semantic zoom** is an opt-in native presentation mode in Settings →
+Appearance, or `ConfigureDiagramPresentation { semantic_zoom: true }`. Scrolling
+into a component replaces its icon with its actual nested Modelica diagram,
+recursively; leaf components show their parsed equations and algorithms. Inline
+previews are read-only, retain full instance paths for values, and use the same
+native canvas layers. Double-click still opens the definition for editing. Turn
+it off to restore the ordinary icon view. Preparation is background work under
+the existing diagram node budget; cycles and limits show diagnostic cards. Source epochs invalidate nested previews after cross-file edits.
+At deep zoom, `lunco-theme::presentation::diagram_text_galley` bounds physical
+glyph rasterization and scales meshes to preserve authored text dimensions; use
+that owner for diagram/icon text instead of requesting enormous atlas glyphs.
+
 Canvas-owned diagram overlays must stay inside the owning leaf: direct painting
 uses the canvas clip rectangle, while an `egui::Area` uses `constrain_to` with
 the measured leaf rectangle. Non-interactive overlays do not claim pointer

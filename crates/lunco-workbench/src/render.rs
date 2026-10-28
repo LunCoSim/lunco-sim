@@ -2454,9 +2454,12 @@ pub(crate) fn register_workbench_appearance_settings_menu(world: &mut World) {
             let colors_changed = ui.checkbox(&mut diagrams.use_authored_colors, "Preserve authored diagram colors")
                 .on_hover_text("Use the model's own icon and connection colors, including authored dark backgrounds.").changed();
             let hover_changed = ui.checkbox(&mut diagrams.show_hover_values, "Diagram hover values").changed();
-            if controls_changed || colors_changed || hover_changed {
+            let semantic_changed = ui.checkbox(&mut diagrams.semantic_zoom, "Modelica semantic zoom")
+                .on_hover_text("Scroll into components to reveal their nested diagrams and source equations. Double-click still opens a component for editing.").changed();
+            if controls_changed || colors_changed || hover_changed || semantic_changed {
                 ctx.trigger(crate::theme_command::ConfigureDiagramPresentation {
                     show_controls: Some(diagrams.show_controls),
+                    semantic_zoom: Some(diagrams.semantic_zoom),
                     use_authored_colors: Some(diagrams.use_authored_colors),
                     show_hover_values: Some(diagrams.show_hover_values),
                 });

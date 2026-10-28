@@ -92,7 +92,8 @@ impl NodeVisual for TextNodeVisual {
             (egui_rect.height() * 0.9).max(1.0)
         };
         if egui_rect.width() > 0.5 && font_px > 1.0 {
-            let measure = ctx.ui.painter().layout_no_wrap(
+            let measure = lunco_theme::presentation::diagram_text_galley(
+                ctx.ui.painter(),
                 self.data.text.clone(),
                 egui::FontId::proportional(font_px),
                 color,
@@ -105,7 +106,8 @@ impl NodeVisual for TextNodeVisual {
         // No-wrap layout: render the text on a single line (already
         // shrunk to fit the extent width above). Wrapping would
         // betray the authored extent box.
-        let layout = ctx.ui.painter().layout_no_wrap(
+        let layout = lunco_theme::presentation::diagram_text_galley(
+            ctx.ui.painter(),
             self.data.text.clone(),
             egui::FontId::proportional(font_px),
             color,

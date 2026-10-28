@@ -1352,6 +1352,8 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                 Has<MountedCamera>,
                 Has<Embodiment>,
                 Has<LocalEmbodiment>,
+                Option<&GlobalTransform>,
+                Option<&bevy::camera::Projection>,
             ),
             With<SceneCamera>,
         >::try_new(world) else {
@@ -1363,7 +1365,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
         let mut candidates: Vec<_> = query
             .iter(world)
             .map(
-                |(entity, name, prim, camera, target, scene_camera, mounted, avatar, local)| {
+                |(entity, name, prim, camera, target, scene_camera, mounted, avatar, local, transform, projection)| {
                     api_value!({
                         "entity": entity.to_bits(),
                         "name": name.map(|n| n.as_str()).unwrap_or_default(),
@@ -1373,6 +1375,9 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                         "mounted_camera": mounted,
                         "avatar": avatar,
                         "local_avatar": local,
+                        "world_translation": transform.map(|transform| transform.translation().to_array()),
+                        "world_forward": transform.map(|transform| transform.forward().to_array()),
+                        "projection": projection.map(|projection| format!("{projection:?}")),
                         // Headless production runs intentionally omit Bevy's
                         // render `Camera` component, but the render-free
                         // `SceneCamera` intent is still the authoritative

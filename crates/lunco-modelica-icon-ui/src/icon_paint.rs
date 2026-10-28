@@ -779,8 +779,12 @@ fn paint_text(
             // Egui galley measure: cheap no-wrap layout to get the
             // rendered width at this font size. If it overruns the
             // extent, scale down by the ratio.
-            let galley =
-                painter.layout_no_wrap(rendered.clone(), egui::FontId::proportional(size), color);
+            let galley = lunco_theme::presentation::diagram_text_galley(
+                painter,
+                rendered.clone(),
+                egui::FontId::proportional(size),
+                color,
+            );
             let measured_w = galley.size().x;
             if measured_w > w {
                 size *= w / measured_w;
@@ -803,31 +807,19 @@ fn paint_text(
     if (angle_screen - snapped * std::f32::consts::FRAC_PI_2).abs() < 1e-3 {
         angle_screen = snapped * std::f32::consts::FRAC_PI_2;
     }
-    if angle_screen.abs() < 1e-4 {
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            &rendered,
-            egui::FontId::proportional(font_size_px),
-            color,
-        );
-    } else {
-        // Build a Galley and emit a rotated TextShape — egui's
-        // higher-level `painter.text` fixes angle to 0.
-        let galley =
-            painter.layout_no_wrap(rendered, egui::FontId::proportional(font_size_px), color);
-        // TextShape rotates around `pos` (top-left). To centre the
-        // rotated label on `rect.center()`, push `pos` back by the
-        // rotated half-size vector — places the post-rotation centre
-        // exactly on rect.center.
-        let half = galley.size() * 0.5;
-        let (sin, cos) = angle_screen.sin_cos();
-        let rotated_half = egui::vec2(cos * half.x - sin * half.y, sin * half.x + cos * half.y);
-        let pos = rect.center() - rotated_half;
-        let mut shape = egui::epaint::TextShape::new(pos, galley, color);
-        shape.angle = angle_screen;
-        painter.add(egui::Shape::Text(shape));
-    }
+    let galley = lunco_theme::presentation::diagram_text_galley(
+        painter,
+        rendered,
+        egui::FontId::proportional(font_size_px),
+        color,
+    );
+    let half = galley.size() * 0.5;
+    let (sin, cos) = angle_screen.sin_cos();
+    let rotated_half = egui::vec2(cos * half.x - sin * half.y, sin * half.x + cos * half.y);
+    let pos = rect.center() - rotated_half;
+    let mut shape = egui::epaint::TextShape::new(pos, galley, color);
+    shape.angle = angle_screen;
+    painter.add(egui::Shape::Text(shape));
 }
 
 /// Paint an Ellipse fitted to `e.extent`. Honours partial-arc

@@ -54,6 +54,7 @@ mod panel;
 mod port;
 mod projection;
 mod pulse;
+mod semantic;
 mod theme;
 pub use panel::CanvasDiagramPanel;
 pub use theme::CanvasThemeSnapshot;
@@ -109,6 +110,8 @@ fn build_registry() -> VisualRegistry {
             .unwrap_or(&d.qualified_type)
             .to_string();
         IconNodeVisual {
+            semantic: d.semantic.clone(),
+            value_instance: d.value_instance.clone(),
             type_label: type_label.clone(),
             class_name: type_label,
             partial: d.partial,
@@ -348,6 +351,8 @@ pub struct CanvasDocState {
     /// the camera (a `last_seen_gen = 0` reset would re-fit). Consumed +
     /// cleared by `spawn_projection_task`.
     pub force_reproject: bool,
+    pub semantic_mode: bool,
+    pub semantic_epoch: u64,
 }
 
 impl Default for CanvasDocState {
@@ -402,6 +407,8 @@ impl Default for CanvasDocState {
             edge_pulse_handle,
             pending_view: None,
             force_reproject: false,
+            semantic_mode: false,
+            semantic_epoch: 0,
         }
     }
 }
