@@ -1750,16 +1750,15 @@ The latter two count invalid endpoint pairs, including sleeping contacts;
 an excess graph-node count alone does not identify a retired contact. Keep
 the audit on demand and trace a confirmed invalid endpoint to its lifecycle
 owner before changing cleanup or contact admission.
-The editor-count diagnostic additionally checks it at one-second checkpoints
-to reject a stall after an early advance, along with full readiness and stable
-physics topology. It also rejects retained errors from `RuntimeDiagnostics`,
+For editor-count diagnostics, check at one-second checkpoints to reject a stall
+after an early advance, along with full readiness and stable physics topology.
+Reject retained errors from `RuntimeDiagnostics`,
 including scene-scoped telemetry delivery holds that do not fault physics.
 That polling overhead is part of the diagnostic window.
-`scripts/perf/usd_editor_tabs.py` compares yaw, pitch, target, distance,
-projection, orthographic scale, measured viewport rectangle and window scale
-factor both within a window and between equal-camera windows. Its negative
-guard tests cover rotation, resizing, faults, retained runtime errors, late
-waits and stopped physics.
+For equal-camera windows, compare yaw, pitch, target, distance, projection,
+orthographic scale, measured viewport rectangle and window scale factor both
+within a window and between windows. Reject camera changes, resizing, faults,
+retained runtime errors, late waits and stopped physics.
 
 Record the clean FPS window, physics and render timings, Tracy capture path,
 scene/settings, and whether the result is startup or settled. Rebuild the

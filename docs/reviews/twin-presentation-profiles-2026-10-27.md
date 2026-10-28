@@ -60,9 +60,8 @@ Ctrl+P and renders the Roadster air, fan, refill and course controls.
   `cargo check -p lunco-controller -p lunco-workbench -p lunco-workbench-runtime-ui --tests -j 4`.
 - Skill catalogue, shell syntax and diff checks pass.
 
-Local captures, reports and runtime logs are under
-`.runtime-check/tesla-default-loading/`. The before/after screenshots were
-visually inspected. The integrated tree includes local main `d101543b2` and its native solver
+The before/after screenshots were visually inspected during validation. The
+integrated tree includes local main `d101543b2` and its native solver
 revision `ba8978bd`. Its production rebuild passed; the 31 control/HUD checks
 and 21 lifecycle checks were repeated successfully on that binary. The Twin's
 `default_loading.rhai` also passed all 19 direct-load assertions. Input-owner
