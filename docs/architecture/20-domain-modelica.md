@@ -1466,6 +1466,15 @@ An unloaded source retains `PortSurfacePending`; declaration publication clears
 that marker without publishing unsolved output samples. Source replacement
 refreshes the declaration and metadata through the same owner.
 
+Native port backends publish `PortSurfaceReady` when their declaring component
+is installed. This includes celestial `LinkNode` endpoints, whose outputs do not
+require a Modelica participant. The shared marker admits the source to USD
+wiring and wakes its derived connection cache. Initial sampling still requires
+an actual declared finite source value. `CosimStatus` with values included
+exposes `pending_initial_inputs` and ordered `initial_input_sources` for
+uncompiled participants, separating unresolved connections, pending source
+surfaces and missing samples.
+
 
 ### Coupled initial admission
 

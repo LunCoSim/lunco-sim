@@ -234,6 +234,7 @@ impl Plugin for CelestialPlugin {
         app.world_mut()
             .get_resource_or_init::<lunco_port_core::ports::PortRegistry>()
             .register(link::LINK_PORT_BACKEND);
+        app.add_observer(link::mark_link_port_surface_ready);
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.
         if app.world().get_resource::<Gravity>().is_none() {
