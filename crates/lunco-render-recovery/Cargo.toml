@@ -7,14 +7,12 @@ description = "Render-device health, adapter capability admission, and presentat
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_render", "bevy_light", "bevy_pbr"] }
-bevy_egui = { workspace = true, features = ["render"] }
 lunco-core = { path = "../lunco-core" }
 lunco-exposure-core = { path = "../lunco-exposure-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-render = { path = "../lunco-render" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }
-lunco-theme = { path = "../lunco-theme" }
 wgpu = { version = "30", default-features = false }
 
 [lints]

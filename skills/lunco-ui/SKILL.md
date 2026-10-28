@@ -100,6 +100,11 @@ Verify the saved width and rendered stroke in the actual plot panel.
 
 ## Core Principles
 
+Render recovery warnings and terminal presentation failures belong in Recent
+Events through the existing StatusBus and RuntimeDiagnostics owners. Keep them
+out of floating viewport banners; presentation-stop decisions stay at the
+render recovery owner.
+
 The Scenarios menu offers **Scenario** and **Test Scenarios** as peer submenus.
 Scene rows use a single-selection marker from `CurrentScenePath`; dispatch the
 existing typed `LoadScene` command when another row is chosen. With multiple

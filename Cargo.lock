@@ -10084,14 +10084,12 @@ name = "lunco-render-recovery"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "bevy_egui",
  "lunco-core",
  "lunco-exposure-core",
  "lunco-hooks",
  "lunco-render",
  "lunco-settings",
  "lunco-status-core",
- "lunco-theme",
  "wgpu",
 ]
 

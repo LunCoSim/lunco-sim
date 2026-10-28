@@ -334,8 +334,12 @@ fn drain_pending_layout_requests(
 /// snapshot is the only layout fact domain crates should consume, so they do
 /// not acquire a dependency on `egui_dock` or the shell's private resource.
 pub(crate) fn publish_workbench_snapshot(layout: &WorkbenchLayout) -> WorkbenchSnapshot {
-    let tabs: Vec<TabId> = layout.dock.iter_all_tabs().map(|(_, tab)| *tab)
-        .chain(layout.floating_panels.iter().map(|p| p.tab)).collect();
+    let tabs: Vec<TabId> = layout
+        .dock
+        .iter_all_tabs()
+        .map(|(_, tab)| *tab)
+        .chain(layout.floating_panels.iter().map(|p| p.tab))
+        .collect();
     let focused_tab = layout.focused_tab().copied();
     let visible_tabs: Vec<TabId> = layout
         .dock
@@ -389,7 +393,10 @@ pub(crate) fn snapshot_for_layout_if_changed(
     let same = current.matches_layout_projection(
         layout.active_perspective.clone(),
         layout.focused_tab().copied(),
-        layout.dock.iter_all_tabs().map(|(_, tab)| *tab)
+        layout
+            .dock
+            .iter_all_tabs()
+            .map(|(_, tab)| *tab)
             .chain(layout.floating_panels.iter().map(|p| p.tab)),
         layout
             .dock
@@ -405,9 +412,16 @@ pub(crate) fn snapshot_for_layout_if_changed(
                     )
                 }),
                 _ => None,
-            }).chain(layout.floating_panels.iter().map(|p| (p.tab, match p.tab {
-                TabId::Singleton(id) => id, TabId::Instance { kind, .. } => kind,
-            }))),
+            })
+            .chain(layout.floating_panels.iter().map(|p| {
+                (
+                    p.tab,
+                    match p.tab {
+                        TabId::Singleton(id) => id,
+                        TabId::Instance { kind, .. } => kind,
+                    },
+                )
+            })),
         layout
             .perspectives
             .iter()
@@ -730,11 +744,7 @@ impl Plugin for WorkbenchPlugin {
             .auto_create_primary_context = false;
         app.add_systems(
             EguiPrimaryContextPass,
-            (
-                lunco_render_recovery::draw_render_recovery_banner
-                    .in_set(ApplicationOverlayRenderSet),
-                stack_hud_layers.after(ApplicationOverlayRenderSet),
-            ),
+            stack_hud_layers.after(ApplicationOverlayRenderSet),
         );
         app.configure_sets(
             EguiPrimaryContextPass,

@@ -85,7 +85,8 @@ replacement must empty `InspectCameraFeeds.views` before new scene selection.
 `lunco-render-recovery` owns native GPU failure and presentation-stop state.
 Its change-gated diagnostic projection publishes `RenderWarning` as a warning
 and `RenderGaveUp` as the `presentation-stopped` error through the existing
-`RuntimeDiagnostics` owner. API, authoring review and performance consumers read
+`RuntimeDiagnostics` owner. Render warnings and failures appear in Recent
+Events without a floating viewport banner. API, authoring review and performance consumers read
 that same diagnostic; the renderer does not raise a simulation fault or change
 physics, camera quality or authored settings. A warning is replaced by the
 terminal error, rather than counted twice. Repair removes only this producer's

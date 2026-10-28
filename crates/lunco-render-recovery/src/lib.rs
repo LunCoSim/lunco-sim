@@ -60,7 +60,6 @@ use bevy::render::{
     Render, RenderApp, RenderStartup, RenderSystems,
     renderer::{RenderAdapterInfo, RenderDevice},
 };
-use bevy_egui::{EguiContexts, egui};
 use lunco_render::{
     EditorPreviewLight, LightRangeAuthorship, RenderingQualitySettings, ShadowRangeAuthorship,
     estimate_shadow_allocation_bytes,
@@ -277,7 +276,7 @@ fn presentation_is_active(state: Option<Res<PresentationState>>) -> bool {
     state.is_none_or(|state| !state.stopped)
 }
 
-/// Why a persistent presentation warning is being shown.
+/// Category of a retained render diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderWarningKind {
     /// The requested graphics configuration is invalid or unsupported by the
@@ -287,21 +286,12 @@ pub enum RenderWarningKind {
     RuntimeFailure,
 }
 
-impl RenderWarningKind {
-    fn title(self) -> &'static str {
-        match self {
-            Self::GraphicsSettings => "GRAPHICS SETTINGS",
-            Self::RuntimeFailure => "RENDERING DEGRADED",
-        }
-    }
-}
-
-/// Persistent presentation warning shown while the simulation is still alive.
+/// Retained render warning published through RuntimeDiagnostics and Recent Events.
 #[derive(Resource, Clone, Debug)]
 pub struct RenderWarning {
-    /// The owner/category of the condition shown in the workbench overlay.
+    /// Category used by the diagnostic projection.
     pub kind: RenderWarningKind,
-    /// Human-readable warning shown in the workbench overlay.
+    /// Human-readable diagnostic detail.
     pub message: String,
 }
 
@@ -311,6 +301,7 @@ fn publish_render_diagnostics(
     warning: Option<Res<RenderWarning>>,
     gave_up: Option<Res<RenderGaveUp>>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    status_bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     let Some(mut diagnostics) = diagnostics else {
         return;
@@ -336,6 +327,21 @@ fn publish_render_diagnostics(
             message: warning.message.clone(),
         })
     };
+    if let (Some(finding), Some(mut bus)) = (finding.as_ref(), status_bus) {
+        if finding.code != "graphics-settings"
+            && (bus.is_added() || !diagnostics.findings.contains(finding))
+        {
+            bus.push(
+                lunco_status_core::status_bus::RENDER_SOURCE,
+                if finding.severity == lunco_core::DiagnosticSeverity::Error {
+                    lunco_status_core::status_bus::StatusLevel::Error
+                } else {
+                    lunco_status_core::status_bus::StatusLevel::Warn
+                },
+                finding.message.clone(),
+            );
+        }
+    }
     diagnostics.replace_producer("render-recovery", finding);
 }
 
@@ -349,7 +355,8 @@ fn register_render_diagnostics(app: &mut App) {
             .run_if(
                 resource_changed_or_removed::<RenderWarning>
                     .or_eager(resource_changed_or_removed::<RenderGaveUp>)
-                    .or_eager(resource_added::<lunco_core::RuntimeDiagnostics>),
+                    .or_eager(resource_added::<lunco_core::RuntimeDiagnostics>)
+                    .or_eager(resource_added::<lunco_status_core::status_bus::StatusBus>),
             ),
     );
     // Ordinary recovery rearms on teardown. Device loss remains terminal and
@@ -360,66 +367,6 @@ fn register_render_diagnostics(app: &mut App) {
             .after(reset_render_recovery)
             .after(lunco_core::faults::clear_runtime_diagnostics),
     );
-}
-
-/// Keep a render-health decision visible in the surviving workbench UI.
-pub fn draw_render_recovery_banner(
-    mut egui_ctx: EguiContexts,
-    warning: Option<Res<RenderWarning>>,
-    gave_up: Option<Res<RenderGaveUp>>,
-    theme: Option<Res<lunco_theme::Theme>>,
-) {
-    let theme = theme
-        .map(|theme| theme.clone())
-        .unwrap_or_else(lunco_theme::Theme::dark);
-    let (icon_label, title, message, color, fill) = if let Some(gave_up) = gave_up {
-        (
-            "×",
-            "PRESENTATION STOPPED",
-            gave_up.reason.clone(),
-            theme.tokens.error,
-            theme.tokens.alert_backdrop,
-        )
-    } else if let Some(warning) = warning {
-        (
-            "!",
-            warning.kind.title(),
-            warning.message.clone(),
-            theme.tokens.warning,
-            theme.tokens.overlay_backdrop,
-        )
-    } else {
-        return;
-    };
-
-    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = ctx.content_rect();
-    lunco_theme::HudTier::General
-        .area(ctx, egui::Id::new("lunco_render_recovery"))
-        .interactable(false)
-        .fixed_pos(egui::pos2(screen.center().x - 210.0, screen.top() + 12.0))
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(fill)
-                .corner_radius(10.0)
-                .stroke(egui::Stroke::new(1.0, color.linear_multiply(0.75)))
-                .inner_margin(egui::Margin::symmetric(12, 8))
-                .show(ui, |ui| {
-                    ui.set_max_width(420.0);
-                    ui.vertical_centered(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(icon_label)
-                                    .color(color)
-                                    .strong()
-                                    .text_style(lunco_theme::TypographyRole::Section.text_style()),
-                            );
-                            ui.label(egui::RichText::new(title).color(color).strong());
-                        });
-                        ui.label(egui::RichText::new(message).color(theme.tokens.text));
-                    });
-                });
-        });
 }
 
 /// Which rung of the degradation ladder we are on.
@@ -1486,6 +1433,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
         app.init_resource::<lunco_core::RuntimeFaults>();
+        app.init_resource::<lunco_status_core::status_bus::StatusBus>();
         register_render_diagnostics(&mut app);
         app.world_mut()
             .resource_mut::<lunco_core::RuntimeDiagnostics>()
@@ -1509,6 +1457,16 @@ mod tests {
             finding.code == "rendering-degraded"
                 && finding.severity == lunco_core::DiagnosticSeverity::Warning
         }));
+        let events = app
+            .world()
+            .resource::<lunco_status_core::status_bus::StatusBus>();
+        assert_eq!(events.history().count(), 1);
+        assert!(
+            events
+                .history()
+                .any(|event| event.message == "GPU allocation failed"
+                    && event.level == lunco_status_core::status_bus::StatusLevel::Warn)
+        );
 
         let health = Arc::new(RenderHealth::default());
         health.device_lost.store(true, Ordering::Relaxed);
@@ -1525,6 +1483,13 @@ mod tests {
                 && finding.message == "the GPU device was lost"
         }));
         assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .history()
+                .any(|event| event.message == "the GPU device was lost"
+                    && event.level == lunco_status_core::status_bus::StatusLevel::Error)
+        );
 
         // Device loss survives scene retirement; scene diagnostics must republish it.
         app.add_systems(
@@ -1547,18 +1512,6 @@ mod tests {
                 .resource::<lunco_core::RuntimeDiagnostics>()
                 .findings
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn warning_titles_distinguish_invalid_configuration_from_render_failure() {
-        assert_eq!(
-            RenderWarningKind::GraphicsSettings.title(),
-            "GRAPHICS SETTINGS"
-        );
-        assert_eq!(
-            RenderWarningKind::RuntimeFailure.title(),
-            "RENDERING DEGRADED"
         );
     }
 
