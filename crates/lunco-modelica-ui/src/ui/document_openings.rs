@@ -133,9 +133,8 @@ pub enum OpeningState {
         /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`]
         /// at insert time. Same role as [`DrillInBinding::busy`] and
         /// [`DuplicateBinding::busy`]: keeps a `(Document(doc_id),
-        /// "opening")` entry on the bus from "user clicked open" until
-        /// the file-load driver hands it off to the projection stage
-        /// via [`crate::ui::panels::canvas_diagram::CanvasDiagramState::stash_projection_handoff`].
+        /// "opening")` entry on the bus until the loaded document is installed.
+        /// Rendering a diagram is a separate, demand-driven operation.
         busy: lunco_status_core::status_bus::BusyHandle,
     },
     /// source library drill-in slim-slice load. Built by
@@ -380,7 +379,6 @@ pub fn drive_file_load_openings(
     mut openings: ResMut<DocumentOpenings>,
     mut registry: ResMut<crate::ui::document_context::ModelicaDocuments>,
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
-    mut canvas_state: ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>,
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
     mut commands: Commands,
@@ -521,11 +519,9 @@ pub fn drive_file_load_openings(
                 for (_, tab) in tabs.iter_mut_for_doc(ready.doc_id) {
                     tab.doc = actual_id;
                 }
-                // Success: hand the parse-phase handle to the canvas
-                // state so the bus stays busy across the file-load →
-                // projection boundary; the projection spawn releases
-                // it via `complete_projection_handoff`.
-                canvas_state.stash_projection_handoff(actual_id, busy);
+                // Installation completes opening even when this document's
+                // diagram is hidden, already projected, or never requested.
+                drop(busy);
                 workspace.active_document = Some(actual_id);
             }
             Err(msg) => {
@@ -583,6 +579,78 @@ fn close_pending_file_tabs(
 mod file_open_admission_tests {
     use super::*;
     use lunco_workspace::{DocumentRuntimeOwner, TwinId};
+
+    #[test]
+    fn installed_file_finishes_opening_without_rendering_a_canvas() {
+        use lunco_status_core::status_bus::{BusyScope, StatusBus, drain_busy_drops};
+
+        let mut app = App::new();
+        app.init_resource::<DocumentOpenings>()
+            .init_resource::<crate::ui::document_context::ModelicaDocuments>()
+            .insert_resource(lunco_workspace::WorkspaceResource::new())
+            .init_resource::<crate::model_tabs::ModelTabs>()
+            .init_resource::<StatusBus>()
+            .insert_resource(crate::package_tree::PackageTreeCache {
+                roots: vec![],
+                tasks: vec![],
+                in_memory_models: vec![],
+                bundled_tree_indexed: false,
+                library_roots_synced: true,
+            })
+            .add_systems(Update, (drive_file_load_openings, drain_busy_drops).chain());
+        let id = DocumentId::new(1);
+        let busy = StatusBus::begin(
+            &mut app.world_mut().resource_mut::<StatusBus>(),
+            BusyScope::Document(id.0),
+            "opening",
+            "Loading hidden document…",
+        );
+        let task =
+            bevy::tasks::IoTaskPool::get_or_init(bevy::tasks::TaskPool::new).spawn(async move {
+                (
+                    FileLoadResult {
+                        doc_id: id,
+                        result: Ok((
+                            lunco_modelica_document::ModelicaDocument::new(
+                                id,
+                                "model Hidden end Hidden;",
+                            ),
+                            DocumentRuntimeOwner::Application,
+                        )),
+                    },
+                    None,
+                )
+            });
+        app.world_mut().resource_mut::<DocumentOpenings>().insert(
+            id,
+            OpeningState::FileLoad {
+                display_name: "Hidden".into(),
+                task,
+                busy,
+            },
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app
+            .world()
+            .resource::<crate::ui::document_context::ModelicaDocuments>()
+            .host(id)
+            .is_none()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "file load did not install"
+            );
+            app.update();
+            std::thread::yield_now();
+        }
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<StatusBus>()
+                .is_busy(BusyScope::Document(id.0)),
+            "a hidden or text-only document must not wait for diagram rendering"
+        );
+    }
 
     #[test]
     fn canonical_file_reopen_keeps_admitted_source_fences() {

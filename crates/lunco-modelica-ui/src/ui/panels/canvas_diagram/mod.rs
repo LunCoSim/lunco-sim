@@ -434,17 +434,6 @@ pub struct CanvasDiagramState {
     /// workbench cannot accidentally mutate or display another document's
     /// scene.
     unbound: CanvasDocState,
-    /// Parse→project handoff slot. When a driver (duplicate, drill-in,
-    /// file-load) resolves its parse task, it moves its `StatusBus`
-    /// `BusyHandle` here so the bus stays busy for `Document(doc_id)`
-    /// across the frame boundary where the parse handle would otherwise
-    /// drop before the projection task spawns. The next
-    /// `spawn_projection_task` for the doc minted its own handle and
-    /// then calls [`complete_projection_handoff`], releasing this one.
-    /// Without this slot the bus blinks empty between parse-complete
-    /// and project-spawn, and the canvas overlay flickers off then on.
-    pending_projection_handoff:
-        std::collections::HashMap<lunco_doc::DocumentId, lunco_status_core::status_bus::BusyHandle>,
     /// Hot-exit camera restore, keyed by document. Populated by
     /// [`stash_pending_view`](Self::stash_pending_view) when a document
     /// is restored from the per-Twin workspace-state (its tab doesn't
@@ -460,19 +449,6 @@ pub struct CanvasDiagramState {
 }
 
 impl CanvasDiagramState {
-    /// Stash the parse-phase `BusyHandle` so the `StatusBus` keeps an
-    /// entry under `Document(doc_id)` until the next projection spawn
-    /// for the doc registers its own. Replaces any previous stashed
-    /// handle for the same doc (its `Drop` then clears the older bus
-    /// entry safely — see `re_begin_evicts_prior_handle_silently`).
-    pub fn stash_projection_handoff(
-        &mut self,
-        doc: lunco_doc::DocumentId,
-        handle: lunco_status_core::status_bus::BusyHandle,
-    ) {
-        self.pending_projection_handoff.insert(doc, handle);
-    }
-
     /// Mark every document-bound tab for a one-shot
     /// re-projection. Called when the source library standard library becomes resident so
     /// diagrams projected before its icons were available re-resolve them
@@ -482,14 +458,6 @@ impl CanvasDiagramState {
         for st in self.per_tab.values_mut() {
             st.force_reproject = true;
         }
-    }
-
-    /// Drop the handoff handle for `doc`, if any. Called from
-    /// `spawn_projection_task` after the new projection entry is on
-    /// the bus, so total bus busy-count for the doc never reaches
-    /// zero during the parse→project transition.
-    pub fn complete_projection_handoff(&mut self, doc: lunco_doc::DocumentId) {
-        self.pending_projection_handoff.remove(&doc);
     }
 
     /// Document-scoped lookup. Resolves to the first tab viewing
@@ -613,12 +581,7 @@ impl CanvasDiagramState {
         self.first_tab_for(doc)
     }
 
-    /// Drop *every* per-tab entry whose doc is `doc` when the
-    /// document is removed from the registry. Also clears any
-    /// pending parse→project handoff handle for the doc — without
-    /// this, a doc closed mid-load (parse resolved, stash placed,
-    /// no canvas render fired before close) would leak its
-    /// `StatusBus` entry indefinitely.
+    /// Drop every per-tab entry for `doc` when its document leaves the registry.
     pub fn drop_doc(&mut self, doc: lunco_doc::DocumentId) {
         let to_drop: Vec<CanvasKey> = self
             .tab_doc
@@ -629,7 +592,6 @@ impl CanvasDiagramState {
             self.per_tab.remove(&t);
             self.tab_doc.remove(&t);
         }
-        self.pending_projection_handoff.remove(&doc);
     }
 
     /// Drop a single tab's canvas state. Called when a tab is

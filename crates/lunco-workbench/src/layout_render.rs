@@ -1338,7 +1338,10 @@ pub(super) fn render_layout(
     }
 }
 
-fn floating_rect(bounds: egui::Rect, panel: &lunco_workbench_core::PerspectiveFloatingPanel) -> egui::Rect {
+fn floating_rect(
+    bounds: egui::Rect,
+    panel: &lunco_workbench_core::PerspectiveFloatingPanel,
+) -> egui::Rect {
     use lunco_workbench_core::PanelCorner;
     let inset = (panel.inset as f32).min(bounds.width().min(bounds.height()).max(0.0) * 0.1);
     let bounds = bounds.shrink(inset);
@@ -1355,23 +1358,38 @@ fn floating_rect(bounds: egui::Rect, panel: &lunco_workbench_core::PerspectiveFl
 }
 
 fn render_floating_panels(
-    ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World,
-    theme: &lunco_theme::Theme, bounds: egui::Rect,
+    ctx: &egui::Context,
+    layout: &mut WorkbenchLayout,
+    world: &mut World,
+    theme: &lunco_theme::Theme,
+    bounds: egui::Rect,
 ) {
-    if !bounds.is_finite() || bounds.width() < 32.0 || bounds.height() < 32.0 { return; }
+    if !bounds.is_finite() || bounds.width() < 32.0 || bounds.height() < 32.0 {
+        return;
+    }
     let floating = layout.floating_panels.clone();
     let surface = panel_content_surface_style(theme, false);
-    let mut viewer = PanelTabViewer { panels: &mut layout.panels,
-        instance_panels: &mut layout.instance_panels, world, surface };
+    let mut viewer = PanelTabViewer {
+        panels: &mut layout.panels,
+        instance_panels: &mut layout.instance_panels,
+        world,
+        surface,
+    };
     for panel in floating {
         let mut tab = panel.tab;
         let rect = floating_rect(bounds, &panel);
         egui::Window::new(tab.debug_id())
             .id(egui::Id::new(("workbench_floating_panel", tab.debug_id())))
-            .title_bar(false).collapsible(false).resizable(false).movable(false)
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .movable(false)
             .fixed_rect(rect)
-            .frame(egui::Frame::NONE.fill(theme.tokens.overlay_backdrop)
-                .inner_margin(8))
+            .frame(
+                egui::Frame::NONE
+                    .fill(theme.tokens.overlay_backdrop)
+                    .inner_margin(8),
+            )
             .show(ctx, |ui| {
                 ui.set_min_size((rect.size() - egui::vec2(16.0, 16.0)).max(egui::Vec2::ZERO));
                 viewer.ui(ui, &mut tab);
@@ -1386,8 +1404,13 @@ mod floating_tests {
 
     #[test]
     fn floating_plot_is_inset_at_bottom_left_and_clamped_on_resize() {
-        let panel = PerspectiveFloatingPanel { tab: TabId::instance(PanelId("plot"), 7),
-            corner: PanelCorner::BottomLeft, width: 880, height: 400, inset: 24 };
+        let panel = PerspectiveFloatingPanel {
+            tab: TabId::instance(PanelId("plot"), 7),
+            corner: PanelCorner::BottomLeft,
+            width: 880,
+            height: 400,
+            inset: 24,
+        };
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(1920.0, 1020.0));
         let rect = floating_rect(screen, &panel);
         assert_eq!(rect.left(), 24.0);

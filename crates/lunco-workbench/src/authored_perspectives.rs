@@ -8,8 +8,8 @@ use lunco_hooks::{
     HookValue, RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
 };
 use lunco_workbench_core::{
-    PanelId, PanelSlot, Perspective, PerspectiveAdmission, PerspectiveId, PerspectiveLayoutPlan,
-    PanelCorner, PerspectiveFloatingPanel, PerspectiveSlotPlan, TabId,
+    PanelCorner, PanelId, PanelSlot, Perspective, PerspectiveAdmission, PerspectiveFloatingPanel,
+    PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan, TabId,
 };
 use lunco_workbench_layout::WorkbenchLayout;
 use std::collections::HashSet;
@@ -403,61 +403,95 @@ fn slot(
     })
 }
 
-fn floating_panels(value: Option<&HookValue>, layout: &WorkbenchLayout) -> Result<Vec<PerspectiveFloatingPanel>, String> {
-    let Some(value) = value else { return Ok(Vec::new()); };
-    let HookValue::Array(items) = value else { return Err("Perspective floating must be an array".into()); };
-    if items.len() > 16 { return Err("Perspective exceeds 16 floating panels".into()); }
-    let integer = |value: &HookValue, key: &str, default: u32, min: u32, max: u32| -> Result<u32, String> {
-        let number = match value.get(key) {
-            None => return Ok(default),
-            Some(HookValue::Int(v)) => u32::try_from(*v).ok(),
-            Some(HookValue::UInt(v)) => u32::try_from(*v).ok(),
-            _ => None,
-        }.filter(|n| (min..=max).contains(n));
-        number.ok_or_else(|| format!("Floating `{key}` must be an integer in {min}..={max}"))
+fn floating_panels(
+    value: Option<&HookValue>,
+    layout: &WorkbenchLayout,
+) -> Result<Vec<PerspectiveFloatingPanel>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
     };
+    let HookValue::Array(items) = value else {
+        return Err("Perspective floating must be an array".into());
+    };
+    if items.len() > 16 {
+        return Err("Perspective exceeds 16 floating panels".into());
+    }
+    let integer =
+        |value: &HookValue, key: &str, default: u32, min: u32, max: u32| -> Result<u32, String> {
+            let number = match value.get(key) {
+                None => return Ok(default),
+                Some(HookValue::Int(v)) => u32::try_from(*v).ok(),
+                Some(HookValue::UInt(v)) => u32::try_from(*v).ok(),
+                _ => None,
+            }
+            .filter(|n| (min..=max).contains(n));
+            number.ok_or_else(|| format!("Floating `{key}` must be an integer in {min}..={max}"))
+        };
     let mut seen = HashSet::new();
-    items.iter().map(|value| {
-        let HookValue::Map(fields) = value else { return Err("Floating panel must be a map".into()); };
-        for (key, _) in fields {
-            if !["panel", "kind", "instance", "corner", "width", "height", "inset"].contains(&key.as_str()) {
-                return Err(format!("Unknown floating field `{key}`"));
-            }
-        }
-        let tab = if value.get("panel").is_some() {
-            if value.get("kind").is_some() || value.get("instance").is_some() {
-                return Err("Floating panel accepts either panel or kind/instance".into());
-            }
-            let name = text(value, "panel")?;
-            let id = layout.panels.keys().find(|id| id.as_str() == name).copied()
-                .ok_or_else(|| format!("Unavailable floating panel `{name}`"))?;
-            if layout.panels[&id].scene_target().is_some() {
-                return Err("Scene panels must remain in their scene host".into());
-            }
-            TabId::Singleton(id)
-        } else {
-            let name = text(value, "kind")?;
-            let kind = layout.instance_panels.keys().find(|id| id.as_str() == name).copied()
-                .ok_or_else(|| format!("Unavailable floating kind `{name}`"))?;
-            let instance = match value.get("instance") {
-                Some(HookValue::Int(v)) if *v >= 0 => *v as u64,
-                Some(HookValue::UInt(v)) => *v,
-                _ => return Err("Floating instance must be a nonnegative integer".into()),
+    items
+        .iter()
+        .map(|value| {
+            let HookValue::Map(fields) = value else {
+                return Err("Floating panel must be a map".into());
             };
-            TabId::Instance { kind, instance }
-        };
-        if !seen.insert(tab) { return Err("Perspective repeats a floating panel".into()); }
-        let corner = match text(value, "corner")? {
-            "top_left" => PanelCorner::TopLeft, "top_right" => PanelCorner::TopRight,
-            "bottom_left" => PanelCorner::BottomLeft, "bottom_right" => PanelCorner::BottomRight,
-            other => return Err(format!("Invalid floating corner `{other}`")),
-        };
-        Ok(PerspectiveFloatingPanel { tab, corner,
-            width: integer(value, "width", 720, 128, 8192)?,
-            height: integer(value, "height", 360, 96, 8192)?,
-            inset: integer(value, "inset", 24, 0, 512)?,
+            for (key, _) in fields {
+                if ![
+                    "panel", "kind", "instance", "corner", "width", "height", "inset",
+                ]
+                .contains(&key.as_str())
+                {
+                    return Err(format!("Unknown floating field `{key}`"));
+                }
+            }
+            let tab = if value.get("panel").is_some() {
+                if value.get("kind").is_some() || value.get("instance").is_some() {
+                    return Err("Floating panel accepts either panel or kind/instance".into());
+                }
+                let name = text(value, "panel")?;
+                let id = layout
+                    .panels
+                    .keys()
+                    .find(|id| id.as_str() == name)
+                    .copied()
+                    .ok_or_else(|| format!("Unavailable floating panel `{name}`"))?;
+                if layout.panels[&id].scene_target().is_some() {
+                    return Err("Scene panels must remain in their scene host".into());
+                }
+                TabId::Singleton(id)
+            } else {
+                let name = text(value, "kind")?;
+                let kind = layout
+                    .instance_panels
+                    .keys()
+                    .find(|id| id.as_str() == name)
+                    .copied()
+                    .ok_or_else(|| format!("Unavailable floating kind `{name}`"))?;
+                let instance = match value.get("instance") {
+                    Some(HookValue::Int(v)) if *v >= 0 => *v as u64,
+                    Some(HookValue::UInt(v)) => *v,
+                    _ => return Err("Floating instance must be a nonnegative integer".into()),
+                };
+                TabId::Instance { kind, instance }
+            };
+            if !seen.insert(tab) {
+                return Err("Perspective repeats a floating panel".into());
+            }
+            let corner = match text(value, "corner")? {
+                "top_left" => PanelCorner::TopLeft,
+                "top_right" => PanelCorner::TopRight,
+                "bottom_left" => PanelCorner::BottomLeft,
+                "bottom_right" => PanelCorner::BottomRight,
+                other => return Err(format!("Invalid floating corner `{other}`")),
+            };
+            Ok(PerspectiveFloatingPanel {
+                tab,
+                corner,
+                width: integer(value, "width", 720, 128, 8192)?,
+                height: integer(value, "height", 360, 96, 8192)?,
+                inset: integer(value, "inset", 24, 0, 512)?,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 #[cfg(test)]
@@ -466,15 +500,24 @@ mod floating_tests {
     use bevy_egui::egui;
     struct Plot;
     impl lunco_workbench_core::InstancePanel for Plot {
-        fn kind(&self) -> PanelId { PanelId("test_plot") }
-        fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
-        fn title(&self, _: &World, _: u64) -> String { "Measured data".into() }
+        fn kind(&self) -> PanelId {
+            PanelId("test_plot")
+        }
+        fn default_slot(&self) -> PanelSlot {
+            PanelSlot::Center
+        }
+        fn title(&self, _: &World, _: u64) -> String {
+            "Measured data".into()
+        }
         fn render(&mut self, _: &mut egui::Ui, _: &mut lunco_workbench_core::PanelCtx, _: u64) {}
     }
     fn host(width: HookValue) -> HookValue {
-        HookValue::map([("kind", HookValue::str("test_plot")),
-            ("instance", HookValue::UInt(7)), ("corner", HookValue::str("bottom_left")),
-            ("width", width)])
+        HookValue::map([
+            ("kind", HookValue::str("test_plot")),
+            ("instance", HookValue::UInt(7)),
+            ("corner", HookValue::str("bottom_left")),
+            ("width", width),
+        ])
     }
     #[test]
     fn floating_policy_validates_dimensions_and_exclusive_identity() {
@@ -486,21 +529,38 @@ mod floating_tests {
         assert_eq!(parsed[0].tab, TabId::instance(PanelId("test_plot"), 7));
         assert_eq!(parsed[0].corner, PanelCorner::BottomLeft);
         assert_eq!(parsed[0].width, 880);
-        for width in [HookValue::Int(-1), HookValue::Int(0), HookValue::Float(880.0), HookValue::Int(8193)] {
+        for width in [
+            HookValue::Int(-1),
+            HookValue::Int(0),
+            HookValue::Float(880.0),
+            HookValue::Int(8193),
+        ] {
             assert!(floating_panels(Some(&HookValue::Array(vec![host(width)])), &layout).is_err());
         }
-        assert!(floating_panels(Some(&HookValue::Array(vec![item.clone(), item])), &layout).is_err());
+        assert!(
+            floating_panels(Some(&HookValue::Array(vec![item.clone(), item])), &layout).is_err()
+        );
         let definition = HookValue::map([
-            ("id", HookValue::str("study")), ("title", HookValue::str("Study")),
-            ("description", HookValue::str("Actual signal history")), ("interaction", HookValue::str("editor")),
+            ("id", HookValue::str("study")),
+            ("title", HookValue::str("Study")),
+            ("description", HookValue::str("Actual signal history")),
+            ("interaction", HookValue::str("editor")),
             ("floating", floating),
-            ("instances", HookValue::Array(vec![HookValue::map([
-                ("kind", HookValue::str("test_plot")), ("instance", HookValue::UInt(7)),
-                ("slot", HookValue::str("center")),
-            ])])),
+            (
+                "instances",
+                HookValue::Array(vec![HookValue::map([
+                    ("kind", HookValue::str("test_plot")),
+                    ("instance", HookValue::UInt(7)),
+                    ("slot", HookValue::str("center")),
+                ])]),
+            ),
         ]);
-        assert!(parse(&HookValue::Array(vec![definition]), &layout, true)
-            .err().unwrap().contains("both floating and docked"));
+        assert!(
+            parse(&HookValue::Array(vec![definition]), &layout, true)
+                .err()
+                .unwrap()
+                .contains("both floating and docked")
+        );
     }
 }
 fn parse(
@@ -660,15 +720,29 @@ impl lunco_api::ApiQueryProvider for InspectWorkbench {
                             ("center", slot(&plan.center)),
                             ("right", slot(&plan.right_inspector)),
                             ("bottom", slot(&plan.bottom)),
-                            ("floating", HookValue::Array(plan.floating_panels.iter().map(|panel| {
-                                HookValue::map([
-                                    ("tab", HookValue::str(panel.tab.debug_id())),
-                                    ("width", HookValue::UInt(u64::from(panel.width))),
-                                    ("height", HookValue::UInt(u64::from(panel.height))),
-                                    ("inset", HookValue::UInt(u64::from(panel.inset))),
-                                    ("corner", HookValue::str(format!("{:?}", panel.corner))),
-                                ])
-                            }).collect())),
+                            (
+                                "floating",
+                                HookValue::Array(
+                                    plan.floating_panels
+                                        .iter()
+                                        .map(|panel| {
+                                            HookValue::map([
+                                                ("tab", HookValue::str(panel.tab.debug_id())),
+                                                ("width", HookValue::UInt(u64::from(panel.width))),
+                                                (
+                                                    "height",
+                                                    HookValue::UInt(u64::from(panel.height)),
+                                                ),
+                                                ("inset", HookValue::UInt(u64::from(panel.inset))),
+                                                (
+                                                    "corner",
+                                                    HookValue::str(format!("{:?}", panel.corner)),
+                                                ),
+                                            ])
+                                        })
+                                        .collect(),
+                                ),
+                            ),
                             (
                                 "instances",
                                 HookValue::Array(

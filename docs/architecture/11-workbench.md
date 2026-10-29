@@ -237,6 +237,11 @@ private dock layout.
    compact notice; an expanded history popup remains open until the user closes it.
    The notice and the history popup never stack.
 
+Modelica file opening, duplication, and library drill-in hold document-scoped
+StatusBus entries until document installation completes. Diagram projection
+owns its own busy handle only while that requested work runs. Opening a hidden
+or text-only document therefore completes without rendering its diagram.
+
 ### 3.1 Rendering contract — how chrome and 3D share the window
 
 The window is drawn by **two layered cameras**, not by tiling:

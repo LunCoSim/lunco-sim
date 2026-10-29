@@ -94,12 +94,9 @@ pub(crate) fn render_diagram_canvas(
     // OR and the separate empty/error branches into one match. Every
     // async stage that contributes to the canvas (file-load, drill-in,
     // duplicate, projection, AST reparse) holds a `BusyHandle`
-    // scoped to `Document(doc_id)` for its lifetime; the parse→project
-    // handoff overlaps handles via
-    // `CanvasDiagramState::pending_projection_handoff`, and AST
-    // reparse runs through `track_ast_reparse_busy`. The bus is
-    // never momentarily empty mid-flight, so the overlay needs only
-    // the lifecycle projection.
+    // scoped to `Document(doc_id)` for its own lifetime. AST
+    // reparse runs through `track_ast_reparse_busy`. Opening finishes
+    // at document installation; projection is tracked only when requested.
     {
         let theme = ctx.resource_expect::<lunco_theme::Theme>();
         let drilled_class = render_tab_id

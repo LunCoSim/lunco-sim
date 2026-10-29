@@ -367,15 +367,7 @@ fn spawn_projection_task(
     let (source, ast_arc) = match resolved {
         Some(v) => v,
         None => {
-            // Doc/AST not ready yet (common on a fresh drill-in whose async
-            // parse hasn't landed). Without this, the parse→project busy
-            // handoff stashed by `drive_drill_in_loads` is never released and
-            // the tab spins on "loading" forever, because no projection task
-            // is created (so the deadline can't cancel it) and re-entry is
-            // gated on gen/target change. Release the handoff so the
-            // lifecycle falls through to Empty and re-projects once the AST
-            // lands (the parse bumps the document generation → gen_advanced).
-            state.complete_projection_handoff(doc_id);
+            // Parsing is tracked by the document owner; projection waits for a current AST.
             // Consume the one-shot source library-ready reprojection request too. If we
             // leave `force_reproject` set, `trigger_projection_if_needed`
             // re-enters every frame (forced=true) and we spin here until the
@@ -559,12 +551,6 @@ fn spawn_projection_task(
     });
     let Some(task) = task else { return };
 
-    // Now that the "projection" entry is on the bus, complete any
-    // parse→project handoff: drop the pending handle the driver
-    // stashed when it resolved the parse. Bus stays continuously
-    // busy for `Document(doc_id)` across the boundary because the
-    // new entry was inserted before this drop fires.
-    state.complete_projection_handoff(doc_id);
     let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
 
     // Consume the one-shot source library-ready re-projection request (if any) — this

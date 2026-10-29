@@ -230,7 +230,6 @@ pub fn drive_duplicate_loads(
     mut probe: Option<bevy::prelude::ResMut<crate::FrameTimeProbe>>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
-    mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
     mut commands: bevy::prelude::Commands,
     mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
@@ -373,8 +372,8 @@ pub fn drive_duplicate_loads(
             );
             continue;
         }
-        // Only a published document may carry its busy handle into projection.
-        canvas_state.stash_projection_handoff(doc_id, busy);
+        // Opening ends at installation; hidden tabs need no projection work.
+        drop(busy);
         let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
         info!(
             "[CanvasDiagram] duplicate: installed `{}` (from `{}`) — poll={poll_ms:.1}ms install={install_ms:.1}ms",
@@ -466,7 +465,6 @@ pub fn drive_drill_in_loads(
     mut openings: bevy::prelude::ResMut<DocumentOpenings>,
     mut registry: bevy::prelude::ResMut<ModelicaDocuments>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
-    mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
     mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
@@ -523,12 +521,6 @@ pub fn drive_drill_in_loads(
                     busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Cancelled);
                     continue;
                 }
-                // Success path: hand the parse-phase busy handle to
-                // the canvas state so the bus keeps a `Document(d)`
-                // entry continuously through the parse→project
-                // transition. Released by `complete_projection_handoff`
-                // once the projection spawn mints its own.
-                canvas_state.stash_projection_handoff(doc_id, busy);
                 (doc, runtime)
             }
             Err(msg) => {
@@ -536,8 +528,7 @@ pub fn drive_drill_in_loads(
                     "[CanvasDiagram] drill-in: class `{}` load failed: {}",
                     qualified, msg
                 );
-                // Drop the handle with `Failed` outcome — no handoff,
-                // no projection. The bus records the outcome under
+                // Drop the handle with `Failed` outcome. The bus records the outcome under
                 // `(Document(d), "drill-in")`; the canvas overlay
                 // picks it up via `bus.lifecycle(...) →
                 // LifecycleState::Failed(msg)` and renders the

@@ -386,6 +386,9 @@ Modelica values not produced, their last accepted values, and sample and target 
 Use one scroll area with a stable `id_salt` in this popup so egui keeps one
 history surface and does not report duplicate scroll-state IDs. Ordinary
 warnings and non-terminal errors remain in history without opening the popup.
+Modelica opening handles end when the document is installed; diagram projection
+tracks its own requested work. Verify completion with a hidden or text-only
+document as well as a visible diagram so opening never depends on panel rendering.
 Diagnostic rows keep the shared column geometry, expose row activation through
 the cursor and tooltip, and add the complete diagnostic as an optional body
 under that row. Emit the existing typed action for Attention; do not create
