@@ -45,7 +45,7 @@ pub use engine_params::{AttrRead, EngineParam, EngineParams, EngineSource, engin
 pub use image_loader::{
     ColorMip, LinearMip, LuncoImagePlugin, NormalMip, PreparedShaderImage, ShaderTexture,
 };
-pub use image_mips::{Rgba8MipMode, rgba8_mip_chain};
+pub use image_mips::{Rgba8MipMode, rgba8_mip_chain, rgba16_mip_chain};
 pub use look::{
     ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, ShaderLookSourceInterface,
     TextureLayer,
