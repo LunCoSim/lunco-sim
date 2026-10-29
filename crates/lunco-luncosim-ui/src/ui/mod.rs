@@ -124,16 +124,18 @@ fn install_viewport_placeholder_actions(world: &mut World) {
     placeholder.guidance = Some("Choose what you'd like to do:".into());
     placeholder.actions = vec![
         ViewportPlaceholderAction {
-            label: "Open demo sandbox".into(),
-            description: "Open a sandbox you can explore freely.".into(),
+            label: "Start Lunar Rover Lab".into(),
+            description: "A 30-minute workshop: drive, measure, compare, and save your Twin."
+                .into(),
             primary: true,
-            activate: load_sandbox_demo,
+            activate: start_rover_lab,
         },
         ViewportPlaceholderAction {
-            label: "Start tutorial".into(),
-            description: "Follow a step-by-step guide to learn the basics.".into(),
+            label: "Explore demo sandbox".into(),
+            description: "Explore the larger collection of vehicles and physics demonstrations."
+                .into(),
             primary: false,
-            activate: start_sandbox_tutorial,
+            activate: load_sandbox_demo,
         },
         ViewportPlaceholderAction {
             label: "Open Twin".into(),
@@ -151,12 +153,9 @@ fn load_sandbox_demo(ctx: &mut PanelCtx<'_>) {
     });
 }
 
-fn start_sandbox_tutorial(ctx: &mut PanelCtx<'_>) {
-    ctx.trigger(lunco_scripting_rhai_runtime::commands::RunScenarioAsset {
-        source_asset: "lunco://tutorials/sandbox/sandbox_intro.rhai".into(),
-        scene_asset: "lunco://tutorials/sandbox/sandbox_intro.usda".into(),
-        reload_policy: lunco_scripting::ScenarioReloadPolicy::Restart,
-        ..Default::default()
+fn start_rover_lab(ctx: &mut PanelCtx<'_>) {
+    ctx.trigger(lunco_luncosim_services::OpenTwinAsset {
+        manifest_asset: "lunco://tutorials/classroom/twin.toml".into(),
     });
 }
 

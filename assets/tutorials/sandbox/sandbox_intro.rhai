@@ -27,7 +27,7 @@ fn steps() {
         // 7
         #{ anchor: "",                      focus: (),             title: "Find command help",       body: "Open Help to find command and automation guidance. Rhai, the HTTP API, MCP clients, and the UI use the same typed commands.", require: "cmd:GuidedNext" },
         // 8
-        #{ anchor: "",                      focus: (),             title: "Choose a lesson",         body: "You know the basic controls. Open Tutorials and choose First Drive or Moon Driving Basics to practise rover driving.", require: "cmd:GuidedNext" },
+        #{ anchor: "",                      focus: (),             title: "Choose a lesson",         body: "You have reviewed the basic controls. Open Tutorials and choose First Drive or Moon Driving Basics to practise rover driving.", require: "cmd:GuidedNext" },
     ]
 }
 
@@ -43,30 +43,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else if this.i >= s.len() { return; }
-    else {
-        let required = s[this.i].require;
-        let matched = if type_of(required) == "string" {
-            evt.name == required
-        } else {
-            let found = false;
-            for name in required {
-                if evt.name == name { found = true; break; }
-            }
-            found
-        };
-        if !matched { return; }
-        this.i += 1;
-    }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Tour complete!", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else {
-        show(s, this.i);
-    }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

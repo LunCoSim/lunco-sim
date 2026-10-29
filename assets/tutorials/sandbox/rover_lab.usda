@@ -1,0 +1,151 @@
+#usda 1.0
+(
+    defaultPrim = "RoverLab"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    doc = "Lunar Rover Lab: a bundled classroom practice yard. Fixed lighting, local lunar gravity, one rover, one ramp, and a marked authoring bay."
+)
+
+def Xform "RoverLab" (
+    kind = "assembly"
+    doc = "A classroom practice yard for driving, telemetry, controlled comparisons, and saving a personal Twin."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
+        double3 xformOp:scale = (40.0, 1.0, 40.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.3499999940395355, 0.33000001311302185, 0.3799999952316284)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </RoverLab/PhysicsMaterials/Friction_1_0>
+    }
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
+    )
+    {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (1.0, 0.0, -6.0)
+        double3 xformOp:translate = (16.0, 13.0, 14.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
+    }
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
+    {
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (0.0, 1.02, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "Flag" (
+        prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.0, -12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "Ramp" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (8.0, 0.35, -7.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        custom double3 xformOp:scale = (4.0, 0.2, 6.0)
+        color3f[] primvars:displayColor = [(0.550000011920929, 0.4000000059604645, 0.18000000715255737)]
+        custom double3 xformOp:rotateXYZ = (8.0, 0.0, 0.0)
+    }
+    def Cube "BuildPad"
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (9.0, 0.015, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        custom double3 xformOp:scale = (4.0, 0.03, 4.0)
+        color3f[] primvars:displayColor = [(0.15000000596046448, 0.4000000059604645, 0.550000011920929)]
+    }
+    def Cube "BuildBlock" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (6.0, 0.5, 6.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        custom double3 xformOp:scale = (1.0, 1.0, 1.0)
+        color3f[] primvars:displayColor = [(0.8999999761581421, 0.550000011920929, 0.15000000596046448)]
+    }
+    def Cube "StartLine"
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (0.0, 0.02, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        custom double3 xformOp:scale = (6.0, 0.04, 0.15)
+        color3f[] primvars:displayColor = [(0.8500000238418579, 0.8500000238418579, 0.800000011920929)]
+    }
+    def Cube "FinishLine"
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (0.0, 0.02, -12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        custom double3 xformOp:scale = (6.0, 0.04, 0.15)
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.800000011920929, 0.4000000059604645)]
+    }
+    def Cube "LeftBoundary"
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (-3.0, 0.02, -5.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        custom double3 xformOp:scale = (0.1, 0.04, 14.0)
+        color3f[] primvars:displayColor = [(0.699999988079071, 0.699999988079071, 0.6499999761581421)]
+    }
+    def Cube "RightBoundary"
+    {
+        double size = 1.0
+        custom double3 xformOp:translate = (3.0, 0.02, -5.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        custom double3 xformOp:scale = (0.1, 0.04, 14.0)
+        color3f[] primvars:displayColor = [(0.699999988079071, 0.699999988079071, 0.6499999761581421)]
+    }
+    def Xform "Results"
+    {
+        def Scope "Report" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://tutorials/sandbox/rover_lab_result.rhai@
+            custom double inputs:baseline_speed_mps = 0.0
+            custom double inputs:changed_speed_mps = 0.0
+            custom double inputs:baseline_mass_kg = 0.0
+            custom double inputs:changed_mass_kg = 0.0
+            custom double inputs:prediction_code = 0.0
+            custom double inputs:practice = 0.0
+        }
+    }
+}

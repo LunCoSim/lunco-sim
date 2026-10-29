@@ -16,7 +16,7 @@ fn steps() {
         #{ anchor: "panel.command_deck",    title: "Take control",          body: "Select your rover. Click Possess in Command Deck. Only one driver controls a rover at a time." },
         #{ anchor: "panel.sandbox_inspector", title: "Check the setup",       body: "With the rover selected, read its class and tuning in Inspector. Explorer LT, Standard, and Hauler handle differently." },
         #{ anchor: "panel.telemetry_browser", title: "Read live telemetry",   body: "Open Telemetry in the left dock. Select a port and read the rover's current values while it is moving." },
-        #{ anchor: "",                      title: "End the session",        body: "When the session ends, open Network and click Disconnect or Leave Server. Click Continue when you are ready for the Space School track." },
+        #{ anchor: "",                      title: "End the session",        body: "When the session ends, open Network and click Disconnect or Leave Server. Finish this tour, then choose your next exercise from Tutorials." },
     ]
 }
 
@@ -32,17 +32,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext" { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Basics complete - ready for the Space School track", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else {
-        show(s, this.i);
-    }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

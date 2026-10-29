@@ -1,5 +1,10 @@
 # LunCoSim tutorials
 
+For a first classroom session, start with [Lunar Rover Lab](06-classroom-onboarding.md).
+It connects driving, telemetry, a controlled input comparison, authoring and
+saving a personal Twin in one practice yard. **Start Here** is the first catalog
+track; the other tracks remain available as individual lessons and references.
+
 This directory contains authoring walkthroughs and links to the authored
 lessons shipped under `assets/tutorials/`. A lesson is an ordinary Rhai
 scenario with optional USD scene content. The application Rhai policy owns

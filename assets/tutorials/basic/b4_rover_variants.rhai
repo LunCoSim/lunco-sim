@@ -16,7 +16,7 @@ fn steps() {
         #{ anchor: "panel.center",          title: "Standard (amber)",          body: "Select the amber Standard. Compare its mass and motor values with the Explorer LT. It is the balanced baseline for testing." },
         #{ anchor: "panel.center",          title: "Hauler (red)",              body: "Select the red Hauler. Notice its high centre of mass, weaker motors, and lower grip. Drive it carefully: across-slope steering can tip it." },
         #{ anchor: "panel.sandbox_inspector", title: "Explain the difference",    body: "Select a rover and read centre of mass, mass, torque, and friction in Inspector. Those authored values explain how each rover handles." },
-        #{ anchor: "",                      title: "Choose a rover",             body: "Pick the rover that fits your next task. Click Continue to learn how to join a team session." },
+        #{ anchor: "",                      title: "Choose a rover",             body: "Pick the rover that fits your next task. Use the next-lesson button to learn how to join a team session." },
     ]
 }
 
@@ -37,18 +37,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext" { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        hint("You have compared the rover variants. Click Continue in the Tutorial complete dialog to begin Join a Team Session.");
-        notify_kind("Variants felt — choose Continue for Join a Team Session", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else {
-        show(s, this.i);
-    }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

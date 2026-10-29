@@ -30,18 +30,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext"      { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else if evt.name == "cmd:GuidedGoto" { this.i = evt.value; }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Tour complete!", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else {
-        coach_step(s, this.i);
-    }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

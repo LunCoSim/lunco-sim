@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**290 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**301 commands** across **57** crates. 4 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -51,7 +51,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Workbench UI & panels**
 
 - [`lunco-ui`](#lunco-ui) (1 command)
-- [`lunco-workbench`](#lunco-workbench) (2 commands)
+- [`lunco-workbench`](#lunco-workbench) (4 commands)
 
 **Scripting & scenarios**
 
@@ -59,7 +59,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Documents & twins**
 
-- [`lunco-doc-bevy`](#lunco-doc-bevy) (10 commands)
+- [`lunco-doc-bevy`](#lunco-doc-bevy) (11 commands)
 
 **Time & clock**
 
@@ -71,7 +71,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Terrain**
 
-- [`lunco-terrain-surface`](#lunco-terrain-surface) (8 commands)
+- [`lunco-terrain-surface`](#lunco-terrain-surface) (9 commands)
 
 **Obstacle fields**
 
@@ -98,7 +98,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-fmi`](#lunco-fmi) (2 commands)
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
-- [`lunco-luncosim-services`](#lunco-luncosim-services) (1 command)
+- [`lunco-luncosim-services`](#lunco-luncosim-services) (2 commands)
 - [`lunco-luncosim-ui`](#lunco-luncosim-ui) (5 commands)
 - [`lunco-modelica-api`](#lunco-modelica-api) (10 commands)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
@@ -118,7 +118,8 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (7 commands)
-- [`lunco-workbench-core`](#lunco-workbench-core) (12 commands)
+- [`lunco-workbench-browser`](#lunco-workbench-browser) (2 commands)
+- [`lunco-workbench-core`](#lunco-workbench-core) (16 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
@@ -1254,6 +1255,31 @@ actually call, with the fields the deserializer actually accepts. See the
 | `use_authored_colors` | `Option < bool >` |   |
 | `show_hover_values` | `Option < bool >` |   |
 
+#### `SetCommandKeyBinding`
+
+*(no description — add a `///` doc on the struct)*
+
+- *defined in:* `crates/lunco-workbench/src/keybindings.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String` |   |
+| `keys` | `Vec < KeyCode >` |   |
+| `command` | `String` |   |
+| `arguments` | `Vec < CommandBindingArgument >` |   |
+| `allow_in_text` | `bool` |   |
+
+#### `SetInputIntentBinding`
+
+*(no description — add a `///` doc on the struct)*
+
+- *defined in:* `crates/lunco-workbench/src/keybindings.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `intent` | `String` |   |
+| `keys` | `Vec < KeyCode >` |  Alternatives, each using a single physical key. Use command chords for commands. |
+
 #### `SetTheme`
 
  Set or toggle the active theme mode. Omit `mode` to toggle.
@@ -1341,6 +1367,16 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `source_doc_id` | `DocumentId` |  Existing document to snapshot. |
 | `name` | `String` |  Untitled name shown until Save-As. |
+
+#### `InvokeEditorIntent`
+
+ Invoke a document intent through the shared configurable command keymap.
+
+- *defined in:* `crates/lunco-doc-bevy/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `intent` | `EditorIntent` |   |
 
 #### `NewDocument`
 
@@ -1697,6 +1733,28 @@ actually call, with the fields the deserializer actually accepts. See the
 | `size` | `f32` |  Boulder radius in metres; 0/absent = 0.6 m. |
 | `seed` | `u64` |  Shape/orientation seed; 0 = derived from position (stable, varied). |
 | `id` | `String` |  Optional stable id for the layer (so it can be removed later). Empty = auto. |
+
+#### `RecoverVessel`
+
+ Right one overturned vessel, NOW — the primitive behind the Recover tool and
+ the rhai `recover::vessel(id)` verb.
+
+ USER-INVOKED ONLY. Recovery is an explicit command because an overturned
+ vessel is observable simulation state and must not be changed implicitly.
+
+ Rotates the whole joint-connected assembly upright about the target's own
+ position (shortest arc, so heading is approximately preserved), reseats it
+ [`RESCUE_CLEARANCE`] above the composed surface, and zeroes velocities.
+
+ Operates on avian's f64 `Position`/`Rotation` — under the big_space physics
+ bridge a Dynamic body's `Transform` is a writeback TARGET (overwritten from
+ `Position` next step), so poses must be written through `Position`.
+
+- *defined in:* `crates/lunco-terrain-surface/src/collider_ring.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  vessel by `ApiEntityRegistry`. |
 
 #### `RemoveTerrainLayer`
 
@@ -2415,6 +2473,16 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `file_stem` | `String` |  Filename stem containing only ASCII letters, digits, `_`, or `-`. |
+
+#### `OpenTwinAsset`
+
+ Open the Twin identified by an exact registered manifest asset URI.
+
+- *defined in:* `crates/lunco-luncosim-services/src/twin_asset.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `manifest_asset` | `String` |  Registered asset URI of `twin.toml`; no native root is guessed. |
 
 ### `lunco-luncosim-ui` <a id="lunco-luncosim-ui"></a>
 
@@ -3885,7 +3953,39 @@ actually call, with the fields the deserializer actually accepts. See the
 | `show_internal` | `Option < bool >` |  Omission preserves the operator's internal-variable checkbox. |
 | `show_preview` | `Option < bool >` |  Omission preserves the operator's inline preview preference. |
 
+### `lunco-workbench-browser` <a id="lunco-workbench-browser"></a>
+
+#### `OpenBrowserFile`
+
+ Open a file from the active Twin through the same route as its browser row.
+
+- *defined in:* `crates/lunco-workbench-browser/src/navigation.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `relative_path` | `String` |   |
+
+#### `SetBrowserSection`
+
+ Select one registered browser view. View changes clear the local filter.
+
+- *defined in:* `crates/lunco-workbench-browser/src/navigation.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String` |   |
+
 ### `lunco-workbench-core` <a id="lunco-workbench-core"></a>
+
+#### `ActivateNavigationEntry`
+
+ Activate a current navigation entry after resolving its exact identity again.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String` |   |
 
 #### `ActivatePerspective`
 
@@ -3917,6 +4017,16 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `id` | `String` |  The singleton panel's stable id. |
+
+#### `NavigateHistory`
+
+ Move through visited document/perspective locations; never reload a scene.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `forward` | `bool` |   |
 
 #### `OpenAssetResource`
 
@@ -3991,6 +4101,16 @@ actually call, with the fields the deserializer actually accepts. See the
 - *defined in:* `crates/lunco-workbench-core/src/commands.rs`
 - *fields:* none — call with `ResetWorkspaceLayout` (no params)
 
+#### `RevealNavigationSource`
+
+ Reveal an exact source in a host's browser without opening or loading it.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `uri` | `String` |   |
+
 #### `SaveSourceText`
 
  Persist an editable source buffer, optionally refreshing its owning domain.
@@ -4003,6 +4123,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | `relative_path` | `String` |  File path relative to that root. |
 | `text` | `String` |  Complete UTF-8 source text. |
 | `update` | `bool` |  Re-dispatch the owning document open operation after writing. |
+
+#### `SearchNavigation`
+
+ Open quick navigation. An empty category searches every contributed destination.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `query` | `String` |   |
+| `category` | `String` |   |
 
 #### `SetRequiredPerspective`
 
@@ -4383,7 +4514,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 290 commands from the runtime schema; scanned 1048 .rs files for docs (0 parse failure(s) skipped).
+<!-- 301 commands from the runtime schema; scanned 1053 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

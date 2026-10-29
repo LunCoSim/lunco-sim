@@ -114,10 +114,11 @@ fn mission(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if tutorials::navigation(evt, ctx) { return; }
     if evt.name == "MISSION_COMPLETE" {
+        tutorials::finish(ctx, "You observed the Hauler lean and reached the top marker. Choose the next lesson below.");
         clear_spotlight();
-        hint("You found the Hauler's tipping point and climbed safely.\n\nClick Continue to compare rover variants.");
-        notify_kind("Lesson complete — choose Continue for Rover Variants", "success");
+        notify_kind("Lesson complete — next: Rover Variants", "success");
     }
 }
 

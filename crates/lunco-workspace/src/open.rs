@@ -583,12 +583,25 @@ pub fn spawn_twin_scan(
     scene: Option<String>,
     mode: TwinOpenMode,
 ) {
+    let scan_path = folder.to_path_buf();
+    let task = AsyncComputeTaskPool::get().spawn(async move { TwinMode::open(&scan_path) });
+    enqueue_twin_scan(task, folder.to_path_buf(), pending, log_tag, scene, mode);
+}
+
+/// Admit a caller-prepared root scan through the workspace's single ordered
+/// replacement boundary. Asset-aware adapters may resolve a source on their
+/// worker before opening it; native and asset requests supersede each other.
+pub fn enqueue_twin_scan(
+    task: Task<Result<TwinMode, TwinError>>,
+    path: std::path::PathBuf,
+    pending: &mut PendingTwinOpens,
+    log_tag: &str,
+    scene: Option<String>,
+    mode: TwinOpenMode,
+) {
     if mode == TwinOpenMode::Replace {
         pending.cancel_all();
     }
-    let path = folder.to_path_buf();
-    let scan_path = path.clone();
-    let task = AsyncComputeTaskPool::get().spawn(async move { TwinMode::open(&scan_path) });
     match &scene {
         Some(rel) => info!(
             "[{log_tag}] scanning {} for `{rel}` (off-thread)…",

@@ -6,7 +6,7 @@ fn steps() {
         #{ anchor: "panel.rhai_editor", focus: "rhai_editor",   title: "Edit a scenario",      body: "The Behaviour editor opens `.rhai` files inside LunCoSim. These scripts attach to USD entities and define their scenario behaviour." },
         #{ anchor: "panel.rhai_repl", focus: "rhai_repl",     title: "Try the live REPL",    body: "Open the Rhai REPL in the bottom dock. Type `print(3 + 4)` and run it. You can also dispatch typed commands to a live rover." },
         #{ anchor: "panel.rhai_repl", focus: "rhai_repl",     title: "Find a command",       body: "Open Help and search the command reference. Copy a typed command into the REPL, then read its result." },
-        #{ anchor: "",             focus: (),              title: "Automate the next step", body: "You can edit a scenario and test it live. Click Continue to return to the tutorial list." },
+        #{ anchor: "",             focus: (),              title: "Automate the next step", body: "You can edit a scenario and test it live. Choose another lesson from Tutorials after finishing this tour." },
     ]
 }
 
@@ -23,18 +23,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext"      { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else if evt.name == "cmd:GuidedGoto" { this.i = evt.value; }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Rhai Editor & REPL tutorial complete!", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else {
-        show(s, this.i);
-    }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

@@ -10,7 +10,7 @@ fn steps() {
         #{ anchor: "",                   title: "Choose the right owner", body: "Use Modelica for continuous equations. Use Rhai for policy and sequencing with verbs such as `nav_to`, `arrived`, `emit`, and mission objectives." },
         #{ anchor: "panel.rhai_editor", focus: "rhai_editor", title: "Attach or run a script", body: "To attach a script, add a `Scope` with `LunCoProgramAPI` and set its `info:sourceAsset` to the `.rhai` file. To run one live, use RunScenario. Re-running reloads the script without a rebuild." },
         #{ anchor: "panel.telemetry_browser", focus: "telemetry_browser", title: "Read the result",        body: "Open Telemetry to read the script's output. Scripts, the UI, and AI agents use the same command surface." },
-        #{ anchor: "",                   title: "Try it yourself",       body: "Open the Scripting Guide for the full verb and mission reference. Click Continue to return to the tutorial list." },
+        #{ anchor: "",                   title: "Try it yourself",       body: "Open the Scripting Guide for the full verb and mission reference. Choose another lesson from Tutorials after finishing this tour." },
     ]
 }
 
@@ -25,15 +25,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext" { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Script a Rover complete", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else { show(s, this.i); }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

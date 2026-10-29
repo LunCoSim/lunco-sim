@@ -375,6 +375,31 @@ in the viewport and defers their `PanelCtx` commands until the layout render
 scope ends; applications own the action labels, descriptions, and command
 targets.
 
+LunCoSim's application composition supplies **Start Lunar Rover Lab** as the
+primary opening action, alongside demo exploration and Open Twin. That fixed
+product entry point submits `OpenTwinAsset` for the exact bundled manifest; the
+shared shell owns no curriculum, objective or routing decision. The catalog
+asset policy resolves learning paths, and the shared `tutorials` Rhai tool owns
+tour cursors and continuation. Domain exercises retain their own authoritative
+state checks. See [classroom onboarding](../tutorials/06-classroom-onboarding.md)
+for the report/save lifecycle and production acceptance.
+
+`lunco-luncosim-services` owns asset-aware Twin opening. It resolves the
+manifest through `SchemeRegistry` on a worker and submits the scan to
+`lunco-workspace::open::enqueue_twin_scan`. Native and asset requests share
+supersession and workspace commit. The template manifest and Rhai guide choose
+the scene and exercises; the adapter supplies no curriculum policy. Failures
+use Workspace's `TWIN_OPEN_FAILED` boundary. `ReadActiveTwinContract` exposes
+`twin_id` and `manifest_present`, so authored save checks can validate the
+document's exact owner without reading manifest bytes or guessing from the
+file index.
+
+`SaveAsTwin` dispatches domain Save-As writes before creating the manifest and
+starting the workspace scan, so the admitted index includes the saved scene.
+An empty `ReplicatedScene` resource represents a local session; only a populated
+replica requires a live replication owner. Authored completion checks match the
+saved document's exact path against the active Twin index as well as its owner.
+
 Panel landmarks use the registered panel id as their canonical anchor:
 `panel.<id>`. The Workbench publishes that exact rect for both docked and
 explicit side-panel rendering. Generic slot anchors (`panel.center`,

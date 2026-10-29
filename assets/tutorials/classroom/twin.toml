@@ -1,0 +1,6 @@
+name = "Lunar Rover Lab"
+version = "1.0.0"
+description = "A classroom practice project for driving, measurement, authoring, and comparison."
+
+[usd]
+default_scene = "scene.usda"

@@ -1,5 +1,10 @@
 # Authored lessons
 
+The default classroom activity is **Start Here → Lunar Rover Lab**, also
+available from the opening screen. Its curriculum, model assumptions,
+instructor checkpoints, save contract and acceptance commands are documented
+in [Classroom onboarding](../../docs/tutorials/06-classroom-onboarding.md).
+
 Lessons are ordinary file-backed Rhai scenarios with optional USD scene
 content. The generic text-asset layer publishes asynchronous JSON-scope events;
 the application Rhai policy parses the catalog, builds the menu contribution,
@@ -34,6 +39,22 @@ that scope root, and contributes the tracks under the Twin's name. Closing the
 Twin removes its menu contribution. A Twin lesson that needs a world must name
 its scene explicitly, so selecting it cannot accidentally keep an unrelated
 scene from the previous lesson.
+
+Optional `lesson_type` is `tour`, `exercise`, or `challenge`;
+`duration_minutes` is a positive integer estimate. `next_source_asset` names
+another entry in the same catalog. The application policy rejects missing
+targets and cycles, and passes the resolved path as typed scenario parameters.
+The shared `tutorials::navigation` and `tutorials::finish` functions consume
+that path. Standalone scenario launches omit catalog navigation.
+
+A project lesson can instead declare `twin_asset`, an exact registered manifest
+URI. The launcher submits `OpenTwinAsset`; the manifest selects the scene and
+its embedded guide. This gives authoring lessons an admitted document owner.
+Do not also declare a `scene_asset` for that entry.
+
+Tours share `tutorials::tour_event`: their Next cursor reviews guidance, Skip
+emits `TUTORIAL_SKIPPED`, and a closed tour cannot consume later cursor events.
+Only exercises make assessed claims about domain state.
 
 ## Authoring a lesson
 

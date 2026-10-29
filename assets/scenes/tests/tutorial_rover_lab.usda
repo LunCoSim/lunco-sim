@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "RoverLab"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "RoverLab" (
+    prepend references = @lunco://tutorials/sandbox/rover_lab.usda@</RoverLab>
+)
+{
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/rover_lab.rhai@
+    }
+    def Xform "TestHost"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/tutorial_rover_lab.rhai@
+        }
+    }
+}

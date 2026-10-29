@@ -128,10 +128,11 @@ fn mission(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if tutorials::navigation(evt, ctx) { return; }
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
+        tutorials::finish(ctx, "You placed the five requested component types. Their presence is assessed; base capacity and placement remain a design discussion.");
         clear_spotlight();
-        hint("Your base has power, habitat, comms, ISRU, and a landing pad.\n\nReview each part in Inspector and adjust the layout for your mission.");
         notify_kind("Build a Lunar Base complete", "success");
     }
 }

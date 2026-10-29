@@ -22,6 +22,9 @@ use lunco_usd_bevy_runtime_core::scene::LoadScene;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::UsdStageAsset;
 
+mod twin_asset;
+pub use twin_asset::OpenTwinAsset;
+
 #[cfg(feature = "experiments")]
 mod experiment_artifacts;
 #[cfg(all(feature = "session-input-archive-export", not(target_arch = "wasm32")))]
@@ -46,6 +49,7 @@ impl Default for LunCoSimServicesPlugin {
 
 impl Plugin for LunCoSimServicesPlugin {
     fn build(&self, app: &mut App) {
+        twin_asset::register_all_commands(app);
         app.insert_resource(ScenePath(self.startup_scene.clone()))
             .add_systems(Startup, load_startup_scene_on_boot)
             .add_observer(startup_twin_scan_failguard)
