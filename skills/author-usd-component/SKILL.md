@@ -90,6 +90,11 @@ the typed editor cannot create the needed variant set/blocks or reference-list
 opinion, report the Rust capability gap instead of using hidden duplicate
 geometry as a substitute.
 
+When starting from a projected prim, `assembly_edit::document_for_entity(id)`
+resolves its exact document through native document-scoped identity. It fails
+for a detached library stage or ambiguous ownership. Retain that explicit id;
+changing the selected workbench document must not redirect an authored edit.
+
 Keep the component's Rhai source reviewable: pure plan functions,
 read-only requirement reports, and runtime test observers are separate
 responsibilities. Register Twin-scoped libraries through `RegisterToolLibrary`

@@ -3,7 +3,7 @@ name = "lunco-workbench"
 version = "0.1.0-dev"
 edition = "2024"
 license.workspace = true
-description = "LunCoSim's own workbench shell — activity bar, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
+description = "LunCoSim's own workbench shell — central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
 
 [features]
 default = []
@@ -11,8 +11,6 @@ default = []
 # supplied by `lunco-capture`; the shell only installs it when its API surface is
 # enabled by a rendered host.
 api = [
-    "dep:lunco-api",
-    "dep:lunco-api-core",
     "dep:lunco-capture",
     "lunco-capture/api",
     "dep:lunco-workspace-api",
@@ -21,8 +19,8 @@ api = [
 [dependencies]
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-hooks = { path = "../lunco-hooks" }
-lunco-api = { path = "../lunco-api", optional = true }
-lunco-api-core = { path = "../lunco-api-core", optional = true }
+lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime", features = ["ui"] }
 lunco-storage = { path = "../lunco-storage" }

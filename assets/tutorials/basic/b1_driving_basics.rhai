@@ -68,9 +68,10 @@ fn mission(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if tutorials::navigation(evt, ctx) { return; }
     if evt.name == "MISSION_COMPLETE" {
-        hint("You took control, climbed the ramp, and checked telemetry.\n\nClick Continue to try Slopes & Tip-Over.");
-        notify_kind("Lesson complete — choose Continue for Slopes & Tip-Over", "success");
+        tutorials::finish(ctx, "You took control and reached the ramp finish. Open Analyze to examine your telemetry.");
+        notify_kind("Lesson complete — next: Slopes & Tip-Over", "success");
     }
 }
 

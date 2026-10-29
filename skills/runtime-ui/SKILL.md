@@ -45,9 +45,9 @@ that need semantics not present in the runtime contract. Runtime UI uses the exi
 egui host and dock geometry; it does not replace the workbench or create a
 second hit-test/camera system.
 
-The standard Twin and Files navigation is the optional
-`lunco-workbench-browser` feature layered on the shell; do not recreate those
-panels in an authored runtime surface.
+The standard Twin, file and library Twin browser is the optional
+`lunco-workbench-browser` feature layered on the shell; do not recreate its
+views in an authored runtime surface.
 
 `lunco-ui::modal` remains the owner for rich dialogs requiring focus, queued
 outcomes, editing, validation, or accessibility. The generic runtime surface

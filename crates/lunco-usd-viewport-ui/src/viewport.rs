@@ -562,7 +562,33 @@ impl InstancePanel for UsdPreviewViewPanel {
             })
             .map(|host| host.document().origin().display_name())
             .unwrap_or_else(|| "USD".to_string());
-        format!("{name} · View {instance}")
+        format!("{name} · Preview")
+    }
+
+    fn navigation_source(
+        &self,
+        world: &World,
+        instance: u64,
+    ) -> Option<lunco_workbench_core::navigation::NavigationSource> {
+        let state = world.get_resource::<UsdViewportState>()?;
+        let view = state.view(UsdPreviewViewId(instance))?;
+        let session = state.session(view.preview())?;
+        let host = world
+            .get_resource::<DocumentRegistry<UsdDocument>>()?
+            .host(session.doc())?;
+        let origin = host.document().origin();
+        Some(lunco_workbench_core::navigation::NavigationSource {
+            uri: origin
+                .canonical_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| origin.display_name()),
+            mode: if origin.is_writable() {
+                "Editing USD preview"
+            } else {
+                "Read-only USD preview"
+            }
+            .into(),
+        })
     }
 
     fn scroll_policy(&self) -> PanelScrollPolicy {

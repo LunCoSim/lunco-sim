@@ -17,6 +17,23 @@ fn open(path) {
     cmd("OpenFile", #{ path: path })
 }
 
+/// Resolve a live prim's exact owning document once, independently of the
+/// workbench's selected file or preview. Native document-scoped identity is
+/// authoritative; an absent or ambiguous owner is an error.
+fn document_for_entity(entity) {
+    let path = usd_path(entity);
+    if path == () { throw "document_for_entity requires a live USD prim"; }
+    let found = ();
+    for document in query("ListOpenDocuments", #{}).open_documents {
+        if document.kind != "usd" { continue; }
+        if find_path_in_document(document.doc_id, path) != entity { continue; }
+        if found != () { throw "the live USD prim has multiple document owners"; }
+        found = document.doc_id;
+    }
+    if found == () { throw "the live USD prim has no admitted document owner"; }
+    found
+}
+
 /// Create a new untitled USD assembly document.
 fn new_document() {
     cmd("NewDocument", #{ kind: "usd" })

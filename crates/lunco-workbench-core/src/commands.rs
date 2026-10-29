@@ -81,3 +81,28 @@ pub struct OpenAssetResource {
     /// Standard resource URI or a registered logical asset address.
     pub uri: String,
 }
+
+/// Open quick navigation. An empty category searches every contributed destination.
+#[Command(default)]
+pub struct SearchNavigation {
+    pub query: String,
+    pub category: String,
+}
+
+/// Activate a current navigation entry after resolving its exact identity again.
+#[Command(default)]
+pub struct ActivateNavigationEntry {
+    pub id: String,
+}
+
+/// Move through visited document/perspective locations; never reload a scene.
+#[Command(default)]
+pub struct NavigateHistory {
+    pub forward: bool,
+}
+
+/// Reveal an exact source in a host's browser without opening or loading it.
+#[Command(default)]
+pub struct RevealNavigationSource {
+    pub uri: String,
+}

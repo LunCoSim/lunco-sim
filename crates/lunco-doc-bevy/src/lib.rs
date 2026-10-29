@@ -380,26 +380,14 @@ pub struct OpenFile {
 // Intent layer — abstract user actions, rebindable, context-resolved
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Keys ──[Keybindings]──▶ EditorIntent ──[resolver]──▶ concrete Command
-//
-// The intent layer exists so keyboard shortcuts (and future menu items,
-// toolbar buttons, voice commands, accessibility tools) can be
-// configured without code changes. A user rebinds `Ctrl+Z` to `Save`
-// by editing `Keybindings`; they never see the concrete
-// `UndoDocument { doc }` / `SaveDocument { doc }` commands.
-//
-// The resolver (in each domain crate) picks the active document and
-// fires the matching concrete command. This keeps intents domain-
-// agnostic — `EditorIntent::Undo` works whether the active doc is
-// Modelica, USD, or something else. Domains install their own
-// resolvers; the first one to recognise the active doc wins.
+// Configured command shortcuts invoke the shared document intent adapter.
+// Domain observers resolve each intent against their authoritative document.
 
-/// High-level user action, independent of which keys or buttons
-/// triggered it and of which document it targets.
-///
-/// Fired by the input-to-intent system (keyboard, menus) and resolved
+/// Fired by configured commands or menus and resolved
 /// into one or more concrete commands by domain-specific observers.
-#[derive(Event, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    Event, Reflect, serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash,
+)]
 pub enum EditorIntent {
     /// Revert the most recent history group on the active document.
     Undo,
@@ -408,8 +396,6 @@ pub enum EditorIntent {
     /// Persist the active document to disk.
     Save,
     /// Persist the active document to a new path (picker dialog).
-    /// Not implemented yet; the dispatch is here so keybindings can
-    /// already reserve a chord (`Ctrl+Shift+S` by default).
     SaveAs,
     /// Remove the active document from its registry.
     Close,
@@ -423,141 +409,25 @@ pub enum EditorIntent {
     NewDocument,
 }
 
-/// A key chord (modifier + key) that triggers an [`EditorIntent`].
-///
-/// Built-in bindings (see [`Keybindings::default`]) cover the standard
-/// text-editor / IDE set. Apps can replace [`Keybindings`] with a
-/// user-configured map loaded from settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct KeyChord {
-    /// The non-modifier key.
-    pub key: KeyCode,
-    /// Whether `Ctrl` (or `Cmd` on macOS) is held.
-    pub ctrl: bool,
-    /// Whether `Shift` is held.
-    pub shift: bool,
-    /// Whether `Alt` (or `Option` on macOS) is held.
-    pub alt: bool,
+/// Invoke a document intent through the shared configurable command keymap.
+#[lunco_core::Command]
+pub struct InvokeEditorIntent {
+    pub intent: EditorIntent,
 }
 
-impl KeyChord {
-    /// Convenience constructor for `Ctrl+<key>`.
-    pub const fn ctrl(key: KeyCode) -> Self {
-        Self {
-            key,
-            ctrl: true,
-            shift: false,
-            alt: false,
-        }
-    }
-    /// Convenience constructor for `Ctrl+Shift+<key>`.
-    pub const fn ctrl_shift(key: KeyCode) -> Self {
-        Self {
-            key,
-            ctrl: true,
-            shift: true,
-            alt: false,
-        }
-    }
-    /// Convenience constructor for a bare (no-modifier) key.
-    pub const fn plain(key: KeyCode) -> Self {
-        Self {
-            key,
-            ctrl: false,
-            shift: false,
-            alt: false,
-        }
-    }
+#[lunco_core::on_command(InvokeEditorIntent)]
+fn invoke_editor_intent(trigger: On<InvokeEditorIntent>, mut commands: Commands) {
+    commands.trigger(trigger.intent);
 }
 
-/// Resource mapping [`KeyChord`]s to [`EditorIntent`]s.
-///
-/// The default bindings cover the common editor set; apps can replace
-/// the resource wholesale (or mutate individual entries) to honor a
-/// user config. Multiple chords can map to the same intent (e.g.
-/// `Ctrl+Y` and `Ctrl+Shift+Z` both → [`EditorIntent::Redo`]).
-#[derive(Resource, Clone, Debug)]
-pub struct Keybindings {
-    /// The binding table. Keys are chords, values are intents.
-    pub map: HashMap<KeyChord, EditorIntent>,
-}
+lunco_core::register_commands!(invoke_editor_intent);
 
-impl Default for Keybindings {
-    fn default() -> Self {
-        let mut map = HashMap::new();
-        map.insert(KeyChord::ctrl(KeyCode::KeyZ), EditorIntent::Undo);
-        map.insert(KeyChord::ctrl_shift(KeyCode::KeyZ), EditorIntent::Redo);
-        map.insert(KeyChord::ctrl(KeyCode::KeyY), EditorIntent::Redo);
-        map.insert(KeyChord::ctrl(KeyCode::KeyS), EditorIntent::Save);
-        map.insert(KeyChord::ctrl_shift(KeyCode::KeyS), EditorIntent::SaveAs);
-        map.insert(KeyChord::ctrl(KeyCode::KeyW), EditorIntent::Close);
-        map.insert(KeyChord::ctrl(KeyCode::KeyN), EditorIntent::NewDocument);
-        map.insert(KeyChord::plain(KeyCode::F5), EditorIntent::Compile);
-        Self { map }
-    }
-}
-
-/// Which intents should *not* fire while an egui widget is claiming
-/// keyboard input (typically: text field has focus and wants its
-/// native undo/redo behavior). These intents defer; others (Save,
-/// Compile) fire regardless because no text widget handles them.
-#[cfg(feature = "ui")]
-fn intent_defers_to_text_widget(intent: EditorIntent) -> bool {
-    matches!(intent, EditorIntent::Undo | EditorIntent::Redo)
-}
-
-/// Input-to-intent system: reads keyboard state, matches against
-/// [`Keybindings`], and fires the [`EditorIntent`] via
-/// [`Commands::trigger`].
-///
-/// Registered by [`EditorIntentPlugin`]. Domain crates install
-/// resolvers (observers of [`EditorIntent`]) that fire concrete
-/// document commands ([`UndoDocument`] etc.) for their owned docs.
-#[cfg(feature = "ui")]
-pub fn keyboard_to_intent(
-    keys: Res<ButtonInput<KeyCode>>,
-    keybindings: Res<Keybindings>,
-    mut egui_ctx: bevy_egui::EguiContexts,
-    mut commands: Commands,
-) {
-    let ctrl = keys.pressed(KeyCode::ControlLeft)
-        || keys.pressed(KeyCode::ControlRight)
-        || keys.pressed(KeyCode::SuperLeft)
-        || keys.pressed(KeyCode::SuperRight);
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
-
-    let wants_keyboard = egui_ctx
-        .ctx_mut()
-        .ok()
-        .map(|c| c.egui_wants_keyboard_input())
-        .unwrap_or(false);
-
-    for (chord, intent) in keybindings.map.iter() {
-        if !keys.just_pressed(chord.key) {
-            continue;
-        }
-        if chord.ctrl != ctrl || chord.shift != shift || chord.alt != alt {
-            continue;
-        }
-        if wants_keyboard && intent_defers_to_text_widget(*intent) {
-            continue;
-        }
-        commands.trigger(*intent);
-    }
-}
-
-/// Registers the [`Keybindings`] resource and the input-to-intent
-/// system. Domain crates add their own intent resolvers on top.
+/// Register the document intent adapter; keyboard ownership belongs to input settings.
 pub struct EditorIntentPlugin;
 
 impl Plugin for EditorIntentPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Keybindings>();
-        // The keyboard→intent system reads egui focus to defer Undo/Redo to
-        // text widgets; pure UI, so it's only present in `ui` builds.
-        #[cfg(feature = "ui")]
-        app.add_systems(Update, keyboard_to_intent);
+        register_all_commands(app);
     }
 }
 

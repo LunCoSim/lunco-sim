@@ -84,10 +84,53 @@ fn lesson_scene_asset(lesson, entry) {
     scene
 }
 
-fn lesson_menu_item(lesson, source_asset, scene_asset, twin_id) {
+fn find_lesson(catalog, root, source) {
+    let found = ();
+    for candidate in catalog.tutorials {
+        let qualified = qualify_catalog_asset(root, candidate.source_asset);
+        if qualified != source { continue; }
+        if found != () { throw "duplicate tutorial source " + source; }
+        found = candidate;
+    }
+    if found == () { throw "unknown next tutorial source " + source; }
+    found
+}
+
+fn learning_path(first, catalog, root) {
+    let path = [];
+    let seen = [];
+    let lesson = first;
+    loop {
+        let source = qualify_catalog_asset(root, lesson.source_asset);
+        if seen.contains(source) { throw "tutorial learning path contains a cycle at " + source; }
+        seen.push(source);
+        let scene = lesson_scene_asset(lesson, source);
+        let step = #{};
+        step.title = lesson.title;
+        step.source_asset = source;
+        step.scene_asset = qualify_catalog_asset(root, scene);
+        if lesson.contains("twin_asset") { step.twin_asset = qualify_catalog_asset(root, lesson.twin_asset); }
+        path.push(step);
+        if !lesson.contains("next_source_asset") || lesson.next_source_asset == "" { break; }
+        if type_of(lesson.next_source_asset) != "string" { throw source + " next_source_asset must be a string"; }
+        let next_source = qualify_catalog_asset(root, lesson.next_source_asset);
+        lesson = find_lesson(catalog, root, next_source);
+    }
+    path
+}
+
+fn lesson_menu_item(lesson, source_asset, scene_asset, twin_id, path) {
     let args = #{};
     args.source_asset = source_asset;
     args.scene_asset = scene_asset;
+    args.params = #{ lesson_path: path };
+    if lesson.contains("twin_asset") {
+        if type_of(lesson.twin_asset) != "string" || blank_text(lesson.twin_asset) {
+            throw source_asset + " twin_asset must name a manifest asset";
+        }
+        if scene_asset != "" { throw source_asset + " cannot declare both twin_asset and scene_asset"; }
+        args.twin_asset = path[0].twin_asset;
+    }
     if twin_id != () {
         args.owner_twin_id = twin_id.parse_int();
     }
@@ -95,6 +138,18 @@ fn lesson_menu_item(lesson, source_asset, scene_asset, twin_id) {
     args.reload_policy = "Restart";
     let item = #{};
     item.label = lesson["title"] + "  ·  " + lesson["difficulty"];
+    if lesson.contains("lesson_type") {
+        if !["tour", "exercise", "challenge"].contains(lesson.lesson_type) {
+            throw source_asset + " lesson_type must be tour, exercise, or challenge";
+        }
+        item.label += "  ·  " + lesson.lesson_type;
+    }
+    if lesson.contains("duration_minutes") {
+        if type_of(lesson.duration_minutes) != "i64" || lesson.duration_minutes < 1 {
+            throw source_asset + " duration_minutes must be a positive integer";
+        }
+        item.label += "  ·  " + lesson.duration_minutes.to_string() + " min";
+    }
     item.tooltip = lesson["blurb"];
     item.tool = "tutorials";
     item.hook = "start";
@@ -219,7 +274,8 @@ fn application_asset_lifecycle(event, ctx) {
         }
         let source_asset = qualify_catalog_asset(root, lesson["source_asset"]);
         let scene_asset = qualify_catalog_asset(root, scene_asset);
-        track_items[group].push(lesson_menu_item(lesson, source_asset, scene_asset, ctx.twin_id));
+        let path = learning_path(lesson, catalog, root);
+        track_items[group].push(lesson_menu_item(lesson, source_asset, scene_asset, ctx.twin_id, path));
     }
 
     let tracks = [];

@@ -465,12 +465,14 @@ reported through `RuntimeDiagnostics`, and leaves the material unbound until an
 explicit USD/Rhai edit repairs or replaces it. Height, collider, streaming, and
 lighting/time ownership remain unchanged by this decision.
 
-Filterable authored RGBA8 roles use `ShaderTexture` prepared-source requests.
+Filterable authored RGBA8/RGBA16 roles use `ShaderTexture` prepared-source requests.
 The native asset worker decodes and builds the full CPU mip chain before
 publishing the native child image, with distinct typed source identities for
 color, scalar and normal roles. All tiles share those handles. Color roles filter
 in linear light, scalar roles in their stored linear space, and normals are
-renormalized. Native image settings carry linear/trilinear filtering and the
+renormalized. RGBA16 retains every source bit and uses the native decoder’s
+linear UNORM encoding; it must not bypass mip preparation. Native image settings
+carry linear/trilinear filtering and the
 validated anisotropy profile. Generated derived maps already supply complete
 native images. The render binder consumes these products without copying pixels;
 changing a terrain tile or camera does not rebuild the chain.

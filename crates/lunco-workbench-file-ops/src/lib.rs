@@ -574,7 +574,7 @@ fn on_save_all(
     };
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
-    if replica.is_some() && replication.is_none() {
+    if replica.as_deref().is_some_and(|scene| scene.0.is_some()) && replication.is_none() {
         return rejected_file_command(
             &mut commands,
             "Save All has no live owner for its replicated scene".into(),
@@ -638,7 +638,7 @@ fn on_save_as_twin(
     };
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
-    if replica.is_some() && replication.is_none() {
+    if replica.as_deref().is_some_and(|scene| scene.0.is_some()) && replication.is_none() {
         return rejected_file_command(
             &mut commands,
             "Save As Twin has no live owner for its replicated scene".into(),
@@ -747,17 +747,16 @@ fn promote_documents(
         saves.push((entry.id, path.to_owned()));
     }
 
-    // CreateTwin is the sole manifest-writing owner. Save-As commands can run
-    // in the same command flush: the storage writer creates the target folder
-    // before the asynchronous workspace scan admits it.
+    // Domain Save-As observers finish their writes before the next command.
+    // Queue every document first so CreateTwin's worker scans the saved files.
+    for (doc, path) in saves {
+        commands.trigger(SaveAsDocument { doc_id: doc, path });
+    }
     commands.trigger(CreateTwin {
         path: folder,
         name: String::new(),
         default_scene,
     });
-    for (doc, path) in saves {
-        commands.trigger(SaveAsDocument { doc_id: doc, path });
-    }
     Ok(Ack::new(OpId::new()))
 }
 

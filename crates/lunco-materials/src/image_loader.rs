@@ -1,7 +1,7 @@
 //! Owned shader-raster preparation inside the native asynchronous asset pipeline.
 //! Native image requests and codecs retain their native loader/settings contract.
 
-use crate::{Rgba8MipMode, TextureLayer, rgba8_mip_chain};
+use crate::{Rgba8MipMode, TextureLayer, rgba8_mip_chain, rgba16_mip_chain};
 use bevy::asset::{AssetApp, AssetLoader, AssetPath, LoadContext, io::Reader};
 use bevy::image::{
     CompressedImageFormatSupport, CompressedImageFormats, ImageLoader, ImageLoaderError,
@@ -173,7 +173,7 @@ impl<M: ImageMipRole> PreparedImageLoader<M> {
 enum ImagePreparationError {
     #[error(transparent)]
     Decode(#[from] ImageLoaderError),
-    #[error("invalid RGBA8 base pixels for role-aware mip preparation")]
+    #[error("invalid RGBA base pixels for role-aware mip preparation")]
     InvalidBase,
 }
 impl<M: ImageMipRole> AssetLoader for PreparedImageLoader<M> {
@@ -216,16 +216,17 @@ fn prepare_image(image: &mut Image, mode: Rgba8MipMode) -> Result<(), ImagePrepa
         || descriptor.size.depth_or_array_layers != 1
         || !matches!(
             descriptor.format,
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba16Unorm
         )
     {
         return Ok(());
     }
+    let format = descriptor.format;
     let expected = match mode {
         Rgba8MipMode::SrgbColor => TextureFormat::Rgba8UnormSrgb,
         Rgba8MipMode::Linear | Rgba8MipMode::Normal => TextureFormat::Rgba8Unorm,
     };
-    if descriptor.format != expected {
+    if format != TextureFormat::Rgba16Unorm && format != expected {
         return Err(ImagePreparationError::InvalidBase);
     }
     let width = descriptor.size.width as usize;
@@ -234,8 +235,19 @@ fn prepare_image(image: &mut Image, mode: Rgba8MipMode) -> Result<(), ImagePrepa
         .data
         .take()
         .ok_or(ImagePreparationError::InvalidBase)?;
-    let (data, levels) =
-        rgba8_mip_chain(base, width, height, mode).ok_or(ImagePreparationError::InvalidBase)?;
+    let chain = if format == TextureFormat::Rgba16Unorm {
+        // Native 16-bit decoded images have a linear UNORM format, including
+        // color sources: preserve that encoding and full channel precision.
+        let mode = if mode == Rgba8MipMode::SrgbColor {
+            Rgba8MipMode::Linear
+        } else {
+            mode
+        };
+        rgba16_mip_chain(base, width, height, mode)
+    } else {
+        rgba8_mip_chain(base, width, height, mode)
+    };
+    let (data, levels) = chain.ok_or(ImagePreparationError::InvalidBase)?;
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = levels;
     Ok(())
@@ -288,6 +300,13 @@ mod tests {
         127, 16, 102, 128, 49, 0, 129, 180, 14, 125, 139, 2, 216, 129, 0, 0, 0, 0, 73, 69, 78, 68,
         174, 66, 96, 130,
     ];
+    // Native 16-bit RGB PNG: opposed slopes with sub-8-bit channel detail.
+    const NORMAL16: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 16,
+        2, 0, 0, 0, 173, 68, 70, 48, 0, 0, 0, 22, 73, 68, 65, 84, 120, 156, 99, 48, 176, 108, 96,
+        248, 94, 127, 254, 24, 136, 100, 64, 230, 0, 0, 145, 14, 11, 213, 121, 191, 104, 68, 0, 0,
+        0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
     fn update_until(app: &mut App, mut ready: impl FnMut(&World) -> bool) {
         let until = Instant::now() + Duration::from_secs(5);
         while Instant::now() < until {
@@ -303,6 +322,7 @@ mod tests {
     fn image_load_and_reload_publish_complete_chains_without_replacing_native_loading() {
         let dir = Dir::default();
         dir.insert_asset(Path::new("raster.png"), DARK);
+        dir.insert_asset(Path::new("normal16.png"), NORMAL16);
         dir.insert_asset(Path::new("invalid.png"), b"invalid PNG".as_slice());
         let source = dir.clone();
         let mut app = App::new();
@@ -336,6 +356,9 @@ mod tests {
                 .unwrap();
         let normal =
             ShaderTexture::load_raster(&server, "raster.png".into(), TextureLayer::Normal, 8)
+                .unwrap();
+        let normal16 =
+            ShaderTexture::load_raster(&server, "normal16.png".into(), TextureLayer::Normal, 8)
                 .unwrap();
         assert_ne!(color.id(), scalar.id());
         assert_ne!(normal.id(), scalar.id());
@@ -398,7 +421,41 @@ mod tests {
             all
         };
         update_until(&mut app, |world| {
+            let loaded16 = match &normal16 {
+                ShaderTexture::Normal(h) => world
+                    .resource::<Assets<PreparedShaderImage<NormalMip>>>()
+                    .get(h),
+                _ => unreachable!(),
+            };
+            let ready16 = loaded16.is_some_and(|prepared| {
+                let images = world.resource::<Assets<Image>>();
+                let image = images.get(&prepared.image).expect("published child");
+                assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba16Unorm);
+                assert_eq!(image.texture_descriptor.mip_level_count, 2);
+                let pixels = image.data.as_ref().unwrap();
+                assert_eq!(pixels.len(), 40);
+                let first: Vec<_> = pixels[..8]
+                    .chunks_exact(2)
+                    .map(|c| u16::from_ne_bytes([c[0], c[1]]))
+                    .collect();
+                assert_eq!(first, [12345, 32768, 63359, 65535]);
+                let last: Vec<_> = pixels[32..]
+                    .chunks_exact(2)
+                    .map(|c| u16::from_ne_bytes([c[0], c[1]]))
+                    .collect();
+                assert!((last[0] as i32 - 32768).abs() <= 1);
+                assert!((last[1] as i32 - 32768).abs() <= 1);
+                assert_eq!(last[2], 65535);
+                assert_eq!(last[3], 65535);
+                let ImageSampler::Descriptor(sampler) = &image.sampler else {
+                    panic!("sampler");
+                };
+                assert_eq!(sampler.mipmap_filter, ImageFilterMode::Linear);
+                assert_eq!(sampler.anisotropy_clamp, 8);
+                true
+            });
             inspect(world, 32)
+                && ready16
                 && images_native_ready(world, &native)
                 && server
                     .get_load_state(invalid.id())

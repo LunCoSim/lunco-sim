@@ -46,6 +46,7 @@ impl Plugin for TerrainSurfacePlugin {
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);
+        crate::collider_ring::register_all_commands(app);
         app.init_resource::<crate::SurfaceOcclusionBudget>();
         app.init_resource::<crate::solar_visibility::VisibilityMemo>();
         app.add_systems(

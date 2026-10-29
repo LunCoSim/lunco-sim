@@ -1,0 +1,12 @@
+{
+  "kind": "lunco.input-bindings.v1",
+  "action": ["KeyW"],
+  "command_bindings": {
+    "test.twin": {
+      "keys": ["KeyK"],
+      "command": "SearchNavigation",
+      "arguments": [{"name": "query", "value": {"Text": "Twin shortcut"}}],
+      "allow_in_text": true
+    }
+  }
+}

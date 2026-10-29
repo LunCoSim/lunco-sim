@@ -232,6 +232,8 @@ impl ApiQueryProvider for ReadActiveTwinContractProvider {
 
         Ok(Some(api_value!({
             "open": true,
+            "twin_id": twin_id.raw(),
+            "manifest_present": twin.manifest.is_some(),
             "name": twin
                 .manifest
                 .as_ref()

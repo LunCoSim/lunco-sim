@@ -65,6 +65,29 @@ impl InstancePanel for SourceEditorPanel {
             .unwrap_or_else(|| "Source".into())
     }
 
+    fn navigation_source(
+        &self,
+        world: &World,
+        instance: u64,
+    ) -> Option<lunco_workbench_core::navigation::NavigationSource> {
+        let tab = world
+            .get_resource::<EditorTabs<SourceTabState>>()?
+            .get(instance)?;
+        Some(lunco_workbench_core::navigation::NavigationSource {
+            uri: tab
+                .state
+                .asset_uri
+                .clone()
+                .unwrap_or_else(|| tab.state.path.display().to_string()),
+            mode: if tab.state.origin.is_some() {
+                "Editing source"
+            } else {
+                "Read-only source"
+            }
+            .into(),
+        })
+    }
+
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
         let mut save = None;
         let error_color = ctx.resource_expect::<lunco_theme::Theme>().tokens.error;
@@ -155,6 +178,7 @@ impl InstancePanel for SourceEditorPanel {
 #[derive(Debug, Clone)]
 struct SourceTabState {
     path: PathBuf,
+    asset_uri: Option<String>,
     text: String,
     origin: Option<TwinSourceOrigin>,
     dirty: bool,
@@ -407,6 +431,7 @@ fn open_inline(world: &mut World, uri: String, text: String) {
         .find(|state| state.path == path);
     let state = || SourceTabState {
         path: path.clone(),
+        asset_uri: None,
         text: text.clone(),
         origin: None,
         dirty: false,
@@ -448,6 +473,9 @@ fn open_path(
 
     let state = || SourceTabState {
         path: path.clone(),
+        asset_uri: asset
+            .as_ref()
+            .map(|asset| lunco_assets_core::engine_asset_uri(&asset.asset_path)),
         text: String::new(),
         origin,
         dirty: false,
@@ -824,6 +852,7 @@ mod tests {
     fn lifecycle_retirement_covers_path_and_explicit_origin() {
         let state = SourceTabState {
             path: PathBuf::from("/tmp/alpha/scripts/entry.rhai"),
+            asset_uri: None,
             text: String::new(),
             origin: Some(TwinSourceOrigin {
                 twin_root: PathBuf::from("/tmp/alpha"),

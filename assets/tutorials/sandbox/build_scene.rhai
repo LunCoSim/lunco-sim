@@ -12,7 +12,7 @@ fn steps() {
         #{ anchor: "panel.center",          title: "Move the object",       body: "Select the object in the Entities panel. Drag the gizmo to move, rotate, or scale it." },
         #{ anchor: "panel.sandbox_inspector", title: "Edit its properties",   body: "With the object selected, open Inspector. Change an authored property such as colour, mass, or material." },
         #{ anchor: "",                      title: "Save the scene",       body: "The shipped assets are read-only. Save your authored changes through the active Twin or document Save workflow." },
-        #{ anchor: "",                      title: "Scene ready",           body: "You placed an object, transformed it, and edited its properties. Click Continue to learn how to script a rover." },
+        #{ anchor: "",                      title: "Scene ready",           body: "This tour showed the controls for placing objects, transforms, properties, and saving. These actions were not assessed. Use the next-lesson button to learn how to script a rover." },
     ]
 }
 
@@ -28,15 +28,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext" { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Build a Scene complete", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else { show(s, this.i); }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

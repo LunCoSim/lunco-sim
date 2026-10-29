@@ -12,6 +12,9 @@ reviewer wastes a pass re-confirming it. Anything worth keeping from a report is
 either a finding that is still open — which becomes an `open-*.md` — or a design
 lesson, which belongs in the architecture doc for that subsystem.
 
+[Twin navigation](twin-navigation-review.md) records context, Twin browser, search,
+ownership, lifecycle, and production acceptance.
+
 ## Standing issues
 
 - [`open-model-authoring-ux-gaps.md`](open-model-authoring-ux-gaps.md) —

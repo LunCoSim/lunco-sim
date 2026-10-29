@@ -450,7 +450,7 @@ shell-independent egui controls;
 persistence, source editing, and command observers; and
 `lunco-workbench-guided-ui` owns the optional Rhai-driven HUD, spotlight,
 coach-mark, and guided-recovery surfaces; and
-`lunco-workbench-browser` owns the optional Twin/Files panels, browser state,
+`lunco-workbench-browser` owns the optional Twin browser and selected views, browser state,
 and built-in filesystem/library sections without depending on the concrete
 shell. Rename payloads belong to `lunco-doc-bevy` or `lunco-workspace` according
 to the identity they address; the shell retains only picker/execution

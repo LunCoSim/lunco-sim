@@ -8,6 +8,21 @@ The simulator's Analyze task keeps the live scene in the center and Graphs
 below it, with Telemetry on the left and Ports on the right. Its graph remains
 in the bottom dock when reopened. View → Reset Layout reapplies this placement.
 
+## Keep your place
+
+The **Twin** panel starts with the active Twin's files. Its selector opens
+Libraries or a specialist view such as Modelica or Document dependencies, one
+at a time. Changing views clears the filter. The **…** menu offers Open Twin,
+Recent Twins and Find file. View can reopen the Twin panel.
+
+Opening a USD file opens an editing preview. Use Scenarios to load a different
+world. Hover a document tab for its source and purpose, or right-click it and
+choose **Reveal in Twin** to locate the exact file.
+
+Use Ctrl/Cmd+P to find files, scenes or library sources. Ctrl/Cmd+Shift+P finds
+panels and perspectives. Alt+Left/Right visits document history; View also
+provides Find files, Back and Forward.
+
 ## Discover the available views
 
 In a production session with API access, query `InspectWorkbench`. Its `panels`

@@ -11,11 +11,17 @@ hud_perspectives([]);
 fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. This script
     // only teaches and verifies the rover actions in that world.
-    hint("Select the rover. Click Possess in Inspector or Command Deck.");
+    hint("Click Take control below, then drive to the green marker. The marker and rover are both visible from the opening camera.");
+    guided_hud_actions("tutorials", "action", [
+        #{id: "first_drive:control", label: "Take control", enabled: true},
+        #{id: "first_drive:recover", label: "Right rover", enabled: true},
+        #{id: "first_drive:camera", label: "Return camera", enabled: true},
+    ]);
     notify_kind("Tutorial: First Drive", "info");
 
     this.rover = find_path("/FirstDrive/Rover");
     this.flag_sensor = find_path("/FirstDrive/Flag/Trigger");
+    first_drive_overview();
     if this.rover < 0 || this.flag_sensor < 0 {
         notify_kind("First Drive cannot resolve its rover or waypoint sensor.", "error");
         return;
@@ -51,8 +57,17 @@ fn simulation_dependencies(me, ctx) {
     if rover < 0 || flag < 0 || sensor < 0 {
         throw "First Drive requires its authored rover, flag, and waypoint sensor before simulation starts";
     }
-    #{ modelica_entities: [rover], entity_reads: [flag, sensor], entity_writes: [],
-       query_reads: ["SensorOccupants"], required_inputs: [] }
+    #{ modelica_entities: [rover], entity_reads: [flag, sensor, find_path("/FirstDrive/Avatar")], entity_writes: [],
+       query_reads: ["SensorOccupants", "QueryUsdPrim"], required_inputs: [] }
+}
+
+fn first_drive_overview() {
+    if is_unattended() { return; }
+    let pose = query("QueryUsdPrim", #{path: "/FirstDrive/Avatar",
+        attrs: ["xformOp:translate", "lunco:cameraLookAt"]}).attrs;
+    set_camera("/FirstDrive/Avatar");
+    cmd("SetCameraLookAt", #{camera: find_path("/FirstDrive/Avatar"),
+        eye: pose["xformOp:translate"], target: pose["lunco:cameraLookAt"]});
 }
 
 fn first_drive_entity_within(entity, ancestor) {
@@ -99,7 +114,7 @@ fn mission(me, ctx) {
         // Step 1 — take control. A request is not success; live controller state
         // must show that this rover is actually owned.
         objective("possess", #{
-            text: "Select the rover and click Possess in Inspector or Command Deck",
+            text: "Click Take control to drive the training rover",
             done: |m| first_drive_controlled(m, rover),
             on_complete: Fn("first_drive_possessed"),
         }),
@@ -115,6 +130,12 @@ fn mission(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if tutorials::navigation(evt, ctx) { return; }
+    if evt.name == "tutorial.action" {
+        if evt.value == "first_drive:control" { possess(this.rover); }
+        else if evt.value == "first_drive:recover" { recover::vessel(this.rover); }
+        else if evt.value == "first_drive:camera" { first_drive_overview(); }
+    }
     if sensor_entered(evt, this.flag_sensor)
         && first_drive_entity_within(evt.value, this.rover) {
         emit("first_drive_waypoint_reached", this.rover);
@@ -122,7 +143,7 @@ fn on_event(me, evt, ctx) {
 
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
-        hint("You took control and reached the flag.\n\nClick Continue to start Moon Driving Basics, or choose another lesson from Tutorials.");
+        tutorials::finish(ctx, "You took control and reached the flag. Choose the next exercise below, or keep exploring.");
         notify_kind("First Drive complete", "success");
     }
 }

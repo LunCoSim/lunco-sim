@@ -32,6 +32,8 @@ examples under `assets/tutorials/`.
   "title": "First Drive",
   "blurb": "Take control of a rover and drive it to a lunar flag.",
   "difficulty": "beginner",
+  "lesson_type": "exercise",
+  "duration_minutes": 5,
   "source_asset": "lunco://tutorials/sandbox/first_drive.rhai",
   "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
 }
@@ -47,6 +49,23 @@ the menu policy before parsing. Keep catalogs in authored source directories.
 The `application_json_catalogs` production gate covers catalog selection,
 result exclusion, similar directory names and malformed authored entries.
 
+For classroom onboarding, use the maintained
+[Lunar Rover Lab curriculum](../../docs/tutorials/06-classroom-onboarding.md).
+`lesson_type` distinguishes a guidance tour from an assessed exercise or an
+independent challenge; `duration_minutes` is an estimate, not a measured result.
+Both fields are optional for catalogs that do not publish that metadata.
+An optional `next_source_asset` links to another entry in the same catalog.
+The policy validates targets and cycles and passes a typed `lesson_path` to the
+scenario; do not duplicate a curriculum registry in Rust or a second tool.
+
+A project-authoring lesson may name `twin_asset` with an exact registered
+`twin.toml` URI. Its manifest selects the scene and the scene embeds its guide.
+The launcher submits `OpenTwinAsset`; the asset adapter resolves it off-thread
+and Workspace owns admission. Do not also specify `scene_asset` for that entry.
+Resolve a live prim's owning document once with
+`assembly_edit::document_for_entity`, and retain that explicit id across panel
+changes. A detached library demonstration stage has no editable document owner.
+
 The menu submits the generic `RunScenarioAsset` command. It uses
 `ScenarioReloadPolicy::Restart` for a predictable fresh start and lets the
 command resolve an omitted host target to the active `WorldRoot`. Other apps
@@ -58,7 +77,7 @@ Use the shared prelude:
 
 - `hint(...)`, `spotlight(anchor, caption)`, and `notify_kind(...)` for
   presentation;
-- `coach_step(steps, index)` with an `on_event` cursor for a guided tour;
+- `coach_step(steps, index)` with `tutorials::tour_event` for a guided tour;
 - `mission(me, ctx)` and `objective(...)` for an objective-driven exercise;
 - `input_binding(...)`/`input_hint(...)` for the controller-owned semantic
   labels.
@@ -83,6 +102,34 @@ directly; if it needs a world, the catalog's `scene_asset` is the request.
 Never branch on the Rust build profile (`is_debug()` or `debug_assertions`). The
 authored `lint.rhai` policy rejects that coupling; use `is_unattended()` when
 attended and automated execution need different behavior.
+
+Tours may advance on Next because they review guidance. Their completion must
+not claim that unobserved editing or engineering actions occurred. Use the
+shared cursor and navigation policy:
+
+```rhai
+fn on_event(me, evt, ctx) {
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
+}
+```
+
+Initialize `this.i = 0` and show the opening coach in `on_start`.
+The helper makes Skip terminal and emits `TUTORIAL_SKIPPED`, without emitting
+`MISSION_COMPLETE`. An exercise instead calls `tutorials::finish(ctx, message)`
+after its own verified result, and handles `tutorials::navigation` in its event
+hook. A standalone launch without catalog context has no next-lesson action;
+its copy should direct the learner to Tutorials rather than promise a dialog.
+
+Use existing guided action buttons for direct control/help and the generic
+`RecoverVessel` command for explicit righting. Never treat command admission,
+a zero trace, a file picker, or a save request as a successful result. For a
+saved project, verify the owning document's saved state and Twin admission.
+`QueryUsdPrim` includes disposable live-stage state. For persistent authoring
+assessments, inspect document-layer ownership too and verify save/reopen;
+an ECS move alone must not count as a saved edit.
+Store measurements as typed authored values with their assumptions; do not
+silently substitute zero when a measurement is unavailable.
 
 For physical waypoint arrival, author an Avian sensor in USD and map its generic
 `SENSOR_ENTER` event to a lesson event in Rhai. Match `evt.source` to the exact

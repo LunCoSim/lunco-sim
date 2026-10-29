@@ -636,11 +636,56 @@ pub fn list_scene_assets(
     Ok(out)
 }
 
+/// Scene choices from already-admitted workspace inventories, without walking
+/// roots or rereading manifests on the presentation thread.
+pub fn list_indexed_scene_assets(
+    manifest: &AssetManifest,
+    roots: &TwinRoots,
+    twins: &[&lunco_twin::Twin],
+) -> Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError> {
+    let mut assets = list_library_assets(manifest)?;
+    assets.retain(|asset| {
+        asset.rel.ends_with(".usda") && lunco_assets_core::is_engine_scene_asset(&asset.rel)
+    });
+    for twin in twins {
+        let authority = roots.name_for_root(&twin.root)?.ok_or_else(|| {
+            lunco_assets_core::TwinRootsError::AssetResolution(
+                std::io::ErrorKind::NotFound,
+                format!("Workspace Twin is not mounted: {}", twin.root.display()),
+            )
+        })?;
+        let globs = scene_globs_from_manifest(twin.manifest.as_ref());
+        for file in twin.files() {
+            let rel = file.relative_path.to_string_lossy().replace('\\', "/");
+            let matches = globs
+                .iter()
+                .any(|glob| lunco_twin::glob_matches(glob, &rel));
+            if rel.ends_with(".usda") && matches {
+                assets.push(AssetFile {
+                    asset_path: lunco_assets_core::twin_uri(&authority, &file.relative_path),
+                    stem: stem_of(&rel),
+                    abs_path: twin.root.join(&file.relative_path),
+                    rel,
+                    twin: Some(authority.clone()),
+                });
+            }
+        }
+    }
+    Ok(assets)
+}
+
 fn default_scene_globs() -> Vec<String> {
     lunco_twin::DEFAULT_SCENE_GLOBS
         .iter()
         .map(|s| s.to_string())
         .collect()
+}
+
+fn scene_globs_from_manifest(manifest: Option<&lunco_twin::TwinManifest>) -> Vec<String> {
+    manifest
+        .and_then(|manifest| manifest.usd.as_ref())
+        .and_then(|usd| usd.scenes.clone())
+        .unwrap_or_else(default_scene_globs)
 }
 
 /// The scene globs a Twin declares, or [`DEFAULT_SCENE_GLOBS`] when the Twin
@@ -651,10 +696,7 @@ fn default_scene_globs() -> Vec<String> {
 fn scene_globs_of_twin(root: &Path) -> Result<Vec<String>, lunco_assets_core::TwinRootsError> {
     let manifest = root.join(lunco_twin::MANIFEST_FILENAME);
     match lunco_twin::TwinManifest::read(&manifest) {
-        Ok(manifest) => Ok(manifest
-            .usd
-            .and_then(|usd| usd.scenes)
-            .unwrap_or_else(default_scene_globs)),
+        Ok(manifest) => Ok(scene_globs_from_manifest(Some(&manifest))),
         Err(lunco_twin::TwinError::Io { source, .. })
             if source.kind() == std::io::ErrorKind::NotFound =>
         {

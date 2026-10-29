@@ -45,9 +45,7 @@ use egui;
 use lunco_assets_core::{FileClosureLimits, TwinRootsSnapshot};
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
-use lunco_workbench_browser::{
-    BrowserAction, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
-};
+use lunco_workbench_browser::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSection};
 
 use lunco_usd_core::commands::is_usd_path;
 use lunco_usd_document::document::UsdDocument;
@@ -594,15 +592,7 @@ impl BrowserSection for SceneFilesSection {
     }
 
     fn title(&self) -> &str {
-        "Scene"
-    }
-
-    fn scope(&self) -> BrowserScope {
-        BrowserScope::Files
-    }
-
-    fn default_open(&self) -> bool {
-        true
+        "Document dependencies"
     }
 
     fn order(&self) -> u32 {

@@ -68,9 +68,10 @@ fn mission(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if tutorials::navigation(evt, ctx) { return; }
     if evt.name == "MISSION_COMPLETE" {
-        hint("Authority handoff complete. Click Continue in the Tutorial complete dialog to begin Moon Driving Basics.");
-        notify_kind("Authority Handoff complete — choose Continue for Moon Driving Basics", "success");
+        tutorials::finish(ctx, "You took and released rover control. Choose the next exercise below, or keep exploring.");
+        notify_kind("Authority Handoff complete — next: Moon Driving Basics", "success");
     }
 }
 

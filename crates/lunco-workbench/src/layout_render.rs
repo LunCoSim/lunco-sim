@@ -1,6 +1,7 @@
 //! Workbench layout composition and dock rendering.
 
 use super::*;
+use crate::render::configured_command_shortcut;
 use lunco_workbench_core::trigger_or_defer;
 use std::borrow::Cow;
 
@@ -16,7 +17,7 @@ pub(super) fn render_layout(
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
     // workbench chrome — menu/title bar, status strip (and its FPS readout),
-    // activity bar, dock — must not be burnt into the footage. Skipping this
+    // dock — must not be burnt into the footage. Skipping this
     // pass while a recording is active leaves the 3D view full-bleed; the
     // deliberate overlays (input HUD, vessel telemetry, notifications) are
     // drawn by their own systems and survive. Scoped to `active`, so the
@@ -321,7 +322,7 @@ pub(super) fn render_layout(
                             // Ctrl+N resolves to the first registered
                             // creatable kind, which is the first entry after
                             // deterministic display-name sorting.
-                            let label = new_document_menu_label(index, &display);
+                            let label = new_document_menu_label(index, &display, &configured_command_shortcut(world, "editor.new"));
                             let response = ui.button(label);
                             let response = match default_filename {
                                 Some(filename) => response.on_hover_text(format!(
@@ -339,7 +340,7 @@ pub(super) fn render_layout(
                 ui.separator();
 
                 // -- Open ---------------------------------------------
-                if ui.button("Open File…\tCtrl+O").clicked() {
+                if menu_item(ui, true, "Open File…", &configured_command_shortcut(world, "editor.open-file"), "").clicked() {
                     trigger_or_defer(world, lunco_workbench_file_ops::ShowOpenFilePicker {});
                     ui.close();
                 }
@@ -433,7 +434,7 @@ pub(super) fn render_layout(
                 // Save / Save As route through `EditorIntent` so the
                 // menu, Ctrl+S, and HTTP API funnel through the same
                 // domain resolver.
-                if menu_item(ui, has_active, "Save", "Ctrl+S", "No document open")
+                if menu_item(ui, has_active, "Save", &configured_command_shortcut(world, "editor.save"), "No document open")
                     .clicked()
                 {
                     trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Save);
@@ -443,7 +444,7 @@ pub(super) fn render_layout(
                     ui,
                     has_active,
                     "Save As…",
-                    "Ctrl+Shift+S",
+                    &configured_command_shortcut(world, "editor.save-as"),
                     "No document open",
                 )
                 .clicked()
@@ -498,7 +499,7 @@ pub(super) fn render_layout(
                 }
 
                 // -- Close --------------------------------------------
-                if menu_item(ui, has_active, "Close", "Ctrl+W", "No document open")
+                if menu_item(ui, has_active, "Close", &configured_command_shortcut(world, "editor.close"), "No document open")
                     .clicked()
                 {
                     trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Close);
@@ -553,13 +554,7 @@ pub(super) fn render_layout(
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Toggle Activity Bar").clicked() {
-                    world
-                        .resource_mut::<PendingLayoutRequests>()
-                        .0
-                        .push(LayoutRequest::SetActivityBar(!layout.activity_bar));
-                    ui.close();
-                }
+                crate::navigation::render_menu(ui, world);
                 ui.separator();
                 // Panels are grouped into workflow submenus using the category
                 // each one declares (`Panel::menu_group`). Each row is a
@@ -953,22 +948,6 @@ pub(super) fn render_layout(
             render_status_bar_inner(ui, world, theme);
         });
 
-    // ── Activity bar ────────────────────────────────────────────────
-    if layout.activity_bar {
-        egui::Panel::left("lunco_workbench_activity_bar")
-            .resizable(false)
-            .exact_size(40.0)
-            .show(&mut viewport_ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(4.0);
-                    for label in ["Files", "Parts", "Assets", "Find", "Settings"] {
-                        ui.label(label);
-                        ui.add_space(8.0);
-                    }
-                });
-            });
-    }
-
     // ── Dock area / side panels ─────────────────────────────────────
     // Two-mode rendering:
     //   1. If the active perspective is centre-driven (non-empty centre
@@ -1095,7 +1074,7 @@ pub(super) fn render_layout(
         {
             // The dock's true extent for the scene-pick gate: the rect we are
             // ABOUT to hand it — i.e. what's left of the root Ui after the menu /
-            // status / activity bars consumed their edges. Anything outside it is
+            // status bar consumed its edge. Anything outside it is
             // bare full-window 3D that must read as scene, not chrome.
             //
             // Must be measured BEFORE `show_inside`. The old code took

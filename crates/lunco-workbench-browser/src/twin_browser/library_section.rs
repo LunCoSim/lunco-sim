@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use egui;
 
 use super::{
-    BrowserCtx, BrowserScope, BrowserSection,
+    BrowserCtx, BrowserSection,
     path_tree::{PathTree, build_path_tree},
 };
-use lunco_workbench_core::scene::CurrentSceneName;
+use lunco_workbench_core::scene::CurrentScenePath;
 use lunco_workbench_core::source::OpenSourceView;
 
 /// Display-ready source entry retained between UI frames.
@@ -63,21 +63,15 @@ impl LuncoLibrarySection {
     }
 }
 
+pub const LIBRARY_SECTION_ID: &str = "lunco.workbench.library";
+
 impl BrowserSection for LuncoLibrarySection {
     fn id(&self) -> &str {
-        "lunco.workbench.library"
+        LIBRARY_SECTION_ID
     }
 
     fn title(&self) -> &str {
         "LunCo Library"
-    }
-
-    fn scope(&self) -> BrowserScope {
-        BrowserScope::Files
-    }
-
-    fn default_open(&self) -> bool {
-        true
     }
 
     fn order(&self) -> u32 {
@@ -105,7 +99,7 @@ impl BrowserSection for LuncoLibrarySection {
         }
 
         let loaded_name = ctx
-            .resource::<CurrentSceneName>()
+            .resource::<CurrentScenePath>()
             .map(|scene| scene.0.clone())
             .unwrap_or_default();
         let mut clicked = None;
@@ -186,13 +180,9 @@ fn render_dir(
             continue;
         }
         visible = true;
-        let is_loaded = asset.rel.extension().is_some_and(|ext| ext == "usda")
-            && !loaded_name.is_empty()
-            && (asset.stem == loaded_name
-                || loaded_name
-                    .split_whitespace()
-                    .next()
-                    .is_some_and(|first| first == asset.stem));
+        let is_loaded = !loaded_name.is_empty()
+            && lunco_assets_core::engine_asset_uri(&asset.asset_path)
+                == lunco_assets_core::engine_asset_uri(loaded_name);
         let label = if is_loaded {
             format!("● {}", asset.file_name)
         } else {

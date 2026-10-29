@@ -66,10 +66,6 @@ impl BrowserSection for ModelicaSection {
         "Modelica"
     }
 
-    fn default_open(&self) -> bool {
-        true
-    }
-
     fn order(&self) -> u32 {
         100
     }

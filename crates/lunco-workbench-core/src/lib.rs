@@ -6,6 +6,7 @@
 //! or application services.
 
 mod menu;
+pub mod navigation;
 mod panel;
 mod perspective;
 mod registration;
@@ -31,8 +32,9 @@ pub use panel::{
     PanelRenderTarget, PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, TabId,
 };
 pub use perspective::{
-    ExplicitPerspectiveChoice, Perspective, PerspectiveAdmission, PerspectiveId,
-    PanelCorner, PerspectiveFloatingPanel, PerspectiveInstanceTab, PerspectiveLayoutPlan, PerspectiveSlotPlan,
+    ExplicitPerspectiveChoice, PanelCorner, Perspective, PerspectiveAdmission,
+    PerspectiveFloatingPanel, PerspectiveId, PerspectiveInstanceTab, PerspectiveLayoutPlan,
+    PerspectiveSlotPlan,
 };
 pub use registration::{WorkbenchPanelAppExt, WorkbenchPanelRegistry};
 pub use snapshot::WorkbenchSnapshot;

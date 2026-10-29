@@ -334,6 +334,14 @@ pub trait InstancePanel: Send + Sync + 'static {
     }
     /// Dynamic title for one instance.
     fn title(&self, world: &World, instance: u64) -> String;
+    /// Exact source shown by this instance, independent of the loaded world.
+    fn navigation_source(
+        &self,
+        _world: &World,
+        _instance: u64,
+    ) -> Option<crate::navigation::NavigationSource> {
+        None
+    }
     /// Whether the tab can be closed.
     fn closable(&self) -> bool {
         true

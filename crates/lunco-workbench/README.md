@@ -7,18 +7,16 @@ to the Document System and the multi-domain composition workflow
 documented in [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.md).
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│ menu · command palette · title · transport · perspective tabs│
-├───┬─────────────────────┬──────────────┬────────────────────┤
-│ A │                     │              │                    │
-│ c │  Twin Browser       │   VIEWPORT   │   Inspector        │
-│ t │  (twins + docs)     │              │ (context-aware)    │
-│ i │                     │              │                    │
-│ v │                     ├──────────────┤                    │
-│   │                     │ bottom dock  │                    │
-├───┴─────────────────────┴──────────────┴────────────────────┤
-│ status bar                                                  │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ menu · title · transport · perspective tabs                 │
+├─────────────────────┬──────────────┬───────────────────────┤
+│ Twin browser        │  VIEWPORT    │ Inspector             │
+│ (one selected view) │              │                       │
+│                     ├──────────────┤                       │
+│                     │ bottom dock  │                       │
+├─────────────────────┴──────────────┴───────────────────────┤
+│ status bar                                                 │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ## Three concepts, three different things
@@ -180,7 +178,7 @@ cargo run --bin lunica      # Modelica workbench
   continue to persist per Twin.
 - The shell is browser-agnostic. Add `lunco-workbench-browser` when the
   application needs Twin/Files navigation; that package provides the standard
-  panels and accepts domain `BrowserSection` implementations.
+  Twin browser and accepts domain `BrowserSection` implementations.
 
 The workbench derives `egui::Visuals` once per `Theme` revision and shares
 that snapshot with every panel surface. Panel render paths should consume the
@@ -204,7 +202,7 @@ before painting any context.
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /
   Observe) — host apps define them as they migrate panels.
-- **Command palette** — planned; `Ctrl+P` is intentionally unbound.
+
 - **Detached panel windows** — planned; the current panel contract is dock-only.
 
 ## Design rationale
@@ -248,3 +246,13 @@ bevy + bevy_egui
    │                     │ browser panels and section contract used by app/domain UI
    │                     └── lunco-modelica-ui, lunco-luncosim-edit-ui, …
 ```
+
+## Navigation
+
+View → Find files and Ctrl/Cmd+P open quick navigation, initially scoped to
+active-Twin files. Ctrl/Cmd+Shift+P selects panel/perspective actions. View →
+Back/Forward and Alt+Left/Right visit document history without replaying scene
+loads. Source owners supply exact URI/purpose through `navigation_source`;
+tab tooltips and context menus display it and offer Reveal in Twin. The Twin
+panel displays one selected file/library/domain view. See architecture §7 for
+lifecycle and production acceptance.

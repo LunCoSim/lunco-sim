@@ -42,7 +42,7 @@ fn assemble(facts) {
         && has_panel(facts, "sandbox_environment") && has_panel(facts, "workbench::viewport") {
         result.push(#{
             id: "rover_build", title: "⚒ Build", interaction: "editor", revision: 4,
-            description: "Compose the live scene from reusable assemblies. Browse Entities and Twin sources, place objects with Spawn and edit their properties in Inspector. Use Editor for internal assembly parts and Analyze for live signals.",
+            description: "Compose the live scene from reusable assemblies. Browse Entities and Twin files, place objects with Spawn and edit their properties in Inspector. Use Editor for internal assembly parts and Analyze for live signals.",
             left: ["entity_list"], left_bottom: ["lunco.workbench.twin_browser"],
             center: ["workbench::viewport"],
             right: ["sandbox_inspector", "sandbox_environment"], right_bottom: ["spawn_palette"],
@@ -51,9 +51,9 @@ fn assemble(facts) {
     if has_panel(facts, "usd_prim_tree") && has_panel(facts, "usd::viewport")
         && has_panel(facts, "lunco.workbench.twin_browser") && has_panel(facts, "sandbox_inspector") {
         let editor = #{
-            id: "editor", title: "✎ Editor", interaction: "editor", revision: 5,
-            description: "Open a document or choose an editing tool to begin. Prim and Twin share the left tabs; Requirements sits beside Inspector, with change History below. The source document owns Save and Undo; the live scene remains a separate context.",
-            left: ["usd_prim_tree", "lunco.workbench.twin_browser"],
+            id: "editor", title: "✎ Editor", interaction: "editor", revision: 6,
+            description: "Choose a file in Twin or a prim in Prims. Edit the document in the center, inspect properties on the right, and review changes in History. Save and Undo apply to the active document.",
+            left: ["lunco.workbench.twin_browser", "usd_prim_tree"],
             right: ["sandbox_inspector"],
         };
         if has_panel(facts, "sysml_requirements") { editor.right.push("sysml_requirements"); }
@@ -65,11 +65,10 @@ fn assemble(facts) {
     }
     if has_panel(facts, "lunco.workbench.twin_browser") && "modelica_model_view" in facts.instance_kinds {
         let model = #{
-            id: "modelica_analyze", title: "∿ Lunica", interaction: "editor",
-            description: "Engineer continuous models. Open a Modelica source from Twin; edit its diagram or equations, compile and run. Use Analyze for signal comparison. F5 compiles and runs; Ctrl+S saves the active source.",
+            id: "modelica_analyze", title: "∿ Lunica", interaction: "editor", revision: 1,
+            description: "Open Modelica sources from Twin. Choose the Modelica view to browse packages and classes. Edit diagrams or equations, compile and run; compare signals in Analyze.",
             left: ["lunco.workbench.twin_browser"],
         };
-        if has_panel(facts, "lunco.workbench.files") { model.left.push("lunco.workbench.files"); }
         if has_panel(facts, "modelica_welcome") { model.center = ["modelica_welcome"]; }
         if has_panel(facts, "workbench::viewport") {
             result.push(model);
@@ -87,6 +86,13 @@ fn assemble(facts) {
             description: "Arm a terrain brush in Tools and click the scene. Escape cancels the active brush. Edits rebuild the visuals and collider through their existing owners.",
             left: ["tools_palette"], center: ["workbench::viewport"],
             right: ["sandbox_inspector", "sandbox_environment", "entity_list"],
+        });
+    }
+    if has_panel(facts, "input_keybindings") {
+        result.push(#{
+            id: "input_settings", title: "Keybindings", interaction: "editor", visible: false,
+            description: "Edit global command shortcuts and inspect the active Twin's overrides. Conflicts are recorded in Recent Events.",
+            center: ["input_keybindings"],
         });
     }
     result

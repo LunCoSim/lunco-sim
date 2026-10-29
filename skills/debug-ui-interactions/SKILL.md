@@ -22,7 +22,11 @@ part of the failure.
 ## Use the real application input path
 
 For a Twin-specific keymap, use one Twin JSON document with
-`kind: "lunco.input-bindings.v1"` and the normal semantic bindings/chords.
+`kind: "lunco.input-bindings.v1"` and semantic bindings/chords or `command_bindings`. Settings → Keybindings edits
+the global map through typed setters. A Twin chord displaces conflicting global
+chords only in the effective map; inspect `InspectInputBindings` and Recent Events
+for the winning and displaced identities. Command shortcuts use reflected command
+dispatch, including terminal rejection reporting.
 Normal Twin loading discovers it. `InputBindingsSettings` retains user
 preferences; all input consumers and `input_binding(...)` read the composed
 `ActiveInputBindings`. Omitted entries inherit; explicit empty lists unbind.

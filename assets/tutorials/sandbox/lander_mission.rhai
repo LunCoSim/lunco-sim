@@ -154,6 +154,7 @@ fn mission(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if tutorials::navigation(evt, ctx) { return; }
     // Coach the course from the scene's own gate events — the scenario counts the
     // gates, the tutorial narrates them.
     if evt.name == "waypoint_1_reached" {
@@ -161,8 +162,8 @@ fn on_event(me, evt, ctx) {
     } else if evt.name == "waypoint_2_reached" {
         hint("Two down. Continue to the final marker.");
     } else if evt.name == "MISSION_COMPLETE" {
+        tutorials::finish(ctx, "You completed the landing handoff and rover route. Choose the next lesson below.");
         // The engine emits MISSION_COMPLETE once every objective is done.
-        hint("You watched the landing, took the rover, and drove through the gates.\n\nClick Continue to return to the tutorial list.");
         notify_kind("Lander & Rover Mission complete", "success");
     }
 }

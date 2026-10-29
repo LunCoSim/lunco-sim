@@ -23,7 +23,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-core-session`** | Always-on session and authority substrate: network role/status, `SessionRegistry`, generic `ClaimControl`/`ReleaseControlClaim` transitions, typed replication scope, exact client connection and admitted remote scene, `ControlAuthorityChanged`, RBAC policy, prediction markers/input watermarks, bounded fixed-tick `PendingSessionInputs` with stable producer classification and reserved runtime-spawn identities, ordered typed commit events, capture, and session-dependent identity admission. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management and canonical typed document/replication lifetime facts: open Twins, active documents, perspectives, recents, generic active-Twin setting persistence (`SetTwinSetting` / `ResetTwinSetting`), and Twin-entry command payloads such as `rename::RenameTwinEntry`. |
-| **`lunco-workspace-api`** | API adapter for Workspace-owned queries (`ListOpenDocuments`, `ListRecentFiles`, `ListTwin`, `ReadActiveTwinContract`), installable by windowed, headless, or offscreen hosts without making the data-only Workspace crate depend on the API layer. |
+| **`lunco-workspace-api`** | API adapter for Workspace-owned queries (`ListOpenDocuments`, `ListRecentFiles`, `ListTwin`, `ReadActiveTwinContract`), including exact Twin identity and manifest presence for document-owner checks. Installable by windowed, headless, or offscreen hosts without making the data-only Workspace crate depend on the API layer. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, generic scalar `[settings]`, explicit Twin-approved native hook-provider entries, file indexing, and strict component-to-verification selection. |
 | **`lunco-twin-journal`** | Canonical Twin-scoped op log: Lamport-ordered entries, DAG parents (for future merges), Streams + Composition, ChangeSets, Markers (named milestones), Branches, `UndoManager`. CRDT-shapable schema; in-memory backend today, yrs-swap-ready. |
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo; typed named diagram view documents store source bindings, scopes, and independent layouts without copying source topology. |
@@ -31,7 +31,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait, native filesystem, memory and browser backends), regular-file admission, bounded native reads and demand-driven OPFS streams, lexical direct-file listing, and worker-prepared native destination identities. The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, traversal checks, and portable materialization tree validation. It has no Bevy, filesystem, storage, or application dependency. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, traversal-safe path/cache operations, worker-prepared native asset paths and OpenUSD search-path resolutions pinned to live Twin mounts, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
-| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders, typed persisted-result source facts for asset policies, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
+| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, scene choices from admitted Twin inventories, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders, typed persisted-result source facts for asset policies, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
@@ -203,7 +203,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-text-editor`** | Reusable generic source editor: source-only text paths, asset/Twin/ephemeral source loading, async storage writes, tab lifecycle, and source-editor panel registration. It reuses the core source/tab contracts and shared text-editor widget without depending on the concrete docking shell. |
 | **`lunco-workbench-state`** | Reusable per-Twin session state: persisted document snapshots, domain codec registry, dock snapshot schema, runtime-surface layout state, storage-backed load/save, and the layout-provider contract used by concrete shells. |
 | **`lunco-workbench-window`** | Reusable OS-window capability: typed minimize/maximize/close commands, merged-titlebar construction, settings-backed geometry persistence, and explicit native placement. It depends on Bevy window APIs and `lunco-settings`, not the concrete Workbench shell. |
-| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
+| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel` Twin browser with selected file/library/domain views. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, recording status, and bounded independent scene-scoped live camera views. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, shared selection/modal resources, and the bounded log model/renderer. It uses workbench contracts and shell-independent widgets; domain panels own their presentation snapshots. |
@@ -285,7 +285,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns zero-clock scene/physics/Modelica admission, globally ticked deterministic stepping, telemetry verdicts, terminal-fault termination of stepping, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
 | **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, stamped build constants and startup logging, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
 | **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics and bounded physical render easing through native endpoint states, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
-| **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, exact-owner asynchronous experiment artifacts, and bounded durable export of completed session-input captures. It is composed by the runtime boundary rather than embedded in the generic core. |
+| **`lunco-luncosim-services`** | — | Production application services: startup and asset-addressed Twin resolution through the shared workspace admission boundary, API/query registration, networking, journal projection, exact-owner asynchronous experiment artifacts, and bounded durable export of completed session-input captures. It is composed by the runtime boundary rather than embedded in the generic core. |
 | **`lunco-luncosim-runtime`** | — | Production application composition: stamped build identity for headless hosts, services plus Rhai plugin/policy projection and retirement with scene-registered source caches, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-rhai-repl`** | — | Terminal adapter for the reflected `RunRhai` command. It reads stdin/files and presents results while delegating evaluation to the running simulator and HTTP to `lunco-api-client`. |
@@ -417,7 +417,7 @@ archives, raster, SVG, GeoTIFF, or native processing.
 
 **`lunco-assets-runtime`**
 The Bevy asset-source, authored-text, and selected-dataset runtime. It owns
-source registration, discovery/catalogs, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders,
+source registration, discovery/catalogs, scene choices from admitted Twin inventories, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders,
 policy-requested dataset artifact reads, web fetch integration, the optional
 shared egui byte loader, and the asset-manifest tool while consuming identity and storage contracts from
 `lunco-assets-core` and dataset declarations from `lunco-assets-datasets`.
@@ -683,7 +683,10 @@ Shared input settings and projection. It owns the persisted `InputBindingsSettin
 section and composes `SceneInputBindings` into the non-persisted
 `ActiveInputBindings` snapshot before input processing. Every UI, avatar,
 controller, injection and Rhai consumer reads that snapshot. Semantic labels,
-pointer-chord resolution and Leafwing `InputMap` construction share this owner.
+pointer-chord resolution, command-chord parsing/collision resolution and Leafwing
+`InputMap` construction share this owner. Twin command or semantic collisions
+displace the global effective chord and publish one warning per changed conflict
+snapshot, without overwriting persisted global preferences.
 `lunco-luncosim-simulation` admits application defaults and active-Twin overrides
 from `lunco.input-bindings.v1` documents through `JsonAssetScopeChanged`. The
 contract crate has no compiled-in asset path or product keymap.
@@ -1179,7 +1182,8 @@ in `lunco-workbench-core`. It does not own file bytes or backend I/O; those go
 through `lunco-storage`, while Twin discovery stays in
 `lunco-workspace`/`lunco-twin`. GPU health and presentation recovery live in
 the independent `lunco-render-recovery` crate; the workbench only composes its
-banner and recovery systems. Hosts that need Twin and Files navigation add the
+banner and recovery systems. Persistent context, quick navigation, and document
+history consume typed provider/source contracts from workbench core. Hosts that need Twin and Files navigation add the
 separate `lunco-workbench-browser` feature package, which does not link this
 shell. The shared input keymap is owned by `lunco-input-core`; the recording
 overlay is supplied by `lunco-input-ui`, so the shell does not depend on the
@@ -1287,8 +1291,8 @@ implements that contract for `egui_dock`; state consumers import these APIs
 directly rather than through the shell.
 
 **`lunco-workbench-browser`**
-Reusable navigation feature for a rendered host. It owns the Twin and Files
-panels, browser query/actions/resources, built-in filesystem and library
+Reusable navigation feature for a rendered host. It owns the Twin browser and selected file/library/domain
+views, browser query/actions/resources, built-in filesystem and library
 sections, while consuming shell-neutral panel, source-view, scene-state, and
 rename command contracts from their owning crates. The library section consumes
 the asset manifest's monotonic revision and retains its tree between replacements

@@ -160,7 +160,7 @@ shell-independent icon, text-editor, and tree helpers. Virtualized trees use
 `tree::branch_header` for a fixed row stride; recursive trees use `tree::branch`
 for an indented body, sharing the same disclosure state and controls.
 `lunco-workbench-browser` is the
-optional reusable Twin/Files feature: it owns browser state, standard panels,
+optional reusable Twin browser feature: it owns browser state, selected file/library/domain views,
 and filesystem/library sections, including the asset-provisioning dependency.
 Domain crates must not read the shell's private `WorkbenchLayout`; use
 `WorkbenchSnapshot` for layout facts and typed workbench/browser actions for
@@ -590,7 +590,7 @@ Document-scoped editor panels use the existing `UsdPreviewId` session as their
 view-model key. Keep each open session's tree, canvas, authored Inspector data,
 joint/animation state, authored layer, and projection generation isolated;
 the Editor perspective opens the prim tree in the upper-left pane and keeps the
-Twin Browser in the separate lower-left pane, so document choice and authored
+Twin browser beside the Prims tab, so document choice and authored
 hierarchy remain visible together. The prim tree consumes the full width of its
 pane and uses immediate structural collapse rendering; do not add a nested
 auto-shrinking scroll region or animated body that can paint stale outlines
@@ -869,3 +869,46 @@ command outcomes when the dock is temporarily scoped out. Saved dock snapshots
 carry central-instance intent independently of policy defaults.
 `scene_mounted` reports an actual mounted payload; `scene_generation` is a
 lifecycle revision and may describe a committed Clear.
+
+## Twin navigation and orientation
+
+In document tasks, explicit center-instance opens establish center intent at the dock owner, even
+when Editor starts empty. Verify the actual rendered editor rectangle beside
+the browser, rather than only its allocated tab/source identity. Scene-backed perspectives
+keep background previews parked so they cannot cover the live world.
+
+The Twin panel defaults to the active Twin's files. Its selector displays one
+registered Files, Library or specialist view at a time. Changing views clears
+`BrowserQuery`; `SetBrowserSection` rejects unknown identities without changing
+selection. Untitled/loose documents get standalone rows; saved Twin files appear
+once with open/dirty markers. Scene choices remain in Scenarios. Editor tab
+hover/context menus consume exact URI/purpose from `navigation_source`, with
+Reveal in Twin using the existing typed command. Keep source context local to
+its tab. The file tree rebuilds on workspace/query changes outside paint;
+scene choices use `list_indexed_scene_assets` over admitted inventories.
+
+Quick navigation uses the core `NavigationRegistry` provider mechanism. Reuse
+existing inventories, canonical identities, and typed commands; do not parse or
+perform I/O during paint. Ctrl/Cmd+P initially lists Twin files, while typing or
+choosing a scope exposes libraries/scenes/actions. Scene results explicitly say
+Load. Ctrl/Cmd+Shift+P opens panel/perspective actions. Alt+Left/Right visits bounded
+document/perspective history without loading worlds. Active `TwinClosed` retires
+search and history; queued requests and destination identities must reject stale
+ownership. Verify with the authored `workbench_navigation.rhai` gate via
+`scripts/api/test_workbench_navigation.py --port <free-port>`, plus native shortcut
+input and screenshots of a populated Twin browser, preview and search.
+
+### Configurable command shortcuts
+
+Settings → Keybindings uses the `input_settings` Rhai perspective. Register an
+existing typed command, then author its shortcut in the input-bindings document;
+do not add per-panel hardcoded command-key handlers. `lunco-input-core` owns
+normalization and collision precedence. `lunco-workbench` validates edits and
+dispatches through the transport-free reflected command core. Menu labels read
+`ActiveInputBindings::label` so remapping and Twin overrides remain visible.
+Twin bindings displace conflicting global chords in the effective snapshot only;
+Recent Events reports the winner and displaced identity when conflicts change.
+Use `InspectInputBindings` plus native injected key events in authored behavior
+trees to verify override, rejection, notification and restoration. Run
+`scripts/api/test_command_keybindings.py --port <owned-free-port>` and inspect
+the settings capture.

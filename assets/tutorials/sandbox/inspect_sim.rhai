@@ -11,7 +11,7 @@ fn steps() {
         #{ anchor: "panel.sandbox_inspector", focus: "sandbox_inspector", title: "Read Inspector",        body: "Open Inspector to read the selected object's pose, components, and authored properties." },
         #{ anchor: "panel.telemetry_browser", focus: "telemetry_browser", title: "Read telemetry",        body: "Use Analyze to open Telemetry beside Graphs. Select a port such as throttle, altitude, or battery to read its live value." },
         #{ anchor: "",                      title: "Read state from code",  body: "Call `ListEntities` to get an entity's `api_id`. Use `ListPorts` to discover exact names, then pass selected names in `ReadPorts`'s required `port_names` array. Use `CosimStatus` and `GetBrokenConnections` to inspect the Modelica link." },
-        #{ anchor: "",                      title: "Inspect, then act",     body: "Use selection, Inspector, and Telemetry to answer whether the simulation is working. Click Continue to return to the tutorial list." },
+        #{ anchor: "",                      title: "Inspect, then act",     body: "Use selection, Inspector, and Telemetry to answer whether the simulation is working. Choose another lesson from Tutorials after finishing this tour." },
     ]
 }
 
@@ -27,15 +27,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext" { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Inspect the Simulation complete", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else { show(s, this.i); }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

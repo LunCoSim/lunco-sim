@@ -6,9 +6,8 @@ license.workspace = true
 description = "Bevy integration for the LunCoSim Document System — generic document-lifecycle events and the Twin-level change journal."
 
 [dependencies]
-bevy = { workspace = true, features = ["keyboard"] }
-# egui only powers two UI-only systems (keyboard-intent suppression + repaint
-# fanout). Optional so a headless `--no-default-features` build (server) drops
+bevy = { workspace = true }
+# egui powers document-view repaint fanout. Optional so a headless `--no-default-features` build (server) drops
 # egui→winit entirely; the document-lifecycle events/types stay egui-free.
 bevy_egui = { workspace = true, optional = true }
 # `Command`, `on_command`, `register_commands` macro re-exports.
@@ -25,7 +24,7 @@ serde_json = { workspace = true }
 
 [features]
 default = ["ui"]
-# The egui-dependent editor-intent + view-sync systems. Off ⇒ no bevy_egui.
+# The egui-dependent view-sync systems. Off ⇒ no bevy_egui.
 ui = ["dep:bevy_egui"]
 
 [lints]

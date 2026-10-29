@@ -8,7 +8,7 @@ fn steps() {
         #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Open a Twin",     body: "In Twin Browser, expand a Twin and select a model. A Twin contains `.mo` files and a manifest." },
         #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Duplicate before editing", body: "Bundled demos and the Modelica Standard Library are read-only. Right-click a class and choose Duplicate to make an editable copy." },
         #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Follow a Learning Path",   body: "Open Learning Paths and choose Circuits, Control, or Mechanics. Select a class and follow its signal or behaviour goal." },
-        #{ anchor: "",                         focus: (),                     title: "Open a model next",   body: "Click Continue to learn the four model views." },
+        #{ anchor: "",                         focus: (),                     title: "Open a model next",   body: "Use the next-lesson button to learn the four model views." },
     ]
 }
 
@@ -18,18 +18,6 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    let s = steps();
-    if evt.name == "cmd:GuidedNext"      { this.i += 1; }
-    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
-    else if evt.name == "cmd:GuidedGoto" { this.i = evt.value; }
-    else { return; }
-
-    if this.i >= s.len() {
-        end_tour();
-        notify_kind("Lesson complete!", "success");
-        emit("MISSION_COMPLETE", 0);
-    } else {
-        coach_step(s, this.i);
-    }
+    if tutorials::navigation(evt, ctx) { return; }
+    this = tutorials::tour_event(this, evt, steps(), ctx);
 }

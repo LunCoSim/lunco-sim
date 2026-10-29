@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shared semantic input bindings and Bevy input-map projection"
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-core = { path = "../lunco-core" }
 bevy = { workspace = true, features = ["keyboard", "mouse"] }
 leafwing-input-manager = { workspace = true }
