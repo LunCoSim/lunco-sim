@@ -49,6 +49,15 @@ repaired samples correctly, and has zero runtime errors or warnings and no GPU
 validation errors. The owned process exits through the API and releases port
 4794. `final-validation.json` records that boundary.
 
+The integrated production check also loads the actual
+`griffin_1_surface_ops.usda` mission after retaining the newer main-branch
+renderer and native physics changes. It reaches readiness with no world hold,
+fault, pending work, runtime diagnostics or GPU validation errors. The lander
+is held at its 60 m startup pose for `griffin-startup-final.png`. The owned
+session exits through the API and releases port 4796;
+`integrated-validation.json` records the binary hash, source commit, readiness,
+lander pose and shutdown state.
+
 Focused validation commands:
 
 ```sh
