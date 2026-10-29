@@ -35,7 +35,7 @@ def main() -> None:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             text = log.read_text(errors="replace")[offset:]
-            for subject in ("preview", "library-search", "quick-open", "actions"):
+            for subject in ("preview", "library-view", "library-search", "quick-open", "actions", "scene-view"):
                 if f"NAV_CAPTURE:{subject}" in text and subject not in captured:
                     time.sleep(0.2)
                     session.capture_screenshot(output / f"{subject}.png")
@@ -43,7 +43,7 @@ def main() -> None:
             if "Workbench navigation: PASS" in text or "TESTS_FAIL" in text:
                 break
             time.sleep(0.1)
-        wait_for_authored_verdict(session, title="Workbench navigation", check_count=18, offset=offset, timeout_s=5)
+        wait_for_authored_verdict(session, title="Workbench navigation", check_count=25, offset=offset, timeout_s=5)
         session.capture_screenshot(output / "replacement-twin.png")
         assert_render_log_clean(log)
     print("Owned process exited and API port released", flush=True)

@@ -790,7 +790,7 @@ App launches
 ### Welcome Screen
 
 Shown when nothing else is loaded. The central viewport area becomes a
-styled panel — the rest of the workbench chrome (menu bar, activity bar,
+styled panel — the rest of the workbench chrome (menu bar,
 status bar) remains visible so the user sees the *app*, not a splash.
 
 ```

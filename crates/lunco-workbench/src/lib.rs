@@ -240,7 +240,6 @@ enum TabRequest {
 #[derive(Clone)]
 enum LayoutRequest {
     Reset,
-    SetActivityBar(bool),
     FocusPanel(PanelId),
     RemoveSingleton(PanelId),
     ActivatePerspective(String),
@@ -301,7 +300,6 @@ fn drain_pending_layout_requests(
     for request in std::mem::take(&mut pending.0) {
         match request {
             LayoutRequest::Reset => layout.reset_to_default_layout(),
-            LayoutRequest::SetActivityBar(visible) => layout.activity_bar = visible,
             LayoutRequest::ActivatePerspective(id) => {
                 if layout.activate_perspective_by_str(&id) {
                     record_explicit_perspective(

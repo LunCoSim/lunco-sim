@@ -10,9 +10,7 @@
 
 use egui;
 use lunco_doc::DocumentId;
-use lunco_workbench_browser::{
-    BrowserAction, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
-};
+use lunco_workbench_browser::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSection};
 use openusd::sdf;
 // The layer browser walks the AUTHORED specs of a layer, deliberately without
 // composition — so it reads through `UsdDataExt` (the authored-layer accessor),
@@ -57,14 +55,6 @@ impl BrowserSection for ConnectionsSection {
         "Connections"
     }
 
-    fn scope(&self) -> BrowserScope {
-        BrowserScope::Models
-    }
-
-    fn default_open(&self) -> bool {
-        false
-    }
-
     fn order(&self) -> u32 {
         125
     }
@@ -80,7 +70,7 @@ impl BrowserSection for ConnectionsSection {
 }
 
 /// Browser section that lists the active Twin's loaded USD stages as sibling
-/// rows in the Twin browser's Models scope. Populated by the lifecycle
+/// rows in its explicit Twin browser view. Populated by the lifecycle
 /// observers in [`UsdUiPlugin`](crate::UsdUiPlugin) (via
 /// [`LoadedUsdStages`](crate::loaded_stages::LoadedUsdStages)) and
 /// flattened into [`UsdBrowserView`] by the producer system.
@@ -93,21 +83,6 @@ impl BrowserSection for UsdSceneSection {
 
     fn title(&self) -> &str {
         "Open USD documents"
-    }
-
-    fn scope(&self) -> BrowserScope {
-        // USD belongs in the same Models tab as Modelica — both are
-        // typed-domain content of the open Twin. Files-scope rendering
-        // of `.usda` / `.usd` / `.usdc` files (raw on-disk view) is handled by the
-        // built-in FilesSection independently.
-        BrowserScope::Models
-    }
-
-    fn default_open(&self) -> bool {
-        // Collapse by default so the USD section renders as a folder
-        // entry until the user opens it. Avoids drowning the browser
-        // with stage rows in folders containing many USD files.
-        false
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {

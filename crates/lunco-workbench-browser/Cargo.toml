@@ -3,7 +3,7 @@ name = "lunco-workbench-browser"
 version = "0.1.0-dev"
 edition = "2024"
 license.workspace = true
-description = "Twin, file and library Navigator for the LunCoSim workbench"
+description = "Twin, file and library browser for the LunCoSim workbench"
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }

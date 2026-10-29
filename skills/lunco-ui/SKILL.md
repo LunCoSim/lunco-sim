@@ -160,7 +160,7 @@ shell-independent icon, text-editor, and tree helpers. Virtualized trees use
 `tree::branch_header` for a fixed row stride; recursive trees use `tree::branch`
 for an indented body, sharing the same disclosure state and controls.
 `lunco-workbench-browser` is the
-optional reusable Navigator feature: it owns browser state, Twin/Files/Libraries lenses,
+optional reusable Twin browser feature: it owns browser state, selected file/library/domain views,
 and filesystem/library sections, including the asset-provisioning dependency.
 Domain crates must not read the shell's private `WorkbenchLayout`; use
 `WorkbenchSnapshot` for layout facts and typed workbench/browser actions for
@@ -587,7 +587,7 @@ Document-scoped editor panels use the existing `UsdPreviewId` session as their
 view-model key. Keep each open session's tree, canvas, authored Inspector data,
 joint/animation state, authored layer, and projection generation isolated;
 the Editor perspective opens the prim tree in the upper-left pane and keeps the
-Navigator beside the Prims tab, so document choice and authored
+Twin browser beside the Prims tab, so document choice and authored
 hierarchy remain visible together. The prim tree consumes the full width of its
 pane and uses immediate structural collapse rendering; do not add a nested
 auto-shrinking scroll region or animated body that can paint stale outlines
@@ -869,17 +869,20 @@ lifecycle revision and may describe a committed Clear.
 
 ## Twin navigation and orientation
 
-The persistent context bar names the active Twin and loaded scene independently.
-The scene picker reuses Scenarios actions; source opens remain isolated previews.
-An editor instance supplies its exact URI and purpose through
-`InstancePanel::navigation_source`; never infer document identity from a tab id.
-The default Navigator Twin lens highlights active-Twin files. Editor places
-Navigator first beside Prims. The cached file tree rebuilds on workspace/query
-changes outside paint. Scene menu/search choices use
-`list_indexed_scene_assets` over admitted Twin inventories, never filesystem
-walks or manifest reads during presentation. Libraries, Modelica,
-USD documents, Connections, resources and dependency groups start collapsed.
-Keep `BrowserQuery` shared across lenses; source reveal opens matching ancestors.
+In document tasks, explicit center-instance opens establish center intent at the dock owner, even
+when Editor starts empty. Verify the actual rendered editor rectangle beside
+the browser, rather than only its allocated tab/source identity. Scene-backed perspectives
+keep background previews parked so they cannot cover the live world.
+
+The Twin panel defaults to the active Twin's files. Its selector displays one
+registered Files, Library or specialist view at a time. Changing views clears
+`BrowserQuery`; `SetBrowserSection` rejects unknown identities without changing
+selection. Untitled/loose documents get standalone rows; saved Twin files appear
+once with open/dirty markers. Scene choices remain in Scenarios. Editor tab
+hover/context menus consume exact URI/purpose from `navigation_source`, with
+Reveal in Twin using the existing typed command. Keep source context local to
+its tab. The file tree rebuilds on workspace/query changes outside paint;
+scene choices use `list_indexed_scene_assets` over admitted inventories.
 
 Quick navigation uses the core `NavigationRegistry` provider mechanism. Reuse
 existing inventories, canonical identities, and typed commands; do not parse or
@@ -890,7 +893,7 @@ document/perspective history without loading worlds. Active `TwinClosed` retires
 search and history; queued requests and destination identities must reject stale
 ownership. Verify with the authored `workbench_navigation.rhai` gate via
 `scripts/api/test_workbench_navigation.py --port <free-port>`, plus native shortcut
-input and screenshots of a populated Navigator, preview and search.
+input and screenshots of a populated Twin browser, preview and search.
 
 ### Configurable command shortcuts
 

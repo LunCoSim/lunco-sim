@@ -1587,35 +1587,6 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         return;
     };
     menus.register_custom_menu("Scenarios", render_scenarios_menu);
-    menus.register_context_bar(|ui, ctx| {
-        let name = ctx
-            .resource::<CurrentSceneName>()
-            .filter(|scene| !scene.0.is_empty())
-            .map(|scene| scene.0.clone())
-            .unwrap_or_else(|| "None loaded".into());
-        let path = ctx
-            .resource::<CurrentScenePath>()
-            .map(|scene| scene.0.clone())
-            .unwrap_or_default();
-        ui.menu_button(format!("Scene: {name}"), |ui| {
-            if !path.is_empty() {
-                ui.label(&path);
-                ui.separator();
-            }
-            render_scenarios_menu(ui, ctx);
-        })
-        .response
-        .on_hover_text(path);
-        if let Some(transport) = ctx.resource::<lunco_time::TimeTransport>() {
-            ui.label(
-                if matches!(transport.mode, lunco_time::TransportMode::Paused) {
-                    "Paused"
-                } else {
-                    "Running"
-                },
-            );
-        }
-    });
     world.init_resource::<lunco_workbench_core::navigation::NavigationRegistry>();
     world
         .resource_mut::<lunco_workbench_core::navigation::NavigationRegistry>()

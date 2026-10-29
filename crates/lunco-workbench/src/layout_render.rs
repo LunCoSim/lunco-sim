@@ -17,7 +17,7 @@ pub(super) fn render_layout(
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
     // workbench chrome — menu/title bar, status strip (and its FPS readout),
-    // activity bar, dock — must not be burnt into the footage. Skipping this
+    // dock — must not be burnt into the footage. Skipping this
     // pass while a recording is active leaves the 3D view full-bleed; the
     // deliberate overlays (input HUD, vessel telemetry, notifications) are
     // drawn by their own systems and survive. Scoped to `active`, so the
@@ -554,13 +554,7 @@ pub(super) fn render_layout(
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Toggle Activity Bar").clicked() {
-                    world
-                        .resource_mut::<PendingLayoutRequests>()
-                        .0
-                        .push(LayoutRequest::SetActivityBar(!layout.activity_bar));
-                    ui.close();
-                }
+                crate::navigation::render_menu(ui, world);
                 ui.separator();
                 // Panels are grouped into workflow submenus using the category
                 // each one declares (`Panel::menu_group`). Each row is a
@@ -929,8 +923,6 @@ pub(super) fn render_layout(
     });
     });
 
-    crate::navigation::render_bar(&mut menu_ui, layout, world, menus);
-
     let mut viewport_ui = egui::Ui::new(
         ctx.clone(),
         "lunco_workbench_viewport".into(),
@@ -955,22 +947,6 @@ pub(super) fn render_layout(
         .show(&mut viewport_ui, |ui| {
             render_status_bar_inner(ui, world, theme);
         });
-
-    // ── Activity bar ────────────────────────────────────────────────
-    if layout.activity_bar {
-        egui::Panel::left("lunco_workbench_activity_bar")
-            .resizable(false)
-            .exact_size(40.0)
-            .show(&mut viewport_ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(4.0);
-                    for label in ["Files", "Parts", "Assets", "Find", "Settings"] {
-                        ui.label(label);
-                        ui.add_space(8.0);
-                    }
-                });
-            });
-    }
 
     // ── Dock area / side panels ─────────────────────────────────────
     // Two-mode rendering:
@@ -1098,7 +1074,7 @@ pub(super) fn render_layout(
         {
             // The dock's true extent for the scene-pick gate: the rect we are
             // ABOUT to hand it — i.e. what's left of the root Ui after the menu /
-            // status / activity bars consumed their edges. Anything outside it is
+            // status bar consumed its edge. Anything outside it is
             // bare full-window 3D that must read as scene, not chrome.
             //
             // Must be measured BEFORE `show_inside`. The old code took

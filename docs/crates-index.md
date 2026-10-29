@@ -203,7 +203,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-text-editor`** | Reusable generic source editor: source-only text paths, asset/Twin/ephemeral source loading, async storage writes, tab lifecycle, and source-editor panel registration. It reuses the core source/tab contracts and shared text-editor widget without depending on the concrete docking shell. |
 | **`lunco-workbench-state`** | Reusable per-Twin session state: persisted document snapshots, domain codec registry, dock snapshot schema, runtime-surface layout state, storage-backed load/save, and the layout-provider contract used by concrete shells. |
 | **`lunco-workbench-window`** | Reusable OS-window capability: typed minimize/maximize/close commands, merged-titlebar construction, settings-backed geometry persistence, and explicit native placement. It depends on Bevy window APIs and `lunco-settings`, not the concrete Workbench shell. |
-| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel` Navigator with Twin/Files/Libraries lenses. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
+| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel` Twin browser with selected file/library/domain views. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, recording status, and bounded independent scene-scoped live camera views. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, shared selection/modal resources, and the bounded log model/renderer. It uses workbench contracts and shell-independent widgets; domain panels own their presentation snapshots. |
@@ -1291,8 +1291,8 @@ implements that contract for `egui_dock`; state consumers import these APIs
 directly rather than through the shell.
 
 **`lunco-workbench-browser`**
-Reusable navigation feature for a rendered host. It owns the Navigator and its Twin/Files/Libraries
-lenses, browser query/actions/resources, built-in filesystem and library
+Reusable navigation feature for a rendered host. It owns the Twin browser and selected file/library/domain
+views, browser query/actions/resources, built-in filesystem and library
 sections, while consuming shell-neutral panel, source-view, scene-state, and
 rename command contracts from their owning crates. The library section consumes
 the asset manifest's monotonic revision and retains its tree between replacements

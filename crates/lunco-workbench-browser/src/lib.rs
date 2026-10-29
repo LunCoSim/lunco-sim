@@ -1,4 +1,4 @@
-//! Navigator with Twin, Files, and Libraries lenses for the workbench.
+//! Focused Twin files, library and specialist browser views.
 //!
 //! The concrete workbench shell owns docking, source editing, and viewport
 //! presentation. This package owns the reusable browser feature. Dataset
@@ -14,7 +14,7 @@ pub mod navigation;
 pub mod twin_browser;
 
 pub use twin_browser::{
-    BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
+    BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserSection,
     BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TWIN_BROWSER_PANEL_ID,
     TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
 };
@@ -31,6 +31,7 @@ impl Plugin for TwinBrowserPlugin {
         app.init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
             .init_resource::<BrowserQuery>()
+            .register_type::<BrowserQuery>()
             .init_resource::<UnsavedDocs>()
             .add_observer(twin_browser::clear_browser_state_on_twin_closed)
             .add_systems(Update, drain_browser_navigation);

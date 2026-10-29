@@ -26,6 +26,7 @@ fn ready(me) {
 }
 fn begin(me) {
     let current = nav(); this.scene = current.scene_path; this.twin = current.twin_id;
+    this = record(this, get_setting("BrowserView.section") == "lunco.workbench.files", "the Twin panel starts with one Files view");
     this = record(this, current.twin_root != () && this.scene != "", "Twin and loaded scene have independent exact context");
     cmd("ActivatePerspective", #{id: "editor"}); cmd("SearchNavigation", #{});
 }
@@ -40,15 +41,43 @@ fn open_twin_source(me) {
     this = record(this, target != (), "quick-open finds the source in the existing Twin inventory");
     if target != () { cmd("ActivateNavigationEntry", #{id: target}); }
 }
-fn preview_ready(me) { let current = nav(); current.source != () && current.mode != () && current.mode.contains("USD preview") }
+fn visible_preview(me) {
+    let preview = (); let browser = ();
+    for panel in query("InspectWorkbench").rendered_panels {
+        if panel.id == "usd::preview_view" { preview = panel; }
+        if panel.id == "lunco.workbench.twin_browser" { browser = panel; }
+    }
+    preview != () && browser != () && preview.width > 0.0 && preview.height > 0.0 && preview.left >= browser.left + browser.width - 1.0
+}
+fn preview_ready(me) { let current = nav(); current.source != () && current.mode != () && current.mode.contains("USD preview") && visible_preview(me) }
 fn inspect_preview(me) {
     let current = nav(); this.source = current.source;
+    for tab in query("InspectWorkbench").docked_instance_tabs {
+        if tab.kind == "usd::preview_view" { this.preview_instance = tab.instance; }
+    }
+    this = record(this, visible_preview(me), "opening the first file creates a visible central editor beside the Twin browser");
     this = record(this, this.source.ends_with("site.usda"), "USD sources identify their isolated editing preview");
     this = record(this, current.scene_path == this.scene && current.twin_id == this.twin, "opening a source preserves the loaded scene and active Twin");
     print("NAV_CAPTURE:preview");
 }
+fn reveal_source(me) { cmd("RevealNavigationSource", #{uri: this.source}); }
+fn revealed(me) { get_setting("BrowserView.section") == "lunco.workbench.files" && get_setting("BrowserQuery.text").ends_with("site.usda") }
+fn choose_library(me) {
+    this = record(this, revealed(me), "revealing a document selects Files and filters its exact source");
+    cmd("SetBrowserSection", #{id: "lunco.workbench.library"});
+}
+fn library_view_ready(me) { get_setting("BrowserView.section") == "lunco.workbench.library" }
+fn inspect_library_view(me) {
+    print("NAV_CAPTURE:library-view");
+    this = record(this, get_setting("BrowserQuery.text") == "", "choosing Libraries clears the Files filter and replaces its contents");
+    this.rejection = cmd("SetBrowserSection", #{id: "missing-browser-view-7492"});
+}
+fn view_rejection_ready(me) {
+    if this.rejection.status == "pending" { this.rejection = command_result(this.rejection.id); }
+    this.rejection.status != "pending"
+}
 fn find_library(me) {
-    cmd("RevealNavigationSource", #{uri: this.source});
+    this = record(this, !this.rejection.ok && library_view_ready(me), "an unavailable view rejects without changing the selected view");
     cmd("SearchNavigation", #{query: "workbench_perspectives", category: "Libraries"});
 }
 fn library_results_ready(me) { let current = nav(); current.query == "workbench_perspectives" && current.entries.len() > 0 }
@@ -122,10 +151,20 @@ fn inspect_actions(me) {
     this = record(this, actions_only, "native application Ctrl+Shift+P opens panel and perspective actions");
     print("NAV_CAPTURE:actions");
 }
+fn switch_to_scene(me) { cmd("ActivatePerspective", #{id: "sandbox_view"}); }
+fn scene_view_ready(me) { query("InspectWorkbench").active_perspective == "sandbox_view" }
+fn park_preview(me) { cmd("OpenTab", #{kind: "usd::preview_view", instance: this.preview_instance}); }
+fn inspect_scene_view(me) {
+    let hidden = true;
+    for panel in query("InspectWorkbench").rendered_panels { if panel.id == "usd::preview_view" { hidden = false; } }
+    this = record(this, hidden && scene_view_ready(me) && nav().scene_path == this.scene, "scene-backed View keeps background previews hidden and preserves the loaded world");
+    print("NAV_CAPTURE:scene-view");
+}
 fn replace_twin(me) { cmd("OpenTwin", #{path: this.replacement}); }
 fn replacement_ready(me) { let current = nav(); current.twin_id != () && current.twin_id != this.twin }
 fn inspect_retirement(me) {
     let current = nav();
+    this = record(this, get_setting("BrowserView.section") == "lunco.workbench.files" && get_setting("BrowserQuery.text") == "", "Twin replacement restores the single Files view and clears its filter");
     this = record(this, !current.open && current.query == "" && !current.can_back && current.source == (), "Twin replacement retires search, source context, and navigation history");
     this = finish(this, "");
 }
@@ -144,7 +183,9 @@ fn task(me, ctx) {
             wait_until(Fn("ready")), once(Fn("begin")), check(Fn("valid")),
             wait_until(Fn("twin_results_ready")), once(Fn("open_twin_source")), check(Fn("valid")),
             wait_until(Fn("preview_ready")), once(Fn("inspect_preview")), check(Fn("valid")), wait(1.0),
-            once(Fn("find_library")), wait_until(Fn("library_results_ready")), once(Fn("inspect_library_results")), check(Fn("valid")), wait(1.0),
+            once(Fn("reveal_source")), wait_until(Fn("revealed")), once(Fn("choose_library")), check(Fn("valid")),
+            wait_until(Fn("library_view_ready")), once(Fn("inspect_library_view")), check(Fn("valid")), wait(1.0),
+            wait_until(Fn("view_rejection_ready")), once(Fn("find_library")), check(Fn("valid")), wait_until(Fn("library_results_ready")), once(Fn("inspect_library_results")), check(Fn("valid")), wait(1.0),
             once(Fn("open_library")), wait_until(Fn("library_ready")), once(Fn("inspect_library")), check(Fn("valid")),
             wait_until(Fn("back_ready")), once(Fn("go_forward")), check(Fn("valid")), wait_until(Fn("library_ready")),
             once(Fn("reject_destination")), wait_until(Fn("rejection_ready")), once(Fn("empty_search")), check(Fn("valid")),
@@ -157,6 +198,9 @@ fn task(me, ctx) {
             once(Fn("inspect_entered_source")), check(Fn("valid")),
             once(Fn("press_control_shift")), wait(0.05), once(Fn("press_p")), wait(0.05), once(Fn("release_shortcut")),
             wait_until(Fn("actions_ready")), once(Fn("inspect_actions")), check(Fn("valid")), wait(1.0),
+            once(Fn("press_escape")), wait(0.05), once(Fn("release_escape")), wait_until(Fn("search_closed")),
+            once(Fn("switch_to_scene")), wait_until(Fn("scene_view_ready")), once(Fn("park_preview")), wait(0.1),
+            once(Fn("inspect_scene_view")), check(Fn("valid")), wait(1.0),
             once(Fn("replace_twin")), wait_until(Fn("replacement_ready")), once(Fn("inspect_retirement")),
         ]),
         seq([wait(45.0), once(Fn("timeout"))]),

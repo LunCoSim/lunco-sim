@@ -10,16 +10,18 @@ in the bottom dock when reopened. View → Reset Layout reapplies this placement
 
 ## Keep your place
 
-The context bar shows the active Twin and loaded scene in every perspective.
-**Browse Twin** opens the Navigator with the active Twin's files; library and
-secondary sections start collapsed. Choose **Files** for document dependencies
-or **Libraries** for shared sources. Opening a USD file opens an editing preview;
-choose **Scene: name** to explicitly load a different world. The preview/source
-label identifies what you are editing independently of that world.
+The **Twin** panel starts with the active Twin's files. Its selector opens
+Libraries or a specialist view such as Modelica or Document dependencies, one
+at a time. Changing views clears the filter. The **…** menu offers Open Twin,
+Recent Twins and Find file. View can reopen the Twin panel.
 
-Use Ctrl/Cmd+P to find a file, scene or library source. Ctrl/Cmd+Shift+P finds
-panels and perspectives. Alt+Left/Right returns through visited document views.
-**Reveal in navigator** locates the focused editor's exact source.
+Opening a USD file opens an editing preview. Use Scenarios to load a different
+world. Hover a document tab for its source and purpose, or right-click it and
+choose **Reveal in Twin** to locate the exact file.
+
+Use Ctrl/Cmd+P to find files, scenes or library sources. Ctrl/Cmd+Shift+P finds
+panels and perspectives. Alt+Left/Right visits document history; View also
+provides Find files, Back and Forward.
 
 ## Discover the available views
 

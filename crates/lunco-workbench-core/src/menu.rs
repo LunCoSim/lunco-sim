@@ -212,8 +212,6 @@ pub type UndoProbe = Arc<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + 
 /// Registry of menu contributions owned by the workbench contract layer.
 #[derive(Resource, Default, Clone)]
 pub struct WorkbenchMenuRegistry {
-    /// Domain-owned controls in the persistent navigation/context bar.
-    pub context_bar: Vec<MenuCallback>,
     /// Settings submenus grouped by their label.
     pub settings_submenus: Vec<SettingsSubmenu>,
     /// Edit-menu callbacks.
@@ -246,13 +244,6 @@ pub struct ScriptedMenu {
 }
 
 impl WorkbenchMenuRegistry {
-    /// Contribute a typed, read-only context control without coupling the shell to a domain.
-    pub fn register_context_bar<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        self.context_bar.push(Arc::new(callback));
-    }
     /// Replace all top-level menus contributed by one script provider.
     pub fn replace_scripted_menus(
         &mut self,

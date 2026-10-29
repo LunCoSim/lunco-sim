@@ -517,7 +517,7 @@ fn parse(
     let mut ids = HashSet::new();
     definitions.iter().map(|value| {
         let HookValue::Map(fields) = value else { return Err("Perspective definition must be a map".into()); };
-        const FIELDS: &[&str] = &["id", "title", "description", "interaction", "left", "left_bottom", "center", "right", "right_bottom", "bottom", "instances", "floating", "revision", "visible", "restore", "scene_visible", "activity_bar"];
+        const FIELDS: &[&str] = &["id", "title", "description", "interaction", "left", "left_bottom", "center", "right", "right_bottom", "bottom", "instances", "floating", "revision", "visible", "restore", "scene_visible"];
         for (key, _) in fields {
             if !FIELDS.contains(&key.as_str()) { return Err(format!("Unknown perspective field `{key}`")); }
         }
@@ -529,7 +529,6 @@ fn parse(
         if !ids.insert(id.clone()) { return Err(format!("Duplicate perspective `{name}`")); }
         let mut seen = HashSet::new();
         let mut plan = PerspectiveLayoutPlan {
-            activity_bar: boolean(value, "activity_bar", false)?,
             side_browser: slot(value, "left", layout, &mut seen)?,
             center: slot(value, "center", layout, &mut seen)?,
             right_inspector: slot(value, "right", layout, &mut seen)?,

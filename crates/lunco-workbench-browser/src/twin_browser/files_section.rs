@@ -11,7 +11,7 @@ use lunco_workspace::rename::RenameTwinEntry;
 use std::sync::Arc;
 
 use super::{
-    BrowserAction, BrowserCtx, BrowserScope, BrowserSection,
+    BrowserAction, BrowserCtx, BrowserSection,
     path_tree::{PathTree, build_path_tree},
 };
 
@@ -142,6 +142,8 @@ struct DocRenameInProgress {
     needs_focus: bool,
 }
 
+pub const FILES_SECTION_ID: &str = "lunco.workbench.files";
+
 /// The built-in Files section impl.
 #[derive(Default)]
 pub struct FilesSection {
@@ -154,29 +156,15 @@ pub struct FilesSection {
 
 impl BrowserSection for FilesSection {
     fn id(&self) -> &str {
-        "lunco.workbench.files"
+        FILES_SECTION_ID
     }
 
     fn title(&self) -> &str {
         "Files"
     }
 
-    fn scope(&self) -> BrowserScope {
-        // The Files section IS the Files tab — domain-agnostic raw FS
-        // view. The Models tab is reserved for typed-content sections
-        // contributed by domain crates.
-        BrowserScope::Files
-    }
-
-    fn default_open(&self) -> bool {
-        // Inside the Files tab the section is the only one and should
-        // be expanded by default — there's no domain section above to
-        // anchor the user's eye.
-        true
-    }
-
     fn order(&self) -> u32 {
-        // The active Twin anchors the Navigator ahead of secondary domain views.
+        // Files is the primary view in the selector.
         0
     }
 
@@ -190,9 +178,8 @@ impl BrowserSection for FilesSection {
             .resource::<super::BrowserQuery>()
             .cloned()
             .unwrap_or_default();
-        // Render workspace documents (saved + unsaved) so the list
-        // stays stable across Save — a Save shouldn't make a doc
-        // disappear from the user's view of "what am I working on."
+        // Documents supply dirty markers for indexed file rows. Untitled and
+        // loose documents also need standalone rows because they have no Twin path.
         // Unsaved drafts get a dirty dot in the theme warning colour
         // plus an italic name; saved docs render plain. Kind badges
         // are intentionally omitted — file extensions in the display
@@ -232,11 +219,30 @@ impl BrowserSection for FilesSection {
         let mut doc_cancel = false;
         let mut doc_close: Option<lunco_doc::DocumentId> = None;
 
-        for entry in docs.iter().filter(|entry| {
-            !query.is_active()
-                || query.matches(&display_name_with_ext(entry))
-                || query.matches(&entry.kind)
-        }) {
+        let standalone = |entry: &super::UnsavedDocEntry| {
+            ctx.resource::<lunco_workspace::WorkspaceResource>()
+                .and_then(|workspace| {
+                    let doc = workspace.document(entry.id)?;
+                    let path = doc.origin.canonical_path()?;
+                    let twin = workspace.active_twin.and_then(|id| workspace.twin(id))?;
+                    Some(!path.starts_with(&twin.root))
+                })
+                .unwrap_or(true)
+        };
+        let standalone_ids: std::collections::HashSet<_> = docs
+            .iter()
+            .filter(|entry| standalone(entry))
+            .map(|entry| entry.id)
+            .collect();
+        for entry in docs
+            .iter()
+            .filter(|entry| standalone_ids.contains(&entry.id))
+            .filter(|entry| {
+                !query.is_active()
+                    || query.matches(&display_name_with_ext(entry))
+                    || query.matches(&entry.kind)
+            })
+        {
             let in_rename = self
                 .rename_doc
                 .as_ref()
@@ -355,7 +361,7 @@ impl BrowserSection for FilesSection {
             ctx.actions.push(BrowserAction::CloseDoc { doc });
         }
 
-        // Files is the active-Twin lens. Other open Twins remain workspace
+        // The tree belongs to the active Twin. Other open Twins remain workspace
         // state, but their files must not be presented as current or routed
         // through the active Twin's path resolver.
         let active_twin = ctx
@@ -366,8 +372,7 @@ impl BrowserSection for FilesSection {
         // and which of those are dirty (never-saved this session). A file row
         // whose absolute path matches an open doc gets a marker so the user can
         // see "what am I editing right now" directly in the tree — the
-        // workspace-doc list above shows the same docs, but keyed by tab, not
-        // by location in the Twin's folders.
+        // standalone list above covers only documents outside this tree.
         let mut open_paths: std::collections::HashSet<std::path::PathBuf> =
             std::collections::HashSet::new();
         let mut unsaved_paths: std::collections::HashSet<std::path::PathBuf> =
@@ -401,7 +406,7 @@ impl BrowserSection for FilesSection {
 
         // Divider only appears between the workspace docs and the
         // folder list — if either is empty, no line to draw.
-        if !docs.is_empty() {
+        if !standalone_ids.is_empty() {
             ui.separator();
         }
 

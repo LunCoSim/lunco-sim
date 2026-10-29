@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use egui;
 
 use super::{
-    BrowserCtx, BrowserScope, BrowserSection,
+    BrowserCtx, BrowserSection,
     path_tree::{PathTree, build_path_tree},
 };
 use lunco_workbench_core::scene::CurrentScenePath;
@@ -63,21 +63,15 @@ impl LuncoLibrarySection {
     }
 }
 
+pub const LIBRARY_SECTION_ID: &str = "lunco.workbench.library";
+
 impl BrowserSection for LuncoLibrarySection {
     fn id(&self) -> &str {
-        "lunco.workbench.library"
+        LIBRARY_SECTION_ID
     }
 
     fn title(&self) -> &str {
         "LunCo Library"
-    }
-
-    fn scope(&self) -> BrowserScope {
-        BrowserScope::Libraries
-    }
-
-    fn default_open(&self) -> bool {
-        false
     }
 
     fn order(&self) -> u32 {

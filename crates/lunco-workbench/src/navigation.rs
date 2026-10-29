@@ -1,12 +1,11 @@
-//! Persistent context, quick-open, and document navigation in the concrete shell.
+//! Quick-open and document navigation in the concrete shell.
 
 use super::*;
-use lunco_workbench_core::commands::{
-    ActivateNavigationEntry, NavigateHistory, RevealNavigationSource, SearchNavigation,
-};
-use lunco_workbench_core::navigation::{NavigationEntry, NavigationRegistry, NavigationSource};
+use lunco_workbench_core::commands::{ActivateNavigationEntry, NavigateHistory, SearchNavigation};
+#[cfg(feature = "api")]
+use lunco_workbench_core::navigation::NavigationSource;
+use lunco_workbench_core::navigation::{NavigationEntry, NavigationRegistry};
 use lunco_workbench_core::trigger_or_defer;
-use lunco_workspace::open::OpenTwin;
 
 #[derive(Resource, Default)]
 struct NavigationSearch {
@@ -116,7 +115,17 @@ fn process_requests(world: &mut World) {
         };
         if let Err(error) = &result {
             warn!("Navigation rejected: {error:?}");
-            world.resource_mut::<NavigationSearch>().error = Some(format!("{error:?}"));
+            let message = format!("Navigation rejected: {error:?}");
+            world.resource_mut::<NavigationSearch>().error = Some(message.clone());
+            world.trigger(lunco_telemetry_core::TelemetryEvent {
+                name: "navigation-rejected".into(),
+                source: 0,
+                severity: lunco_telemetry_core::Severity::Warning,
+                data: lunco_telemetry_core::TelemetryValue::String(message),
+                timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
+            });
         }
         if let Some(command) = command {
             world
@@ -328,6 +337,7 @@ pub(super) fn install(app: &mut App) {
     }
 }
 
+#[cfg(feature = "api")]
 fn focused_source(layout: &WorkbenchLayout, world: &World) -> Option<NavigationSource> {
     let TabId::Instance { kind, instance } = *layout.focused_tab()? else {
         return None;
@@ -338,168 +348,39 @@ fn focused_source(layout: &WorkbenchLayout, world: &World) -> Option<NavigationS
         .navigation_source(world, instance)
 }
 
-pub(super) fn render_bar(
-    ui: &mut egui::Ui,
-    layout: &WorkbenchLayout,
-    world: &mut World,
-    menus: &WorkbenchMenuRegistry,
-) {
-    let source = focused_source(layout, world);
-    egui::Panel::top("workbench_navigation_context").show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let history = world.resource::<NavigationHistory>();
-            let back = history.cursor > 0;
-            let forward = history.cursor + 1 < history.locations.len();
-            for (label, enabled, forward) in [("←", back, false), ("→", forward, true)] {
-                if ui
-                    .add_enabled(enabled, egui::Button::new(label))
-                    .on_hover_text(format!(
-                        "{} {}",
-                        if forward { "Forward" } else { "Back" },
-                        crate::render::configured_command_shortcut(
-                            world,
-                            if forward {
-                                "navigation.forward"
-                            } else {
-                                "navigation.back"
-                            }
-                        )
-                    ))
-                    .clicked()
-                {
-                    trigger_or_defer(world, NavigateHistory { forward });
-                }
-            }
-            let twin = world
-                .get_resource::<WorkspaceResource>()
-                .and_then(|workspace| workspace.active_twin.and_then(|id| workspace.twin(id)));
-            let name = twin
-                .map(|twin| {
-                    twin.manifest
-                        .as_ref()
-                        .map(|manifest| manifest.name.clone())
-                        .unwrap_or_else(|| twin.root.display().to_string())
-                })
-                .unwrap_or_else(|| "No Twin".into());
-            let root = twin
-                .map(|twin| twin.root.display().to_string())
-                .unwrap_or_default();
-            ui.menu_button(format!("Twin: {name}"), |ui| {
-                if !root.is_empty() {
-                    ui.label(&root);
-                    ui.separator();
-                }
-                if ui.button("Open Twin…").clicked() {
-                    trigger_or_defer(
-                        world,
-                        OpenTwin {
-                            path: String::new(),
-                        },
-                    );
-                    ui.close();
-                }
-                let recents = world
-                    .get_resource::<WorkspaceResource>()
-                    .map(|workspace| workspace.recents.twin_paths.clone())
-                    .unwrap_or_default();
-                for path in recents {
-                    if ui.button(path.display().to_string()).clicked() {
-                        trigger_or_defer(
-                            world,
-                            OpenTwin {
-                                path: path.display().to_string(),
-                            },
-                        );
-                        ui.close();
-                    }
-                }
-            });
-            for callback in &menus.context_bar {
-                run_menu_callback(ui, world, callback.as_ref());
-            }
-            if ui
-                .button("Find…")
-                .on_hover_text(format!(
-                    "Quick Open {} · Actions {}",
-                    crate::render::configured_command_shortcut(world, "navigation.find"),
-                    crate::render::configured_command_shortcut(world, "navigation.actions")
-                ))
-                .clicked()
-            {
-                trigger_or_defer(world, SearchNavigation::default());
-            }
-        });
-        if let Some(source) = source {
-            let source_path = std::path::Path::new(&source.uri);
-            let owner = world
-                .get_resource::<WorkspaceResource>()
-                .and_then(|workspace| {
-                    workspace.twins().find_map(|(_, twin)| {
-                        source_path.strip_prefix(&twin.root).ok().map(|relative| {
-                            (
-                                twin.manifest
-                                    .as_ref()
-                                    .map(|manifest| manifest.name.clone())
-                                    .unwrap_or_else(|| twin.root.display().to_string()),
-                                twin.root.clone(),
-                                relative.to_path_buf(),
-                            )
-                        })
-                    })
-                });
-            ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(format!("{}:", source.mode)).strong());
-                if let Some((name, root, relative)) = owner {
-                    if ui
-                        .small_button(name)
-                        .on_hover_text(root.display().to_string())
-                        .clicked()
-                    {
-                        trigger_or_defer(
-                            world,
-                            RevealNavigationSource {
-                                uri: root.display().to_string(),
-                            },
-                        );
-                    }
-                    let mut path = root;
-                    for component in relative.components() {
-                        path.push(component);
-                        ui.label("/");
-                        if ui
-                            .small_button(component.as_os_str().to_string_lossy())
-                            .on_hover_text(path.display().to_string())
-                            .clicked()
-                        {
-                            trigger_or_defer(
-                                world,
-                                RevealNavigationSource {
-                                    uri: path.display().to_string(),
-                                },
-                            );
-                        }
-                    }
-                } else {
-                    ui.label(&source.uri).on_hover_text(&source.uri);
-                }
-                if ui.small_button("Reveal in navigator").clicked() {
-                    trigger_or_defer(
-                        world,
-                        RevealNavigationSource {
-                            uri: source.uri.clone(),
-                        },
-                    );
-                }
-            });
-        }
-        if let Some(error) = world
-            .get_resource::<NavigationSearch>()
-            .filter(|search| !search.open)
-            .and_then(|search| search.error.as_ref())
+pub(super) fn render_menu(ui: &mut egui::Ui, world: &mut World) {
+    if crate::render::menu_item(
+        ui,
+        true,
+        "Find files…",
+        &crate::render::configured_command_shortcut(world, "navigation.find"),
+        "",
+    )
+    .clicked()
+    {
+        trigger_or_defer(world, SearchNavigation::default());
+        ui.close();
+    }
+    let history = world.resource::<NavigationHistory>();
+    let back = history.cursor > 0;
+    let forward = history.cursor + 1 < history.locations.len();
+    for (label, enabled, forward, binding) in [
+        ("Back", back, false, "navigation.back"),
+        ("Forward", forward, true, "navigation.forward"),
+    ] {
+        if crate::render::menu_item(
+            ui,
+            enabled,
+            label,
+            &crate::render::configured_command_shortcut(world, binding),
+            "No destination in that direction",
+        )
+        .clicked()
         {
-            ui.colored_label(world.resource::<lunco_theme::Theme>().tokens.error, error);
+            trigger_or_defer(world, NavigateHistory { forward });
+            ui.close();
         }
-    });
+    }
 }
 
 pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
@@ -614,13 +495,11 @@ pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
                             .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
                     row.spacing_mut().item_spacing.y = 0.0;
-                    row.add_sized(
-                        [row.available_width(), title_height],
+                    row.add(
                         egui::Label::new(format!("{}  ·  {}", entry.label, entry.category))
                             .truncate(),
                     );
-                    row.add_sized(
-                        [row.available_width(), detail_height],
+                    row.add(
                         egui::Label::new(egui::RichText::new(&entry.detail).small()).truncate(),
                     );
                     let response = response.on_hover_text(&entry.detail);

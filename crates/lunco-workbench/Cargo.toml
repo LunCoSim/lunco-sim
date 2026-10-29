@@ -3,7 +3,7 @@ name = "lunco-workbench"
 version = "0.1.0-dev"
 edition = "2024"
 license.workspace = true
-description = "LunCoSim's own workbench shell — activity bar, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
+description = "LunCoSim's own workbench shell — central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
 
 [features]
 default = []

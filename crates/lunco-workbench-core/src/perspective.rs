@@ -98,8 +98,6 @@ pub struct PerspectiveFloatingPanel {
 /// Renderer-independent result of applying a perspective.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PerspectiveLayoutPlan {
-    /// Whether the activity bar is visible.
-    pub activity_bar: bool,
     /// Side-browser slot declaration.
     pub side_browser: PerspectiveSlotPlan,
     /// Center slot declaration.
@@ -117,10 +115,9 @@ pub struct PerspectiveLayoutPlan {
 }
 
 impl PerspectiveLayoutPlan {
-    /// Create an empty plan with the shell's default activity-bar state.
+    /// Create an empty layout plan.
     pub const fn new() -> Self {
         Self {
-            activity_bar: false,
             side_browser: PerspectiveSlotPlan::new(),
             center: PerspectiveSlotPlan::new(),
             right_inspector: PerspectiveSlotPlan::new(),

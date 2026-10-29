@@ -7,18 +7,16 @@ to the Document System and the multi-domain composition workflow
 documented in [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.md).
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│ menu · command palette · title · transport · perspective tabs│
-├───┬─────────────────────┬──────────────┬────────────────────┤
-│ A │                     │              │                    │
-│ c │  Navigator          │   VIEWPORT   │   Inspector        │
-│ t │  (twins + docs)     │              │ (context-aware)    │
-│ i │                     │              │                    │
-│ v │                     ├──────────────┤                    │
-│   │                     │ bottom dock  │                    │
-├───┴─────────────────────┴──────────────┴────────────────────┤
-│ status bar                                                  │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ menu · title · transport · perspective tabs                 │
+├─────────────────────┬──────────────┬───────────────────────┤
+│ Twin browser        │  VIEWPORT    │ Inspector             │
+│ (one selected view) │              │                       │
+│                     ├──────────────┤                       │
+│                     │ bottom dock  │                       │
+├─────────────────────┴──────────────┴───────────────────────┤
+│ status bar                                                 │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ## Three concepts, three different things
@@ -180,7 +178,7 @@ cargo run --bin lunica      # Modelica workbench
   continue to persist per Twin.
 - The shell is browser-agnostic. Add `lunco-workbench-browser` when the
   application needs Twin/Files navigation; that package provides the standard
-  Navigator and accepts domain `BrowserSection` implementations.
+  Twin browser and accepts domain `BrowserSection` implementations.
 
 The workbench derives `egui::Visuals` once per `Theme` revision and shares
 that snapshot with every panel surface. Panel render paths should consume the
@@ -251,10 +249,10 @@ bevy + bevy_egui
 
 ## Navigation
 
-The persistent context bar distinguishes the active Twin, loaded scene, and
-focused source editor. Ctrl/Cmd+P opens quick navigation, initially scoped to
-active-Twin files; Ctrl/Cmd+Shift+P selects panel and perspective actions.
-Alt+Left/Right visits document/perspective history without replaying scene loads.
-Source owners supply exact URI/purpose metadata through `navigation_source`;
-provider callbacks reuse typed domain commands. See architecture §7 for lifecycle
-and production acceptance.
+View → Find files and Ctrl/Cmd+P open quick navigation, initially scoped to
+active-Twin files. Ctrl/Cmd+Shift+P selects panel/perspective actions. View →
+Back/Forward and Alt+Left/Right visit document history without replaying scene
+loads. Source owners supply exact URI/purpose through `navigation_source`;
+tab tooltips and context menus display it and offer Reveal in Twin. The Twin
+panel displays one selected file/library/domain view. See architecture §7 for
+lifecycle and production acceptance.

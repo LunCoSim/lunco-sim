@@ -1,6 +1,8 @@
 //! Browser navigation uses the existing file inventory and document dispatch.
 
-use crate::{BrowserAction, BrowserActions, BrowserQuery, BrowserScope, TWIN_BROWSER_PANEL_ID};
+use crate::{
+    BrowserAction, BrowserActions, BrowserQuery, BrowserSectionRegistry, TWIN_BROWSER_PANEL_ID,
+};
 use bevy::prelude::*;
 use lunco_doc::{Ack, OpId};
 use lunco_workbench_core::commands::{FocusPanel, RevealNavigationSource};
@@ -8,23 +10,24 @@ use lunco_workbench_core::navigation::{NavigationEntry, NavigationRegistry};
 use lunco_workbench_core::source::{OpenSourceView, OpenTwinSource};
 use std::sync::Arc;
 
-#[derive(Resource, Clone, Debug)]
+#[derive(Resource, Reflect, Clone, Debug)]
+#[reflect(Resource)]
 pub struct BrowserView {
-    pub scope: BrowserScope,
+    pub section: String,
 }
 
 impl Default for BrowserView {
     fn default() -> Self {
         Self {
-            scope: BrowserScope::Models,
+            section: crate::twin_browser::files_section::FILES_SECTION_ID.into(),
         }
     }
 }
 
-/// Select a navigator lens while preserving the shared search query.
+/// Select one registered browser view. View changes clear the local filter.
 #[lunco_core::Command(default)]
-pub struct SetBrowserScope {
-    pub scope: String,
+pub struct SetBrowserSection {
+    pub id: String,
 }
 
 /// Open a file from the active Twin through the same route as its browser row.
@@ -33,14 +36,18 @@ pub struct OpenBrowserFile {
     pub relative_path: String,
 }
 
-#[lunco_core::on_command(SetBrowserScope)]
-fn set_scope(trigger: On<SetBrowserScope>, mut view: ResMut<BrowserView>) -> Result<Ack, String> {
-    view.scope = match trigger.scope.as_str() {
-        "models" => BrowserScope::Models,
-        "files" => BrowserScope::Files,
-        "libraries" => BrowserScope::Libraries,
-        _ => return Err("Unknown browser scope; expected models, files, or libraries".into()),
-    };
+#[lunco_core::on_command(SetBrowserSection)]
+fn set_section(
+    trigger: On<SetBrowserSection>,
+    registry: Res<BrowserSectionRegistry>,
+    mut view: ResMut<BrowserView>,
+    mut query: ResMut<BrowserQuery>,
+) -> Result<Ack, String> {
+    if !registry.iter().any(|section| section.id() == trigger.id) {
+        return Err(format!("Unknown browser view: {}", trigger.id));
+    }
+    view.section = trigger.id.clone();
+    query.text.clear();
     Ok(Ack::new(OpId::new()))
 }
 
@@ -91,13 +98,13 @@ fn reveal(
         .and_then(|id| workspace.twin(id))
         .and_then(|twin| std::path::Path::new(uri).strip_prefix(&twin.root).ok())
     {
-        view.scope = BrowserScope::Files;
+        view.section = crate::twin_browser::files_section::FILES_SECTION_ID.into();
         query.text = relative.display().to_string();
     } else if let Some(relative) = uri.strip_prefix("lunco://") {
-        view.scope = BrowserScope::Libraries;
+        view.section = crate::twin_browser::library_section::LIBRARY_SECTION_ID.into();
         query.text = relative.to_owned();
     } else {
-        return Err("This source is outside the active Twin and bundled library; its exact path remains in the context bar".into());
+        return Err("This source is outside the active Twin and bundled library; inspect its exact path from the document tab".into());
     }
     commands.trigger(FocusPanel {
         id: TWIN_BROWSER_PANEL_ID.as_str().into(),
@@ -105,7 +112,7 @@ fn reveal(
     Ok(Ack::new(OpId::new()))
 }
 
-lunco_core::register_commands!(set_scope, open_file, reveal);
+lunco_core::register_commands!(set_section, open_file, reveal);
 
 fn twin_entries(world: &World) -> Result<Vec<NavigationEntry>, String> {
     let mut entries = Vec::new();
@@ -178,6 +185,7 @@ fn library_entries(world: &World) -> Result<Vec<NavigationEntry>, String> {
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<BrowserView>()
+        .register_type::<BrowserView>()
         .init_resource::<NavigationRegistry>();
     app.world_mut()
         .resource_mut::<NavigationRegistry>()
@@ -185,15 +193,5 @@ pub(crate) fn install(app: &mut App) {
     app.world_mut()
         .resource_mut::<NavigationRegistry>()
         .register(&["Libraries"], library_entries);
-    app.init_resource::<lunco_workbench_core::WorkbenchMenuRegistry>();
-    app.world_mut()
-        .resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
-        .register_context_bar(|ui, ctx| {
-            if ui.button("Browse Twin").clicked() {
-                ctx.trigger(FocusPanel {
-                    id: TWIN_BROWSER_PANEL_ID.as_str().into(),
-                });
-            }
-        });
     register_all_commands(app);
 }

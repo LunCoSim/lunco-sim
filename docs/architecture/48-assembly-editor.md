@@ -29,7 +29,7 @@ introduce a second authoring model.
 ## Assembly Editor and Builder boundaries
 
 Editor is the focused authoring workspace for one explicit USD document at a
-time. Open a rover, lander, or other assembly from the Navigator, then use
+time. Open a rover, lander, or other assembly from the Twin browser, then use
 its isolated `UsdPreviewId` and USD prim tree to inspect and edit the authored
 parts. The Editor layout does not expose the live Entity list or spawn palette,
 so a mounted scene entity cannot be mistaken for the document being authored.
@@ -535,8 +535,8 @@ The existing implementation provides the substrate the perspective composes:
 | Program attach | Discover `.mo`/`.py`/`.rhai` sources and lower source, ports, defaults, and wires through `AttachProgram`; drag onto Connections with `DropConnectionAsset` |
 
 The perspective remains a composition of these surfaces. Editor opens with the
-Navigator as its first left tab, beside the authored prim hierarchy, for choosing
-another document. The Navigator opens
+Twin browser as its first left tab, beside the authored prim hierarchy, for choosing
+another document. The Twin browser opens
 an explicit preview session for the selected document; the USD preview, prim
 tree, Connections graph, Inspector, and command handlers consume that same
 explicit document binding. The Connections graph and native USD panels are
@@ -1237,7 +1237,7 @@ undo, and reprojection; invalid non-finite values are rejected in the Inspector.
 
 The companion `assembly_ui` tool library is presentation policy over the same
 typed boundary. Its templates describe the registered `editor` perspective,
-Navigator, USD prim tree, USD viewport, Connections canvas, Inspector, and
+Twin browser, USD prim tree, USD viewport, Connections canvas, Inspector, and
 Environment panel ids, plus the existing animation, mount, review, and
 persistence sections/workflows. `open_session` takes an explicit
 `UsdPreviewId`/`DocumentId`/edit target, then uses `ActivatePerspective`,

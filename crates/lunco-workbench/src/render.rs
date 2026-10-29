@@ -521,12 +521,42 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         }
     }
 
+    fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
+        if let TabId::Instance { kind, instance } = *tab {
+            if let Some(source) = self
+                .instance_panels
+                .get(&kind)
+                .and_then(|panel| panel.navigation_source(self.world, instance))
+            {
+                response
+                    .clone()
+                    .on_hover_text(format!("{}\n{}", source.mode, source.uri));
+            }
+        }
+    }
+
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _path: egui_dock::NodePath) {
         // Domain hook: dispatch to the registered InstancePanel so it
         // can draw its own menu items (Pin, Open in new view, …).
         // Singletons and unknown-kind instance tabs get no extras —
         // egui_dock still surfaces its built-in "Close" item below.
         if let TabId::Instance { kind, instance } = *tab {
+            if let Some(source) = self
+                .instance_panels
+                .get(&kind)
+                .and_then(|panel| panel.navigation_source(self.world, instance))
+            {
+                ui.label(&source.mode);
+                ui.label(&source.uri);
+                if ui.button("Reveal in Twin").clicked() {
+                    trigger_or_defer(
+                        self.world,
+                        lunco_workbench_core::commands::RevealNavigationSource { uri: source.uri },
+                    );
+                    ui.close();
+                }
+                ui.separator();
+            }
             // Take the panel out so it can mutably borrow `self.world`
             // freely while drawing its menu, then put it back. Mirrors
             // how `tab_ui` swaps panels in/out for render to dodge the

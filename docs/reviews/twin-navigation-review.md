@@ -4,22 +4,23 @@ The workbench must identify the active Twin, the loaded world, and the source
 being edited independently. A source preview is a document operation; scene
 replacement remains an explicit load action.
 
-The persistent context bar names the Twin and scene across perspectives. Editor
-instances publish exact source URI/purpose metadata. Twin-owned source paths
-become clickable breadcrumbs; source reveal filters the existing Navigator.
-Navigator starts with active-Twin files and collapsed secondary sections.
-Libraries and document dependencies are explicit lenses/groups. Editor places
-Navigator first beside Prims through the existing Rhai perspective policy.
+The Twin panel defaults to the active Twin's file tree. One selector opens
+Libraries or a specialist owner view; only the selected tree renders. Saved
+Twin files appear once with open/dirty markers; untitled and loose documents
+retain standalone rows. Source URI/purpose and Reveal in Twin belong to each
+document tab's hover/context menu. Scenarios owns scene switching; View owns
+Find files and document Back/Forward. The existing shell menu/title row keeps
+the viewport available for the scene.
 
 ## Ownership and reuse
 
 - `lunco-workbench-core` owns navigation provider/source contracts and typed
   navigation commands. Providers publish readable labels, canonical identities,
   and callbacks that emit existing typed domain intents.
-- `lunco-workbench` owns the context/search presentation and bounded transient
+- `lunco-workbench` owns tab context/search presentation and bounded transient
   document/perspective history. Activation resolves the exact identity against
   the current provider inventory; closed or unavailable destinations reject.
-- `lunco-workbench-browser` owns lens/filter state, the cached active-Twin file
+- `lunco-workbench-browser` owns view/filter state, the cached active-Twin file
   tree, file dispatch and reveal. Source editing, rename and USD opening retain
   their document owners. Library rows use canonical source identity for the
   loaded marker.
@@ -37,14 +38,14 @@ Missing/loading providers expose their reason alongside any usable results.
 ## Policy and lifecycle review
 
 The existing `workbench.perspectives.defaults` Rhai hook remains the owner of
-application task layout, including Navigator placement. Provider and section
-metadata declare available destinations and section defaults. Keyboard handling,
+application task layout, including Twin-panel placement. Provider and section
+metadata declare available destinations and view choices. Keyboard handling,
 exact URI routing, search matching, history application and stale-owner rejection
 are generic UI mechanisms. There is no Twin-name-specific routing or additional
 mission/lifecycle policy requiring a second Rhai hook.
 
 Search, history and browser filters are transient. Active `TwinClosed` clears
-them and resets the Twin lens; inactive closure preserves the current lens.
+them and restores Files; inactive closure preserves the current view.
 Queued navigation pins its admitted Twin identity. File trees clear immediately
 on active closure and republish from the incoming inventory. Document ownership
 and editor lifetime remain with their existing registries.
@@ -56,7 +57,7 @@ Run `LUNCOSIM_BIN=target/debug/luncosim python3 scripts/api/test_workbench_navig
 Its authored Rhai gate observes exact context, source previews, library lookup,
 history, explicit scene choices, empty/rejected destinations, native application
 shortcut events, and Twin retirement. Inspect the captured preview/search/action
-screens and the default Navigator in a populated owned session. Injected native
+screens and the default Twin panel in a populated owned session. Injected native
 events exercise the application event path, not physical OS device delivery.
 The existing workbench perspective gate covers the Rhai layout consumer.
 
@@ -91,7 +92,18 @@ notifications, non-repeating notices and restoration after Twin replacement.
 The input-profile fixture remains under `assets/scenes/tests`; its `.json.in`
 source is staged as `input.json` in the driver's output Twin. This keeps the
 fixture out of the bundled application-default JSON scope while using normal
-Twin admission. Runtime acceptance passes 18 navigation checks, 11 binding
-checks and the existing 23 perspective checks; screenshots cover collapsed
-Navigator defaults, source context, search scopes and the scrollable settings
+Twin admission. Runtime acceptance exercises 25 navigation checks, 11 binding
+checks and the existing 23 perspective checks; screenshots cover
+single-view Twin defaults, tab context, search scopes and the scrollable settings
 form.
+
+Opening a center instance establishes center intent at the dock owner before
+leaf selection. This keeps a first document visible in an initially empty
+Editor, beside the Twin tree. The navigation gate asserts the actual rendered
+preview rectangle and its placement, in addition to the source identity.
+Scene-backed perspectives preserve their primary world when preview tabs are
+allocated in the background. The same production gate verifies that a parked
+preview stays hidden in View while the loaded scene remains unchanged.
+Disk restoration honors each perspective's existing `restore` decision for
+both the active dock and cached docks, so a saved preview layout cannot replace
+a presentation perspective's scene-only default.

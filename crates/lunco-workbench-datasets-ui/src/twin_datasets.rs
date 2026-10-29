@@ -10,7 +10,7 @@ use egui;
 use lunco_assets_datasets::{
     CancelDataset, DatasetEntry, DatasetRegistry, DatasetScope, DatasetState, RequestDataset,
 };
-use lunco_workbench_browser::{BrowserCtx, BrowserScope, BrowserSection};
+use lunco_workbench_browser::{BrowserCtx, BrowserSection};
 
 /// Twin Browser section that reports the active Twin's declared resources.
 #[derive(Default)]
@@ -23,14 +23,6 @@ impl BrowserSection for TwinDatasetsSection {
 
     fn title(&self) -> &str {
         "Twin resources"
-    }
-
-    fn scope(&self) -> BrowserScope {
-        BrowserScope::Models
-    }
-
-    fn default_open(&self) -> bool {
-        false
     }
 
     fn order(&self) -> u32 {
