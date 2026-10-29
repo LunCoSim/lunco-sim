@@ -283,7 +283,7 @@ fn cached_plot_points(
                 bounds.extend_with(&PlotPoint::from(*sample));
             }
             if let Some(decimated) =
-                crate::plot_fmt::decimate_min_max(&samples, build_pixel_width as f32 * 0.5)
+                crate::plot_fmt::decimate_min_max(&samples, build_pixel_width as f32 * 0.5, None)
             {
                 samples = decimated;
             }

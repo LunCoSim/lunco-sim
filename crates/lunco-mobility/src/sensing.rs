@@ -28,7 +28,7 @@ fn parse_vec3(params: &ApiValue, key: &str) -> Option<DVec3> {
 }
 
 /// `Raycast` — cast a world-space ray, return the first collider hit.
-/// params: `{ origin:[x,y,z], dir:[x,y,z], max?:f64 }` ·
+/// params: `{ origin:[x,y,z], dir:[x,y,z], max?:f64, exclude_sensors?:bool, solid?:bool }` ·
 /// returns: `{ hit, entity:gid|null, distance, point:[x,y,z], normal:[x,y,z] }`.
 pub(crate) struct RaycastProvider;
 impl ApiQueryProvider for RaycastProvider {
@@ -51,7 +51,37 @@ impl ApiQueryProvider for RaycastProvider {
                 "Raycast: `dir` must be non-zero",
             ));
         };
-        cast_ray_response(world, GridPos(origin), dir, max)
+        let exclude_sensors = match params.get("exclude_sensors") {
+            None => false,
+            Some(ApiValue::Bool(value)) => *value,
+            Some(_) => {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "Raycast: `exclude_sensors` must be a boolean",
+                ));
+            }
+        };
+        let solid = match params.get("solid") {
+            None => true,
+            Some(ApiValue::Bool(value)) => *value,
+            Some(_) => {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "Raycast: `solid` must be a boolean",
+                ));
+            }
+        };
+        let filter = if exclude_sensors {
+            SpatialQueryFilter::from_excluded_entities(
+                world
+                    .iter_entities()
+                    .filter(|entity| entity.contains::<Sensor>())
+                    .map(|entity| entity.id()),
+            )
+        } else {
+            SpatialQueryFilter::default()
+        };
+        cast_ray_response(world, GridPos(origin), dir, max, solid, &filter)
     }
 }
 
@@ -74,7 +104,15 @@ impl ApiQueryProvider for GroundHeightProvider {
         let from = optional_f64(params, "from", 1.0e5, "GroundHeight")?;
         let max = optional_f64(params, "max", 2.0e5, "GroundHeight")?;
         let origin = GridPos(DVec3::new(x, from, z));
-        let Some(ray) = cast_ray_response(world, origin, Dir3::NEG_Y, max)? else {
+        let Some(ray) = cast_ray_response(
+            world,
+            origin,
+            Dir3::NEG_Y,
+            max,
+            true,
+            &SpatialQueryFilter::default(),
+        )?
+        else {
             return Ok(None);
         };
         let hit = api_param_bool(&ray, "hit").ok_or_else(|| {
@@ -177,11 +215,18 @@ impl ApiQueryProvider for SensorOccupantsProvider {
 /// API callers never provide a camera-relative render point: that frame moves
 /// whenever BigSpace recentres and is therefore not stable user or simulation
 /// state. The returned point stays in the same active frame.
-fn cast_ray_response(world: &World, origin: GridPos, dir: Dir3, max: f64) -> ApiQueryResult {
+fn cast_ray_response(
+    world: &World,
+    origin: GridPos,
+    dir: Dir3,
+    max: f64,
+    solid: bool,
+    filter: &SpatialQueryFilter,
+) -> ApiQueryResult {
     let query_state = world.resource::<lunco_physics::GridSpatialQueryState>();
     let result = query_state.with_query(world, |spatial| {
         let registry = world.resource::<ApiEntityRegistry>();
-        let hit = spatial.cast_ray_grid(origin, dir, max, true, &SpatialQueryFilter::default());
+        let hit = spatial.cast_ray_grid(origin, dir, max, solid, filter);
         (hit, registry)
     });
     let Ok((hit, registry)) = result else {

@@ -841,12 +841,8 @@ pub fn draw_graph_hud(world: &mut World, state: &mut SystemState<EguiContexts>) 
         return;
     };
     let theme = world.resource::<lunco_theme::Theme>();
-    let (padding, fill, border, rounding) = (
-        theme.spacing.window_padding,
-        theme.tokens.overlay_backdrop,
-        theme.tokens.overlay_border,
-        theme.rounding.window,
-    );
+    let padding = theme.spacing.window_padding;
+    let frame = lunco_theme::hud_window_frame(theme);
     let bounds = viewport.shrink(padding);
     if bounds.width() < 320.0 || bounds.height() < 240.0 {
         return;
@@ -871,13 +867,8 @@ pub fn draw_graph_hud(world: &mut World, state: &mut SystemState<EguiContexts>) 
             .min_size([320.0, 240.0])
             .max_size(bounds.size())
             .resizable(true)
-            .frame(
-                egui::Frame::new()
-                    .fill(fill)
-                    .stroke(egui::Stroke::new(1.0, border))
-                    .corner_radius(rounding)
-                    .inner_margin(egui::Margin::same(padding as i8)),
-            );
+            .frame(frame);
+
         // A requested size is applied once through the native resize owner;
         // subsequent frames keep the operator's native drag-resize interaction.
         if hud.apply_size {

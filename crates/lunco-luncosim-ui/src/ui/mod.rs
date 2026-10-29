@@ -49,6 +49,7 @@ struct DismissTerrainOverlay;
 #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
 struct RuntimeUiDropdownState {
     open: Option<String>,
+    search: String,
     /// Keep the press that opened the dropdown from immediately closing it
     /// when the matching pointer release reaches egui on the next frame.
     ignore_opening_click: bool,
@@ -67,6 +68,7 @@ impl RuntimeUiDropdownState {
             self.close();
         } else {
             self.open = Some(key.to_owned());
+            self.search.clear();
             self.ignore_opening_click = true;
         }
     }
@@ -199,6 +201,7 @@ impl Plugin for LunCoSimUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(lunco_capture::camera_feed::CameraFeedPlugin)
             .init_scene_resource::<camera_feed::CameraFeedUiState>();
+        camera_feed::install(app);
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
@@ -794,6 +797,7 @@ fn runtime_ui_dropdown_options(
     exposure: &lunco_exposure_core::ExposureSurface,
     definition: &runtime_ui::RuntimeUiDropdownDefinition,
     selected_key: Option<&str>,
+    search: &str,
 ) -> Option<String> {
     let Some(lunco_exposure_core::ExposureValue::Array(values)) =
         exposure.properties.get(&definition.source)
@@ -803,6 +807,9 @@ fn runtime_ui_dropdown_options(
     };
 
     let mut selected = None;
+    let search = search.to_lowercase();
+    let mut previous_group = None;
+    let mut shown = 0;
     for value in values {
         let Some(fields) = runtime_ui::collection_item_fields(value, &definition.key) else {
             continue;
@@ -828,6 +835,29 @@ fn runtime_ui_dropdown_options(
         else {
             continue;
         };
+        let group = definition.group.as_ref().and_then(|field| {
+            fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|(_, value)| value.as_str())
+        });
+        if !search.is_empty()
+            && ![key, label, group.unwrap_or("")]
+                .iter()
+                .any(|value| value.to_lowercase().contains(&search))
+        {
+            continue;
+        }
+        if let Some(group) = group {
+            if previous_group.as_deref() != Some(group) {
+                if shown > 0 {
+                    ui.separator();
+                }
+                ui.strong(group);
+                previous_group = Some(group.to_owned());
+            }
+        }
+        shown += 1;
         if ui
             .selectable_label(selected_key == Some(key), label)
             .on_hover_text(key)
@@ -835,6 +865,9 @@ fn runtime_ui_dropdown_options(
         {
             selected = Some(action.to_owned());
         }
+    }
+    if shown == 0 {
+        ui.weak("No matching options.");
     }
     selected
 }
@@ -960,11 +993,24 @@ fn draw_runtime_ui_dropdowns(
         let viewport_width = ctx.content_rect().width().max(1.0);
         ui.set_width(width.min(viewport_width));
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        if let Some(hint) = &definition.search_hint {
+            ui.add(
+                egui::TextEdit::singleline(&mut dropdowns.search)
+                    .hint_text(hint)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.separator();
+        }
         egui::ScrollArea::vertical()
             .max_height(max_height)
             .show(ui, |ui| {
-                selected_action =
-                    runtime_ui_dropdown_options(ui, exposure, definition, selected_key.as_deref());
+                selected_action = runtime_ui_dropdown_options(
+                    ui,
+                    exposure,
+                    definition,
+                    selected_key.as_deref(),
+                    &dropdowns.search,
+                );
             });
     });
     if let Some(popup) = popup {
@@ -1044,7 +1090,7 @@ fn register_camera_menu(world: &mut World) {
                     .and_then(|source| exposure.properties.get(source))
                     .and_then(lunco_exposure_core::ExposureValue::scalar_render);
                 if let Some(action) =
-                    runtime_ui_dropdown_options(ui, exposure, dropdown, selected_key.as_deref())
+                    runtime_ui_dropdown_options(ui, exposure, dropdown, selected_key.as_deref(), "")
                 {
                     let scope = runtime_ui::RuntimeUiActionScope::capture(
                         ctx.resource::<lunco_workspace::WorkspaceResource>(),

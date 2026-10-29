@@ -8,7 +8,6 @@
   <property name="speed">—</property>
   <property name="altitude">—</property>
   <property name="height_reference">DATUM UNAVAILABLE</property>
-  <property name="coordinate_frame">FRAME UNAVAILABLE</property>
   <property name="roll">—</property>
   <property name="pitch">—</property>
   <property name="heading">—</property>
@@ -18,7 +17,6 @@
   <property name="comms_peer">—</property>
   <property name="comms_range">—</property>
   <property name="comms_elevation">—</property>
-  <property name="telemetry_summary">TELEMETRY UNAVAILABLE</property>
   <property name="tilt_color">var(--ok-color)</property>
   <property name="tilt_marker">0%</property>
   <property name="caution_width">44%</property>
@@ -29,7 +27,6 @@
   <property name="comms_display">none</property>
   <property name="comms_los_display">none</property>
   <property name="comms_color">var(--muted-color)</property>
-  <property name="telemetry_display">none</property>
   <property name="program_color">var(--muted-color)</property>
 
   <node id="vessel-hud-root">
@@ -63,7 +60,6 @@
         </button>
       </node>
       <text id="vessel-hud-runtime-status">{runtime_status}</text>
-      <text id="vessel-hud-frame">{coordinate_frame}</text>
       <node id="vessel-hud-nav-details">
         <node id="vessel-hud-altitude-block">
           <text id="vessel-hud-altitude-label">HEIGHT</text>
@@ -94,12 +90,7 @@
         </node>
       </node>
 
-      <node id="vessel-hud-telemetry">
-        <node id="vessel-hud-telemetry-heading">
-          <text id="vessel-hud-telemetry-label">LIVE TELEMETRY</text>
-        </node>
-        <text id="vessel-hud-telemetry-summary">{telemetry_summary}</text>
-      </node>
+
     </node>
   </node>
 </template>

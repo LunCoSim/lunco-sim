@@ -33,7 +33,7 @@
 
 #camera-status-label {
   color: var(--accent-color);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -48,7 +48,7 @@
   color: var(--text-color);
   align-items: center;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 700;
   -bevy-line-break: no-wrap;
 }

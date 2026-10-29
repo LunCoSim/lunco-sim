@@ -3,7 +3,7 @@
     defaultPrim = "World"
     upAxis = "Y"
     metersPerUnit = 1.0
-    documentation = "GPU authored Sun angle and opaque half-disc occlusion gate."
+    doc = "GPU authored Sun angle and opaque half-disc occlusion gate."
 )
 
 def Xform "World" (
@@ -85,5 +85,16 @@ def Xform "World" (
         token lunco:activeCamera.timeSamples = {
             0.0: "Camera",
         }
+    }
+    def Camera "ProbeCamera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 0.0, 2.0)
+        custom double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float focalLength = 18.0
+        uniform token lunco:cameraRole = "sensor"
+        uniform token lunco:cameraPose = "authored"
     }
 }

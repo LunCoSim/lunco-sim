@@ -52,7 +52,8 @@ Each view owns one bounded image and a scene-owned camera child at the source
 pose. It never opens or projects another USD stage. `CameraFeedCamera` carries
 look intent in `lunco-render`; `lunco-render-bevy` binds the pipeline. It has no
 `SceneCamera` marker and cannot replace the main viewport. Native USD sensor
-cameras retain authored exposure through the standard camera projector.
+cameras retain authored exposure and can also be selected explicitly as the main
+viewport through the standard camera projector and viewport reconciler.
 Optics are sampled when selected; physical source and joint motion remain live.
 Stereo uses two real camera prims at their authored baseline, without image
 shifting or a second physical solver.
@@ -79,6 +80,54 @@ rejected sources/resolution, bounded allocation and complete release. Supply
 two camera identities and a non-camera from the owning scene. Pixel evidence
 requires a windowed screenshot; allocation alone does not prove pixels. Scene
 replacement must empty `InspectCameraFeeds.views` before new scene selection.
+
+## Camera image controls
+
+`SetCameraImageEffects` replaces the settings of exactly one `feed` or native
+camera `source` identity. Omitted settings fields use `CameraImageEffects`'s
+clean-color defaults; this is replacement, not a patch. `InspectCameraImageEffects`
+and each `InspectCameraFeeds.views[].effects` return the admitted f64 values.
+Settings survive view source/resolution changes and retire with that scene or
+view. Invalid ranges, noise fractions, quantization or targets reject before
+mutation. Source-camera settings affect its main viewport; each feed is an
+independent consumer with its own settings.
+
+`lunco-render` owns this validated presentation intent. `lunco-render-bevy`
+converts it at the named GPU boundary and runs the standard-library
+`lunco://shaders/camera_sensor.wesl` after tonemapping. The existing scene-depth
+owner supplies Bevy's native opaque depth prepass only while a consumer needs it.
+Depth reconstructs axial metres from the source projection; near red passes
+through amber to far green, with sky black. The editable near/far interval is a
+display range, not the optical clipping interval. Transparent surfaces are not
+represented by the opaque depth buffer. This is rendered ground truth, not a
+stereo-disparity algorithm or calibrated depth sensor.
+
+The normalized image model exposes read Gaussian noise, intensity-dependent
+shot noise, row noise, black pixel dropout and intensity quantization. A full
+u32 seed and an animation toggle control procedural noise. These are illustrative
+image effects; they do not alter Modelica equipment, storage, CPU or power.
+The shader interface is group 0: color texture (0), filtering sampler (1),
+`CameraImage` uniform (2), native depth texture (3). `CAMERA_MULTISAMPLED`
+selects the depth binding. The uniform carries inverse projection, physical viewport, near/far/mode,
+noise fractions and seed/frame/levels. Choose an explicit WESL/WGSL asset in
+**Shader workflow** and use `ReloadShader` after editing it; shader failures
+remain visible through the native renderer diagnostics.
+
+The main Camera picker and each image window group mounted cameras by their
+nearest controlled USD ancestor in the same composed stage. Native physics
+reparenting does not change this authoring identity. Search includes full paths
+and group names. **Image controls…** opens the selected main camera's controls;
+each window's **Style** menu configures only that image. All choices submit
+typed commands and all drafts/search state retire with the scene.
+
+`CaptureCameraFeed { feed, path, request }` saves the exact view target, including
+its image effects, through the existing screenshot/readback owner. Paths obey the
+same local screenshot boundary. The caller supplies a nonempty request token;
+`camera.image.saved` or `camera.image.failed` carries that token and the exact
+source identity. HTTP completion waits for the write. Rhai uses the discrete
+completion event to associate an artifact with its admitted observation pose.
+Pending feed captures are scene owned. Artifact completion does not feed PNG
+size or worker timing into continuous physical equations.
 
 ## Presentation health and performance evidence
 
@@ -529,9 +578,9 @@ without increasing the terrain density or bake work in Balanced.
 The USD projection reads the registered `LunCoProceduralSkyAPI` on its `Xform`
 owner, stamps this intent, and projects no `UsdGeomGprim` for that background.
 The sky shader remains an ordinary bound `UsdShade.Material`; it opts into
-celestial Sun uniforms by declaring `sun_dir_view` and `sun_tan_radius` as
+celestial Sun uniforms by declaring `sun_dir_world` and `sun_tan_radius` as
 `//!@engine` inputs. The engine writes those uniforms from the causal
-`WorldTime` Sun light direction and the active camera's BigSpace pose, only
+`WorldTime` Sun light direction, independently of camera poses, only
 when their reflected values change. Shader schema reflection can finish after
 the sky material is first bound, so a change to the sky's `ShaderMaterial`
 also refreshes the uniforms once the fields become available.
@@ -669,3 +718,31 @@ owned by the `lunco-luncosim` application shell, while
 `lunco-luncosim-core` contains no UI feature or renderer dependency. The
 renderer-independent domain composition is installed by
 `lunco-luncosim-simulation`; the simulation crates contain no GUI conditionals.
+
+Graph and camera HUDs share `lunco_theme::hud_window_frame`, the graph HUD's
+single toolbar, native resize/move behavior, `+` and `×` controls. Camera source
+selection occupies the graph parameter-picker position; resolution occupies
+the history-window position and Style configures its image. Camera titles are
+in that toolbar rather than a second native title bar.
+
+Live line-plot decimation uses the visible time interval and absolute-time
+buckets. Appending samples or sliding the time window preserves every completed
+interior bucket. The async cache keys include that interval; zooming/history
+selection changes sampling density explicitly. Phase-space trajectories retain
+their full ordered points. Pure decimation regressions compare shared intervals
+before and after append/scroll and preserve single-sample spikes.
+
+Camera capture admission requires the exact image-effects configuration and
+physical target dimensions to have rendered. A scene-owned render token is
+replaced when either changes, so a retired render frame cannot admit a new
+capture. `InspectCameraFeeds.views[].ready` exposes that boundary. Capturing
+before readiness rejects without creating a PNG. Feed targets explicitly admit
+GPU copy-source readback.
+
+Camera image capture rejects retained rendering failures from RuntimeDiagnostics,
+as well as an unpresented configuration. A completed frame alone cannot admit
+evidence while the renderer reports invalid output. The windowed production
+gate is `python3 scripts/api/test_camera_views.py --port <free-port>`; it runs
+the authored camera contract and inspects depth, repeatable noise, live reset
+and a stationary Sun in one view while another camera tilts. The explicit
+balanced preset bounds concurrent GPU allocations for this gate.

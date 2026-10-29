@@ -124,6 +124,7 @@ lunco-networking = { path = "../lunco-networking", default-features = false, opt
 lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-notifications-core = { path = "../lunco-notifications-core" }
 lunco-render = { path = "../lunco-render" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-render-bevy = { path = "../lunco-render-bevy" }
 lunco-render-recovery = { path = "../lunco-render-recovery" }
 lunco-scene-commands = { path = "../lunco-scene-commands", optional = true }

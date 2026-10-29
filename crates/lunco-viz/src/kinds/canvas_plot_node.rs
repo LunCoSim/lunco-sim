@@ -779,7 +779,7 @@ impl NodeVisual for PlotNodeVisual {
             match cached {
                 Some(c) if c.0 == key => c,
                 _ => {
-                    let pts = crate::plot_fmt::decimate_min_max(arc, plot_w)
+                    let pts = crate::plot_fmt::decimate_min_max(arc, plot_w, None)
                         .unwrap_or_else(|| arc.as_ref().clone());
                     let fresh = Arc::new((key, pts));
                     crate::scene_state::scene_data(ctx.ui.ctx(), |d| {
@@ -1064,8 +1064,12 @@ mod tests {
         // Two egui passes with nobody registering (node deleted /
         // culled) — the double-buffered interest ages out and the
         // producer stops publishing the signal.
-        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
-        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        ctx.run_ui(Default::default(), |_| {})
+            .textures_delta
+            .clear();
+        ctx.run_ui(Default::default(), |_| {})
+            .textures_delta
+            .clear();
         stash_signal_snapshot_from_registry(&ctx, &reg, HashMap::new());
         assert!(fetch_signal_snapshot(&ctx).samples.is_empty());
     }

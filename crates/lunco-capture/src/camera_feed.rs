@@ -1,13 +1,29 @@
 //! Scene-scoped live observations of projected cameras in the active world.
 use bevy::camera::{Exposure, RenderTarget, visibility::RenderLayers};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureFormat};
+use bevy::render::render_resource::{Extent3d, TextureFormat, TextureUsages};
 use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_core::{
     AppSceneExt, Command, GlobalEntityId, MarkClientLocalExt, SceneOwned, SceneResource,
     on_command, register_commands,
 };
+use lunco_render::camera_image::CameraImageEffects;
 use std::collections::BTreeMap;
+
+/// Replace image-effect settings for exactly one feed or native source camera.
+/// Physical camera power and acquisition remain independent Modelica controls.
+#[Command(default)]
+pub struct SetCameraImageEffects {
+    pub feed: Option<u64>,
+    pub source: Option<GlobalEntityId>,
+    pub settings: CameraImageEffects,
+}
+/// Inspect the image effects of exactly one feed or native source camera.
+#[Command(default)]
+pub struct InspectCameraImageEffects {
+    pub feed: Option<u64>,
+    pub source: Option<GlobalEntityId>,
+}
 
 pub const MAX_CAMERA_FEEDS: usize = 8;
 const PRIMARY_FEED: u64 = 1;
@@ -54,8 +70,23 @@ pub struct CameraFeed {
     pub height: u32,
     pub match_window: bool,
     pub resolution_error: Option<String>,
-    camera: Option<Entity>,
+    pub effects: CameraImageEffects,
+    pub(crate) camera: Option<Entity>,
     source_entity: Option<Entity>,
+}
+impl CameraFeed {
+    pub fn image_ready(
+        &self,
+        receipts: &Query<&lunco_render::camera_image::CameraImagePresentation>,
+    ) -> bool {
+        self.camera
+            .and_then(|camera| receipts.get(camera).ok())
+            .is_some_and(|receipt| {
+                receipt.is_ready()
+                    && receipt.settings == self.effects
+                    && receipt.dimensions == Some(UVec2::new(self.width, self.height))
+            })
+    }
 }
 impl Default for CameraFeed {
     fn default() -> Self {
@@ -67,6 +98,7 @@ impl Default for CameraFeed {
             height: 270,
             match_window: true,
             resolution_error: None,
+            effects: default(),
             camera: None,
             source_entity: None,
         }
@@ -135,11 +167,14 @@ pub struct CameraFeedPlugin;
 impl Plugin for CameraFeedPlugin {
     fn build(&self, app: &mut App) {
         register_all_commands(app);
+        app.register_type::<CameraImageEffects>();
         app.mark_client_local::<CreateCameraFeed>()
             .mark_client_local::<SetCameraFeed>()
             .mark_client_local::<SetCameraFeedResolution>()
             .mark_client_local::<RemoveCameraFeed>()
             .mark_client_local::<InspectCameraFeeds>();
+        app.mark_client_local::<SetCameraImageEffects>()
+            .mark_client_local::<InspectCameraImageEffects>();
         app.init_scene_resource::<CameraFeeds>()
             .add_systems(Update, retire_missing_sources);
     }
@@ -191,6 +226,9 @@ fn set_camera_feed(
         ));
     }
     let existing = feeds.instances.get(&id);
+    let effects = existing
+        .map(|feed| feed.effects.clone())
+        .unwrap_or_default();
     let width = request
         .width
         .unwrap_or_else(|| existing.map_or(480, |feed| feed.width));
@@ -256,17 +294,16 @@ fn set_camera_feed(
         width,
         height,
         match_window,
+        effects: effects.clone(),
         ..default()
     };
     if let Some((source, entity, projection, exposure, layers, mut look)) = selection {
         look.msaa = lunco_render::camera::MsaaLevel::Off;
         look.bloom = None;
-        let image = images.add(Image::new_target_texture(
-            width,
-            height,
-            TextureFormat::Rgba8UnormSrgb,
-            None,
-        ));
+        let mut target =
+            Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
+        target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+        let image = images.add(target);
         let mut render_camera = commands.spawn((
             lunco_render::camera::CameraFeedCamera(look),
             projection,
@@ -276,6 +313,7 @@ fn set_camera_feed(
             ChildOf(entity),
             SceneOwned,
             Name::new(format!("Camera view {id}")),
+            effects,
         ));
         if let Some(layers) = layers {
             render_camera.insert(layers);
@@ -336,15 +374,92 @@ fn set_camera_feed_resolution(
     Ok(Ack::new(OpId::new()))
 }
 #[on_command(InspectCameraFeeds)]
-fn inspect_camera_feeds(_: On<InspectCameraFeeds>, feeds: Res<CameraFeeds>) -> Result<Ack, String> {
-    let views:Vec<_>=feeds.instances.iter().map(|(id,feed)|lunco_api_core::api_value!({
+fn inspect_camera_feeds(
+    _: On<InspectCameraFeeds>,
+    feeds: Res<CameraFeeds>,
+    presentation: Query<&lunco_render::camera_image::CameraImagePresentation>,
+) -> Result<Ack, String> {
+    let views:Vec<_>=feeds.instances.iter().map(|(id,feed)|Ok(lunco_api_core::api_value!({
         "feed":*id,"source":feed.source.map(|id|id.get()),"label":&feed.label,"active":feed.camera.is_some(),
-        "width":feed.width,"height":feed.height,"match_window":feed.match_window,"error":feed.resolution_error.as_deref()
-    })).collect();
+        "ready":feed.image_ready(&presentation),
+        "width":feed.width,"height":feed.height,"match_window":feed.match_window,"error":feed.resolution_error.as_deref(),
+        "effects":lunco_api_core::api_value_from_serializable(&feed.effects).map_err(|error|error.to_string())?
+    }))).collect::<Result<_,String>>()?;
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({"views":views,"limit":MAX_CAMERA_FEEDS,"max_pixels_per_view":MAX_FEED_PIXELS,"max_total_pixels":MAX_TOTAL_PIXELS}),
     ))
+}
+
+fn source_entity(
+    source: Option<GlobalEntityId>,
+    feed: Option<u64>,
+    registry: &lunco_api::registry::ApiEntityRegistry,
+    cameras: &Query<&Projection>,
+) -> Result<Option<Entity>, Reject> {
+    match (source, feed) {
+        (Some(source), None) => {
+            let entity = registry
+                .resolve(&source)
+                .ok_or_else(|| Reject::InvalidOp("camera source is no longer live".into()))?;
+            if !cameras.contains(entity) {
+                return Err(Reject::InvalidOp("source has no camera projection".into()));
+            }
+            Ok(Some(entity))
+        }
+        (None, Some(_)) => Ok(None),
+        _ => Err(Reject::InvalidOp(
+            "Specify exactly one camera source or feed".into(),
+        )),
+    }
+}
+#[on_command(SetCameraImageEffects)]
+fn set_camera_image_effects(
+    trigger: On<SetCameraImageEffects>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    cameras: Query<&Projection>,
+    mut feeds: ResMut<CameraFeeds>,
+    mut commands: Commands,
+) -> Result<Ack, Reject> {
+    cmd.settings.validate().map_err(Reject::InvalidOp)?;
+    if let Some(entity) = source_entity(cmd.source, cmd.feed, &registry, &cameras)? {
+        commands.entity(entity).try_insert(cmd.settings.clone());
+    } else if let Some(id) = cmd.feed {
+        let view = feeds
+            .instances
+            .get_mut(&id)
+            .ok_or_else(|| Reject::InvalidOp("camera view is unavailable".into()))?;
+        view.effects = cmd.settings.clone();
+        if let Some(camera) = view.camera {
+            commands.entity(camera).try_insert(cmd.settings.clone());
+        }
+    }
+    Ok(Ack::new(OpId::new()))
+}
+#[on_command(InspectCameraImageEffects)]
+fn inspect_camera_image_effects(
+    trigger: On<InspectCameraImageEffects>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    cameras: Query<&Projection>,
+    effects: Query<&CameraImageEffects>,
+    feeds: Res<CameraFeeds>,
+) -> Result<Ack, Reject> {
+    let settings = if let Some(entity) = source_entity(cmd.source, cmd.feed, &registry, &cameras)? {
+        effects.get(entity).cloned().unwrap_or_default()
+    } else {
+        let id = cmd
+            .feed
+            .ok_or_else(|| Reject::InvalidOp("camera view is unavailable".into()))?;
+        feeds
+            .instances
+            .get(&id)
+            .ok_or_else(|| Reject::InvalidOp("camera view is unavailable".into()))?
+            .effects
+            .clone()
+    };
+    let value = lunco_api_core::api_value_from_serializable(&settings)
+        .map_err(|error| Reject::InvalidOp(error.to_string()))?;
+    Ok(Ack::with_data(OpId::new(), value))
 }
 fn retire_missing_sources(
     mut feeds: ResMut<CameraFeeds>,
@@ -386,5 +501,7 @@ register_commands!(
     remove_camera_feed,
     set_camera_feed,
     set_camera_feed_resolution,
-    inspect_camera_feeds
+    inspect_camera_feeds,
+    set_camera_image_effects,
+    inspect_camera_image_effects
 );

@@ -50,7 +50,7 @@ use bevy::utils::default;
 use lunco_environment::SunRenderState;
 use lunco_environment::horizon::{SunQuery, pick_sun};
 use lunco_materials::ParamValue;
-use lunco_render::{EditorPreviewCamera, ProceduralSkybox, SceneCamera};
+use lunco_render::{EditorPreviewCamera, ProceduralSkybox};
 
 // Use Bevy's render adapter marker parameter to extract the existing camera
 // role without adding render dependencies to the render-free intent crate.
@@ -200,15 +200,6 @@ pub(crate) fn build(app: &mut App) {
     render_app.add_render_command::<Opaque3d, DrawProceduralSkyboxCommands>();
 }
 
-fn sun_direction_in_view(world_direction: Vec3, camera_rotation: Quat) -> Option<Vec3> {
-    if !world_direction.is_finite() || world_direction.length_squared() <= 0.0 {
-        return None;
-    }
-    let view_direction = camera_rotation.inverse() * world_direction.normalize();
-    (view_direction.is_finite() && view_direction.length_squared() > 0.0)
-        .then(|| view_direction.normalize())
-}
-
 fn directional_sun_inputs_changed(
     sun: Option<Res<SunRenderState>>,
     changed_lights: Query<
@@ -219,15 +210,6 @@ fn directional_sun_inputs_changed(
         )>,
     >,
     mut material_events: MessageReader<AssetEvent<super::ShaderMaterial>>,
-    cameras: Query<
-        (),
-        (
-            With<SceneCamera>,
-            With<Camera3d>,
-            Without<EditorPreviewCamera>,
-            Or<(Added<Camera>, Changed<Camera>, Changed<GlobalTransform>)>,
-        ),
-    >,
     skyboxes: Query<&ProceduralSkyboxMaterial>,
     changed_skyboxes: Query<
         (),
@@ -245,7 +227,6 @@ fn directional_sun_inputs_changed(
     }
     sun.is_some_and(|state| state.is_changed())
         || !changed_lights.is_empty()
-        || !cameras.is_empty()
         || !changed_skyboxes.is_empty()
         || skybox_material_changed
 }
@@ -260,20 +241,11 @@ fn skybox_material_event_matches(
     )
 }
 
-/// Project Bevy's finalized scene-light direction into the active camera for
-/// procedural sky disks. Angular radius comes from the same authored distant
+/// Publish Bevy's finalized world-space light direction for every sky view. Angular radius comes from the same authored distant
 /// light as terrain shadow softness; no astronomical position is narrowed.
 fn wire_directional_sun_inputs(
     sun: Option<Res<SunRenderState>>,
     lights: SunQuery,
-    cameras: Query<
-        (&Camera, &GlobalTransform),
-        (
-            With<SceneCamera>,
-            With<Camera3d>,
-            Without<EditorPreviewCamera>,
-        ),
-    >,
     skyboxes: Query<&ProceduralSkyboxMaterial>,
     materials: Option<ResMut<Assets<super::ShaderMaterial>>>,
 ) {
@@ -281,21 +253,9 @@ fn wire_directional_sun_inputs(
         return;
     };
     let state = sun.and_then(|state| state.direction_to_sun_world);
-    let mut active_cameras = cameras.iter().filter(|(camera, _)| camera.is_active);
-    let camera_rotation = active_cameras
-        .next()
-        .map(|(_, transform)| transform.rotation());
-    let direction = match (state, camera_rotation, active_cameras.next()) {
-        (Some(world_direction), Some(rotation), None) => {
-            sun_direction_in_view(world_direction, rotation).unwrap_or(Vec3::ZERO)
-        }
-        (None, _, _) => Vec3::ZERO,
-        (Some(_), None, _) => Vec3::ZERO,
-        (Some(_), Some(_), Some(_)) => {
-            warn_once!("[render] multiple active scene cameras; procedural Sun disk is disabled");
-            Vec3::ZERO
-        }
-    };
+    // One world direction is shared by every view; camera rotation belongs
+    // exclusively to each view uniform used when reconstructing its sky ray.
+    let direction = state.unwrap_or(Vec3::ZERO);
     let tan_radius = if direction.length_squared() > 0.0 {
         pick_sun(&lights).map_or(0.0, |(_, radius, _)| radius)
     } else {
@@ -303,21 +263,21 @@ fn wire_directional_sun_inputs(
     };
 
     for skybox in &skyboxes {
-        let Some(mut material) = materials.get_mut(&skybox.material) else {
+        let Some(material) = materials.get(&skybox.material) else {
             continue;
         };
-        let has_direction = material.schema.field("sun_dir_view").is_some();
+        let has_direction = material.schema.field("sun_dir_world").is_some();
         let has_radius = material.schema.field("sun_tan_radius").is_some();
         if !has_direction && !has_radius {
             continue;
         }
         if !(has_direction && has_radius) {
             warn_once!(
-                "[render] procedural sky declares only one of `sun_dir_view` and `sun_tan_radius`; celestial Sun inputs require both"
+                "[render] procedural sky declares only one of `sun_dir_world` and `sun_tan_radius`; celestial Sun inputs require both"
             );
             continue;
         }
-        let current_direction = material.get_vec3("sun_dir_view");
+        let current_direction = material.get_vec3("sun_dir_world");
         let current_radius = material.get_scalar("sun_tan_radius");
         if current_direction
             .is_some_and(|current| (current - direction).length_squared() <= 1.0e-10)
@@ -325,10 +285,12 @@ fn wire_directional_sun_inputs(
         {
             continue;
         }
-        material.set_many([
-            ("sun_dir_view", ParamValue::Vec3(direction.to_array())),
-            ("sun_tan_radius", ParamValue::F32(tan_radius)),
-        ]);
+        if let Some(mut material) = materials.get_mut(&skybox.material) {
+            material.set_many([
+                ("sun_dir_world", ParamValue::Vec3(direction.to_array())),
+                ("sun_tan_radius", ParamValue::F32(tan_radius)),
+            ]);
+        }
     }
 }
 
@@ -550,23 +512,6 @@ fn remove_skybox_material(remove: On<Remove<ProceduralSkybox>>, mut commands: Co
 mod tests {
     use super::*;
     use crate::ShaderMaterial;
-
-    #[test]
-    fn sky_disk_uses_the_directional_light_in_camera_space() {
-        let world_direction = Vec3::NEG_Z;
-        let camera_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
-
-        let view_direction = sun_direction_in_view(world_direction, camera_rotation)
-            .expect("finite scene sun direction");
-
-        assert!(view_direction.abs_diff_eq(Vec3::X, 1.0e-6));
-    }
-
-    #[test]
-    fn sky_disk_rejects_an_invalid_direction() {
-        assert!(sun_direction_in_view(Vec3::ZERO, Quat::IDENTITY).is_none());
-        assert!(sun_direction_in_view(Vec3::splat(f32::NAN), Quat::IDENTITY).is_none());
-    }
 
     #[test]
     fn sky_material_schema_events_revisit_the_sun_uniforms() {

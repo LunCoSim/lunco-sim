@@ -18,6 +18,7 @@ use bevy::ecs::reflect::ReflectComponent;
 pub mod appearance;
 pub mod backend;
 pub mod camera;
+pub mod camera_image;
 pub mod data_texture;
 pub mod quality;
 mod quality_policy;

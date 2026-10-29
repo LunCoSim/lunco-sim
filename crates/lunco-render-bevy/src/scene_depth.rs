@@ -42,6 +42,8 @@ pub(crate) fn build(app: &mut App) {
         .add_observer(removed::<Camera3d>)
         .add_observer(added::<DepthPrepass>)
         .add_observer(removed::<DepthPrepass>)
+        .add_observer(inserted::<lunco_render::camera_image::CameraImageEffects>)
+        .add_observer(removed::<lunco_render::camera_image::CameraImageEffects>)
         .add_systems(
             Update,
             reconcile.run_if(resource_changed::<SceneDepthInvalidation>),
@@ -53,7 +55,15 @@ fn reconcile(
         &ShaderLookSourceInterface,
         (With<Mesh3d>, With<MeshMaterial3d<ShaderMaterial>>),
     >,
-    cameras: Query<(Entity, Has<DepthPrepass>, Has<AutomaticSceneDepth>), With<Camera3d>>,
+    cameras: Query<
+        (
+            Entity,
+            Has<DepthPrepass>,
+            Has<AutomaticSceneDepth>,
+            Option<&lunco_render::camera_image::CameraImageEffects>,
+        ),
+        With<Camera3d>,
+    >,
     retired_cameras: Query<Entity, (With<AutomaticSceneDepth>, Without<Camera3d>)>,
     mut commands: Commands,
 ) {
@@ -63,12 +73,13 @@ fn reconcile(
                 .capabilities
                 .contains(lunco_materials::dyn_params::VOLUME_DEPTH_CAPABILITY)
     });
-    for (camera, has_depth, automatic) in &cameras {
-        if required && !has_depth {
+    for (camera, has_depth, automatic, effect) in &cameras {
+        let needed = required || effect.is_some_and(|effect| effect.enabled());
+        if needed && !has_depth {
             commands
                 .entity(camera)
                 .try_insert((DepthPrepass, AutomaticSceneDepth));
-        } else if !required && automatic {
+        } else if !needed && automatic {
             commands.entity(camera).try_remove::<DepthPrepass>();
             commands.entity(camera).try_remove::<AutomaticSceneDepth>();
         }

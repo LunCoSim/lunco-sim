@@ -52,8 +52,8 @@ const DEFAULT_HORIZONTAL_APERTURE_MM: f32 = 20.955;
 const DEFAULT_NEAR: f32 = 1.0;
 const DEFAULT_FAR: f32 = 1.0e6;
 
-/// A camera whose rendered output belongs to an instrument rather than the
-/// main window. It deliberately does not carry [`SceneCamera`].
+/// An instrument camera. Like other scene cameras it can be explicitly
+/// selected for the main viewport or observed through an independent feed.
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdSensorCamera;
 
@@ -381,17 +381,14 @@ pub fn instantiate_camera_prim(
     // bridge and makes headless camera projection data available immediately.
     let mut camera = commands.entity(entity);
     camera.try_insert((projection, pose));
-    if is_viewport {
+    if is_viewport || is_sensor {
         camera.try_insert((
             lunco_render::scene_camera_look_with_profile(camera_exposure, quality),
             lunco_render::GraphicsCameraDefaults,
         ));
     }
     if is_sensor {
-        camera.try_insert((
-            UsdSensorCamera,
-            lunco_render::scene_camera_look_with_profile(camera_exposure, quality).1,
-        ));
+        camera.try_insert(UsdSensorCamera);
     }
 
     // Conform the authored horizontal aperture against the real window aspect

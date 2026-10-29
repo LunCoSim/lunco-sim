@@ -54,7 +54,8 @@ use bevy::render::renderer::RenderDevice;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use lunco_api::executor::{ApiResponseEvent, DeferredCommandAppExt, PendingApiRequest};
 use lunco_api_core::ApiResponse;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_command_contracts::{Ack, OpId, Reject};
+use lunco_core::{Command, MarkClientLocalExt, on_command, register_commands};
 use lunco_render::SceneCamera;
 use lunco_tools_bevy::{ToolResult, register_closure_tool};
 use lunco_viewport_core::SceneViewport;
@@ -89,10 +90,13 @@ impl Plugin for ScreenshotPlugin {
         // plugin cleanly reports "command not found") AND marks it deferred (so the executor
         // holds the HTTP response open for the PNG instead of answering with a
         // provisional acknowledgement.
+        app.mark_client_local::<CaptureCameraFeed>();
         app.register_deferred_command::<CaptureScreenshot>()
             .register_deferred_command::<CaptureFromCamera>()
+            .register_deferred_command::<CaptureCameraFeed>()
             .add_observer(forward_texture_readback)
-            .add_observer(deliver_screenshot);
+            .add_observer(deliver_screenshot)
+            .add_observer(cancel_pending_capture);
 
         // Offline Frame-by-Frame Recording Mode
         app.init_resource::<lunco_core_runtime::FramePacingDemand>()
@@ -176,6 +180,141 @@ struct PendingCapture {
     completion_correlation_id: Option<u64>,
     save_path: Option<String>,
     region: Option<(u32, u32, u32, u32)>,
+    evidence: Option<FeedEvidence>,
+}
+
+/// Exact feed and caller token travel with the readback, including scene retirement.
+#[derive(Debug, Clone)]
+struct FeedEvidence {
+    source: lunco_core::GlobalEntityId,
+    request: String,
+}
+
+/// Save the exact live camera-window image, including its image effects.
+/// The completion event `camera.image.saved` or `camera.image.failed` carries
+/// the source identity and caller request token. It never changes physical loads.
+#[Command(default)]
+pub struct CaptureCameraFeed {
+    pub feed: u64,
+    pub path: String,
+    pub request: String,
+}
+#[on_command(CaptureCameraFeed)]
+fn on_capture_camera_feed(
+    trigger: On<CaptureCameraFeed>,
+    feeds: Res<crate::camera_feed::CameraFeeds>,
+    images: Res<Assets<Image>>,
+    presentation: Query<&lunco_render::camera_image::CameraImagePresentation>,
+    pending: Option<Res<PendingApiRequest>>,
+    diagnostics: Res<lunco_core::RuntimeDiagnostics>,
+    mut commands: Commands,
+) -> Result<Ack, Reject> {
+    let correlation = pending
+        .as_ref()
+        .and_then(|p| (p.correlation_id != 0).then_some(p.correlation_id));
+    let result = (|| {
+        if diagnostics.findings.iter().any(|finding| {
+            finding.producer == "render-recovery" && finding.code != "graphics-settings"
+        }) {
+            return Err(
+                "Camera capture is unavailable while presentation reports a rendering failure"
+                    .to_owned(),
+            );
+        }
+        if cmd.path.trim().is_empty() {
+            return Err("Capture requires an explicit local PNG path".to_owned());
+        }
+        if cmd.request.is_empty() || cmd.request.len() > 256 {
+            return Err("Capture requires a request token of 1..256 bytes".to_owned());
+        }
+        let feed = feeds
+            .instances
+            .get(&cmd.feed)
+            .ok_or_else(|| "Camera view does not exist".to_owned())?;
+        let source = feed
+            .source
+            .ok_or_else(|| "Select a source before capturing".to_owned())?;
+        let image = feed
+            .image
+            .clone()
+            .ok_or_else(|| "Camera view has no rendered image".to_owned())?;
+        let target = images
+            .get(&image)
+            .ok_or_else(|| "Camera image allocation is unavailable".to_owned())?;
+        if !target
+            .texture_descriptor
+            .usage
+            .contains(bevy::render::render_resource::TextureUsages::COPY_SRC)
+        {
+            return Err("Camera image does not admit GPU readback".to_owned());
+        }
+        if !feed.image_ready(&presentation) {
+            return Err("Camera image configuration is not rendered yet; wait for its live image before capturing".to_owned());
+        }
+        let path = safe_screenshot_path(std::path::Path::new(&cmd.path))?;
+        Ok((source, image, path))
+    })();
+    match result {
+        Ok((source, image, path)) => {
+            commands.spawn((
+                lunco_core::SceneOwned,
+                PendingTextureReadback {
+                    target: image,
+                    request: PendingCapture {
+                        correlation_id: None,
+                        completion_correlation_id: correlation,
+                        save_path: Some(path),
+                        region: None,
+                        evidence: Some(FeedEvidence {
+                            source,
+                            request: cmd.request.clone(),
+                        }),
+                    },
+                },
+            ));
+            Ok(Ack::new(OpId::new()))
+        }
+        Err(message) => {
+            warn!("[camera-feed] {message}");
+            Err(Reject::InvalidOp(message))
+        }
+    }
+}
+fn report_feed_evidence(
+    commands: &mut Commands,
+    evidence: &FeedEvidence,
+    path: &str,
+    error: Option<String>,
+) {
+    use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+    let mut data = std::collections::BTreeMap::from([
+        (
+            "request".into(),
+            TelemetryValue::String(evidence.request.clone()),
+        ),
+        ("path".into(), TelemetryValue::String(path.into())),
+    ]);
+    if let Some(message) = &error {
+        data.insert("error".into(), TelemetryValue::String(message.clone()));
+    }
+    commands.trigger(TelemetryEvent {
+        name: if error.is_some() {
+            "camera.image.failed"
+        } else {
+            "camera.image.saved"
+        }
+        .into(),
+        source: evidence.source.get(),
+        severity: if error.is_some() {
+            Severity::Error
+        } else {
+            Severity::Info
+        },
+        data: TelemetryValue::Map(data),
+        timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
+    });
 }
 
 /// An API image-target capture requested during command dispatch.
@@ -282,6 +421,7 @@ fn on_capture_screenshot(
             completion_correlation_id: None,
             save_path: Some(path),
             region,
+            evidence: None,
         }
     } else {
         PendingCapture {
@@ -289,6 +429,7 @@ fn on_capture_screenshot(
             completion_correlation_id: None,
             save_path: None,
             region,
+            evidence: None,
         }
     };
 
@@ -375,6 +516,7 @@ fn forward_texture_readback(
 register_commands!(
     on_capture_screenshot,
     on_capture_from_camera,
+    on_capture_camera_feed,
     on_start_offline_recording,
     on_stop_offline_recording
 );
@@ -382,23 +524,31 @@ register_commands!(
 /// The picture landed — crop, encode, and either save it or answer the deferred request.
 fn deliver_screenshot(
     trigger: On<ScreenshotCaptured>,
-    requests: Query<&PendingCapture>,
+    mut requests: Query<&mut PendingCapture>,
     mut commands: Commands,
 ) {
     let event = trigger.event();
     // Not one of ours (an offline-recording frame) — bail out BEFORE the full-frame
     // clone+convert below, which costs ~8 MB per 1080p frame.
-    let Ok(pending) = requests.get(event.entity) else {
+    let Ok(mut pending) = requests.get_mut(event.entity) else {
         return;
     };
-    let correlation_id = pending.correlation_id;
-    let completion_correlation_id = pending.completion_correlation_id;
+    let correlation_id = pending.correlation_id.take();
+    let completion_correlation_id = pending.completion_correlation_id.take();
     let save_path = pending.save_path.clone();
     let region = pending.region;
 
     let Ok(mut dyn_img) = event.image.clone().try_into_dynamic() else {
         error!("[screenshot] failed to convert the captured image");
-        if let Some(cid) = completion_correlation_id {
+        if let Some(evidence) = &pending.evidence {
+            report_feed_evidence(
+                &mut commands,
+                evidence,
+                save_path.as_deref().unwrap_or(""),
+                Some("Captured image conversion failed".into()),
+            );
+        }
+        if let Some(cid) = completion_correlation_id.or(correlation_id) {
             commands.trigger(ApiResponseEvent {
                 correlation_id: cid,
                 response: ApiResponse::error(
@@ -429,6 +579,9 @@ fn deliver_screenshot(
         // save_to_file mode — the response was already sent; just write the file.
         if let Err(e) = save_png(std::path::Path::new(&path), &dyn_img) {
             error!("[screenshot] failed to save to '{path}': {e}");
+            if let Some(evidence) = &pending.evidence {
+                report_feed_evidence(&mut commands, evidence, &path, Some(e.to_string()));
+            }
             if let Some(cid) = completion_correlation_id {
                 commands.trigger(ApiResponseEvent {
                     correlation_id: cid,
@@ -438,11 +591,16 @@ fn deliver_screenshot(
                     ),
                 });
             }
-        } else if let Some(cid) = completion_correlation_id {
-            commands.trigger(ApiResponseEvent {
-                correlation_id: cid,
-                response: ApiResponse::ok(lunco_api_core::api_value!({ "path": &path })),
-            });
+        } else {
+            if let Some(evidence) = &pending.evidence {
+                report_feed_evidence(&mut commands, evidence, &path, None);
+            }
+            if let Some(cid) = completion_correlation_id {
+                commands.trigger(ApiResponseEvent {
+                    correlation_id: cid,
+                    response: ApiResponse::ok(lunco_api_core::api_value!({ "path": &path })),
+                });
+            }
         }
     } else if let Some(cid) = correlation_id {
         // raw-PNG mode — encode and answer the deferred HTTP request.
@@ -457,7 +615,35 @@ fn deliver_screenshot(
             });
         } else {
             error!("[screenshot] failed to encode the screenshot as PNG");
+            commands.trigger(ApiResponseEvent {
+                correlation_id: cid,
+                response: ApiResponse::error(
+                    lunco_api_core::ApiErrorCode::InternalError,
+                    "Captured image could not be encoded as PNG",
+                ),
+            });
         }
+    }
+}
+
+/// Retirement must finish an outstanding transport request without publishing
+/// scene evidence into the next scene's event inbox.
+fn cancel_pending_capture(
+    event: On<Remove<PendingCapture>>,
+    pending: Query<&PendingCapture>,
+    mut commands: Commands,
+) {
+    let Ok(pending) = pending.get(event.entity) else {
+        return;
+    };
+    if let Some(cid) = pending.completion_correlation_id.or(pending.correlation_id) {
+        commands.trigger(ApiResponseEvent {
+            correlation_id: cid,
+            response: ApiResponse::error(
+                lunco_api_core::ApiErrorCode::CommandRejected,
+                "Capture retired before image completion",
+            ),
+        });
     }
 }
 
@@ -519,6 +705,7 @@ fn on_capture_from_camera(
         completion_correlation_id,
         save_path: Some(path),
         region: None,
+        evidence: None,
     };
     let viewport_camera = viewport.as_deref().and_then(|v| v.active_camera);
     let active_camera = || {

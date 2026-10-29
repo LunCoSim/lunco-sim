@@ -142,6 +142,11 @@ fn mission_site_camera_animation_duration_s() {
 /// command bridge. The runtime UI layer only transports the action string; it
 /// does not know that these records happen to represent cameras.
 fn handle_camera_ui_action(action) {
+    if action == "camera.image.settings" {
+        let result=cmd("ShowCameraImageSettings", #{});
+        if result.ok != true {notify_kind("Camera image controls are unavailable", "error");}
+        return true;
+    }
     let prefix = "camera.select.path.";
     if action.starts_with(prefix) {
         let result = cmd("SetUserCamera", #{ name: action.sub_string(prefix.len()) });

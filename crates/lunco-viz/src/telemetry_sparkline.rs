@@ -152,7 +152,7 @@ pub fn render_telemetry_sparkline(
             .iter()
             .map(|sample| [sample.time, sample.value])
             .collect();
-        let points = decimate_min_max(&raw, rect.width()).unwrap_or(raw);
+        let points = decimate_min_max(&raw, rect.width(), None).unwrap_or(raw);
         let cached = Arc::new(CachedSparkline {
             signal: signal.clone(),
             fingerprint,
@@ -195,7 +195,7 @@ pub fn render_values_sparkline(
         .enumerate()
         .map(|(index, value)| [index as f64, value])
         .collect::<Vec<_>>();
-    let points = decimate_min_max(&raw, rect.width()).unwrap_or(raw);
+    let points = decimate_min_max(&raw, rect.width(), None).unwrap_or(raw);
     paint_sparkline(
         ui,
         rect,

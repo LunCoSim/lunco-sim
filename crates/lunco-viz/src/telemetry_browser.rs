@@ -2882,7 +2882,7 @@ impl TelemetryBrowserState {
             let stale = !matches!(&self.preview, Some(p) if &p.sig == sel && p.fp == fp);
             if stale {
                 let raw: Vec<[f64; 2]> = h.iter().map(|s| [s.time, s.value]).collect();
-                let points = crate::plot_fmt::decimate_min_max(&raw, PREVIEW_PX_WIDTH)
+                let points = crate::plot_fmt::decimate_min_max(&raw, PREVIEW_PX_WIDTH, None)
                     .unwrap_or(raw)
                     .into_iter()
                     .map(egui_plot::PlotPoint::from)

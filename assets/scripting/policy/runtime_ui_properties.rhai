@@ -91,14 +91,15 @@ fn camera_ui_properties(facts) {
     result.active_label = facts.active_label;
     // The HTML surface and the generic dropdown renderer consume the same
     // authored dimensions. A Twin can replace these values in its policy.
-    result.dropdown_width = "280px";
-    result.dropdown_max_height = "240px";
+    result.dropdown_width = "380px";
+    result.dropdown_max_height = "420px";
     let items = [];
     for camera in facts.cameras {
         items.push(#{
             key: camera.name,
             label: camera.label,
             action: "camera.select.path." + camera.name,
+            group: camera.group,
         });
     }
     if facts.avatar_available {
@@ -106,6 +107,7 @@ fn camera_ui_properties(facts) {
             key: "__avatar__",
             label: "Observe avatar",
             action: "camera.observe.avatar",
+            group: "Scene views",
         });
     }
     if facts.director_available {
@@ -113,9 +115,15 @@ fn camera_ui_properties(facts) {
             key: "__director__",
             label: "Resume authored director",
             action: "camera.resume.director",
+            group: "Scene views",
         });
     }
-    result.camera_items = items;
+    items.push(#{key:"__image_settings__",label:"Image controls…",action:"camera.image.settings",group:"Image controls"});
+    let groups=[];
+    for item in items {if !groups.contains(item.group){groups.push(item.group);}}
+    let grouped=[];
+    for group in groups {for item in items {if item.group==group{grouped.push(item);}}}
+    result.camera_items = grouped;
     result
 }
 

@@ -187,13 +187,6 @@ impl EngineParams {
                     doc: "To-sun direction in world space for scene lighting and terrain shaders.",
                 },
                 EngineParam {
-                    name: "sun_dir_view",
-                    ty: ParamType::Vec3,
-                    source: Runtime,
-                    prop_fillable: false,
-                    doc: "To-sun direction in active-camera view space for the procedural sky.",
-                },
-                EngineParam {
                     name: "blueprint_origin",
                     ty: ParamType::Vec3,
                     source: Runtime,

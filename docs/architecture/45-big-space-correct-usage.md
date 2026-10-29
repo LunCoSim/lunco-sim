@@ -462,13 +462,9 @@ Celestial source ids use `lunco:body` NAIF identity (`sun`, `earth`, and `moon`
 for 10, 399, and 301; `body_<NAIF>` for other bodies). Non-celestial targets
 use their `LunCoDirectionTargetAPI` id.
 
-The procedural Sun disc uniform uses the active camera's view coordinates,
-matching the shader's view-space rays. `SunRenderState` records the finalized
-scene-light direction after the generic source resolver projects it onto the
-light; the render path converts that direction to camera space after BigSpace
-propagation. Do not add a second ephemeris or camera-space Sun calculation.
-Camera pose changes refresh the view-space material input while CelestialTime
-is paused.
+The procedural Sun disc uses the finalized world-space to-Sun direction.
+Each camera reconstructs its own world-space ray; changing one camera cannot
+change the shared sky material or another view's Sun position.
 
 Focused regression coverage includes
 `lunco-celestial-spatial/tests/celestial_integration.rs`, which exercises the

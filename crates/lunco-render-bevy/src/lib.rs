@@ -13,6 +13,7 @@
 //! See `docs/architecture/render-decoupling.md`.
 
 mod backend;
+mod camera_image;
 mod data_texture;
 mod env_light;
 mod gpu_culling;
@@ -120,6 +121,7 @@ pub struct LuncoRenderPlugin;
 
 impl Plugin for LuncoRenderPlugin {
     fn build(&self, app: &mut App) {
+        camera_image::build(app);
         if !app.is_plugin_added::<lunco_materials::LuncoImagePlugin>() {
             app.add_plugins(lunco_materials::LuncoImagePlugin);
         }

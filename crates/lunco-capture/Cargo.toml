@@ -15,6 +15,7 @@ required-features = ["api"]
 
 [dependencies]
 lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-time = { path = "../lunco-time" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_render", "bevy_window"] }
 image = { workspace = true, optional = true }

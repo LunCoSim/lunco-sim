@@ -468,6 +468,7 @@ struct SeriesKey {
     log_y: bool,
     /// Plot pixel width bucket — decimation depth depends on it.
     px_w: u32,
+    x_range: Option<[u64; 2]>,
 }
 
 type PlotSeriesPoints =
@@ -577,9 +578,11 @@ fn cached_plot_series_points(
             if time_on_x {
                 // Min-max pairs cover two horizontal points per bin, giving
                 // the rendered line about one sample per display point.
-                if let Some(decimated) =
-                    crate::plot_fmt::decimate_min_max(&points, pixel_width * 0.5)
-                {
+                if let Some(decimated) = crate::plot_fmt::decimate_min_max(
+                    &points,
+                    pixel_width * 0.5,
+                    build_key.x_range.map(|range| range.map(f64::from_bits)),
+                ) {
                     points = decimated;
                 }
             }
@@ -741,6 +744,13 @@ impl LinePlot {
             .and_then(|xs| registry.scalar_history(xs))
             .filter(|history| !history.is_empty());
         let x_fp = x_history.map(hist_fingerprint);
+        let plot_id = ctx.ui.make_persistent_id(("line_plot", config.id.raw()));
+        let visible_range = egui_plot::PlotMemory::load(ctx.ui.ctx(), plot_id).and_then(|memory| {
+            let bounds = memory.bounds();
+            bounds
+                .is_finite_x()
+                .then(|| [bounds.min()[0], bounds.max()[0]])
+        });
 
         // Snapshot point buffers and their current labels/colors before the
         // plot takes a long-lived borrow on `ctx.ui`.
@@ -761,6 +771,20 @@ impl LinePlot {
                         x_signal: style.x_signal.clone(),
                         log_y: style.log_y,
                         px_w: remaining.x.max(1.0) as u32,
+                        x_range: if style.x_signal.is_some() {
+                            None
+                        } else {
+                            visible_range
+                                .or_else(|| {
+                                    style.time_window_s.and_then(|width| {
+                                        let first = hist.front()?.time;
+                                        let latest = hist.back()?.time;
+                                        let end = latest.max(first + width);
+                                        Some([end - width, end])
+                                    })
+                                })
+                                .map(|range| range.map(f64::to_bits))
+                        },
                     };
                     let cache_id =
                         egui::Id::new(("line_plot_async_series", config.id.raw())).with(&b.source);
@@ -860,6 +884,7 @@ impl LinePlot {
         // space left after the toolbar + separator; `max_rect()` would
         // double-count that strip and push the plot off the bottom.
         let mut plot = Plot::new(("line_plot", config.id.raw()))
+            .id(plot_id)
             .show_x(style.show_hover_values)
             .show_y(style.show_hover_values)
             .width(remaining.x)

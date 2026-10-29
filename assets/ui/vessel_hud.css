@@ -17,7 +17,6 @@
   --ui-local-display: flex;
   --ui-comms-display: none;
   --ui-comms-los-display: none;
-  --ui-telemetry-display: none;
   --ui-program-color: var(--muted-color);
 }
 
@@ -34,8 +33,8 @@
   position: absolute;
   bottom: 24px;
   flex-direction: column;
-  row-gap: 6px;
-  padding: 10px;
+  row-gap: 8px;
+  padding: 14px;
   box-sizing: border-box;
   border-top-width: 1px;
   border-right-width: 1px;
@@ -48,39 +47,37 @@
 
 #vessel-hud-attitude {
   left: 14px;
-  width: 224px;
+  width: 260px;
 }
 
 #vessel-hud-nav {
   right: 14px;
-  width: 340px;
+  width: 420px;
 }
 
 #vessel-hud-attitude-title,
-#vessel-hud-frame,
 #vessel-hud-speed-label,
 #vessel-hud-altitude-label,
-#vessel-hud-comms-label,
-#vessel-hud-telemetry-label {
+#vessel-hud-comms-label {
   color: var(--muted-color);
-  font-size: 12px;
+  font-size: 16px;
 }
 
 #vessel-hud-label {
   color: var(--text-color);
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
 }
 
 #vessel-hud-runtime-status {
   color: var(--accent-color);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 #vessel-hud-height-reference {
   color: var(--muted-color);
-  font-size: 10px;
+  font-size: 14px;
 }
 
 #vessel-hud-nav-heading,
@@ -106,7 +103,7 @@
 
 #vessel-hud-program-label {
   color: var(--ui-program-color);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -128,12 +125,15 @@
   display: flex;
   flex-direction: column;
   row-gap: 4px;
-  width: 62%;
+  width: 56%;
   min-width: 0px;
 }
 
 #vessel-hud-geo,
 #vessel-hud-local {
+  flex-direction: column;
+  align-items: flex-start;
+  row-gap: 6px;
   width: 100%;
   min-width: 0px;
   column-gap: 6px;
@@ -150,24 +150,22 @@
 
 #vessel-hud-tilt {
   color: var(--ui-tilt-color);
-  font-size: 25px;
+  font-size: 34px;
   font-weight: 700;
 }
 
 #vessel-hud-tilt-status,
 #vessel-hud-tilt-limits,
-#vessel-hud-comms-status,
-#vessel-hud-telemetry-summary {
+#vessel-hud-comms-status {
   color: var(--ui-tilt-color);
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 700;
 }
 
 #vessel-hud-tilt-limits,
-#vessel-hud-comms-detail,
-#vessel-hud-telemetry-summary {
+#vessel-hud-comms-detail {
   color: var(--muted-color);
-  font-size: 12px;
+  font-size: 16px;
 }
 
 #vessel-hud-tilt-track {
@@ -209,7 +207,7 @@
 #vessel-hud-speed,
 #vessel-hud-altitude {
   color: var(--accent-color);
-  font-size: 23px;
+  font-size: 30px;
   font-weight: 700;
 }
 
@@ -220,10 +218,9 @@
 #vessel-hud-local-position,
 #vessel-hud-local-heading,
 #vessel-hud-comms-peer,
-#vessel-hud-comms-range,
-#vessel-hud-telemetry-summary {
+#vessel-hud-comms-range {
   color: var(--text-color);
-  font-size: 12px;
+  font-size: 16px;
 }
 
 #vessel-hud-geo {
@@ -234,8 +231,7 @@
   display: var(--ui-local-display);
 }
 
-#vessel-hud-comms,
-#vessel-hud-telemetry {
+#vessel-hud-comms {
   display: var(--ui-comms-display);
   flex-direction: column;
   row-gap: 3px;
@@ -245,8 +241,7 @@
 }
 
 #vessel-hud-comms-heading,
-#vessel-hud-comms-detail,
-#vessel-hud-telemetry-heading {
+#vessel-hud-comms-detail {
   flex-direction: column;
 }
 
@@ -266,13 +261,9 @@
   color: var(--danger-color);
 }
 
-#vessel-hud-telemetry {
-  display: var(--ui-telemetry-display);
-}
-
-#vessel-hud-telemetry-summary {
-  width: 100%;
-  color: var(--text-color);
-  font-size: 11px;
-  overflow: hidden;
+#vessel-hud-geo-heading,
+#vessel-hud-local-heading {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent-color);
 }

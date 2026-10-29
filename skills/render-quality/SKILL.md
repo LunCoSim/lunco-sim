@@ -246,17 +246,15 @@ cadence; physical celestial inputs evaluate that same affine domain at exact
 communication boundaries through `CelestialClock`, independently of the render
 solve gate.
 Procedural sky materials opt into the live Sun disc by declaring both
-`sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
+`sun_dir_world` and `sun_tan_radius` as engine inputs; no shader filename selects
 the behavior. Radius comes from the selected light's authored `inputs:angle`,
 shared with terrain penumbra. Opaque scene depth clips the disc independently
 of terrain shadow visibility; run `sun_disc_occlusion` for authored radius and
-half-disc occlusion. The direction is in the active camera's view coordinates, the
-same frame as the shader's view rays. `SunRenderState` comes from the
-generic `sun` direction resolver after the scene light is finalized through
-BigSpace. `SunState` supplies irradiance only. The renderer projects the
-finalized light direction into camera space; do not add a second ephemeris
-calculation for sky materials. Camera pose changes
-refresh the direction while CelestialTime is paused. Continuous renderer data
+half-disc occlusion. `SunRenderState` supplies one world-space direction after
+the scene light is finalized through BigSpace. Each view transforms its own
+sky ray into world space. Camera movement cannot mutate the shared sky or
+another camera's Sun position. `SunState` supplies irradiance only; do not add
+a second ephemeris calculation for sky materials. Continuous renderer data
 stays in Rust; author the background and material binding in USD.
 
 The globe's resident mesh cap defaults to 72 MiB. A Twin can override it in

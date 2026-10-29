@@ -98,6 +98,19 @@ uses the existing typed edit observer. Keep global UI zoom at the operator's
 preferred scale; curve width does not change typography or signal samples.
 Verify the saved width and rendered stroke in the actual plot panel.
 
+## Camera windows and image controls
+
+The main Camera picker includes mounted sensor cameras, grouped by controlled
+USD owner with path-aware search. Use **Image controls…** for the selected main
+camera. Each camera window keeps source, resolution and **Style** controls
+on one toolbar line, with the graph HUD frame and `+`/`×` buttons. Its image controls affect only that feed; depth range,
+noise, seed, animation, quantization and shader asset are live typed settings.
+See [camera image controls](../../docs/architecture/render-decoupling.md#camera-image-controls)
+for owners, shader bindings, physical scope and completion events. Verify both
+actual rendered depth/noise and negative `SetCameraImageEffects` admissions;
+a successful allocation is not pixel evidence. UI draft/search state belongs
+to the scene resource. Camera selection/viewing never toggles physical power.
+
 ## Core Principles
 
 Render recovery warnings and terminal presentation failures belong in Recent

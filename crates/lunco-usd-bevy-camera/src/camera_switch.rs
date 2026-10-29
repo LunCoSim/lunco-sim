@@ -90,6 +90,9 @@ pub enum CameraSelectionOwner {
 pub struct CameraSelectionStatus {
     /// Window-targeting USD cameras, sorted by display name.
     pub cameras: Vec<String>,
+    /// Exact camera path to the nearest ancestor exposing authored controls.
+    /// Cameras without a vehicle owner belong to the scene group.
+    pub camera_group_paths: std::collections::BTreeMap<String, String>,
     pub active_name: Option<String>,
     pub owner: CameraSelectionOwner,
     pub avatar_available: bool,
@@ -1043,6 +1046,8 @@ pub fn update_camera_selection_status(
     vp: Res<SceneViewport>,
     q_cams: Query<(Entity, &Name, &RenderTarget, Has<LocalEmbodiment>), With<SceneCamera>>,
     q_tracks: Query<(), With<crate::camera_track::CameraTrackPlan>>,
+    prims: Query<&UsdPrimPath>,
+    owners: Query<&UsdPrimPath, With<ControlBinding>>,
     mut status: ResMut<CameraSelectionStatus>,
     mut commands: Commands,
 ) {
@@ -1060,6 +1065,23 @@ pub fn update_camera_selection_status(
     });
     let next = CameraSelectionStatus {
         cameras: cameras.iter().map(|(_, name, _)| name.clone()).collect(),
+        camera_group_paths: cameras
+            .iter()
+            .filter_map(|(entity, name, _)| {
+                let camera = prims.get(*entity).ok()?;
+                owners
+                    .iter()
+                    .filter(|owner| {
+                        owner.stage_handle == camera.stage_handle
+                            && camera
+                                .path
+                                .strip_prefix(&owner.path)
+                                .is_some_and(|suffix| suffix.starts_with('/'))
+                    })
+                    .max_by_key(|owner| owner.path.len())
+                    .map(|owner| (name.clone(), owner.path.clone()))
+            })
+            .collect(),
         active_name,
         owner: selection.owner,
         avatar_available: cameras.iter().any(|(_, _, avatar)| *avatar),
@@ -1095,6 +1117,15 @@ pub fn camera_selection_status_changed(
         ),
     >,
     tracks: Query<(), Added<crate::camera_track::CameraTrackPlan>>,
+    owner_changes: Query<
+        (),
+        (
+            With<ControlBinding>,
+            Or<(Added<ControlBinding>, Changed<Name>)>,
+        ),
+    >,
+    changed_parents: Query<(), Changed<ChildOf>>,
+    removed_owners: RemovedComponents<ControlBinding>,
     removed_cameras: RemovedComponents<SceneCamera>,
     removed_tracks: RemovedComponents<crate::camera_track::CameraTrackPlan>,
 ) -> bool {
@@ -1102,6 +1133,9 @@ pub fn camera_selection_status_changed(
         || viewport.is_changed()
         || !cameras.is_empty()
         || !tracks.is_empty()
+        || !owner_changes.is_empty()
+        || !changed_parents.is_empty()
+        || !removed_owners.is_empty()
         || !removed_cameras.is_empty()
         || !removed_tracks.is_empty()
 }

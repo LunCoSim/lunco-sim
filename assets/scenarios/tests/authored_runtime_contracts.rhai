@@ -157,6 +157,17 @@ fn on_tick(me, ctx) {
             - ramp.attrs["size"] * ramp.attrs["xformOp:scale"][1] / 2.0) < 1.0e-6,
         "first query did not observe the standalone ramp collider at its authored pose: " + ramp_height));
 
+    let trigger = query("Raycast", #{origin:[30.0,10.0,30.0],dir:[0.0,-1.0,0.0],max:20.0});
+    let visible = query("Raycast", #{origin:[30.0,10.0,30.0],dir:[0.0,-1.0,0.0],max:20.0,exclude_sensors:true});
+    checks.push(t_true(trigger.hit && trigger.entity==find_path(ROOT+"/SightTrigger"),
+        "unfiltered ray observes the authored trigger"));
+    checks.push(t_true(visible.hit && abs(visible.point[1])<0.1,
+        "visibility ray ignores triggers and retains the solid ground"));
+    let interior=query("Raycast",#{origin:[30.0,5.0,30.0],dir:[0.0,1.0,0.0],max:2.0,solid:false});
+    checks.push(t_true(interior.hit && abs(interior.distance-0.5)<0.001,"surface ray exits an enclosing collider"));
+    let invalid=query("Raycast",#{origin:[30.0,10.0,30.0],dir:[0.0,-1.0,0.0],exclude_sensors:"yes"});
+    checks.push(t_true(invalid.ok==false && invalid.error.contains("must be a boolean"),"malformed sensor filter is rejected"));
+
     let ray_hit = ray != () && ray.hit == true;
     let ground_hit = ground_height != () && ground_height.hit == true;
     print("[authored-runtime] tick=" + sim_tick() + " camera_track_present=" + query_ok(camera_track)

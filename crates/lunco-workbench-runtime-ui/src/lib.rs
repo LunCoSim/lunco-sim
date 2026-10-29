@@ -353,6 +353,12 @@ pub struct RuntimeUiDropdownDefinition {
     pub max_height_source: String,
     #[serde(default)]
     pub selected_source: Option<String>,
+    /// Optional record field for group headings in authored row order.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Enables a local text filter over row labels, keys and groups.
+    #[serde(default)]
+    pub search_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

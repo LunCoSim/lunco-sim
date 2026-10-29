@@ -172,8 +172,8 @@ const EXTINCTION_RGB: vec3<f32> = vec3<f32>(0.72, 1.00, 1.35);
 //!@default pole_azimuth    20
 //!@ui      center_roll     0 360   "Galactic centre roll (deg)"
 //!@default center_roll     120
-//!@engine sun_dir_view
-//!@default sun_dir_view 0,0,-1
+//!@engine sun_dir_world
+//!@default sun_dir_world 0,0,-1
 //!@engine sun_tan_radius
 //!@default sun_tan_radius 0
 struct Material {
@@ -195,7 +195,7 @@ struct Material {
     pole_tilt:       f32,
     pole_azimuth:    f32,
     center_roll:     f32,
-    sun_dir_view:    vec3<f32>,
+    sun_dir_world:    vec3<f32>,
     sun_tan_radius:  f32,
 }
 
@@ -522,10 +522,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let g = galactic_frame();
     var color = stars(d, px) + milky_way(d, g);
     if (mat.sun_tan_radius > 0.0) {
-        let view_ray = normalize(view_ray_direction);
-        let sun_ray = normalize(mat.sun_dir_view);
+        let world_ray = d;
+        let sun_ray = normalize(mat.sun_dir_world);
         // Cross magnitude retains small angular separation at the disc edge.
-        let sun_angle = atan2(length(cross(view_ray, sun_ray)), dot(view_ray, sun_ray));
+        let sun_angle = atan2(length(cross(world_ray, sun_ray)), dot(world_ray, sun_ray));
         let sun_radius = atan(mat.sun_tan_radius);
         let edge = max(px * 0.5, 1.0e-6);
         let sun_disc = 1.0 - smoothstep(

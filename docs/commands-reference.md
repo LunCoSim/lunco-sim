@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**286 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**290 commands** across **56** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -89,7 +89,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-assets-datasets`](#lunco-assets-datasets) (3 commands)
 - [`lunco-camera-core`](#lunco-camera-core) (7 commands)
-- [`lunco-capture`](#lunco-capture) (9 commands)
+- [`lunco-capture`](#lunco-capture) (12 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
 - [`lunco-control-core`](#lunco-control-core) (2 commands)
 - [`lunco-core-runtime`](#lunco-core-runtime) (1 command)
@@ -99,7 +99,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-services`](#lunco-luncosim-services) (1 command)
-- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (4 commands)
+- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (5 commands)
 - [`lunco-modelica-api`](#lunco-modelica-api) (10 commands)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
@@ -2001,6 +2001,20 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-capture` <a id="lunco-capture"></a>
 
+#### `CaptureCameraFeed`
+
+ Save the exact live camera-window image, including its image effects.
+ The completion event `camera.image.saved` or `camera.image.failed` carries
+ the source identity and caller request token. It never changes physical loads.
+
+- *defined in:* `crates/lunco-capture/src/screenshot.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `feed` | `u64` |   |
+| `path` | `String` |   |
+| `request` | `String` |   |
+
 #### `CaptureFromCamera`
 
  **Capture from a specific vessel's mounted camera** — the typed command behind the
@@ -2055,6 +2069,17 @@ actually call, with the fields the deserializer actually accepts. See the
 - *defined in:* `crates/lunco-capture/src/camera_feed.rs`
 - *fields:* none — call with `InspectCameraFeeds` (no params)
 
+#### `InspectCameraImageEffects`
+
+ Inspect the image effects of exactly one feed or native source camera.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `feed` | `Option < u64 >` |   |
+| `source` | `Option < GlobalEntityId >` |   |
+
 #### `RemoveCameraFeed`
 
  Release one window, its render camera and image.
@@ -2094,6 +2119,19 @@ actually call, with the fields the deserializer actually accepts. See the
 | `match_window` | `bool` |   |
 | `width` | `Option < u32 >` |   |
 | `height` | `Option < u32 >` |   |
+
+#### `SetCameraImageEffects`
+
+ Replace image-effect settings for exactly one feed or native source camera.
+ Physical camera power and acquisition remain independent Modelica controls.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `feed` | `Option < u64 >` |   |
+| `source` | `Option < GlobalEntityId >` |   |
+| `settings` | `CameraImageEffects` |   |
 
 #### `StartOfflineRecording`
 
@@ -2428,6 +2466,16 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `unavailable` | `bool` |  `true` injects the unavailable state; `false` restores normal discovery. |
+
+#### `ShowCameraImageSettings`
+
+ Open live image controls. Omitted source follows the selected main camera.
+
+- *defined in:* `crates/lunco-luncosim-ui/src/ui/camera_feed.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `Option < GlobalEntityId >` |   |
 
 #### `SuppressDatasetProvisioning`
 
@@ -4335,7 +4383,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 286 commands from the runtime schema; scanned 1046 .rs files for docs (0 parse failure(s) skipped).
+<!-- 290 commands from the runtime schema; scanned 1048 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

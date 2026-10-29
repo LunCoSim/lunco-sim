@@ -64,6 +64,15 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+/// Shared viewport HUD chrome for graph and camera windows.
+pub fn hud_window_frame(theme: &Theme) -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme.tokens.overlay_backdrop)
+        .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
+        .corner_radius(theme.rounding.window)
+        .inner_margin(egui::Margin::same(theme.spacing.window_padding as i8))
+}
+
 /// Terse "same colour, different alpha" for opaque design tokens.
 ///
 /// Every palette entry / design token in this crate is **opaque**

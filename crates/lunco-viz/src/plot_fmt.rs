@@ -54,65 +54,71 @@ pub fn log_y_tick(mark_value: f64) -> String {
 /// meaningfully shrink it (caller plots the original), or when the X
 /// span is degenerate (all samples at one X — nothing to bucket by).
 ///
+/// `x_range` chooses the visible interval; omitted means the full history.
+/// Absolute-time bins keep completed intervals stable during append and scroll.
+///
 /// Only valid for X-monotone series (classic time-series). Phase-space
 /// trajectories revisit X and must not be decimated this way.
-pub fn decimate_min_max(points: &[[f64; 2]], px_width: f32) -> Option<Vec<[f64; 2]>> {
+pub fn decimate_min_max(
+    points: &[[f64; 2]],
+    px_width: f32,
+    x_range: Option<[f64; 2]>,
+) -> Option<Vec<[f64; 2]>> {
     let cols = (px_width.max(1.0) as usize).max(1);
-    // 2 points per column; skip only when the input already fits the
-    // requested output budget.
-    if points.len() <= cols.saturating_mul(2) {
+    let first = points.first()?;
+    let last = points.last()?;
+    let [low, high] = x_range.unwrap_or([first[0], last[0]]);
+    let span = high - low;
+    if !low.is_finite() || !high.is_finite() || span <= 0.0 || !span.is_finite() {
         return None;
     }
-    let x0 = points[0][0];
-    let span = points[points.len() - 1][0] - x0;
-    if span.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || !span.is_finite() {
+    // Anchor bins to absolute time, never to a moving history endpoint.
+    // Sampling density changes only at a power-of-two viewport scale boundary.
+    let width = 2.0f64.powf((span / cols as f64).log2().ceil());
+    if !width.is_finite() || width <= 0.0 {
         return None;
     }
-    let mut out = Vec::with_capacity(cols * 2 + 2);
-    let mut bucket = 0usize;
-    // Index of the current bucket's min/max sample (by Y).
-    let (mut lo, mut hi): (usize, usize) = (0, 0);
+    let start = points
+        .partition_point(|point| point[0] < (low / width).floor() * width)
+        .saturating_sub(1);
+    let end = (points.partition_point(|point| point[0] < (high / width).ceil() * width) + 1)
+        .min(points.len());
+    let visible = &points[start..end];
+    if visible.len() <= cols.saturating_mul(2) {
+        return (visible.len() != points.len()).then(|| visible.to_vec());
+    }
+    let mut out = Vec::with_capacity(cols * 2 + 4);
+    let mut bucket = (visible[0][0] / width).floor();
+    let (mut lo, mut hi) = (0, 0);
     let flush = |lo: usize, hi: usize, out: &mut Vec<[f64; 2]>| {
-        // Emit in sample order so X stays monotone within the column.
         let (a, b) = if lo <= hi { (lo, hi) } else { (hi, lo) };
-        out.push(points[a]);
-        if b != a {
-            out.push(points[b]);
+        out.push(visible[a]);
+        if a != b {
+            out.push(visible[b]);
         }
     };
-    for (i, p) in points.iter().enumerate() {
-        let col = (((p[0] - x0) / span) * cols as f64) as usize;
-        let col = col.min(cols - 1);
+    for (i, point) in visible.iter().enumerate() {
+        let col = (point[0] / width).floor();
         if col != bucket {
             flush(lo, hi, &mut out);
             bucket = col;
             lo = i;
             hi = i;
         } else {
-            if p[1] < points[lo][1] {
+            if point[1] < visible[lo][1] {
                 lo = i;
             }
-            if p[1] > points[hi][1] {
+            if point[1] > visible[hi][1] {
                 hi = i;
             }
         }
     }
     flush(lo, hi, &mut out);
-    let same_sample = |left: &[f64; 2], right: &[f64; 2]| {
-        left[0].to_bits() == right[0].to_bits() && left[1].to_bits() == right[1].to_bits()
-    };
-    if out
-        .first()
-        .is_none_or(|first| !same_sample(first, &points[0]))
-    {
-        out.insert(0, points[0]);
+    if out.first() != visible.first() {
+        out.insert(0, visible[0]);
     }
-    let last = points[points.len() - 1];
-    if out
-        .last()
-        .is_none_or(|last_sample| !same_sample(last_sample, &last))
-    {
-        out.push(last);
+    if out.last() != visible.last() {
+        out.push(*visible.last()?);
     }
     Some(out)
 }
@@ -154,7 +160,7 @@ mod tests {
         // 100 px the spike must survive as the max of its column.
         let mut pts: Vec<[f64; 2]> = (0..10_000).map(|i| [i as f64, 0.0]).collect();
         pts[5_000][1] = 42.0;
-        let out = decimate_min_max(&pts, 100.0).expect("10k points must decimate at 100 px");
+        let out = decimate_min_max(&pts, 100.0, None).expect("10k points must decimate at 100 px");
         assert!(out.len() <= 2 * 100 + 2);
         assert!(
             out.iter().any(|p| p[1] == 42.0),
@@ -167,12 +173,33 @@ mod tests {
     #[test]
     fn small_series_pass_through_undedecimated() {
         let pts: Vec<[f64; 2]> = (0..50).map(|i| [i as f64, i as f64]).collect();
-        assert!(decimate_min_max(&pts, 100.0).is_none());
+        assert!(decimate_min_max(&pts, 100.0, None).is_none());
     }
 
     #[test]
     fn degenerate_x_span_is_left_alone() {
         let pts: Vec<[f64; 2]> = (0..5_000).map(|i| [1.0, i as f64]).collect();
-        assert!(decimate_min_max(&pts, 10.0).is_none());
+        assert!(decimate_min_max(&pts, 10.0, None).is_none());
+    }
+    #[test]
+    fn completed_bins_stay_fixed_when_history_grows_and_scrolls() {
+        let samples: Vec<_> = (0..20000)
+            .map(|i| {
+                let t = i as f64 * 0.01;
+                [t, (t * 19.0).sin() + (t * 71.0).cos()]
+            })
+            .collect();
+        let before = decimate_min_max(&samples[..16000], 100.0, Some([145.0, 160.0])).unwrap();
+        let after = decimate_min_max(&samples[..16020], 100.0, Some([145.2, 160.2])).unwrap();
+        let interior = |points: Vec<[f64; 2]>| {
+            points
+                .into_iter()
+                .filter(|p| p[0] >= 146.0 && p[0] < 159.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(interior(before), interior(after));
+        let dense = decimate_min_max(&samples, 100.0, Some([145.0, 160.0])).unwrap();
+        assert!(dense.len() <= 204);
+        assert!(dense.windows(2).all(|p| p[0][0] <= p[1][0]));
     }
 }

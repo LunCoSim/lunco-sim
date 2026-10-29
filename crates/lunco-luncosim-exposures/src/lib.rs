@@ -2959,6 +2959,18 @@ fn queue_camera_exposure(
         .and_then(|active| status.cameras.iter().position(|name| name == active))
         .and_then(|index| labels.get(index).cloned())
         .unwrap_or_else(|| active_name.to_owned());
+    let group_paths: Vec<_> = status
+        .camera_group_paths
+        .values()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let group_labels: std::collections::BTreeMap<_, _> = group_paths
+        .iter()
+        .cloned()
+        .zip(lunco_camera_core::camera_display_labels(&group_paths))
+        .collect();
     let cameras = status
         .cameras
         .iter()
@@ -2967,6 +2979,17 @@ fn queue_camera_exposure(
             HookValue::map([
                 ("name", HookValue::str(name.clone())),
                 ("label", HookValue::str(label)),
+                (
+                    "group",
+                    HookValue::str(
+                        status
+                            .camera_group_paths
+                            .get(name)
+                            .and_then(|path| group_labels.get(path))
+                            .cloned()
+                            .unwrap_or_else(|| "Scene views".to_owned()),
+                    ),
+                ),
             ])
         })
         .collect();

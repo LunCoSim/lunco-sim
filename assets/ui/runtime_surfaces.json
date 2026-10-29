@@ -132,7 +132,6 @@
         "speed": { "source": "speed" },
         "altitude": { "source": "altitude" },
         "height_reference": { "source": "height_reference" },
-        "coordinate_frame": { "source": "coordinate_frame" },
         "roll": { "source": "roll" },
         "pitch": { "source": "pitch" },
         "heading": { "source": "heading" },
@@ -142,7 +141,6 @@
         "comms_peer": { "source": "comms_peer" },
         "comms_range": { "source": "comms_range" },
         "comms_elevation": { "source": "comms_elevation" },
-        "telemetry_summary": { "source": "telemetry_summary" },
         "tilt_color": { "source": "tilt_color", "css": true },
         "tilt_marker": { "source": "tilt_marker", "css": true },
         "caution_width": { "source": "caution_width", "css": true },
@@ -153,7 +151,6 @@
         "comms_display": { "source": "comms_display", "css": true },
         "comms_los_display": { "source": "comms_los_display", "css": true },
         "comms_color": { "source": "comms_color", "css": true },
-        "telemetry_display": { "source": "telemetry_display", "css": true },
         "program_color": { "source": "program_color", "css": true }
       },
       "actions": [],
@@ -211,7 +208,9 @@
           "action": "action",
           "width_source": "dropdown_width",
           "max_height_source": "dropdown_max_height",
-          "selected_source": "active_name"
+          "selected_source": "active_name",
+          "group": "group",
+          "search_hint": "Find a rover or camera…"
         }
       ],
       "visible_in_perspective": "sandbox_view",
@@ -220,7 +219,7 @@
         "mode": "window",
         "anchor": "top_right",
         "offset": [-12.0, 52.0],
-        "width": 196.0,
+        "width": 280.0,
         "height": 32.0
       }
     },

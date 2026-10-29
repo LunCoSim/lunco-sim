@@ -111,7 +111,10 @@ resolution policy. Allocation limits and rejection details are reported by
 Use two physically separated
 native sensor cameras for stereo, and verify both rendered views in the owned
 session. See the [render owner contract](../../docs/architecture/render-decoupling.md#live-camera-observations)
-and `camera_feed_live.rhai` production acceptance.
+and `camera_feed_live.rhai` production acceptance. For grouped navigation and
+live depth/noise controls, follow [camera windows](../lunco-ui/SKILL.md#camera-windows-and-image-controls).
+Run `scripts/api/test_camera_views.py --port <free-port>` for the windowed
+pixel and world-fixed-sky gate. Capture only after the view reports `ready`.
 
 Named guided cards accept `SetGuidedHudLayout { hud, width, text_scale,
 draggable }`. Layout is scene scoped and exposed in `InspectGuidedHud`; invalid
