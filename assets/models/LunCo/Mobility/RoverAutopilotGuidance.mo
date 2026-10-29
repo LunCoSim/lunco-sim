@@ -22,10 +22,17 @@ model RoverAutopilotGuidance
   input Real position_z = 0.0 "Authoritative rover position Z (m)";
   input Real yaw = 0.0 "Authoritative rover yaw (rad)";
   input Real yaw_rate = 0.0 "Authoritative rover angular rate about Y (rad/s)";
-  input Real speed = 0.0 "Forward throttle limit";
+  input Real velocity_x = 0.0 "Authoritative rover velocity X (m/s)";
+  input Real velocity_z = 0.0 "Authoritative rover velocity Z (m/s)";
+  input Real speed = 0.0 "Signed skid-steer cruise limit; wheel steering uses the magnitude";
   input Real radius = 2.0 "Horizontal arrival radius (m)";
   input Real turn_only = 0.0 "1 for a steering-only heading maneuver";
 
+  parameter Real drive_heading_tolerance = 0.2
+    "Skid-steer heading window before forward travel (rad)";
+  parameter Real maximum_yaw_rate = 0.12 "Skid-steer turn-rate limit (rad/s)";
+  parameter Real turn_rate_kp = 3.0 "Turn-rate proportional gain";
+  parameter Real turn_rate_ki = 0.8 "Turn-rate integral gain";
   parameter Real heading_kp = 1.2 "Heading proportional gain (1/rad)";
   parameter Real heading_kd = 0.8 "Yaw-rate damping gain (s/rad)";
   parameter Real front_transition = 0.05
@@ -33,7 +40,9 @@ model RoverAutopilotGuidance
   parameter Real turn_in_place = 1.0
     "1 for skid steering, 0 for wheel-steered forward/reverse recovery";
 
-  output Real throttle_cmd "Forward throttle command";
+  output Real throttle_cmd "Signed drive plus pivot-hold correction";
+  output Real travel_throttle_cmd "Signed waypoint travel command";
+  output Real pivot_hold_throttle "Common motor demand holding translation during a pivot";
   output Real steer_cmd "Damped normalized steer command";
   output Real target_distance_m(unit = "m") "Horizontal target distance";
   output Real heading_error_rad(unit = "rad")
@@ -43,6 +52,7 @@ model RoverAutopilotGuidance
   Real dx;
   Real dz;
   Real distance_safe;
+  Real requested_drive_direction;
   Real target_x_unit;
   Real target_z_unit;
   Real forward_x;
@@ -50,25 +60,56 @@ model RoverAutopilotGuidance
   Real cross_yaw;
   Real dot_heading;
   Real front_gate;
+  Real skid_alignment_gate;
   Real approach_gate;
   Real enabled_gate;
   Real turn_only_gate;
   Real steer_gate;
   Real raw_steer;
+  Real desired_right_yaw_rate;
+  LunCo.GNC.PIDAxis turn_rate_controller(
+    enabled=enabled_gate * turn_in_place * steer_gate,
+    setpoint=desired_right_yaw_rate,
+    measurement=-yaw_rate,
+    kp=turn_rate_kp,
+    ki=turn_rate_ki,
+    kd=0.0,
+    integral_limit=1.0 / max(1.0e-9, turn_rate_ki),
+    output_limit=1.0,
+    anti_windup_gain=2.0);
+  Real pivot_gate;
+  LunCo.GNC.PIDAxis pivot_hold_controller(
+    enabled=enabled_gate * turn_in_place * pivot_gate,
+    setpoint=0.0,
+    measurement=velocity_x * forward_x + velocity_z * forward_z,
+    kp=2.0,
+    ki=1.0,
+    kd=0.0,
+    integral_limit=0.3,
+    output_limit=0.3,
+    anti_windup_gain=2.0);
   Real wheel_steer;
   Real travel_direction;
   Real arrival_gate;
   Real travel_approach;
 
 equation
+  assert(drive_heading_tolerance > 0.0 and drive_heading_tolerance <= 1.5707963267948966,
+    "Rover guidance heading window must be in (0, pi/2]");
+  assert(maximum_yaw_rate > 0.0 and turn_rate_kp > 0.0 and turn_rate_ki > 0.0,
+    "Rover turn-rate limits and gains must be positive");
   enabled_gate = max(0.0, min(1.0, enabled));
   turn_only_gate = max(0.0, min(1.0, turn_only));
 
   dx = target_x - position_x;
   dz = target_z - position_z;
   distance_safe = sqrt(max(1.0e-12, dx * dx + dz * dz));
-  target_x_unit = dx / distance_safe;
-  target_z_unit = dz / distance_safe;
+  // Reverse skid travel keeps the chassis aimed opposite the travel vector.
+  // Steering still controls the physical chassis yaw; signed motor demand
+  // supplies reverse motion through the same electrical and wheel models.
+  requested_drive_direction = noEvent(if turn_in_place > 0.5 and speed < 0.0 then -1.0 else 1.0);
+  target_x_unit = requested_drive_direction * dx / distance_safe;
+  target_z_unit = requested_drive_direction * dz / distance_safe;
 
   // The authored rover frame is local -Z forward.  The Avian yaw output is
   // the same YXZ yaw used by the physical pose boundary.
@@ -87,15 +128,24 @@ equation
   // discontinuity while retaining zero throttle for a decisively rear target.
   front_gate = max(0.0, min(1.0,
     (dot_heading + front_transition) / max(1.0e-9, 2.0 * front_transition)));
+  // Skid steering aligns before translating. A continuous cosine window
+  // reduces forward drive while the heading error grows, so a pivot does
+  // not become a wide powered arc. Wheel-steered guidance retains curvature.
+  skid_alignment_gate = max(0.0, min(1.0,
+    (dot_heading - cos(drive_heading_tolerance)) /
+      max(1.0e-9, 1.0 - cos(drive_heading_tolerance))));
   approach_gate = max(0.0, min(1.0,
     (distance_safe - max(1.0e-3, radius)) /
       max(1.0e-3, 2.0 * max(1.0e-3, radius))));
   steer_gate = (1.0 - turn_only_gate) * arrival_gate + turn_only_gate;
 
-  // Avian's positive Y rate corresponds to a left turn in the rover's
-  // local -Z/+X convention. Adding it to the right-positive heading error is
-  // therefore negative feedback and removes the post-turn overshoot.
-  raw_steer = heading_kp * heading_error_rad + heading_kd * yaw_rate;
+  // The outer heading loop requests a bounded right-positive yaw rate.
+  // Avian Y rate is left-positive, so its negation is the measured right rate.
+  // The shared PI axis supplies the friction-holding bias without sacrificing
+  // the rate limit or accumulating integral while guidance is disabled.
+  desired_right_yaw_rate = max(-maximum_yaw_rate,
+    min(maximum_yaw_rate, heading_kp * heading_error_rad));
+  raw_steer = turn_rate_controller.command;
   travel_direction = 2.0 * front_gate - 1.0;
   // Curvature has the same sign in forward and reverse. Rate damping changes
   // sign with travel direction because steering reverses its yaw effect.
@@ -111,9 +161,14 @@ equation
     + (1.0 - turn_in_place) * arrival_gate *
       max(-1.0, min(1.0, wheel_steer)));
 
-  throttle_cmd = enabled_gate * (1.0 - turn_only_gate) * speed * (
-    turn_in_place * front_gate *
+  // A pivot still needs common motor torque to resist rolling down a slope.
+  // Physical velocity feedback supplies that torque; it never moves the pose.
+  pivot_gate = max(turn_only_gate, 1.0 - skid_alignment_gate);
+  pivot_hold_throttle = pivot_hold_controller.command;
+  throttle_cmd = travel_throttle_cmd + pivot_hold_throttle;
+  travel_throttle_cmd = enabled_gate * (1.0 - turn_only_gate) * (
+    turn_in_place * speed * front_gate * skid_alignment_gate *
       (0.25 + 0.75 * max(0.0, dot_heading)) * travel_approach
-    + (1.0 - turn_in_place) * travel_direction * travel_approach);
+    + (1.0 - turn_in_place) * abs(speed) * travel_direction * travel_approach);
 
 end RoverAutopilotGuidance;

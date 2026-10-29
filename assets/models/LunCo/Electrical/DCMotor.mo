@@ -15,6 +15,8 @@ model DCMotor
   parameter Real v_rated = 28.0 "Bus voltage the drive is rated at, V";
 
   input Real demand "Normalized motor demand, -1..1";
+  parameter Real coast_at_zero(unit="1") = 0.0
+    "Zero preserves voltage drive; one opens the H-bridge at exactly zero demand";
   input Real speed(unit="rad/s") "Measured shaft speed from the mechanical engine";
 
   input Real resistance_scale(unit="1") = 1.0
@@ -50,7 +52,10 @@ equation
   resistance = torque_constant * v_rated / stall_torque * resistance_scale;
 
   shaft_speed = speed;
-  winding_voltage = demand * p.v;
+  // Open-circuit idle is distinct from the legacy zero-voltage short.
+  // The open winding carries its back-EMF but no current, torque or heat.
+  winding_voltage = if noEvent(coast_at_zero > 0.5 and abs(demand) <= 0.0)
+    then back_emf else demand * p.v;
   back_emf = back_emf_constant * shaft_speed;
   winding_current = (winding_voltage - back_emf) / resistance;
 

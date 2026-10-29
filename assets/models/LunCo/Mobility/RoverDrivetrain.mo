@@ -24,11 +24,13 @@ model RoverDrivetrain
   input Real program_active "1 while the authored program owns the drive";
   input Real autopilot_target_x "Waypoint X in the active physics frame (m)";
   input Real autopilot_target_z "Waypoint Z in the active physics frame (m)";
-  input Real autopilot_speed "Forward throttle limit";
+  input Real autopilot_speed "Signed cruise throttle limit; negative requests reverse";
   input Real autopilot_radius "Horizontal arrival radius (m)";
   input Real autopilot_turn_only "1 for a steering-only heading maneuver";
   input Real autopilot_position_x "Authoritative rover position X (m)";
   input Real autopilot_position_z "Authoritative rover position Z (m)";
+  input Real autopilot_velocity_x = 0.0 "Authoritative rover velocity X (m/s)";
+  input Real autopilot_velocity_z = 0.0 "Authoritative rover velocity Z (m/s)";
   input Real autopilot_yaw "Authoritative rover yaw (rad)";
   input Real autopilot_yaw_rate "Authoritative rover angular rate about Y (rad/s)";
   input Real piloted "1 while an external session owns manual control";
@@ -39,6 +41,8 @@ model RoverDrivetrain
     target_z=autopilot_target_z,
     position_x=autopilot_position_x,
     position_z=autopilot_position_z,
+    velocity_x=autopilot_velocity_x,
+    velocity_z=autopilot_velocity_z,
     yaw=autopilot_yaw + forward_yaw_offset,
     yaw_rate=autopilot_yaw_rate,
     speed=autopilot_speed,
@@ -55,6 +59,7 @@ model RoverDrivetrain
 
   output Real drive_left "Normalized left-side drive, -1..1";
   output Real drive_right "Normalized right-side drive, -1..1";
+  output Real guidance_travel_throttle "Signed waypoint travel demand, excluding pivot hold";
   output Real guidance_throttle "Modelica waypoint throttle command";
   output Real guidance_steer "Modelica waypoint steer command";
   output Real guidance_heading_error "Modelica waypoint heading error (rad)";
@@ -72,6 +77,7 @@ equation
     selected_throttle - steer_gain * selected_steer)) - tr) / tau_m;
   drive_left = tl;
   drive_right = tr;
+  guidance_travel_throttle = guidance.travel_throttle_cmd;
   guidance_throttle = guidance.throttle_cmd;
   guidance_steer = guidance.steer_cmd;
   guidance_heading_error = guidance.heading_error_rad;
