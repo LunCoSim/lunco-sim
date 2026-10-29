@@ -259,6 +259,12 @@ rounds off. The oracle makes the fix cheap. Four levers, in priority order:
    `colliderDepth` and `colliderResolution` on the `dem` layer. They are copied
    into `DemTerrainRequest` and are the only quality inputs to the collider ring;
    visual LOD and `RenderingQualitySettings` are not read by physics.
+   For terrain width `W`, depth `d` and tile resolution `n`, contact spacing is
+   `W / (2^d * (n - 1))`; the physics band excludes features below twice that
+   spacing. The overzoom generator fully retains crater radii at six times the
+   spacing. Author enough contact resolution for the scene's smallest intended
+   physical crater, then compare native ray hits with the oracle near a body.
+   Matching the height source alone does not match differently filtered products.
 
 **Constraint that shapes all of it:** detail generation stays **CPU-side /
 bakeable**, never GPU tessellation or mesh shaders. It must be wasm-safe (locked

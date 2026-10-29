@@ -144,6 +144,12 @@ Source replacement/removal and reload publication are handled by the reflection
 owner. Source request admission precedes reflection; material readiness
 invalidation precedes readiness promotion. Required consumers must not lose a
 valid interface while their material waits for binding or repacking.
+The shader binder packs every new material against the source's cached
+`ShaderSchemas` layout before binding its handle, including LOD band and edge
+stitch replacements. Asset events schedule reflection for newly loaded sources;
+they are not a publication barrier for materials created later in the frame.
+An unreflected source remains pending under `ShaderLookReady`. Layout selection
+belongs to the renderer, with no terrain-specific shader or visibility policy.
 The exterior also carries the site lunar photometry parameters and fades
 its direct-sun response to the body response. Shared PBR and terrain lighting
 helpers own lighting; no heightfield shadow march runs for the collar. The

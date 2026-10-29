@@ -25,10 +25,11 @@
 //! repack or an `AssetEvent` storm.
 //!
 //! The schema (parameter name → std140 offset, reflected out of the WESL) is
-//! filled in by [`reflect_shader_schemas`](crate::reflect_shader_schemas) once the shader
-//! source loads; a freshly built material carries the empty schema and its values
-//! by name, and is repacked the moment the schema lands. Stage validation,
-//! schemas, and source interfaces share asset-scoped facts; tile replacement
+//! reflected by [`reflect_shader_schemas`](crate::reflect_shader_schemas) once
+//! the shader source loads. New materials use that cached layout before binding;
+//! pending sources retain named values until reflection and readiness complete.
+//! Stage validation, schemas, and source interfaces share asset-scoped facts;
+//! tile replacement
 //! never re-parses an unchanged shader.
 
 use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
@@ -111,6 +112,7 @@ fn shader_material(
     look: &ShaderLook,
     handles: &ShaderLoadHandles,
     rasters: &ShaderImageAssets,
+    schemas: &crate::ShaderSchemas,
 ) -> ShaderMaterial {
     let mut m = ShaderMaterial {
         // A path, not a handle, in the intent — `bevy::shader` pulls naga, so the
@@ -154,10 +156,16 @@ fn shader_material(
         };
         *slot = rasters.get(image).cloned();
     }
-    // Packs against the (initially empty) schema; `reflect_shader_schemas` upgrades
-    // it and repacks once the WESL source lands. Same lifecycle as every other
-    // `ShaderMaterial` in the codebase.
-    m.repack();
+    // A new content key can be bound and extracted in this same frame. Pack
+    // against the loaded shader's authoritative layout before publishing it;
+    // asset events and the reflection sweep may run in a later frame.
+    if let Some(schema) = schemas.get(handles.fragment.id()) {
+        m.set_schema(schema.clone());
+    } else {
+        // The source has not been reflected yet; readiness holds publication
+        // until reflect_shader_schemas installs its layout.
+        m.repack();
+    }
     build_shader_material(handles.fragment.clone(), m)
 }
 
@@ -351,6 +359,7 @@ fn material_for(
     materials: &mut Assets<ShaderMaterial>,
     asset_server: &AssetServer,
     rasters: &ShaderImageAssets,
+    schemas: &crate::ShaderSchemas,
 ) -> Result<Option<Handle<ShaderMaterial>>, (ShaderStage, String)> {
     if look
         .textures
@@ -361,7 +370,7 @@ fn material_for(
     }
     let handles = shader_load_handles(look, asset_server)?;
     Ok(Some(cache.resolve(look, materials, |look| {
-        shader_material(look, &handles, rasters)
+        shader_material(look, &handles, rasters, schemas)
     })))
 }
 
@@ -452,6 +461,7 @@ fn bind_shader_look(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     rasters: ShaderImageAssets,
+    schemas: Res<crate::ShaderSchemas>,
     shaders: Option<Res<Assets<Shader>>>,
     mut shader_cache: ResMut<ShaderSourceCache>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -468,7 +478,14 @@ fn bind_shader_look(
         }
         return;
     }
-    let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+    let handle = match material_for(
+        look,
+        &mut cache,
+        &mut materials,
+        &asset_server,
+        &rasters,
+        &schemas,
+    ) {
         Ok(Some(handle)) => handle,
         Ok(None) => {
             clear_shader_render_components(&mut commands, e);
@@ -503,6 +520,7 @@ fn bind_added_skybox_shader_look(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     rasters: ShaderImageAssets,
+    schemas: Res<crate::ShaderSchemas>,
     shaders: Option<Res<Assets<Shader>>>,
     mut shader_cache: ResMut<ShaderSourceCache>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -519,7 +537,14 @@ fn bind_added_skybox_shader_look(
         }
         return;
     }
-    let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+    let handle = match material_for(
+        look,
+        &mut cache,
+        &mut materials,
+        &asset_server,
+        &rasters,
+        &schemas,
+    ) {
         Ok(Some(handle)) => handle,
         Ok(None) => {
             clear_shader_render_components(&mut commands, e);
@@ -581,7 +606,7 @@ fn rebind_changed_shader_look(
     rasters: ShaderImageAssets,
     shaders: Option<Res<Assets<Shader>>>,
     images: Option<Res<Assets<Image>>>,
-    schemas: Option<Res<crate::ShaderSchemas>>,
+    schemas: Res<crate::ShaderSchemas>,
     mut commands: Commands,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut shader_cache: ResMut<ShaderSourceCache>,
@@ -615,30 +640,9 @@ fn rebind_changed_shader_look(
             // adding one per change (that would leak a material per frame).
             let current_handle = current.map(|material| material.0.clone());
             if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
-                // A driven look changes EVERY tick, so this is the hot path, and a
-                // full rebuild here is wrong twice over.
-                //
-                // Correctness: `shader_material` builds from `..Default::default()`,
-                // whose schema is `empty_schema_arc()`, and its trailing `repack()`
-                // then packs against NO fields — every parameter zeroed. Harmless
-                // when a material is being CREATED (`reflect_shader_schemas` fills
-                // the schema in once the WESL lands), fatal when it recurs: the two
-                // systems are unordered `Update` members contending for
-                // `Assets<ShaderMaterial>`, so if reflection runs first the zeroing
-                // write is the last one each frame and the uniforms stay dead.
-                //
-                // Cost: it also re-collects the parameter map, re-resolves the
-                // texture slots and calls `asset_server.load` twice, per driven prim
-                // per tick, to express what is usually a single moved float.
-                //
-                // So rebuild only when the SHADER ITSELF changed (a hot-reloaded
-                // `shaderPath`, a genuinely different texture set) — and carry the
-                // reflected schema across when we do. Otherwise write the values in
-                // place, which is what `set_many` exists for: one repack for N
-                // fields, against the live schema. Shader identity comes from the
-                // asset-ID cache, avoiding repeated path resolution. Textures compare slot-by-slot
-                // (`textures_match`): a TEXTURED look whose texture SET is
-                // unchanged takes the cheap param path like everything else.
+                // Driven values pack once into the retained material. Rebuild
+                // only when shader, texture, or pipeline structure changes;
+                // construction selects the new shader's cached layout.
                 let want_shader_id = match shader_cache.shader_id(&look.shader, &asset_server) {
                     Ok(id) => id,
                     Err(detail) => {
@@ -699,9 +703,7 @@ fn rebind_changed_shader_look(
                             continue;
                         }
                     };
-                    let schema = existing.schema.clone();
-                    *existing = shader_material(look, &handles, &rasters);
-                    existing.set_schema(schema);
+                    *existing = shader_material(look, &handles, &rasters, &schemas);
                     // The rebuild loaded the shader afresh; make the id cache agree
                     // with the material so the compare above stays quiet next tick.
                     shader_cache
@@ -741,7 +743,14 @@ fn rebind_changed_shader_look(
                 continue;
             }
         }
-        let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+        let handle = match material_for(
+            look,
+            &mut cache,
+            &mut materials,
+            &asset_server,
+            &rasters,
+            &schemas,
+        ) {
             Ok(Some(handle)) => handle,
             Ok(None) => {
                 clear_shader_render_components(&mut commands, e);
@@ -770,9 +779,8 @@ fn rebind_changed_shader_look(
                 .get(&handle)
                 .zip(shaders.as_deref())
                 .zip(images.as_deref())
-                .zip(schemas.as_deref())
-                .is_some_and(|(((material, shaders), images), schemas)| {
-                    material_is_render_ready(material, shaders, images, schemas, &mut shader_cache)
+                .is_some_and(|((material, shaders), images)| {
+                    material_is_render_ready(material, shaders, images, &schemas, &mut shader_cache)
                 });
             if !replacement_ready {
                 commands.entity(e).try_remove::<ShaderLookReady>();
@@ -812,6 +820,7 @@ fn validate_shader_assets_on_change(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     rasters: ShaderImageAssets,
+    schemas: Res<crate::ShaderSchemas>,
     mut commands: Commands,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut shader_cache: ResMut<ShaderSourceCache>,
@@ -940,7 +949,14 @@ fn validate_shader_assets_on_change(
         let Ok((_, look, _, _)) = looks.get(entity) else {
             continue;
         };
-        let handle = match material_for(look, &mut cache, &mut materials, &asset_server, &rasters) {
+        let handle = match material_for(
+            look,
+            &mut cache,
+            &mut materials,
+            &asset_server,
+            &rasters,
+            &schemas,
+        ) {
             Ok(Some(handle)) => handle,
             Ok(None) => {
                 clear_shader_render_components(&mut commands, entity);
@@ -987,7 +1003,8 @@ pub(crate) fn build(app: &mut App) {
     if !app.world().contains_resource::<Assets<Shader>>() {
         bevy::asset::AssetApp::init_asset::<Shader>(app);
     }
-    app.init_resource::<ShaderSourceCache>()
+    app.init_resource::<crate::ShaderSchemas>()
+        .init_resource::<ShaderSourceCache>()
         .add_systems(
             PostUpdate,
             (
@@ -1848,6 +1865,68 @@ mod tests {
         app.update();
         assert_eq!(material_of(&app, e), first);
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 2);
+    }
+
+    #[test]
+    fn newly_keyed_material_uses_loaded_layout_before_binding() {
+        let mut app = app();
+        app.init_resource::<ShaderSchemas>();
+        let source = "struct Material { morph_start: f32, }\n@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
+        let shader: Handle<Shader> = app.world().resource::<AssetServer>().load("test.wesl");
+        app.world_mut()
+            .resource_mut::<Assets<Shader>>()
+            .insert(shader.id(), Shader::from_wesl(source, "test.wesl"))
+            .unwrap();
+        app.world_mut()
+            .write_message(AssetEvent::<Shader>::Added { id: shader.id() });
+        app.world_mut()
+            .run_system_cached(crate::reflect_shader_schemas)
+            .unwrap();
+        let layout = app
+            .world()
+            .resource::<ShaderSchemas>()
+            .get(shader.id())
+            .unwrap()
+            .clone();
+        let entity = app
+            .world_mut()
+            .spawn(ShaderLook::new("test.wesl").with("morph_start", ParamValue::F32(1.0)))
+            .id();
+        // Binding occurs immediately in the Add observer, before another asset
+        // event or reflection sweep can repair the material for extraction.
+        let handle = material_of(&app, entity);
+        let material = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&handle)
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&material.schema, &layout),
+            "new material must carry its loaded layout before extraction"
+        );
+        assert_eq!(material.raw[0].x, 1.0);
+        app.world_mut().entity_mut(entity).insert(ShaderLookReady);
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<ShaderLook>()
+            .unwrap()
+            .set_value("morph_start", ParamValue::F32(2.0));
+        app.world_mut()
+            .run_system_cached(rebind_changed_shader_look)
+            .unwrap();
+        let replacement = material_of(&app, entity);
+        assert_ne!(handle, replacement);
+        let material = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&replacement)
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&material.schema, &layout),
+            "replacement must be packed before replacing the bound material"
+        );
+        assert_eq!(material.raw[0].x, 2.0);
+        assert!(app.world().entity(entity).contains::<ShaderLookReady>());
     }
 
     #[test]

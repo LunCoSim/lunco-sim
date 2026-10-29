@@ -346,6 +346,13 @@ These values are copied into the typed terrain-generation request and used by
 native, worker, GUI, and headless physics. They are deliberately independent
 of `RenderingQualitySettings`, camera-driven visual LOD, and `targetRes`; a
 graphics preset must never change collider tile count or resolution.
+For terrain width `W`, contact spacing is
+`W / (2^colliderDepth * (colliderResolution - 1))`. Overzoom crater radii below
+twice that spacing are absent from contacts and reach full amplitude at six
+times the spacing. Size this explicit lattice for the authored physical relief,
+then compare native non-solid downward `Raycast` hits (excluding sensors) with
+`TerrainHeight` in the body-driven ring. A visible crater can outresolve an
+otherwise correctly composed collider band.
 
 Visual CDLOD morph targets sample the parent's indexed triangles for height
 and normal. Preserve that interpolation at interior vertices and stitched

@@ -211,6 +211,11 @@ GPU acceptance still require the rendered fixture and a clean process log.
    its per-terrain queue. Offline capture lockstep bypasses the cadence and runs
    selection synchronously for each captured frame. Profile remaining frame
    hitches before changing LOD budgets.
+   For black flashes during loading or cover changes, verify that newly keyed
+   materials receive the cached `ShaderSchemas` layout before binding. A later
+   asset-event reflection sweep cannot protect a handle extracted this frame.
+   Run `newly_keyed_material_uses_loaded_layout_before_binding` in
+   `lunco-render-bevy`, then check production loading and camera traversal.
 
 Standard `UsdPreviewSurface` input edits travel through
 `UsdSceneChangeBatch`; the visual owner refreshes the bound `PbrLook` in place
