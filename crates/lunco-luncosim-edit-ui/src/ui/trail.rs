@@ -8,8 +8,7 @@ use bevy::prelude::*;
 use lunco_core::MobilityRoot;
 use lunco_mobility::wheel_kinematics::wheel_hub_pose;
 use lunco_mobility::{
-    JointedWheelTire, Suspension, WheelBodyMount, WheelRaycast, WheelRaycastResultsSet,
-    raycast_contact_point,
+    Suspension, WheelBodyMount, WheelRaycast, WheelRaycastResultsSet, raycast_contact_point,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_spatial::ActivePhysicsFrame;
@@ -428,7 +427,7 @@ pub(crate) fn sample_vehicle_trails(
         &RayHits,
         &WheelBodyMount,
     )>,
-    physical_wheels: Query<(&PhysicalWheel, Entity), With<JointedWheelTire>>,
+    physical_wheels: Query<(&PhysicalWheel, Entity)>,
     collisions: Collisions,
     tiles: Query<&ColliderTileOf>,
     terrains: Query<(), With<DemHeightField>>,
@@ -769,6 +768,7 @@ fn sync_ground_trail_annotations(
                         lane.width,
                         trail_look().base_color,
                     );
+                    annotation.receives_lighting = true;
                     let mut valid = true;
                     // A source is created from its first pending contacts. A frame
                     // change resets history, so no historical replay is needed.

@@ -138,6 +138,6 @@ fn fragment(in: forward_io::VertexOutput, @builtin(front_facing) is_front: bool)
     let shade = 0.45 + 0.55 * clamp(n.y, 0.0, 1.0);
     let neutral = vec3<f32>(0.5, 0.5, 0.5) * shade;
     var result = vec4<f32>(mix(neutral, colour * shade, material.opacity), 1.0);
-    @if((VERTEX_UVS_A)) result = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, result);
+    @if((VERTEX_UVS_A)) result = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, result, -1);
     return result;
 }

@@ -444,7 +444,8 @@ fn annotation_texel(data: texture_2d<f32>, index: u32) -> vec4<f32> {
     return textureLoad(data, vec2<i32>(i32(index % 256u), i32(index / 256u)), 0);
 }
 
-fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>) -> vec4<f32> {
+fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>, lighting: i32) -> vec4<f32> {
+    // lighting: -1 = diagnostic view (all marks), 0 = overlays, 1 = material marks.
     // Derivatives precede nonuniform bounds/cell branches. The stroke remains
     // antialiased at grazing angles and when its physical width is subpixel.
     let footprint = fwidth(p);
@@ -474,7 +475,9 @@ fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>
         let delta = endpoints.zw - endpoints.xy;
         let t = clamp(dot(p - endpoints.xy, delta) / dot(delta, delta), 0.0, 1.0);
         let dist = length(p - endpoints.xy - delta * t);
-        let radius = annotation_texel(data, record + 1u).x;
+        let style = annotation_texel(data, record + 1u);
+        if (lighting >= 0 && i32(style.y) != lighting) { continue; }
+        let radius = style.x;
         let right = abs(vec2<f32>(-delta.y, delta.x) / length(delta));
         let aa = max(dot(right, footprint) * 0.5, 0.00001);
         let coverage = clamp((radius - dist + aa) / (2.0 * aa), 0.0, 1.0)
