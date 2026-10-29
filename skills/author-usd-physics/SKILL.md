@@ -50,8 +50,16 @@ top of its Coulomb impulses. The raycast realization consumes its vehicle tire
 curve independently of collider materials. Command ownership must remain
 explicit when a reset-stack body leaves its vessel transform subtree; the
 joint actuator stores its authored vehicle command owner.
-Its brake impulse bound uses the admitted fixed timestep, because actuation
-precedes native integration and the previous native delta is zero after a hold.
+Physical wheel brakes use a native zero-speed velocity motor with the authored
+torque cap. Contact relaxation retains that driven axis and shares one bounded
+substep impulse across its passes. Co-simulation publishes solved motor effort
+and measured brake heat; it does not apply a second explicit spin-down torque.
+For numerical convergence checks, use `set_physics_substeps(n)` and
+`set_physics_joint_velocity_iterations(n)` to select the native resolution
+explicitly; the latter accepts 1..255 and throws on invalid values. Read it with
+`physics_joint_velocity_iterations()`. The solver fingerprint includes both.
+Keep those numerical settings separate from physical friction and brake torque,
+and verify both a loaded hold and release under the chosen resolution.
 
 Physical wheel hinges use the ordinary USD joint reader and retain their authored
 prim entity, both local frames and limits. Mobility binds the Modelica shaft
@@ -756,6 +764,14 @@ every step until a body leaves the world.
 contacts, author `PhysicsFilteredPairsAPI` explicitly; for many-to-many sets,
 use `PhysicsCollisionGroup` with `UsdCollectionAPI`. Do not infer a vehicle-wide
 self-exclusion: articulated mechanisms often need selected internal contacts.
+
+For independent comparison copies, include each complete vehicle subtree in its
+own collision group and filter the copy groups against each other. Specialized
+physical wheels consume those same group layers. Keep the environment outside
+those groups, and verify both zero cross-copy contacts during initial overlap
+and loaded wheel contact with the ground. Appearance is independent: use local
+USD material/display-opacity opinions on render geometry, preserving collision
+proxies and physical properties.
 
 Filtering is symmetric, targets may name a body or a collider under that body,
 and invalid targets or same-body pairs must remain visible diagnostics. The

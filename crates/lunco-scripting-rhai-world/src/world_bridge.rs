@@ -2074,6 +2074,33 @@ fn build_world_engine_base(
         },
     );
 
+    engine.register_fn("physics_joint_velocity_iterations", || -> Dynamic {
+        bridge_core::with_world(|world| lunco_physics::joint_velocity_iterations(world))
+            .flatten()
+            .map(|count| Dynamic::from_int(i64::from(count)))
+            .unwrap_or(Dynamic::UNIT)
+    });
+    engine.register_fn(
+        "set_physics_joint_velocity_iterations",
+        |value: i64| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            let count = u32::try_from(value).map_err(|_| {
+                script_runtime_error("joint velocity iterations must be in 1..=255".to_string())
+            })?;
+            bridge_core::with_world(|world| {
+                bridge_core::enforce_script_mutation(
+                    world,
+                    bridge_core::capability::SETTING_MUTATE,
+                    None,
+                )?;
+                lunco_physics::set_joint_velocity_iterations(world, count)
+            })
+            .ok_or_else(|| script_runtime_error("no world in scope".to_string()))?
+            .map(|()| true)
+            .map_err(script_runtime_error)
+        },
+    );
+
     // contact_friction(id) / set_contact_friction(id, dynamic, static) — live
     // material diagnostics. These mutate the projected Avian component in
     // place, so a script can test the contact law without adding a second

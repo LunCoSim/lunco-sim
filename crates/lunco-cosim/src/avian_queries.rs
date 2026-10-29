@@ -36,9 +36,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_DISTANCE,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.distance)
+                sampled_observation(world, entity).map(|observation| observation.distance)
             }),
             write: None,
         },
@@ -47,8 +45,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::DIMENSIONLESS,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
+                sampled_observation(world, entity)
                     .map(|observation| if observation.hit_valid { 1.0 } else { 0.0 })
             }),
             write: None,
@@ -58,9 +55,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_POSITION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.hit_position.x)
+                sampled_observation(world, entity).map(|observation| observation.hit_position.x)
             }),
             write: None,
         },
@@ -69,9 +64,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_POSITION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.hit_position.y)
+                sampled_observation(world, entity).map(|observation| observation.hit_position.y)
             }),
             write: None,
         },
@@ -80,9 +73,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_POSITION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.hit_position.z)
+                sampled_observation(world, entity).map(|observation| observation.hit_position.z)
             }),
             write: None,
         },
@@ -91,9 +82,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_NORMAL,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.hit_normal.x)
+                sampled_observation(world, entity).map(|observation| observation.hit_normal.x)
             }),
             write: None,
         },
@@ -102,9 +91,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_NORMAL,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.hit_normal.y)
+                sampled_observation(world, entity).map(|observation| observation.hit_normal.y)
             }),
             write: None,
         },
@@ -113,9 +100,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_NORMAL,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.hit_normal.z)
+                sampled_observation(world, entity).map(|observation| observation.hit_normal.z)
             }),
             write: None,
         },
@@ -124,9 +109,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_TIME,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
-                    .map(|observation| observation.sample_time_s)
+                sampled_observation(world, entity).map(|observation| observation.sample_time_s)
             }),
             write: None,
         },
@@ -135,8 +118,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_ORIGIN,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
+                sampled_observation(world, entity)
                     .map(|observation| observation.ray_origin_body_local.x)
             }),
             write: None,
@@ -146,8 +128,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_ORIGIN,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
+                sampled_observation(world, entity)
                     .map(|observation| observation.ray_origin_body_local.y)
             }),
             write: None,
@@ -157,8 +138,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_ORIGIN,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
+                sampled_observation(world, entity)
                     .map(|observation| observation.ray_origin_body_local.z)
             }),
             write: None,
@@ -168,8 +148,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_DIRECTION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
+                sampled_observation(world, entity)
                     .map(|observation| observation.direction_body_local.x)
             }),
             write: None,
@@ -179,8 +158,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_DIRECTION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
+                sampled_observation(world, entity)
                     .map(|observation| observation.direction_body_local.y)
             }),
             write: None,
@@ -190,8 +168,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             contract: AvianPortContract::RAY_DIRECTION,
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world
-                    .get::<RaycastObservation>(entity)
+                sampled_observation(world, entity)
                     .map(|observation| observation.direction_body_local.z)
             }),
             write: None,
@@ -199,6 +176,15 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
     ],
     install_topology: register_raycast_topology,
 };
+
+// Keep configuration discoverable while withholding unsampled numeric defaults.
+// Initial causal admission waits for this same reader; a real miss still carries
+// sampled validity=0 and a real zero distance remains representable.
+fn sampled_observation(world: &World, entity: Entity) -> Option<&RaycastObservation> {
+    world
+        .get::<RaycastObservation>(entity)
+        .filter(|observation| observation.sampled)
+}
 
 fn register_raycast_topology(app: &mut App) {
     app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RaycastObservation>)
@@ -227,6 +213,39 @@ fn check_raycast_structure(
 mod tests {
     use super::RAYCAST_GROUP;
     use bevy::prelude::*;
+
+    #[test]
+    fn raw_ports_wait_for_sampling_and_preserve_sampled_zero() {
+        let mut world = World::new();
+        let entity = world
+            .spawn(lunco_physics::raycast::RaycastObservation::default())
+            .id();
+        for port in RAYCAST_GROUP.ports {
+            assert_eq!(port.read.unwrap()(&world, entity), None, "{}", port.name);
+        }
+        world
+            .get_mut::<lunco_physics::raycast::RaycastObservation>(entity)
+            .unwrap()
+            .sampled = true;
+        for name in ["ray_distance", "ray_hit_valid", "ray_sample_time"] {
+            let port = RAYCAST_GROUP
+                .ports
+                .iter()
+                .find(|port| port.name == name)
+                .unwrap();
+            assert_eq!(port.read.unwrap()(&world, entity), Some(0.0));
+        }
+        world
+            .get_mut::<lunco_physics::raycast::RaycastObservation>(entity)
+            .unwrap()
+            .hit_valid = true;
+        let valid = RAYCAST_GROUP
+            .ports
+            .iter()
+            .find(|port| port.name == "ray_hit_valid")
+            .unwrap();
+        assert_eq!(valid.read.unwrap()(&world, entity), Some(1.0));
+    }
 
     #[test]
     fn raw_group_does_not_publish_altimeter_semantics() {

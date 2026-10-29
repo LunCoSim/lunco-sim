@@ -466,6 +466,14 @@ impl Plugin for CoSimPlugin {
                 .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
                 .after(avian3d::prelude::PhysicsSystems::Writeback),
         );
+        // Solver construction must see the mounted ray at the admitted initial
+        // pose too. Waiting for FixedPostUpdate publishes the unsampled default
+        // as t=0 and only repairs the sensor after the first physics interval.
+        app.add_systems(
+            lunco_cosim_core::schedule::InitializationSampling,
+            lunco_physics::raycast::sample_raycast_observations
+                .run_if(resource_exists::<Time<avian3d::prelude::Physics>>),
+        );
 
         // The authored ray BEAM is drawn by `lunco-render-bevy`'s `sensor_beams`,
         // not here: naming `Gizmos`/`GizmoConfigStore` dragged

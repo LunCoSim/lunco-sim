@@ -30,7 +30,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::ports::{AvianGroup, AvianPort, AvianPortContract};
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
-use lunco_physics::joint::{JointTorqueActuator, bounded_brake_torque, revolute_hinge_axis_world};
+use lunco_physics::joint::{JointTorqueActuator, revolute_hinge_axis_world};
 use lunco_physics::kinematics::SolvedBodyAcceleration;
 use lunco_port_core::ports::{PortDirection, PortTopologyRevision, PortTopologyState};
 
@@ -62,15 +62,15 @@ pub struct PendingForces {
 /// command, speed, battery state, motor name, or fixed torque-speed curve.
 pub fn apply_joint_torque_actuators(
     physics_time: Res<Time<Physics>>,
-    fixed_time: Res<Time<Fixed>>,
     virtual_time: Res<Time<Virtual>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
-    q_actuators: Query<
+    mut q_actuators: Query<
         (
             Entity,
             &JointTorqueActuator,
-            Option<&RevoluteJoint>,
+            Option<&mut RevoluteJoint>,
+            &avian3d::prelude::JointForces,
             Has<JointDisabled>,
         ),
         Without<lunco_physics::PhysicsObjectPaused>,
@@ -82,6 +82,7 @@ pub fn apply_joint_torque_actuators(
     q_contracts: Query<&lunco_port_core::ScalarPortContracts>,
     q_sleeping: Query<(), With<Sleeping>>,
     q_inputs: Query<&lunco_port_core::InputPorts>,
+    mut previous_axle_speed: Local<std::collections::HashMap<Entity, f64>>,
     mut bodies: ParamSet<(
         Query<(
             &Rotation,
@@ -97,13 +98,13 @@ pub fn apply_joint_torque_actuators(
         return;
     }
 
-    let step_dt = fixed_time.timestep().as_secs_f64();
-    for (entity, actuator, joint, disabled) in &q_actuators {
+    previous_axle_speed.retain(|entity, _| q_actuators.contains(*entity));
+    for (entity, actuator, joint, joint_forces, disabled) in &mut q_actuators {
         let torque_contracts = q_contracts.get(actuator.torque_endpoint()).ok();
         let speed_contracts = q_contracts.get(actuator.speed_endpoint()).ok();
         if let Err(detail) = validate_joint_effort_contract(
             actuator,
-            joint,
+            joint.as_deref(),
             disabled,
             torque_contracts,
             speed_contracts,
@@ -118,7 +119,7 @@ pub fn apply_joint_torque_actuators(
             );
             return;
         }
-        let joint = joint.expect("validated revolute joint");
+        let mut joint = joint.expect("validated revolute joint");
         let torque_contracts = torque_contracts.expect("validated endpoint contracts");
         let speed_contracts = speed_contracts.expect("validated endpoint contracts");
         let torque = {
@@ -174,7 +175,7 @@ pub fn apply_joint_torque_actuators(
                 );
                 return;
             }
-            let Some(axis) = revolute_hinge_axis_world(joint, body1_rotation.0.as_dquat()) else {
+            let Some(axis) = revolute_hinge_axis_world(&joint, body1_rotation.0.as_dquat()) else {
                 reject_joint_torque_coupling(
                     faults.as_deref_mut(),
                     holds.as_deref_mut(),
@@ -225,30 +226,35 @@ pub fn apply_joint_torque_actuators(
             );
             return;
         }
-        let brake = if q_inputs
-            .get(actuator.control_entity)
-            .ok()
-            .is_some_and(|inputs| inputs.brake_active)
-        {
-            bounded_brake_torque(
-                actuator.brake_torque,
-                actuator.rotational_inertia,
-                coordinate_speed,
-                // Actuation precedes native integration. Its previous delta
-                // can be zero after a hold; bound this cycle's impulse.
-                step_dt,
-            )
+        let was_braking = actuator.brake_torque > 0.0 && joint.motor.enabled;
+        let previous = previous_axle_speed.insert(entity, coordinate_speed);
+        let brake_heat = if was_braking {
+            previous.map_or(0.0, |old| {
+                f64::from(joint_forces.motor_force()).abs()
+                    * (old.abs() + coordinate_speed.abs())
+                    * 0.5
+            })
         } else {
             0.0
         };
+        // A capped native velocity constraint reacts to the contact load even
+        // at zero shaft speed. An explicit spin-down torque cannot do that.
+        if actuator.brake_torque > 0.0 {
+            let mut brake = actuator.passive_brake_motor();
+            brake.enabled = q_inputs
+                .get(actuator.control_entity)
+                .is_ok_and(|inputs| inputs.brake_active);
+            if joint.motor != brake {
+                info!(joint = ?entity, command_owner = ?actuator.control_entity,
+                    enabled = brake.enabled, limit_nm = brake.max_torque,
+                    coordinate_speed_rad_s = coordinate_speed,
+                    "native passive joint brake changed");
+                joint.motor = brake;
+            }
+        }
         // Conjugate torque/speed use the same relative axle coordinate as the
         // delivered motor torque. Housing rotation is not bearing slip.
         let bearing_torque = -actuator.bearing_damping * coordinate_speed;
-        let brake_heat = if brake == 0.0 {
-            0.0
-        } else {
-            -brake * (coordinate_speed + 0.5 * brake * step_dt / actuator.rotational_inertia)
-        };
         {
             let mut ports = q_ports.p1();
             for (endpoint, power) in [
@@ -298,7 +304,7 @@ pub fn apply_joint_torque_actuators(
                 }
             }
         }
-        let coordinate_torque = torque + brake + bearing_torque;
+        let coordinate_torque = torque + bearing_torque;
         let world_torque = axis * (coordinate_torque * actuator.coordinate_sign());
         if !lunco_physics::avian_backend_vector_is_valid(world_torque) {
             if let Some(holds) = holds.as_deref_mut() {
