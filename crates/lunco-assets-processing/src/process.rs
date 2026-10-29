@@ -804,11 +804,11 @@ fn roi_samples(
 /// Interpolate bounded DEM voids without modifying measured postings.
 ///
 /// A 64-ring admission bound rejects large unsupported interiors. Admitted
-/// nodes solve the eight-neighbour discrete Laplace equation with measured
-/// heights held fixed. This preserves planar slopes through missing coverage
-/// and avoids ridges where independently advancing fill fronts meet. The
-/// deterministic relaxation is offline processing, shared by DEM and normal
-/// map generation; an unconverged solve fails instead of publishing geometry.
+/// nodes minimize squared discrete curvature with measured heights held fixed.
+/// The biharmonic system uses surrounding slopes as well as boundary heights,
+/// continuing curved crater walls through missing coverage. A bounded,
+/// deterministic conjugate-gradient solve runs only during offline DEM and
+/// normal-map processing; an unconverged solve rejects the bake.
 fn fill_dem_voids(
     v: &mut [f64],
     n: usize,
@@ -816,8 +816,8 @@ fn fill_dem_voids(
     control: &ProcessControl,
 ) -> Result<usize, std::io::Error> {
     const MAX_PASSES: usize = 64;
-    const MAX_RELAXATION_SWEEPS: usize = 4096;
-    const HEIGHT_TOLERANCE_M: f64 = 1e-7;
+    const MAX_SOLVER_ITERATIONS: usize = 4096;
+    const RESIDUAL_TOLERANCE_M: f64 = 1e-10;
     let idx = |x: usize, y: usize| y * n + x;
     let missing: Vec<usize> = (0..v.len()).filter(|&i| !v[i].is_finite()).collect();
     if missing.is_empty() {
@@ -873,55 +873,110 @@ fn fill_dem_voids(
              inventing terrain; re-centre the window or pick a source with coverage here."
         )));
     }
-    // Cache the stencil once; only missing nodes are unknowns in the solve.
-    let stencils: Vec<_> = missing
-        .iter()
-        .map(|&i| {
-            let (x, y) = (i % n, i / n);
-            let mut neighbours = [0; 8];
-            let mut count = 0;
-            for dy in -1isize..=1 {
-                for dx in -1isize..=1 {
-                    if dx == 0 && dy == 0 {
-                        continue;
-                    }
-                    let (nx, ny) = (x as isize + dx, y as isize + dy);
-                    if nx >= 0 && ny >= 0 && nx < n as isize && ny < n as isize {
-                        neighbours[count] = idx(nx as usize, ny as usize);
-                        count += 1;
-                    }
-                }
+    // L is the symmetric four-neighbour graph Laplacian, clipped at raster
+    // edges. Minimizing ||L h||² gives LᵀL h = 0 at unknown nodes. The two-ring
+    // stencil includes measured slopes without changing any measured height.
+    let laplacian = |i: usize| {
+        let (x, y) = (i % n, i / n);
+        let mut row = Vec::with_capacity(5);
+        if x > 0 {
+            row.push((i - 1, 1.0));
+        }
+        if x + 1 < n {
+            row.push((i + 1, 1.0));
+        }
+        if y > 0 {
+            row.push((i - n, 1.0));
+        }
+        if y + 1 < n {
+            row.push((i + n, 1.0));
+        }
+        row.push((i, -(row.len() as f64)));
+        row
+    };
+    let mut unknown = vec![usize::MAX; v.len()];
+    for (j, &i) in missing.iter().enumerate() {
+        unknown[i] = j;
+    }
+    let mut diagonal = Vec::with_capacity(missing.len());
+    let mut residual = Vec::with_capacity(missing.len());
+    let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(missing.len());
+    for (index, &i) in missing.iter().enumerate() {
+        if index.is_multiple_of(4096) {
+            control.check()?;
+        }
+        let mut stencil = BTreeMap::<usize, f64>::new();
+        for (k, a) in laplacian(i) {
+            for (j, b) in laplacian(k) {
+                *stencil.entry(j).or_default() += a * b;
             }
-            (i, neighbours, count)
-        })
-        .collect();
-    for _ in 0..MAX_RELAXATION_SWEEPS {
-        control.check()?;
-        let mut largest_change = 0.0f64;
-        for (index, &(i, neighbours, count)) in stencils.iter().enumerate() {
-            if index.is_multiple_of(4096) {
-                control.check()?;
-            }
-            let mean = neighbours[..count]
+        }
+        diagonal.push(stencil[&i]);
+        // Subtract the local datum before summation: row coefficients sum to
+        // zero, and large absolute elevations must not erode the residual.
+        residual.push(
+            -stencil
                 .iter()
-                .map(|&j| v[j] / count as f64)
-                .sum::<f64>();
-            // Successive over-relaxation of the fixed-boundary Laplacian.
-            let change = 1.5 * (mean - v[i]);
-            if !change.is_finite() {
+                .map(|(&j, &c)| c * (v[j] - v[i]))
+                .sum::<f64>(),
+        );
+        rows.push(
+            stencil
+                .into_iter()
+                .filter_map(|(j, c)| (unknown[j] != usize::MAX).then_some((unknown[j], c)))
+                .collect(),
+        );
+    }
+    let apply = |vector: &[f64]| -> Vec<f64> {
+        rows.iter()
+            .map(|row| row.iter().map(|&(j, c)| c * vector[j]).sum())
+            .collect()
+    };
+    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
+    let precondition = |r: &[f64]| {
+        r.iter()
+            .zip(&diagonal)
+            .map(|(r, d)| r / d)
+            .collect::<Vec<_>>()
+    };
+    let mut direction = precondition(&residual);
+    let mut energy = dot(&residual, &direction);
+    for _ in 0..MAX_SOLVER_ITERATIONS {
+        control.check()?;
+        if residual
+            .iter()
+            .zip(&diagonal)
+            .all(|(r, d)| r.is_finite() && (r / d).abs() <= RESIDUAL_TOLERANCE_M)
+        {
+            return Ok(filled);
+        }
+        let product = apply(&direction);
+        let denominator = dot(&direction, &product);
+        if !energy.is_finite() || !denominator.is_finite() || energy <= 0.0 || denominator <= 0.0 {
+            return Err(io_err(format!(
+                "{kind} pipeline: invalid DEM curvature interpolation system"
+            )));
+        }
+        let alpha = energy / denominator;
+        for (j, &i) in missing.iter().enumerate() {
+            v[i] += alpha * direction[j];
+            residual[j] -= alpha * product[j];
+            if !v[i].is_finite() {
                 return Err(io_err(format!(
                     "{kind} pipeline: non-finite DEM void interpolation"
                 )));
             }
-            v[i] += change;
-            largest_change = largest_change.max(change.abs());
         }
-        if largest_change <= HEIGHT_TOLERANCE_M {
-            return Ok(filled);
+        let conditioned = precondition(&residual);
+        let next_energy = dot(&residual, &conditioned);
+        let beta = next_energy / energy;
+        for (d, z) in direction.iter_mut().zip(conditioned) {
+            *d = z + beta * *d;
         }
+        energy = next_energy;
     }
     Err(io_err(format!(
-        "{kind} pipeline: harmonic interpolation of {filled} void samples did not converge after {MAX_RELAXATION_SWEEPS} sweeps"
+        "{kind} pipeline: curvature interpolation of {filled} void samples did not converge after {MAX_SOLVER_ITERATIONS} iterations"
     )))
 }
 
@@ -1396,7 +1451,17 @@ fn process_albedo(
         }
     }
 
-    let src = decode_gray_source(source)?;
+    let mut src = decode_gray_source(source)?;
+    // Orthophoto zeroes are unmapped coverage. Canonicalize that mask before
+    // the shared valid-sample resampler so zeroes cannot darken adjacent data.
+    for chunk in src.samples.chunks_mut(4096) {
+        control.check()?;
+        for value in chunk {
+            if *value == 0.0 {
+                *value = f64::NAN;
+            }
+        }
+    }
     let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "albedo")?;
     let out_n = roi.out_n;
     let crop = roi_samples(&src.samples, src.w, src.h, &roi, control)?;
@@ -1806,6 +1871,75 @@ mod tests {
                 );
             } else {
                 assert_eq!(height.to_bits(), expected.to_bits(), "measured node {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn albedo_void_boundary_preserves_uniform_measured_radiance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("uniform.tif");
+        let output = tmp.path().join("albedo.png");
+        let mut samples = vec![100.0f32; 11 * 11];
+        samples[5 * 11 + 5] = 0.0;
+        lunco_storage::write_file_sync(&source, &encode_tiff_f32(11, 11, &samples)).unwrap();
+        let config: ProcessConfig = toml::from_str(
+            r#"
+            kind = "albedo"
+            output = "albedo.png"
+            target_resolution = [21, 21]
+            center_lat = 0.0
+            center_lon = 0.0
+            window_m = 20.0
+            pixel_scale_m = 2.0
+            src_min_lat = -1.0
+            src_max_lat = 1.0
+            src_min_lon = -1.0
+            src_max_lon = 1.0
+        "#,
+        )
+        .unwrap();
+        process_albedo(&source, &output, &config, &control()).unwrap();
+        let image = image::open(output).unwrap().to_rgb8();
+        let expected = encode_linear_to_srgb_u8(0.13);
+        assert!(
+            image.pixels().all(|p| p.0 == [expected; 3]),
+            "unmapped zero radiance must not create a dark ring around a neutral void"
+        );
+    }
+
+    #[test]
+    fn dem_voids_preserve_crater_curvature_and_boundary_slopes() {
+        let n = 31;
+        let crater: Vec<f64> = (0..n * n)
+            .map(|i| {
+                let x = (i % n) as f64 - 15.0;
+                let y = (i / n) as f64 - 15.0;
+                100.0 + 0.08 * x * x + 0.12 * y * y + 0.04 * x * y
+            })
+            .collect();
+        let mut heights = crater.clone();
+        for y in 10..21 {
+            for x in 10..21 {
+                heights[y * n + x] = f64::NAN;
+            }
+        }
+        fill_dem_voids(&mut heights, n, "dem", &control()).unwrap();
+        for y in 1..n - 1 {
+            for x in 1..n - 1 {
+                let i = y * n + x;
+                assert!(
+                    (heights[i] - crater[i]).abs() < 1e-6,
+                    "crater height at ({x}, {y}): {} != {}",
+                    heights[i],
+                    crater[i]
+                );
+                let slope = heights[i + 1] - heights[i - 1];
+                let expected = crater[i + 1] - crater[i - 1];
+                assert!(
+                    (slope - expected).abs() < 1e-6,
+                    "crater boundary slope at ({x}, {y}): {slope} != {expected}"
+                );
             }
         }
     }

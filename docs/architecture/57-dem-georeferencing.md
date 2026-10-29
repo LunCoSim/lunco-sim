@@ -44,10 +44,12 @@ version, so a georeferencing change invalidates previously processed output.
 Missing elevation samples are owned by the native DEM processor. Polar
 reprojection adapters preserve unresolved coverage as NaN rather than copying
 nearby postings. The processor admits gaps within 64 neighbour rings, then
-solves the eight-neighbour discrete Laplace equation only at missing nodes,
-holding measured heights fixed. A bounded deterministic relaxation must
-converge before output is written. Pipeline version 9 invalidates prior bake
-stamps. Filled heights are interpolated estimates, not measured crater relief;
+minimizes squared discrete curvature only at missing nodes, holding measured
+heights fixed. The biharmonic system carries surrounding slopes into the gap
+instead of flattening curved crater walls. A bounded deterministic, diagonally
+preconditioned conjugate-gradient solve must converge before output is written.
+Pipeline version 10 invalidates prior bake stamps. Filled heights are
+interpolated estimates, not measured crater relief;
 the preparation provenance records their count. The same solver precedes
 normal-map derivation so geometry and shading share the repaired surface.
 

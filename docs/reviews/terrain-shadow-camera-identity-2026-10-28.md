@@ -54,38 +54,15 @@ and renderer invariants; they do not turn a 4 m elevation grid and roughly
 compilation make the captured frame timings unsuitable for a
 performance-improvement claim.
 
-Unlit albedo and geometric-normal captures isolated another defect in the
-northern crater: missing orthophoto coverage coincides with irregular filled
-DEM slopes. The native `lunco-assets-processing::process::fill_dem_voids` owner
-now solves bounded gaps harmonically with measured postings fixed. The polar
-adapter in lunar-base-model leaves unresolved coverage for that owner. There
-is no second fill in the adapter. The native negative slope regression failed
-before the correction; all four void-processing tests pass, including the
-oversized-gap rejection. Dataset pipeline revision 9 invalidates prior stamps.
+Nobile coverage gaps are processed at the native asset boundary. Polar adapters
+preserve unresolved elevations, and `lunco-assets-processing` reconstructs only
+missing heights while keeping measured postings fixed. Orthophoto zeroes are
+excluded before resampling so they cannot create a dark fringe in neighbouring
+material colour. The runtime consumes the resulting DEM and albedo through the
+same composed USD terrain and material bindings.
 
-The production asset CLI regenerated Nobile's 513 by 513 raster. All 261,442
-measured nodes and all 2,601 nodes in the central 200 m square remain bitwise
-identical. Only 1,727 missing nodes change, by at most 6.8241043 m. These remain
-interpolated estimates, not additional lunar measurements. The verified TIFF
-is installed in both the Twin's authored and cached terrain directories; its
-4 m node spacing, 2048 m extent and vertical datum are preserved. Evidence:
-`target/terrain-shadow-repair/void-data/bake-validation.json` and
-`void-process.log`. This is offline asset preparation with no added rendering
-cost. The Twin's workflow and provenance describe reproduction and coverage.
-
-The rebuilt app rendered the repaired crater at three matched distances with
-no GPU or runtime errors. The central artificial ridge and its black shadow
-strip are absent in `complete/crater-0.png` through `crater-2.png`, compared
-with `final/crater-0.png` through `crater-2.png` before asset regeneration.
-The missing image coverage still has neutral albedo; the repair does not
-invent photographic detail there.
-
-Final acceptance used the rebuilt production binary after asset installation:
-`celestial_terrain_clock.rhai` passed all six checks again at 100,000x; runtime
-readiness is true and diagnostics contain zero errors or warnings. The owned
-window remains open on API port 4783 with celestial speed restored to 1x.
-Its PID and evidence are recorded under `target/terrain-shadow-repair/complete/`.
-The separate `verify_griffin_bundle.py` check passes for cached sources,
-georeferencing, DEM and albedo. Formatting and diff whitespace checks pass;
-the 43-skill catalogue validates. Unrelated concurrent worktree edits are not
-part of this change or its validation claim.
+The current numerical, asset and production-view evidence is recorded in
+[Nobile crater reconstruction](nobile-crater-reconstruction-2026-10-29.md).
+[DEM georeferencing](../architecture/57-dem-georeferencing.md) owns the processing
+contract. These are offline preparation changes; terrain mesh density, shader
+work, authored Sun, navigation coordinates and simulation clocks are unchanged.

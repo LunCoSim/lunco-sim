@@ -61,9 +61,10 @@ Polar adapters prepare a local raster for the native processor. Keep void
 interpolation and its coverage rejection in that processor, record its filled
 sample count, and verify the emitted node span: `(resolution - 1) * spacing`.
 Adapters must preserve unresolved samples as NaN, without a nearest-neighbour
-fill. Native processing uses bounded harmonic interpolation with measured
-nodes fixed; failed convergence rejects the bake. Use pipeline version 9 or
-newer, retain the interpolated-node count in provenance, and compare measured
+fill. Native processing uses bounded minimum-curvature (biharmonic)
+interpolation with measured nodes fixed; failed convergence rejects the bake.
+Use pipeline version 10 or newer, retain the interpolated-node count in
+provenance, and compare measured
 postings before and after regeneration. Filled regions are estimates.
 For a crop enlargement, compare the retained operating area's heights before
 and after processing and again through `TerrainHeights` in the production app.
@@ -235,9 +236,11 @@ process entry. Its optional native-only parameters are
 `albedo_base_linear` (neutral material base, default `0.13`),
 `albedo_detail_strength` (retained local contrast, default `0.35`), and
 `albedo_illumination_radius_m` (low-frequency field radius, default `40`). The
-processor writes a stable `albedo.png`; it does not claim to perform full
-photometric calibration. PDS3 `.IMG` sources supply their projection extent and
-pixel scale from the attached or detached label. A grayscale TIFF albedo source
+processor excludes unmapped zero radiance before resampling, so missing coverage
+cannot darken neighbouring measurements. It writes a stable `albedo.png`; it does
+not claim to perform full photometric calibration. PDS3 `.IMG` sources supply
+their projection extent and pixel scale from the attached or detached label.
+A grayscale TIFF albedo source
 must author `pixel_scale_m` and all four `src_*` bounds in the process table;
 the grayscale TIFF decoder does not infer those geographic facts from its tags.
 Keep `map` for analysis/display outputs. In Rhai,
