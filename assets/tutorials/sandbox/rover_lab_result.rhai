@@ -55,15 +55,23 @@ fn report_complete(me) {
         + r4(report["inputs:changed_speed_mps"]).to_string() + " m/s at "
         + r4(report["inputs:changed_mass_kg"]).to_string() + " kg.\nPrediction: "
         + prediction + ".\n\nExplain what changed, what stayed constant, and what the model leaves out. Reopen this Twin to revisit the saved report.");
-    guided_hud_actions("lunar_rover_lab", "tutorials", "action", [
-        #{id: "rover_lab_result:driving", label: "Next: Moon Driving Basics", enabled: true},
-    ]);
+    this.continuation = [];
+    if !is_unattended() {
+        this.continuation = tutorials::application_path("lunco://tutorials/sandbox/rover_lab.rhai");
+        this.continuation.remove(0);
+    }
+    let actions = [];
+    if this.continuation.len() > 0 {
+        actions.push(#{id: "rover_lab_result:next", label: "Next: " + this.continuation[0].title, enabled: true});
+    }
+    guided_hud_actions("lunar_rover_lab", "tutorials", "action", actions);
     emit("ROVER_LAB_SAVED", report);
 }
 
 fn on_start(me, ctx) {
     this.doc = assembly_edit::document_for_entity(me);
     this.projected_generation = usd_document_generation(this.doc);
+    this.continuation = [];
     hud_perspectives("lunar_rover_lab", []);
     if !is_unattended() { cmd("SetGuidedHudLayout", #{hud: "lunar_rover_lab", width: 440.0, text_scale: 1.15}); }
 }
@@ -72,9 +80,8 @@ fn on_event(me, evt, ctx) {
     if evt.name == "usd.document.projected" && evt.value.doc_id == this.doc {
         this.projected_generation = evt.value.generation;
     }
-    if evt.name == "tutorial.action" && evt.value == "rover_lab_result:driving" {
-        tutorials::start(#{source_asset: "lunco://tutorials/basic/b1_driving_basics.rhai",
-            scene_asset: "lunco://tutorials/basic/driving_basics.usda", reload_policy: "Restart"});
+    if evt.name == "tutorial.action" && evt.value == "rover_lab_result:next" {
+        tutorials::start_path(this.continuation);
     }
 }
 

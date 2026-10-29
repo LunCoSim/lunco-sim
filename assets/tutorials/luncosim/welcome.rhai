@@ -12,7 +12,7 @@ fn steps() {
         #{ anchor: "panel.telemetry_browser", focus: "telemetry_browser", title: "Read live state", body: "Analyze opens Telemetry beside the central Graphs view. Check a rover speed or wheel channel, or drag it onto Graphs, to plot the signal as the simulation runs." },
         #{ anchor: "panel.sandbox_inspector", focus: "sandbox_inspector", title: "Inspect the selection", body: "Select the model in the scene. The Inspector in the right dock then shows the selected model's authored properties and current state." },
         #{ anchor: "panel.command_deck", focus: "command_deck", title: "Check control authority", body: "Open Command Deck in the right dock. It tells you whether the rover is free, human-driven, or on autopilot." },
-        #{ anchor: "", focus: (), title: "Next: choose a perspective", body: "The next lesson explains ◉ View, ⚒ Build, ↗ Analyze, ✎ Editor, and ∿ Lunica.\n\nUse the next-lesson button when you are ready." },
+        #{ anchor: "", focus: (), title: "Choose a perspective", body: "Use ◉ View to operate, ⚒ Build and ✎ Editor to author, ↗ Analyze to inspect signals, and ∿ Lunica to work on equations.\n\nFinish this tour to choose your next lesson." },
     ]
 }
 

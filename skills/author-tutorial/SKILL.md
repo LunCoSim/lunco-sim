@@ -120,6 +120,19 @@ The helper makes Skip terminal and emits `TUTORIAL_SKIPPED`, without emitting
 after its own verified result, and handles `tutorials::navigation` in its event
 hook. A standalone launch without catalog context has no next-lesson action;
 its copy should direct the learner to Tutorials rather than promise a dialog.
+`tutorials::start_path` relaunches a guide with its exact calling Twin owner;
+Restart uses this same path and preserves scene edits. Do not use `RestartScene`
+as a guide restart: a scene-free tour has no scene to reload. An explicit
+document-reset action must still state that it discards edits.
+
+For a saved report, resolve the current application lesson with
+`tutorials::application_path(source_asset)` in the interactive presentation
+path. It reads enabled typed actions from `InspectScriptedMenus`, whose reader
+and renderer share the installed immutable trees. Use the returned titles and
+path for continuation instead of duplicating catalog destinations. Unknown or
+ambiguous lessons reject visibly. Keep headless report assessment independent
+of windowed menu presentation. The focused acceptance is
+`scripts/api/test_tutorial_navigation.py`.
 
 Use existing guided action buttons for direct control/help and the generic
 `RecoverVessel` command for explicit righting. Never treat command admission,
@@ -145,13 +158,16 @@ Example objective:
 ```rhai
 fn mission(me, ctx) {
     [
-        objective("possess", #{
-            text: "Select the rover to take control",
-            requires_event: "cmd:AcquireControl",
+        objective("take_control", #{
+            text: "Take control of the training rover",
+            done: |m| {
+                let role = controller(find_path("/Training/Rover"));
+                role != () && role != "AiAgent"
+            },
         }),
         objective("reach_flag", #{
             text: "Drive to the glowing flag",
-            requires: ["possess"],
+            requires: ["take_control"],
             requires_event: "flag_reached",
         }),
     ]

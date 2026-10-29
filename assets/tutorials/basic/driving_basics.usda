@@ -2,44 +2,29 @@
 (
     defaultPrim = "DrivingBasics"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# ── Scene: Driving Basics (lesson S1) ────────────────────────────────────────
-# A small, safe practice plot: flat regolith to learn throttle/steer/brake, plus
-# one gentle ramp so the student feels wheel slip and the climb before ever
-# meeting the real borderline wall. A finish flag at the top of the ramp gives S1
-# its arrival objective. The medium rover spawns at the SW corner facing the +X route.
-#
-#   target/debug/luncosim --scene tutorials/basic/driving_basics.usda
 def Xform "DrivingBasics" (
     kind = "assembly"
     doc = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-
-    # The tutorial is a standalone local lunar stage, so it owns its gravity
-    # instead of relying on a referenced surface scene to provide a default.
-    # Without this authored PhysicsScene the physical rover has no normal load
-    # and its wheel motors cannot generate traction on the practice ground.
+    uniform bool lunco:spawnable = false
     def PhysicsScene "PhysicsScene"
     {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
+        vector3f physics:gravityDirection = (0.0, -1.0, 0.0)
+        float physics:gravityMagnitude = 1.6200000047683716
     }
-
-    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
-    # bound with the purpose-specific `material:binding:physics`, which is
-    # how UsdPhysics (and Omniverse) actually spell a surface.
     def Scope "PhysicsMaterials"
     {
         def Material "Friction_0_9" (
             prepend apiSchemas = ["PhysicsMaterialAPI"]
         )
         {
-            float physics:dynamicFriction = 0.9
-            float physics:staticFriction = 0.9
+            float physics:dynamicFriction = 0.8999999761581421
+            float physics:staticFriction = 0.8999999761581421
         }
         def Material "Friction_1_0" (
             prepend apiSchemas = ["PhysicsMaterialAPI"]
@@ -49,28 +34,18 @@ def Xform "DrivingBasics" (
             float physics:staticFriction = 1.0
         }
     }
-    uniform bool lunco:spawnable = false
-
-    # The shared antenna stays parked because this lesson selects no ground
-    # station.
-
-    # Flat plot, ±60 m.
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (120.0, 1.0, 120.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.34, 0.32, 0.31)]
+        color3f[] primvars:displayColor = [(0.3400000035762787, 0.3199999928474426, 0.3100000023841858)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </DrivingBasics/PhysicsMaterials/Friction_1_0>
     }
-
-    # A gentle ~12° ramp (a long wedge) to introduce climbing + wheel slip before
-    # the real slopes. The route runs along +X, so the ramp's long axis and slope
-    # are authored along X; its transverse width stays across the route.
     def Cube "Ramp" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
@@ -80,13 +55,10 @@ def Xform "DrivingBasics" (
         double3 xformOp:rotateXYZ = (0.0, 0.0, 12.0)
         double3 xformOp:scale = (30.0, 0.6, 14.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.40, 0.36, 0.33)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.36000001430511475, 0.33000001311302185)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </DrivingBasics/PhysicsMaterials/Friction_0_9>
     }
-
-    # The medium rover, at the SW corner facing the ramp. Asset-root ref to the
-    # shared variant kit (resolves regardless of where this scene lives).
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/variants/rover_medium.usda@</RoverMedium>
     )
@@ -95,9 +67,6 @@ def Xform "DrivingBasics" (
         double3 xformOp:rotateXYZ = (0.0, -90.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
-
-    # Finish flag at the top of the ramp — S1's arrival target. Shared asset via
-    # the asset-root `lunco://` scheme (resolves wherever the twin is mounted).
     def Xform "Flag" (
         prepend references = @lunco://markers/route_point.usda@</RoutePoint>
     )
@@ -105,36 +74,28 @@ def Xform "DrivingBasics" (
         double3 xformOp:translate = (38.0, 6.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
-    # Low ESE sun (matches the event lighting the teams will meet in the traverse).
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )
     {
         double3 xformOp:rotateXYZ = (-14.0, 110.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-
-        # Standard `UsdLuxShadowAPI`. The cascade SPLIT stays in the renderer
-        # namespace — UsdLux has no attribute for it, because cascaded shadow
-        # maps are a rasterizer technique.
         float inputs:shadow:distance = 600.0
         float lunco:shadow:firstCascadeFarBound = 20.0
     }
-
-    # Chase-style fly-cam over the SW corner so the rover and ramp are both framed.
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
+        double3 xformOp:translate = (0.0, 35.0, 70.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
-        double3 xformOp:translate = (-48.0, 18.0, -30.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 }

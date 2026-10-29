@@ -335,6 +335,7 @@ impl Plugin for LunCoSimUiPlugin {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 install_viewport_placeholder_actions(app.world_mut());
                 app.init_resource::<scripted_menus::ScriptedMenuBindings>();
+                scripted_menus::register_all_commands(app);
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_guided_hud_action)
                     .add_observer(on_guided_stop_requested)

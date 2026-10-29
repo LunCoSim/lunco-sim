@@ -7,7 +7,7 @@ import json
 import time
 from pathlib import Path
 
-from runtime import BINARY, ROOT, ProductionSession, get_json, wait_for_authored_verdict
+from runtime import BINARY, ROOT, ProductionSession, assert_render_log_clean, get_json, wait_for_authored_verdict
 
 
 def command(session: ProductionSession, command_name: str, **params: object) -> dict:
@@ -107,6 +107,16 @@ def main() -> None:
         if placement["attrs"]["xformOp:translate"] != [9.0, 0.5, 3.0]:
             raise RuntimeError("reopening the Twin lost the authored block placement")
         session.capture_screenshot(output / "reopened.png")
+        # The saved report resumes the current catalog path, including later lessons.
+        actions = lab_card(session).get("actions", [])
+        if not any(action["id"] == "rover_lab_result:next" and action["label"] == "Next: Moon Driving Basics"
+                   for action in actions):
+            raise RuntimeError("saved report has no catalog-selected continuation")
+        command(session, "RunRhai", code='tutorials::action("rover_lab_result:next");')
+        wait_until(session, "next driving lesson", lambda: any(
+            "Drive to the finish flag and stop there" in card.get("objectives", "")
+            for card in command(session, "InspectGuidedHud").get("cards", [])))
+        session.capture_screenshot(output / "next-lesson.png")
         # A skipped UI tour must remain closed under later Next commands.
         command(session, "RunScenarioAsset", source_asset="lunco://tutorials/luncosim/welcome.rhai", reload_policy="Restart")
         wait_until(session, "UI tour", lambda: command(session, "InspectGuidedHud").get("tour"))
@@ -126,6 +136,7 @@ def main() -> None:
         wait_until(session, "reset workshop", lambda: lab_card(session).get("hint", "").startswith("1/6"))
         session.capture_screenshot(output / "reset.png")
         (output / "report.json").write_text(json.dumps(before, indent=2) + "\n")
+        assert_render_log_clean(session.log_path)
     print("Classroom onboarding: PASS; saved report reopened and owned API port released", flush=True)
 
 
