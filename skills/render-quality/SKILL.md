@@ -336,7 +336,7 @@ and physics settings while tuning render LOD through its quality profile. If an
 asset is missing, report the owning cache or manifest error visibly instead of
 adding a procedural fallback.
 
-Authored RGBA8 shader rasters use `lunco-materials::ShaderTexture` typed prepared
+Authored RGBA8/RGBA16 shader rasters use `lunco-materials::ShaderTexture` typed prepared
 sources. Retain their source handles for native reloads; the worker publishes a
 complete native child before the renderer binds it. Its render-only usage moves
 pixels through native GPU extraction while retaining main-world metadata; reload
@@ -344,7 +344,9 @@ the source to publish new texels or sampler settings. Generated derived maps use
 complete native images directly. `load_raster` admits physical sources and rejects
 container labels; bind imported labeled images through their owner's native
 handle. Preserve native image/glTF loader settings and
-validated request-time anisotropy. For CPU-built RGBA8 mip chains, preserve the
+validated request-time anisotropy. Preserve 16-bit decoded UNORM precision and
+prepare its complete role-aware mip chain too; a single-level 16-bit normal map
+aliases in distant views. For CPU-built RGBA8/RGBA16 mip chains, preserve the
 role-aware filtering above while
 using the GPU texture extent rule `max(1, floor(size / 2))` independently on
 each axis. Never use ceil-halving or silently clamp an oversized mip count:
