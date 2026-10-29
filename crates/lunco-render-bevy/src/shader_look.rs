@@ -153,6 +153,9 @@ fn shader_material(
             TextureLayer::ContinuationAlbedo => &mut m.continuation_albedo_map,
             TextureLayer::ContinuationSurface => &mut m.continuation_surface_map,
             TextureLayer::SurfaceAnnotations => &mut m.surface_annotations,
+            TextureLayer::DetailAlbedo => &mut m.detail_albedo_map,
+            TextureLayer::DetailNormal => &mut m.detail_normal_map,
+            TextureLayer::DetailSurface => &mut m.detail_surface_map,
         };
         *slot = rasters.get(image).cloned();
     }
@@ -429,6 +432,9 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAs
         ContinuationAlbedo,
         ContinuationSurface,
         SurfaceAnnotations,
+        DetailAlbedo,
+        DetailNormal,
+        DetailSurface,
     ]
     .iter()
     .all(|layer| {
@@ -442,6 +448,9 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAs
             ContinuationAlbedo => &m.continuation_albedo_map,
             ContinuationSurface => &m.continuation_surface_map,
             SurfaceAnnotations => &m.surface_annotations,
+            DetailAlbedo => &m.detail_albedo_map,
+            DetailNormal => &m.detail_normal_map,
+            DetailSurface => &m.detail_surface_map,
         };
         slot.as_ref().map(Handle::id)
             == look

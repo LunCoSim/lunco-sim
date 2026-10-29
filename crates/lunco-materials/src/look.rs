@@ -18,7 +18,7 @@
 //!   annotations. Adding a parameter is editing a shader, not editing Rust — and
 //!   the Inspector picks it up automatically, because it derives its sliders from
 //!   the schema rather than a hand-written list.
-//! - The GPU side is a single opaque 256-byte uniform block that **each shader
+//! - The GPU side is a single opaque 512-byte uniform block that **each shader
 //!   reinterprets through its own `Material` struct**. That is what makes the set
 //!   of parameters a property of the *asset*, not of the engine.
 //!
@@ -44,7 +44,7 @@
 //! Such a look must opt out with [`ShaderLook::unshared`], which gives it a private
 //! material the binder mutates in place instead of re-keying.
 //!
-//! Nine texture roles stay within the portable sampled-texture floor. The sparse
+//! Twelve texture roles stay within the portable sampled-texture floor. The sparse
 //! annotation role is non-filtered and needs no sampler. Roles are optional:
 //! shaders that do not declare a binding ignore it (`None` binds Bevy's neutral
 //! image binding). The two continuation roles let a site shader retain the
@@ -96,6 +96,12 @@ pub enum TextureLayer {
     ContinuationSurface,
     /// Sparse terrain-local vector annotations, read with textureLoad.
     SurfaceAnnotations,
+    /// Repeatable color detail independent of a georeferenced raster.
+    DetailAlbedo,
+    /// Repeatable tangent-space normal detail, independent of DEM normals.
+    DetailNormal,
+    /// Repeatable packed scalar detail: R=roughness, G=AO.
+    DetailSurface,
 }
 
 /// A custom-shader surface, stated as data.

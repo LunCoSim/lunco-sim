@@ -33,6 +33,8 @@ pub struct SurfaceCurveAnnotation {
     pub color: LinearRgba,
     /// Physical surface marks participate in material lighting; route overlays do not.
     pub receives_lighting: bool,
+    /// Inward feather width in metres; zero keeps the antialiased hard edge.
+    pub edge_softness_m: f64,
     segments: Arc<BTreeMap<u64, Pair>>,
     edits: BTreeMap<u64, Option<Pair>>,
     next_id: u64,
@@ -47,6 +49,7 @@ impl SurfaceCurveAnnotation {
             width_m,
             color,
             receives_lighting: false,
+            edge_softness_m: 0.0,
             segments: Arc::new(BTreeMap::new()),
             edits: BTreeMap::new(),
             next_id: 0,
@@ -99,6 +102,7 @@ impl SurfaceCurveAnnotation {
             width_m: self.width_m,
             color: self.color,
             receives_lighting: self.receives_lighting,
+            edge_softness_m: self.edge_softness_m,
             segments: self.segments.clone(),
             edits: BTreeMap::new(),
             next_id: self.next_id,
@@ -143,6 +147,7 @@ impl SurfaceCurveAnnotation {
         self.width_m = replacement.width_m;
         self.color = replacement.color;
         self.receives_lighting = replacement.receives_lighting;
+        self.edge_softness_m = replacement.edge_softness_m;
         self.revision = replacement.revision;
     }
     pub fn distance(&self, point: DVec2) -> f64 {
@@ -240,6 +245,7 @@ struct SourcePatch {
     width: f64,
     color: LinearRgba,
     receives_lighting: bool,
+    edge_softness_m: f64,
     clear: bool,
     remove: bool,
     edits: BTreeMap<u64, Option<Pair>>,
@@ -252,6 +258,7 @@ impl SourcePatch {
             width: 1.0,
             color: LinearRgba::WHITE,
             receives_lighting: false,
+            edge_softness_m: 0.0,
             clear: true,
             remove: true,
             edits: BTreeMap::new(),
@@ -280,6 +287,7 @@ struct Segment {
     radius: f64,
     color: LinearRgba,
     receives_lighting: bool,
+    edge_softness_m: f64,
     slot: usize,
 }
 #[derive(Clone)]
@@ -313,7 +321,7 @@ struct Index {
     nodes: BTreeMap<usize, Node>,
     segments: BTreeMap<Key, Segment>,
     slots: BTreeMap<usize, Key>,
-    sources: BTreeMap<Entity, (u64, f64, LinearRgba, bool)>,
+    sources: BTreeMap<Entity, (u64, f64, LinearRgba, bool, f64)>,
     dirty: BTreeSet<usize>,
     reference_capacity: usize,
     source_work: BTreeMap<Entity, AnnotationWork>,
@@ -570,6 +578,7 @@ impl Index {
         width: f64,
         color: LinearRgba,
         receives_lighting: bool,
+        edge_softness_m: f64,
         undo: &mut Undo,
     ) -> Result<bool, String> {
         let old = self.segments.get(&key).cloned();
@@ -578,6 +587,7 @@ impl Index {
                 && old.radius == width * 0.5
                 && old.color == color
                 && old.receives_lighting == receives_lighting
+                && old.edge_softness_m == edge_softness_m
         }) {
             return Ok(false);
         }
@@ -585,7 +595,7 @@ impl Index {
             return Ok(false);
         } // coalesced insert followed by retirement
         if let Some(pair) = pair {
-            validate_segment(pair, width, color, self.half)?;
+            validate_segment(pair, width, color, edge_softness_m, self.half)?;
         }
         undo.segments.entry(key).or_insert(old.clone());
         if let Some(old) = &old {
@@ -609,6 +619,7 @@ impl Index {
                 radius: width * 0.5,
                 color,
                 receives_lighting,
+                edge_softness_m,
                 slot,
             };
             self.segments.insert(key, segment.clone());
@@ -628,7 +639,7 @@ impl Index {
                 [
                     segment.radius as f32,
                     u8::from(segment.receives_lighting) as f32,
-                    0.0,
+                    segment.edge_softness_m as f32,
                     0.0,
                 ],
                 undo,
@@ -671,6 +682,7 @@ impl Index {
                             patch.width,
                             patch.color,
                             patch.receives_lighting,
+                            patch.edge_softness_m,
                             &mut undo,
                         )?);
                     }
@@ -681,10 +693,11 @@ impl Index {
                     continue;
                 }
                 let style_changed = self.sources.get(&patch.entity).is_some_and(
-                    |(_, width, color, receives_lighting)| {
+                    |(_, width, color, receives_lighting, edge_softness_m)| {
                         *width != patch.width
                             || *color != patch.color
                             || *receives_lighting != patch.receives_lighting
+                            || *edge_softness_m != patch.edge_softness_m
                     },
                 );
                 if style_changed {
@@ -700,6 +713,7 @@ impl Index {
                             patch.width,
                             patch.color,
                             patch.receives_lighting,
+                            patch.edge_softness_m,
                             &mut undo,
                         )?);
                     }
@@ -711,6 +725,7 @@ impl Index {
                         patch.width,
                         patch.color,
                         patch.receives_lighting,
+                        patch.edge_softness_m,
                         &mut undo,
                     )?);
                 }
@@ -721,6 +736,7 @@ impl Index {
                         patch.width,
                         patch.color,
                         patch.receives_lighting,
+                        patch.edge_softness_m,
                     ),
                 );
                 self.source_work.insert(
@@ -784,17 +800,27 @@ impl Index {
     }
 }
 
-fn validate_segment(pair: Pair, width: f64, color: LinearRgba, half: f64) -> Result<(), String> {
+fn validate_segment(
+    pair: Pair,
+    width: f64,
+    color: LinearRgba,
+    edge_softness_m: f64,
+    half: f64,
+) -> Result<(), String> {
     let radius = width * 0.5;
     if !width.is_finite()
         || width <= 0.0
+        || !edge_softness_m.is_finite()
+        || edge_softness_m < 0.0
+        || edge_softness_m > radius
+        || !(edge_softness_m as f32).is_finite()
         || !color
             .to_f32_array()
             .iter()
             .all(|v| v.is_finite() && *v >= 0.0)
         || color.alpha > 1.0
     {
-        return Err("surface annotation width and colour must be finite".into());
+        return Err("surface annotation width, feather and colour must be finite; feather must be within the stroke radius".into());
     }
     if !pair.iter().all(|p| p.is_finite()) || pair[0].distance_squared(pair[1]) <= 1e-18 {
         return Err("surface annotation needs finite, distinct segment endpoints".into());
@@ -978,6 +1004,7 @@ pub(crate) fn prepare_surface_annotations(
             width: annotation.width_m,
             color: annotation.color,
             receives_lighting: annotation.receives_lighting,
+            edge_softness_m: annotation.edge_softness_m,
             clear: reset,
             remove: false,
             edits,
@@ -987,6 +1014,7 @@ pub(crate) fn prepare_surface_annotations(
             previous.width = patch.width;
             previous.color = patch.color;
             previous.receives_lighting = patch.receives_lighting;
+            previous.edge_softness_m = patch.edge_softness_m;
             previous.clear |= patch.clear || previous.remove;
             previous.remove = false;
             previous.edits.extend(patch.edits);
@@ -1304,6 +1332,7 @@ mod tests {
             width: 0.2,
             color: LinearRgba::WHITE,
             receives_lighting: false,
+            edge_softness_m: 0.0,
             clear: false,
             remove: false,
             edits: edits.into_iter().collect(),
@@ -1313,7 +1342,7 @@ mod tests {
         [DVec2::new(x, 0.0), DVec2::new(x + 0.5, 0.0)]
     }
     #[test]
-    fn surface_mark_lighting_survives_index_and_style_updates() {
+    fn surface_mark_style_survives_index_and_transactional_updates() {
         let mut world = World::new();
         let source = world.spawn_empty().id();
         let mut index = Index::new(10.0, SurfaceAnnotationSettings::default()).unwrap();
@@ -1324,12 +1353,19 @@ mod tests {
         assert_eq!(index.texels[slot + 1][1], 0.0);
         let mut physical = patch(source, []);
         physical.receives_lighting = true;
+        physical.edge_softness_m = 0.04;
         let work = index.apply(vec![physical]).unwrap();
         assert_eq!(work.updated_segments, 1);
         assert_eq!(index.segments[&(source, 0)].slot, slot);
         assert_eq!(index.texels[slot + 1][1], 1.0);
+        assert_eq!(index.texels[slot + 1][2], 0.04);
+        let mut invalid = patch(source, []);
+        invalid.edge_softness_m = 0.11;
+        assert!(index.apply(vec![invalid]).is_err());
+        assert_eq!(index.texels[slot + 1][2], 0.04);
         index.apply(vec![patch(source, [])]).unwrap();
         assert_eq!(index.texels[slot + 1][1], 0.0);
+        assert_eq!(index.texels[slot + 1][2], 0.0);
     }
     #[test]
     fn surface_annotation_index_edits_are_local_and_transactional() {
@@ -1436,12 +1472,13 @@ mod tests {
         );
         assert!(dense.segments.is_empty());
         assert_eq!(dense.nodes.len(), 1);
-        assert!(validate_segment(pair(1.0), 0.0, LinearRgba::WHITE, 10.0).is_err());
+        assert!(validate_segment(pair(1.0), 0.0, LinearRgba::WHITE, 0.0, 10.0).is_err());
         assert!(
             validate_segment(
                 [DVec2::splat(f64::NAN), DVec2::ZERO],
                 0.2,
                 LinearRgba::WHITE,
+                0.0,
                 10.0
             )
             .is_err()

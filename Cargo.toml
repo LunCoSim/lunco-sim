@@ -696,5 +696,6 @@ bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "fc11207b6f17957
 # Pinned upstream source with the approved public path-tracing ordering hook.
 # See third_party/bevy_solari/VENDOR.md for identity and the exact patch.
 bevy_solari = { path = "third_party/bevy_solari" }
-avian3d = { git = "https://github.com/LunCoSim/avian", rev = "ba8978bd647a5e9f911d9160219cc2f9c1795f83" }
+# Capped revolute velocity motors share the native joint/contact relaxation solve.
+avian3d = { git = "https://github.com/LunCoSim/avian", rev = "a2ecc37877b13783f00a3bfed5b1e164748af763" }
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "01302a171ac3db662c0c322ef9e98fe7d5f33a6a" }

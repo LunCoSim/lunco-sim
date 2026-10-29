@@ -503,6 +503,40 @@ fn mark_initial_route_occupancy(me, state) {
     #{ ok: true, state: state }
 }
 
+// Composed mission limits. Omitted inputs select the documented route defaults.
+fn route_drive_settings(me) {
+    let record = query("QueryUsdPrim", #{path: program_path(me),
+        attrs: ["inputs:cruise_throttle", "inputs:arrival_radius"]});
+    if record == () || record.ok == false || record.attrs == () {
+        return route_failure("route program drive settings are unavailable");
+    }
+    let throttle = record.attrs["inputs:cruise_throttle"];
+    let radius = record.attrs["inputs:arrival_radius"];
+    if throttle == () { throttle = 0.6; }
+    if radius == () { radius = 2.5; }
+    if !throttle.is_finite() || throttle <= 0.0 || throttle > 1.0 {
+        return route_failure("inputs:cruise_throttle must be finite and in (0, 1]");
+    }
+    if !radius.is_finite() || radius <= 0.0 {
+        return route_failure("inputs:arrival_radius must be finite and positive");
+    }
+    #{ok:true, throttle:throttle, radius:radius}
+}
+
+// Each leg may select forward or reverse travel into its destination point.
+fn route_drive_direction(point) {
+    let record = query("QueryUsdPrim", #{path:point, attrs:["inputs:drive_direction"]});
+    if record == () || record.ok == false || record.attrs == () {
+        return route_failure("route point drive direction is unavailable");
+    }
+    let direction = record.attrs["inputs:drive_direction"];
+    if direction == () { return #{ok:true, value:1.0}; }
+    if !direction.is_finite() || (direction != 1.0 && direction != -1.0) {
+        return route_failure("inputs:drive_direction must be +1 or -1");
+    }
+    #{ok:true, value:direction}
+}
+
 fn drive_current_point(me, state) {
     if !state.enabled {
         let result = ensure_route_safe_stop(me, state);
@@ -538,13 +572,20 @@ fn drive_current_point(me, state) {
             state: state,
         };
     }
-    let command = modelica_waypoint(subject, position, 0.6, 2.5, 0.0);
+    let settings = route_drive_settings(me);
+    if settings.ok != true { return #{result:settings, state:state}; }
+    let direction = route_drive_direction(point);
+    if direction.ok != true { return #{result:direction, state:state}; }
+    let command = modelica_waypoint(subject, position,
+        settings.throttle * direction.value, settings.radius, 0.0);
     if command == () || command.ok != true {
         return #{
             result: route_failure("the subject rejected the route target"),
             state: state,
         };
     }
+    emit("route_leg_started", #{point:point, direction:direction.value,
+        throttle:settings.throttle, radius:settings.radius});
     state.commanded_path = point;
     state.commanded_revision = state.route_revision;
     state.commanded_view_key = state.route_view_key;

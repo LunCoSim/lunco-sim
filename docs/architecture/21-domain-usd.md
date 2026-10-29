@@ -1135,6 +1135,11 @@ def PhysicsCollisionGroup "Wheels"
 - The table is resolved once per stage (`CollisionGroupTables`, cleared on
   teardown) because membership is a stage-wide question the loader asks one prim
   at a time.
+- Group layers apply at the shared USD projection boundary to ordinary bodies,
+  compound colliders and specialized physical wheels. An included vehicle
+  subtree therefore filters its independently simulated wheels too. Comparison
+  copies can exclude each other while retaining contact with ungrouped terrain;
+  this does not disable their internal joints, drivetrain or power model.
 
 The two spellings are proven to agree: `scenes/tests/filtered_pairs.usda` and
 `scenes/tests/collision_groups.usda` are the same rig, referenced, filtered the

@@ -5,8 +5,8 @@
 // collider contact. The first behavior call captures its declared Modelica
 // ports and physics ports. It also verifies that scenario start already sees
 // the committed scene generation and keeps it through its first behavior run.
-// The initial altimeter miss must remain explicitly invalid until the first
-// Avian ray sample arrives.
+// Initial admission must sample the authored ray against prepared geometry;
+// the first behavior call must already observe the real range.
 //
 // The test reads Modelica outputs from the mounted conversion prims and
 // contact directly from the collider. It also verifies stable identity and
@@ -887,16 +887,13 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
                 && first_tick.range_valid.value <= 1.0,
                 "first behavior tick observed out-of-range altimeter validity"));
         }
-        if first_tick_number(first_tick.range)
-            && first_tick_number(first_tick.range_valid)
-            && first_tick.range_valid.value >= 1.0 {
+        if first_tick_number(first_tick.range_valid) {
+            f.push(t_true(first_tick.range_valid.value >= 1.0,
+                "initial altimeter observation must be sampled before solver admission"));
+        }
+        if first_tick_number(first_tick.range) {
             f.push(t_rel(first_tick.range.value, EXPECT_RANGE, 20.0,
                 "first behavior tick did not observe the authored altimeter ray input"));
-        } else if first_tick_number(first_tick.range)
-            && first_tick_number(first_tick.range_valid)
-            && first_tick.range_valid.value == 0.0 {
-            f.push(t_true(first_tick.range.value == 0.0,
-                "invalid initial altimeter input must not appear as a measured range"));
         }
     }
 

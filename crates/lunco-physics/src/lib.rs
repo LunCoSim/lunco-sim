@@ -183,6 +183,27 @@ pub fn set_solver_substeps(world: &mut World, count: u32) -> Result<(), String> 
     Ok(())
 }
 
+/// Read native joint/contact velocity resolution. This is also included in the
+/// solver configuration fingerprint; it is independent of wheel/soil friction.
+pub fn joint_velocity_iterations(world: &World) -> Option<u8> {
+    world
+        .get_resource::<avian3d::dynamics::solver::xpbd::JointVelocitySolverConfig>()
+        .map(|config| config.iterations.get())
+}
+
+/// Select an explicit native relaxation budget for a numerical convergence run.
+pub fn set_joint_velocity_iterations(world: &mut World, count: u32) -> Result<(), String> {
+    let count = u8::try_from(count)
+        .ok()
+        .and_then(core::num::NonZeroU8::new)
+        .ok_or_else(|| "joint velocity iterations must be in 1..=255".to_string())?;
+    let mut config = world
+        .get_resource_mut::<avian3d::dynamics::solver::xpbd::JointVelocitySolverConfig>()
+        .ok_or_else(|| "Avian joint/contact velocity solver is not installed".to_string())?;
+    config.iterations = count;
+    Ok(())
+}
+
 /// Live contact-material coefficients for a physics entity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContactFrictionParameters {

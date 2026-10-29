@@ -2,48 +2,15 @@
 (
     defaultPrim = "DriveLaw"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Modelica drive law for a skid rover. The rover root references this component
-# so the composed model publishes wheel demands consumed by generic wheel
-# ports. Everything below composes onto the host rover through the reference arc.
-#
-# What it does: `RoverDrivetrain.mo` integrates a first-order motor state per
-# side on the solver clock. Native USD connections publish its outputs onto the
-# rover's generic wheel ports; no tick script participates.
-#
-# NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
-# ── The law FORWARDS the vessel's output; it does not write an input ─────────
-#
-# `drive_left` on a rover root is an output consumed by wheel drive inputs. The
-# drive law is its producer, so this is an output-to-output forward.
-#
-#     float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
-#
-# ── Why the model stays in a child prim ──────────────────────────────────────
-#
-# Not for tidiness — the rover root is already taken. It references
-# `components/avionics/obc.usda`, so it ALREADY carries `LunCoProgramAPI` and an
-# `info:sourceAsset`. That attribute is single-valued and the OBC's arc is
-# stronger, so a second `info:sourceAsset` here would be silently overridden and
-# the drive law would never bind at all. One prim, one model.
-#
-# The generated network materialises these forwards onto the vessel's generic
-# wheel ports.
 def Xform "DriveLaw" (
     kind = "component"
 )
 {
-    # Extend the host rover's composed Modelica member collection. The rover
-    # owns the collection and the overlay contributes its one program member;
-    # without this authored membership the drive law is visible in USD but is
-    # not part of the generated network.
-    prepend rel collection:components:includes = [</DriveLaw/Drivetrain>]
-
-    # The command surface is projected on the host rover root by the OBC's
-    # authored Controls profile. Declare the same causal boundary here so the
-    # generated network can receive those live InputPorts values.
+    rel collection:components:includes
+    prepend rel collection:components:includes = </DriveLaw/Drivetrain>
     float inputs:throttle = 0.0
     float inputs:steer = 0.0
     float inputs:program_active = 0.0
@@ -53,24 +20,32 @@ def Xform "DriveLaw" (
     float inputs:autopilot_speed = 0.0
     float inputs:autopilot_radius = 2.0
     float inputs:autopilot_turn_only = 0.0
-    # The pose is a live Avian observation, not a Rust autopilot feed.  The
-    # network root exposes it as an input boundary so the generic wire fabric
-    # carries the authored body outputs into the Modelica solver.
+    float inputs:autopilot_position_x
     float inputs:autopilot_position_x.connect = </DriveLaw.outputs:position_x>
+    float inputs:autopilot_position_z
     float inputs:autopilot_position_z.connect = </DriveLaw.outputs:position_z>
+    float inputs:autopilot_yaw
     float inputs:autopilot_yaw.connect = </DriveLaw.outputs:yaw>
+    float inputs:autopilot_yaw_rate
     float inputs:autopilot_yaw_rate.connect = </DriveLaw.outputs:angvel_y>
+    float inputs:piloted
     float inputs:piloted.connect = </DriveLaw.outputs:piloted>
-
-    # These connected outputs are the authored source for the vessel's wheel
-    # demand ports.
+    float outputs:drive_left
     float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+    float outputs:drive_right
     float outputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
+    float outputs:guidance_throttle
     float outputs:guidance_throttle.connect = </DriveLaw/Drivetrain.outputs:guidance_throttle>
+    float outputs:guidance_steer
     float outputs:guidance_steer.connect = </DriveLaw/Drivetrain.outputs:guidance_steer>
+    float outputs:guidance_heading_error
     float outputs:guidance_heading_error.connect = </DriveLaw/Drivetrain.outputs:guidance_heading_error>
-
-    # The physics: per-side first-order motor lag, solver-clocked.
+    custom double outputs:guidance_travel_throttle = 0.0
+    double outputs:guidance_travel_throttle.connect = </DriveLaw/Drivetrain.outputs:guidance_travel_throttle>
+    custom double inputs:autopilot_velocity_x
+    double inputs:autopilot_velocity_x.connect = </DriveLaw.outputs:velocity_x>
+    custom double inputs:autopilot_velocity_z
+    double inputs:autopilot_velocity_z.connect = </DriveLaw.outputs:velocity_z>
     def Scope "Drivetrain" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
@@ -82,20 +57,38 @@ def Xform "DriveLaw" (
         float outputs:guidance_throttle
         float outputs:guidance_steer
         float outputs:guidance_heading_error
-        # The translated reference reads the host rover's command ports.
+        float inputs:throttle
         float inputs:throttle.connect = </DriveLaw.inputs:throttle>
+        float inputs:steer
         float inputs:steer.connect = </DriveLaw.inputs:steer>
+        float inputs:program_active
         float inputs:program_active.connect = </DriveLaw.inputs:program_active>
+        float inputs:autopilot_enable
         float inputs:autopilot_enable.connect = </DriveLaw.inputs:autopilot_enable>
+        float inputs:autopilot_target_x
         float inputs:autopilot_target_x.connect = </DriveLaw.inputs:autopilot_target_x>
+        float inputs:autopilot_target_z
         float inputs:autopilot_target_z.connect = </DriveLaw.inputs:autopilot_target_z>
+        float inputs:autopilot_speed
         float inputs:autopilot_speed.connect = </DriveLaw.inputs:autopilot_speed>
+        float inputs:autopilot_radius
         float inputs:autopilot_radius.connect = </DriveLaw.inputs:autopilot_radius>
+        float inputs:autopilot_turn_only
         float inputs:autopilot_turn_only.connect = </DriveLaw.inputs:autopilot_turn_only>
+        float inputs:autopilot_position_x
         float inputs:autopilot_position_x.connect = </DriveLaw.inputs:autopilot_position_x>
+        float inputs:autopilot_position_z
         float inputs:autopilot_position_z.connect = </DriveLaw.inputs:autopilot_position_z>
+        float inputs:autopilot_yaw
         float inputs:autopilot_yaw.connect = </DriveLaw.inputs:autopilot_yaw>
+        float inputs:autopilot_yaw_rate
         float inputs:autopilot_yaw_rate.connect = </DriveLaw.inputs:autopilot_yaw_rate>
+        float inputs:piloted
         float inputs:piloted.connect = </DriveLaw.inputs:piloted>
+        custom double outputs:guidance_travel_throttle = 0.0
+        custom double inputs:autopilot_velocity_x
+        double inputs:autopilot_velocity_x.connect = </DriveLaw.inputs:autopilot_velocity_x>
+        custom double inputs:autopilot_velocity_z
+        double inputs:autopilot_velocity_z.connect = </DriveLaw.inputs:autopilot_velocity_z>
     }
 }

@@ -643,6 +643,9 @@ fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
         "mineral_map" => Some(TextureLayer::Mineral),
         "surface_map" => Some(TextureLayer::Surface),
         "normal_map" => Some(TextureLayer::Normal),
+        "detail_albedo_map" => Some(TextureLayer::DetailAlbedo),
+        "detail_normal_map" => Some(TextureLayer::DetailNormal),
+        "detail_surface_map" => Some(TextureLayer::DetailSurface),
         // `height_map` and `shadow_cache` are engine-filled (horizon system);
         // authoring them from USD would fight the engine writer, so they are
         // deliberately NOT addressable here.

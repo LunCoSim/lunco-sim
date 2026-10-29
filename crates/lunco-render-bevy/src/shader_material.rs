@@ -76,14 +76,14 @@ use lunco_materials::{
 /// `.wesl` declares its own `Material` uniform struct (real field names), the
 /// engine reflects that layout from the shader source ([`ParamSchema`]),
 /// values are stored by name in [`values`](Self::values), and packed into a
-/// fixed 256-byte opaque block ([`raw`](Self::raw)) at the reflected offsets.
+/// fixed 512-byte opaque block ([`raw`](Self::raw)) at the reflected offsets.
 /// No parameter names/ranges/defaults are hardcoded in Rust. A fresh material
 /// has an empty schema (packs all-zero) until the reflect system derives one
 /// from its shader source.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(ShaderKey)]
 pub struct ShaderMaterial {
-    /// Opaque uniform block (256 bytes). Its field layout is the *shader's* —
+    /// Opaque uniform block (512 bytes). Its field layout is the *shader's* —
     /// each `.wesl` reinterprets these bytes through its own `Material`
     /// struct. Built from [`values`](Self::values) via
     /// [`schema`](Self::schema); never edit directly, use `set*`.
@@ -150,6 +150,18 @@ pub struct ShaderMaterial {
     /// Sparse surface annotation records; no filtering or sampler.
     #[texture(16, sample_type = "float", filterable = false)]
     pub surface_annotations: Option<Handle<Image>>,
+    /// Optional repeatable surface detail, separate from georeferenced maps.
+    #[texture(17)]
+    #[sampler(18)]
+    pub detail_albedo_map: Option<Handle<Image>>,
+    /// Tangent-space normal detail at the authored material scale.
+    #[texture(19)]
+    #[sampler(20)]
+    pub detail_normal_map: Option<Handle<Image>>,
+    /// Detail scalars: R=roughness, G=ambient occlusion.
+    #[texture(21)]
+    #[sampler(22)]
+    pub detail_surface_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -213,6 +225,9 @@ impl Default for ShaderMaterial {
             continuation_albedo_map: None,
             continuation_surface_map: None,
             surface_annotations: None,
+            detail_albedo_map: None,
+            detail_normal_map: None,
+            detail_surface_map: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),
@@ -249,7 +264,7 @@ impl ShaderMaterial {
         self.repack();
     }
     /// Applies several named writes and repacks ONCE at the end, rather than a
-    /// full 256-byte `repack()` per `set` (MAT-1). Use on multi-param write
+    /// full 512-byte `repack()` per `set` (MAT-1). Use on multi-param write
     /// paths such as the per-frame engine-field update in the horizon system.
     pub fn set_many<I, S>(&mut self, entries: I)
     where

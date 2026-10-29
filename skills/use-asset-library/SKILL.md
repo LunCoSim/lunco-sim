@@ -212,6 +212,14 @@ hardcoded; **moving the file changes its category.**
   caches per asset. Adding a *new* file is picked up automatically on native
   (the filesystem is the manifest).
 
+For photographic terrain detail, declare the scan maps in the Twin's
+`Assets.toml` and download them through the asset manager into `.cache`.
+Author `detail_albedo_map`, `detail_normal_map` and `detail_surface_map` inputs
+through the USD document owner; keep their metre scale and linear luminance
+mean explicit. Tangent detail normals belong to their separate role, while
+DEM normals and site rasters retain their own registered frames. See
+[`physical-scale surface detail`](../../docs/architecture/terrain-layered-rendering.md#physical-scale-surface-detail).
+
 ## Add a shader (`.wesl`)
 
 Drop it in `assets/shaders/`. It is walked into the manifest and registered into

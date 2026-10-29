@@ -85,6 +85,12 @@ struct Material {
     stitch_edges:      vec4<f32>,
     site_base_color: vec4<f32>,
     site_photometry: vec4<f32>,
+    detail_tile_size_m: f32,
+    detail_albedo_weight: f32,
+    detail_albedo_mean: f32,
+    detail_normal_strength: f32,
+    detail_rough_weight: f32,
+    detail_ao_weight: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)

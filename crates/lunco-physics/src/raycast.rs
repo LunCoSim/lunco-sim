@@ -43,6 +43,9 @@ pub struct RaycastObservation {
     pub hit_normal: DVec3,
     /// Whether the last query hit a physical collider.
     pub hit_valid: bool,
+    /// Whether a query has completed against admitted physical geometry.
+    /// An unsampled instrument is pending, distinct from a sampled miss.
+    pub sampled: bool,
     /// Physics-clock timestamp associated with the result.
     pub sample_time_s: f64,
 }
@@ -60,6 +63,7 @@ impl Default for RaycastObservation {
             hit_position: DVec3::ZERO,
             hit_normal: DVec3::ZERO,
             hit_valid: false,
+            sampled: false,
             sample_time_s: 0.0,
         }
     }
@@ -73,6 +77,7 @@ pub fn sample_raycast_observations(
     time: Res<Time<Physics>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     mount_state: Option<Res<lunco_core::SceneMountState>>,
+    holds: Option<Res<crate::PhysicsHolds>>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
     bodies: Query<
@@ -81,6 +86,7 @@ pub fn sample_raycast_observations(
             &Rotation,
             Option<&lunco_core::GlobalEntityId>,
             Option<&RigidBodyColliders>,
+            Option<&lunco_core::PhysicsStatePending>,
         ),
         With<RigidBody>,
     >,
@@ -92,6 +98,10 @@ pub fn sample_raycast_observations(
     // into a downstream ray-query failure.
     if faults.is_some_and(|faults| faults.active())
         || mount_state.is_some_and(|mount| mount.active_root().is_none())
+        || holds.is_some_and(|holds| {
+            holds.holds(crate::PhysicsHolds::TERRAIN_READY)
+                || holds.holds(crate::PhysicsHolds::FRAME_CONTRACT)
+        })
     {
         return;
     }
@@ -100,7 +110,13 @@ pub fn sample_raycast_observations(
         let mut mount = Transform::IDENTITY;
         let Some((body_position, body_rotation, body_global_id, excluded_entities)) = (0..64)
             .find_map(|_| {
-                if let Ok((position, rotation, global_id, colliders)) = bodies.get(cursor) {
+                if let Ok((position, rotation, global_id, colliders, pending)) = bodies.get(cursor)
+                {
+                    // A mounted body can exist before its authored pose has
+                    // crossed the native physics admission boundary.
+                    if pending.is_some() {
+                        return None;
+                    }
                     let mut excluded = Vec::new();
                     let mut ancestor = entity;
                     while ancestor != cursor {
@@ -147,6 +163,7 @@ pub fn sample_raycast_observations(
             filter.excluded_entities.insert(excluded);
         }
 
+        observation.sampled = true;
         let Some(hit) = grid.cast_ray_grid(
             lunco_spatial::coords::GridPos(origin),
             direction,

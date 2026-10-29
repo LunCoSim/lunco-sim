@@ -312,6 +312,11 @@ Flight software is not a Rust semantic-sensor special case.
 - LunCoRaycastAPI is the one generic query description needed because Modelica
   cannot access Avian collision geometry. Rust samples raw distance, validity,
   hit point, hit normal, and physics sample time after Avian writeback.
+  Before solver construction, `InitializationSampling` samples the same ray
+  against prepared terrain and an admitted body pose without advancing time.
+  Unsampled raw ports are unavailable, so causal admission waits rather than
+  publishing numeric defaults. A completed miss remains a sampled invalid
+  observation; sampled zero values are preserved.
 - LunCo.Sensors.IMUSensor converts raw Avian kinematics plus the environment
   gravity vector into local coordinate acceleration, specific force, and gyro
   outputs. Altimeter converts raw ray distance and validity without a miss
@@ -470,6 +475,17 @@ angular displacement. A stationary brake holding torque produces no heat.
 The locked-patch projection cannot propel existing slip and is bounded by the
 remaining authored brake authority. Physical wheels apply bearing torque across
 the relative axle/housing coordinate, rather than damping world rotation.
+Their passive brake is a capped native zero-speed velocity motor. Its free-axis
+row participates in contact/joint relaxation, with one accumulated torque budget
+per substep. Native measured motor impulse supplies brake heat; the co-simulation
+boundary does not add a second spin-down torque.
+`physics_joint_velocity_iterations()` and
+`set_physics_joint_velocity_iterations(n)` read/write the native relaxation
+budget (1..255), independently of `set_physics_substeps(n)`. Authored numerical
+experiments opt into these settings explicitly; neither changes physical grip
+or brake torque. Both participate in the existing solver fingerprint. The
+physics owner validates the budget and the scripting adapter enforces mutation
+authority before applying it.
 
 Shared physical tires consume the physics owner's prepared native contact
 loads with their exact body/collider provenance, normal and world contact point.
@@ -501,4 +517,29 @@ Verification: `scripts/api/test_mechanical_losses.py` has 46 authored checks,
 including a closed wheel/ground stored-heat balance and airborne isolation;
 FLIP's route/brake/thermal gate has 25. `tire_patch_tests` covers the native
 force cone, interval work and passivity; `drivetrain_parity` covers both wheel
-realizations. No third-party source is changed.
+realizations. Physical brake/contact relaxation uses the pinned Avian correction
+published on `fix/flip-native-brake` at `a2ecc37877b1`.
+
+### Conservative route execution
+
+A route program can author `inputs:cruise_throttle` in (0, 1]; omission selects
+0.6. `inputs:arrival_radius` selects the positive Modelica arrival distance in
+metres; omission selects 2.5. Author the route sensors consistently with that
+mission tolerance. Each destination point may author `inputs:drive_direction`
+as +1 (default) or -1. The route publishes this sign with the cruise magnitude
+and emits `route_leg_started` with the selected point and direction. Signed
+cruise selects forward or reverse skid travel; wheel-steered guidance retains
+its automatic curvature/recovery direction. Cruise throttle is a normalized
+drive limit, not a speed in metres per second.
+
+Skid guidance gates waypoint travel through a continuous heading window and
+uses the shared `PIDAxis` for bounded yaw-rate control. During alignment or a
+steering-only pivot, a second PI axis requests zero chassis forward velocity.
+Native `velocity_x/z` observations supply its measurement. Its bounded common
+motor demand resists rolling downhill while differential demand turns the
+chassis; it does not freeze or relocate the body. `guidance_travel_throttle`
+excludes this pivot-hold correction, while `guidance_throttle` includes it.
+Wheel-steered curvature guidance is unchanged. Mission acceptance must still
+measure actual speed, stopping distance, position error and parked drift;
+reaching a collider overlap sensor alone does not establish a settled arrival
+or a solar-facing parking orientation.

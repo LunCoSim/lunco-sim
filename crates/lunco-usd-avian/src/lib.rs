@@ -1189,14 +1189,14 @@ fn extract_avian_prim(
         commands.entity(entity).try_insert(pending);
     }
 
-    // Skip wheel prims — the sim plugin handles their colliders and bodies. The
-    // standard filtered-pairs API above is still owned by this bridge, because
-    // it is orthogonal to wheel realization and must be admitted before the
-    // wheel projector returns.
+    // Wheel realization belongs to the sim plugin. Standard collision filters
+    // remain owned here and must reach specialized colliders as well as bodies
+    // projected below, before either path opens physics admission.
     if reader
         .real_f32(sdf_path, "physxVehicleWheel:radius")
         .is_some()
     {
+        apply_collision_groups(commands, entity, groups, sdf_path);
         commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }

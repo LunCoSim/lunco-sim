@@ -360,6 +360,12 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   * `drive_laws/modelica_skid.usda` (skid_rover, six_wheel_rover,
     rocker_bogie): `RoverDrivetrain.mo` integrates a per-side motor lag on
     the solver clock; native USD connections publish `drive_left`/`drive_right`.
+    Skid waypoint guidance accepts signed cruise for forward/reverse travel,
+    limits yaw rate and aligns before travelling. Wire native chassis
+    `velocity_x/z` into `autopilot_velocity_x/z`: the pivot PI loop uses them
+    to resist downhill rolling while turning. Measure destination error after
+    the turn as well as drift after the brake engages. The travel-only output
+    `guidance_travel_throttle` excludes this physical hold correction.
   * `drive_laws/modelica_ackermann.usda` (ackermann_rover):
     `RoverAckermannDrivetrain.mo` publishes the front wheel heading outputs and
     the drive outputs consumed by the raycast or physical realization.

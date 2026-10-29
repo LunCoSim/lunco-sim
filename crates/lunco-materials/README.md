@@ -55,7 +55,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
 That's it — no Rust. Optional texture slots are available at fixed bindings
 (`albedo_map` 2/3, `mineral_map` 4/5, `surface_map` 6/7, `normal_map` 8/9,
-`height_map` 1); declare only the ones you sample.
+`height_map` 1). Optional repeatable material detail uses `detail_albedo_map`
+17/18, `detail_normal_map` 19/20, and `detail_surface_map` 21/22. Detail normals
+are tangent-space; the normal raster at 8/9 is object-local. Detail samplers
+repeat and use color/normal/linear mip preparation for their respective roles.
+Declare only the bindings you sample.
 
 ### 2. Apply it from USD
 
@@ -128,5 +132,5 @@ authored `assets/scenes/tests/shader_asset_contracts.usda` scene and its Rhai
 observer. Rust tests in this crate use inline WESL only for the generic
 reflection and packing mechanism; they do not open repository shader files.
 
-The 256-byte uniform block caps all params (named + engine-filled) at 64 f32 lanes;
+The 512-byte uniform block caps all params (named + engine-filled) at 128 f32 lanes;
 supported types are `f32 / i32 / u32 / vec2 / vec3 / vec4` (std140).
