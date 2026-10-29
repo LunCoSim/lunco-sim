@@ -266,7 +266,7 @@ avoid the collision:
 | A simulation unit on disk | **Twin** | `lunco-twin` |
 
 ### Panel
-A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console, Twin Browser). The standard Twin/Files browser panels and their section registry live in `lunco-workbench-browser`; the shell only provides the generic panel host.
+A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console, Twin Browser). The standard Navigator lenses and their section registry live in `lunco-workbench-browser`; the shell only provides the generic panel host.
 
 ### Perspective
 A named task-specific UI configuration. Each Perspective has its own default panel layout, toolbar set, and optionally a camera/view state. Standard LunCoSim Perspectives: **Build** (edit scenes and subsystems), **Simulate** (minimal chrome, maximize viewport), **Analyze** (Modelica/system model deep dive), **Plan** (mission timeline), **Observe** (presentation/cinema mode). Analogous to Eclipse Perspectives (same word) or Blender "Workspaces" (different word, same idea). *Distinct from the broader **Workspace** concept — see §4e.*
@@ -278,7 +278,7 @@ A primary navigation category displayed in a vertical strip at the far left (VS 
 The 3D world view — NOT a panel, NOT a tile. Structurally persistent as the central area of the workbench window. Docks are arranged around the Viewport, never on top of it. This is a first-class architectural primitive, distinct from panels.
 
 ### Command Palette
-Keyboard-invoked (Ctrl+P / Cmd+P) universal search for actions, entities, parameters, and commands. Integrates with the reflected command registry for discoverable actions.
+Keyboard-invoked quick navigation (Ctrl/Cmd+P) for contributed Twin files, library sources, scenes, panels, and perspectives. Ctrl/Cmd+Shift+P selects panel/perspective actions. Domain providers reuse their existing inventories and typed operations; this surface does not execute arbitrary parameterized commands.
 
 ---
 

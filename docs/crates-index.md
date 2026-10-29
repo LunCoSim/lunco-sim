@@ -31,7 +31,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait, native filesystem, memory and browser backends), regular-file admission, bounded native reads and demand-driven OPFS streams, lexical direct-file listing, and worker-prepared native destination identities. The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, traversal checks, and portable materialization tree validation. It has no Bevy, filesystem, storage, or application dependency. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, traversal-safe path/cache operations, worker-prepared native asset paths and OpenUSD search-path resolutions pinned to live Twin mounts, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
-| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders, typed persisted-result source facts for asset policies, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
+| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, scene choices from admitted Twin inventories, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders, typed persisted-result source facts for asset policies, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
@@ -203,7 +203,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-text-editor`** | Reusable generic source editor: source-only text paths, asset/Twin/ephemeral source loading, async storage writes, tab lifecycle, and source-editor panel registration. It reuses the core source/tab contracts and shared text-editor widget without depending on the concrete docking shell. |
 | **`lunco-workbench-state`** | Reusable per-Twin session state: persisted document snapshots, domain codec registry, dock snapshot schema, runtime-surface layout state, storage-backed load/save, and the layout-provider contract used by concrete shells. |
 | **`lunco-workbench-window`** | Reusable OS-window capability: typed minimize/maximize/close commands, merged-titlebar construction, settings-backed geometry persistence, and explicit native placement. It depends on Bevy window APIs and `lunco-settings`, not the concrete Workbench shell. |
-| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
+| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel` Navigator with Twin/Files/Libraries lenses. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, recording status, and bounded independent scene-scoped live camera views. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, shared selection/modal resources, and the bounded log model/renderer. It uses workbench contracts and shell-independent widgets; domain panels own their presentation snapshots. |
@@ -417,7 +417,7 @@ archives, raster, SVG, GeoTIFF, or native processing.
 
 **`lunco-assets-runtime`**
 The Bevy asset-source, authored-text, and selected-dataset runtime. It owns
-source registration, discovery/catalogs, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders,
+source registration, discovery/catalogs, scene choices from admitted Twin inventories, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders,
 policy-requested dataset artifact reads, web fetch integration, the optional
 shared egui byte loader, and the asset-manifest tool while consuming identity and storage contracts from
 `lunco-assets-core` and dataset declarations from `lunco-assets-datasets`.
@@ -683,7 +683,10 @@ Shared input settings and projection. It owns the persisted `InputBindingsSettin
 section and composes `SceneInputBindings` into the non-persisted
 `ActiveInputBindings` snapshot before input processing. Every UI, avatar,
 controller, injection and Rhai consumer reads that snapshot. Semantic labels,
-pointer-chord resolution and Leafwing `InputMap` construction share this owner.
+pointer-chord resolution, command-chord parsing/collision resolution and Leafwing
+`InputMap` construction share this owner. Twin command or semantic collisions
+displace the global effective chord and publish one warning per changed conflict
+snapshot, without overwriting persisted global preferences.
 `lunco-luncosim-simulation` admits application defaults and active-Twin overrides
 from `lunco.input-bindings.v1` documents through `JsonAssetScopeChanged`. The
 contract crate has no compiled-in asset path or product keymap.
@@ -1179,7 +1182,8 @@ in `lunco-workbench-core`. It does not own file bytes or backend I/O; those go
 through `lunco-storage`, while Twin discovery stays in
 `lunco-workspace`/`lunco-twin`. GPU health and presentation recovery live in
 the independent `lunco-render-recovery` crate; the workbench only composes its
-banner and recovery systems. Hosts that need Twin and Files navigation add the
+banner and recovery systems. Persistent context, quick navigation, and document
+history consume typed provider/source contracts from workbench core. Hosts that need Twin and Files navigation add the
 separate `lunco-workbench-browser` feature package, which does not link this
 shell. The shared input keymap is owned by `lunco-input-core`; the recording
 overlay is supplied by `lunco-input-ui`, so the shell does not depend on the
@@ -1287,8 +1291,8 @@ implements that contract for `egui_dock`; state consumers import these APIs
 directly rather than through the shell.
 
 **`lunco-workbench-browser`**
-Reusable navigation feature for a rendered host. It owns the Twin and Files
-panels, browser query/actions/resources, built-in filesystem and library
+Reusable navigation feature for a rendered host. It owns the Navigator and its Twin/Files/Libraries
+lenses, browser query/actions/resources, built-in filesystem and library
 sections, while consuming shell-neutral panel, source-view, scene-state, and
 rename command contracts from their owning crates. The library section consumes
 the asset manifest's monotonic revision and retains its tree between replacements

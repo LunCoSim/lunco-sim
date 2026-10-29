@@ -14,6 +14,8 @@ use lunco_core::AppSceneExt;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod command_bindings;
+pub use command_bindings::*;
 
 const DEFAULT_LOOK_BUTTON: &str = "Right";
 
@@ -61,6 +63,8 @@ fn pointer_button_matches(configured: &str, event: &str) -> bool {
 #[derive(Deserialize)]
 struct InputBindingsDocument {
     #[serde(default)]
+    command_bindings: BTreeMap<String, CommandKeyBinding>,
+    #[serde(default)]
     #[serde(rename = "kind")]
     _kind: Option<String>,
     #[serde(flatten)]
@@ -83,6 +87,9 @@ struct InputBindingsDocument {
 #[derive(Resource, Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[reflect(Resource)]
 pub struct InputBindingsSettings {
+    /// Stable shortcut id to a typed command invocation.
+    #[serde(default)]
+    pub command_bindings: BTreeMap<String, CommandKeyBinding>,
     /// Semantic intent name to Bevy key names.
     #[serde(flatten)]
     pub bindings: BTreeMap<String, Vec<KeyCode>>,
@@ -103,6 +110,7 @@ pub struct InputBindingsSettings {
 impl Default for InputBindingsSettings {
     fn default() -> Self {
         Self {
+            command_bindings: BTreeMap::new(),
             bindings: BTreeMap::new(),
             look_button: None,
             pointer_bindings: BTreeMap::new(),
@@ -115,6 +123,47 @@ impl SettingsSection for InputBindingsSettings {
     const KEY: &'static str = "input_bindings";
 
     fn validate_section(&self) -> Result<(), String> {
+        let mut chords = std::collections::BTreeSet::new();
+        for (id, binding) in &self.command_bindings {
+            if id.trim().is_empty() || binding.command.trim().is_empty() {
+                return Err("Command shortcut id and command are required".into());
+            }
+            let chord = normalized_chord(&binding.keys);
+            if chord.len() != binding.keys.len() {
+                return Err(format!("Shortcut {id} repeats a key or modifier"));
+            }
+            if !chord.is_empty() && !chords.insert(chord) {
+                return Err(format!("Shortcut {id} duplicates another command chord"));
+            }
+            if !binding.keys.is_empty() {
+                let chord = normalized_chord(&binding.keys);
+                if self
+                    .bindings
+                    .values()
+                    .flatten()
+                    .any(|key| normalized_chord(&[*key]) == chord)
+                    || self
+                        .key_chords
+                        .values()
+                        .flatten()
+                        .any(|keys| normalized_chord(keys) == chord)
+                {
+                    return Err(format!(
+                        "Command shortcut {id} shares its chord with an intent in the same profile"
+                    ));
+                }
+            }
+            let mut names = std::collections::BTreeSet::new();
+            for argument in &binding.arguments {
+                if argument.name.trim().is_empty() || !names.insert(&argument.name) {
+                    return Err(format!("Shortcut {id} has an empty or duplicate parameter"));
+                }
+                if matches!(argument.value, CommandBindingValue::Float(value) if !value.is_finite())
+                {
+                    return Err(format!("Shortcut {id} has a non-finite parameter"));
+                }
+            }
+        }
         if let Some(button) = &self.look_button
             && parse_look_button(button).is_none()
         {
@@ -158,6 +207,7 @@ impl InputBindingsSettings {
         let document: InputBindingsDocument = serde_json::from_str(json)
             .map_err(|error| format!("invalid input bindings: {error}"))?;
         let settings = Self {
+            command_bindings: document.command_bindings,
             bindings: document.bindings,
             look_button: Some(document.look_button),
             pointer_bindings: document.pointer_bindings,
@@ -170,14 +220,7 @@ impl InputBindingsSettings {
     /// Compose a partial profile over this map. Explicit empty lists unbind an
     /// intent; omitted entries inherit this map. Validation remains at admission.
     pub fn overridden_by(&self, overrides: &Self) -> Self {
-        let mut resolved = self.clone();
-        resolved.bindings.extend(overrides.bindings.clone());
-        resolved.key_chords.extend(overrides.key_chords.clone());
-        resolved
-            .pointer_bindings
-            .extend(overrides.pointer_bindings.clone());
-        resolved.look_button = overrides.look_button.clone().or(resolved.look_button);
-        resolved
+        self.resolve_overrides(overrides).0
     }
 
     /// Build the live leafwing map from the resolved settings section.
@@ -253,6 +296,9 @@ impl InputBindingsSettings {
 
     /// Return a human-readable key or pointer label for authored help copy.
     pub fn label(&self, binding: &str) -> Option<String> {
+        if let Some(command) = self.command_bindings.get(binding) {
+            return (!command.keys.is_empty()).then(|| shortcut_label(&command.keys));
+        }
         if binding == "look_button" {
             self.look_button_value()?;
             return Some(format!(
@@ -368,14 +414,20 @@ fn resolve_active_input_bindings(
     settings: Res<InputBindingsSettings>,
     scene: Res<SceneInputBindings>,
     mut active: ResMut<ActiveInputBindings>,
+    mut conflicts: ResMut<InputBindingConflicts>,
+    mut commands: Commands,
 ) {
     if !settings.is_changed() && !scene.is_changed() {
         return;
     }
-    let resolved = scene.0.as_ref().map_or_else(
-        || settings.clone(),
-        |profile| settings.overridden_by(profile),
+    let (resolved, collisions) = scene.0.as_ref().map_or_else(
+        || (settings.clone(), Vec::new()),
+        |profile| settings.resolve_overrides(profile),
     );
+    if conflicts.0 != collisions {
+        report_binding_collisions("Twin binding overrides global", &collisions, &mut commands);
+        conflicts.0 = collisions;
+    }
     active.set_if_neq(ActiveInputBindings(resolved));
 }
 
@@ -390,12 +442,15 @@ impl Plugin for InputBindingsPlugin {
             .register_settings_section::<InputBindingsSettings>()
             .init_scene_resource::<SceneInputBindings>()
             .init_resource::<ActiveInputBindings>()
+            .init_scene_resource::<InputBindingConflicts>()
+            .register_type::<InputBindingConflicts>()
             .register_type::<ActiveInputBindings>()
             .add_systems(
                 PreUpdate,
                 (resolve_active_input_bindings, refresh_live_input_maps)
                     .chain()
                     .in_set(InputBindingsSet)
+                    .after(bevy::input::InputSystems)
                     .before(leafwing_input_manager::plugin::InputManagerSystem::Unify),
             );
     }
@@ -403,12 +458,49 @@ impl Plugin for InputBindingsPlugin {
 
 fn refresh_live_input_maps(
     settings: Res<ActiveInputBindings>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    focus: Option<Res<lunco_control_core::EguiFocus>>,
+    mut previous_claims: Local<Vec<Vec<KeyCode>>>,
     mut maps: Query<&mut InputMap<UserIntent>>,
 ) {
-    if !settings.is_changed() {
+    let in_text = focus.is_some_and(|focus| focus.wants_keyboard);
+    let claims: Vec<_> = keys
+        .as_ref()
+        .map(|keys| {
+            settings
+                .command_bindings
+                .values()
+                .filter(|binding| {
+                    (!in_text || binding.allow_in_text) && chord_matches(&binding.keys, keys)
+                })
+                .map(|binding| normalized_chord(&binding.keys))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !settings.is_changed() && *previous_claims == claims {
         return;
     }
-    match settings.input_map() {
+    *previous_claims = claims.clone();
+    let mut projected = settings.0.clone();
+    // A command owns its whole chord while held; its constituent keys must not
+    // also actuate semantic controls in a different input consumer.
+    for keys in projected.bindings.values_mut() {
+        keys.retain(|key| {
+            !claims.iter().any(|claim| {
+                normalized_chord(&[*key])
+                    .iter()
+                    .all(|key| claim.contains(key))
+            })
+        });
+    }
+    for chords in projected.key_chords.values_mut() {
+        chords.retain(|keys| {
+            !claims
+                .iter()
+                .any(|claim| normalized_chord(keys).iter().all(|key| claim.contains(key)))
+        });
+    }
+    match projected.input_map() {
         Ok(map) => {
             for mut live in &mut maps {
                 *live = map.clone();

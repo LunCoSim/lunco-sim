@@ -1,6 +1,7 @@
 //! Workbench layout composition and dock rendering.
 
 use super::*;
+use crate::render::configured_command_shortcut;
 use lunco_workbench_core::trigger_or_defer;
 use std::borrow::Cow;
 
@@ -321,7 +322,7 @@ pub(super) fn render_layout(
                             // Ctrl+N resolves to the first registered
                             // creatable kind, which is the first entry after
                             // deterministic display-name sorting.
-                            let label = new_document_menu_label(index, &display);
+                            let label = new_document_menu_label(index, &display, &configured_command_shortcut(world, "editor.new"));
                             let response = ui.button(label);
                             let response = match default_filename {
                                 Some(filename) => response.on_hover_text(format!(
@@ -339,7 +340,7 @@ pub(super) fn render_layout(
                 ui.separator();
 
                 // -- Open ---------------------------------------------
-                if ui.button("Open File…\tCtrl+O").clicked() {
+                if menu_item(ui, true, "Open File…", &configured_command_shortcut(world, "editor.open-file"), "").clicked() {
                     trigger_or_defer(world, lunco_workbench_file_ops::ShowOpenFilePicker {});
                     ui.close();
                 }
@@ -433,7 +434,7 @@ pub(super) fn render_layout(
                 // Save / Save As route through `EditorIntent` so the
                 // menu, Ctrl+S, and HTTP API funnel through the same
                 // domain resolver.
-                if menu_item(ui, has_active, "Save", "Ctrl+S", "No document open")
+                if menu_item(ui, has_active, "Save", &configured_command_shortcut(world, "editor.save"), "No document open")
                     .clicked()
                 {
                     trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Save);
@@ -443,7 +444,7 @@ pub(super) fn render_layout(
                     ui,
                     has_active,
                     "Save As…",
-                    "Ctrl+Shift+S",
+                    &configured_command_shortcut(world, "editor.save-as"),
                     "No document open",
                 )
                 .clicked()
@@ -498,7 +499,7 @@ pub(super) fn render_layout(
                 }
 
                 // -- Close --------------------------------------------
-                if menu_item(ui, has_active, "Close", "Ctrl+W", "No document open")
+                if menu_item(ui, has_active, "Close", &configured_command_shortcut(world, "editor.close"), "No document open")
                     .clicked()
                 {
                     trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Close);
@@ -927,6 +928,8 @@ pub(super) fn render_layout(
         });
     });
     });
+
+    crate::navigation::render_bar(&mut menu_ui, layout, world, menus);
 
     let mut viewport_ui = egui::Ui::new(
         ctx.clone(),

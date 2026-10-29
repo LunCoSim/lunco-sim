@@ -62,7 +62,7 @@ impl BrowserSection for ConnectionsSection {
     }
 
     fn default_open(&self) -> bool {
-        true
+        false
     }
 
     fn order(&self) -> u32 {
@@ -92,7 +92,7 @@ impl BrowserSection for UsdSceneSection {
     }
 
     fn title(&self) -> &str {
-        "USD"
+        "Open USD documents"
     }
 
     fn scope(&self) -> BrowserScope {

@@ -69,7 +69,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod authored_perspectives;
+mod keybindings;
 mod layout_render;
+mod navigation;
 mod render;
 mod resource_preview;
 mod session;
@@ -913,6 +915,8 @@ impl Plugin for WorkbenchPlugin {
             )
             .add_systems(First, lunco_workbench_layout::sync_scene_interaction_mode);
         authored_perspectives::install(app);
+        navigation::install(app);
+        keybindings::install(app);
         register_all_commands(app);
         app.register_panel(twin_settings::TwinSettingsPanel::default());
         drain_registered_panels(app.world_mut());

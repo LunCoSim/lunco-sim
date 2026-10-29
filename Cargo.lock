@@ -8753,6 +8753,7 @@ dependencies = [
  "lunco-control-core",
  "lunco-core",
  "lunco-settings",
+ "lunco-telemetry-core",
  "serde",
  "serde_json",
 ]
@@ -11990,6 +11991,7 @@ dependencies = [
  "egui",
  "lunco-assets-core",
  "lunco-assets-runtime",
+ "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-theme",

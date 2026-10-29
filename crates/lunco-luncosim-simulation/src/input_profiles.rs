@@ -101,7 +101,8 @@ fn retire_input_profile(
     mut profiles: ResMut<InputProfiles>,
     mut scene: ResMut<SceneInputBindings>,
 ) {
-    if profiles.0.remove(&event.twin).is_some() {
+    profiles.0.remove(&event.twin);
+    if event.was_active {
         scene.0 = None;
     }
 }

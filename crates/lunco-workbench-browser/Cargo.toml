@@ -3,9 +3,10 @@ name = "lunco-workbench-browser"
 version = "0.1.0-dev"
 edition = "2024"
 license.workspace = true
-description = "Twin and Files browser panels for the LunCoSim workbench"
+description = "Twin, file and library Navigator for the LunCoSim workbench"
 
 [dependencies]
+lunco-core = { path = "../lunco-core" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 bevy = { workspace = true }

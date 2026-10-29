@@ -196,6 +196,31 @@ impl InstancePanel for ModelViewPanel {
         }
     }
 
+    fn navigation_source(
+        &self,
+        world: &World,
+        instance: u64,
+    ) -> Option<lunco_workbench_core::navigation::NavigationSource> {
+        let tab = world.get_resource::<ModelTabs>()?.get(instance)?;
+        let document = world
+            .get_resource::<ModelicaDocuments>()?
+            .host(tab.doc)?
+            .document();
+        let origin = document.origin();
+        Some(lunco_workbench_core::navigation::NavigationSource {
+            uri: origin
+                .canonical_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| origin.display_name()),
+            mode: if origin.is_writable() {
+                "Editing Modelica"
+            } else {
+                "Read-only Modelica"
+            }
+            .into(),
+        })
+    }
+
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
         let tab_id: TabId = instance;
         let Some((doc, drilled)) = ctx

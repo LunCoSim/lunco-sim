@@ -8,6 +8,19 @@ The simulator's Analyze task keeps the live scene in the center and Graphs
 below it, with Telemetry on the left and Ports on the right. Its graph remains
 in the bottom dock when reopened. View → Reset Layout reapplies this placement.
 
+## Keep your place
+
+The context bar shows the active Twin and loaded scene in every perspective.
+**Browse Twin** opens the Navigator with the active Twin's files; library and
+secondary sections start collapsed. Choose **Files** for document dependencies
+or **Libraries** for shared sources. Opening a USD file opens an editing preview;
+choose **Scene: name** to explicitly load a different world. The preview/source
+label identifies what you are editing independently of that world.
+
+Use Ctrl/Cmd+P to find a file, scene or library source. Ctrl/Cmd+Shift+P finds
+panels and perspectives. Alt+Left/Right returns through visited document views.
+**Reveal in navigator** locates the focused editor's exact source.
+
 ## Discover the available views
 
 In a production session with API access, query `InspectWorkbench`. Its `panels`

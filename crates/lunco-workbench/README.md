@@ -11,7 +11,7 @@ documented in [`docs/architecture/11-workbench.md`](../../docs/architecture/11-w
 │ menu · command palette · title · transport · perspective tabs│
 ├───┬─────────────────────┬──────────────┬────────────────────┤
 │ A │                     │              │                    │
-│ c │  Twin Browser       │   VIEWPORT   │   Inspector        │
+│ c │  Navigator          │   VIEWPORT   │   Inspector        │
 │ t │  (twins + docs)     │              │ (context-aware)    │
 │ i │                     │              │                    │
 │ v │                     ├──────────────┤                    │
@@ -180,7 +180,7 @@ cargo run --bin lunica      # Modelica workbench
   continue to persist per Twin.
 - The shell is browser-agnostic. Add `lunco-workbench-browser` when the
   application needs Twin/Files navigation; that package provides the standard
-  panels and accepts domain `BrowserSection` implementations.
+  Navigator and accepts domain `BrowserSection` implementations.
 
 The workbench derives `egui::Visuals` once per `Theme` revision and shares
 that snapshot with every panel surface. Panel render paths should consume the
@@ -204,7 +204,7 @@ before painting any context.
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /
   Observe) — host apps define them as they migrate panels.
-- **Command palette** — planned; `Ctrl+P` is intentionally unbound.
+
 - **Detached panel windows** — planned; the current panel contract is dock-only.
 
 ## Design rationale
@@ -248,3 +248,13 @@ bevy + bevy_egui
    │                     │ browser panels and section contract used by app/domain UI
    │                     └── lunco-modelica-ui, lunco-luncosim-edit-ui, …
 ```
+
+## Navigation
+
+The persistent context bar distinguishes the active Twin, loaded scene, and
+focused source editor. Ctrl/Cmd+P opens quick navigation, initially scoped to
+active-Twin files; Ctrl/Cmd+Shift+P selects panel and perspective actions.
+Alt+Left/Right visits document/perspective history without replaying scene loads.
+Source owners supply exact URI/purpose metadata through `navigation_source`;
+provider callbacks reuse typed domain commands. See architecture §7 for lifecycle
+and production acceptance.

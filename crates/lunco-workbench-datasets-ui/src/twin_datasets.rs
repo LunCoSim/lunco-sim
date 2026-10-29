@@ -30,7 +30,7 @@ impl BrowserSection for TwinDatasetsSection {
     }
 
     fn default_open(&self) -> bool {
-        true
+        false
     }
 
     fn order(&self) -> u32 {

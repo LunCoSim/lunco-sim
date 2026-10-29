@@ -1,40 +1,9 @@
-//! Twin Browser — the side panel that surfaces the open Twin's
-//! contents through pluggable per-domain sections.
+//! Navigator for the active Twin, raw files, and shared libraries.
 //!
-//! ## What this is
-//!
-//! A single workbench panel ([`TwinBrowserPanel`]) that renders a
-//! stack of collapsible *sections*. Each section is contributed by a
-//! domain plugin via the [`BrowserSection`] trait and stored in the
-//! [`BrowserSectionRegistry`] resource. This feature ships exactly one
-//! built-in section — [`files_section::FilesSection`] — because file listing
-//! is domain-agnostic.
-//!
-//! ## Why a registry instead of a hard-coded list
-//!
-//! `lunco-workbench-browser` cannot depend on the domain crates without
-//! inverting the dependency graph (`lunco-modelica-core` already depends on
-//! us). So domain crates push their section impls into the registry
-//! at plugin-build time:
-//!
-//! ```ignore
-//! // somewhere in ModelicaPlugin::build
-//! app.world_mut()
-//!    .resource_mut::<BrowserSectionRegistry>()
-//!    .register(ModelicaSection::default());
-//! ```
-//!
-//! The browser walks the registry each frame, asking each section to
-//! render itself into a collapsing header. Section-emitted actions
-//! (clicks, drags, context-menu choices) flow back through the
-//! [`BrowserCtx::actions`] outbox so domain crates can install
-//! observers that turn them into concrete app behaviour (open a tab,
-//! drill into a class, reveal in editor, …).
-//!
-//! ## What's *not* here
-//!
-//! - The Modelica-specific class-tree section — that ships in
-//!   `lunco-modelica-core` as `ModelicaSection`, registered by its plugin.
+//! Domain plugins contribute BrowserSections through the existing registry.
+//! The Twin lens shows the active Twin's file tree first. Secondary sections
+//! start collapsed; Files and Libraries are explicit lenses of the same panel.
+//! Sections read published owner facts and emit typed navigation intents.
 
 use bevy::prelude::*;
 use egui;
@@ -53,12 +22,12 @@ pub use library_section::LuncoLibrarySection;
 /// Stable id of the Twin Browser singleton panel.
 pub const TWIN_BROWSER_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_browser");
 
-/// Shared transient filter for the Twin and Files browser panels.
+/// Shared transient filter for the Navigator lenses.
 ///
 /// The browser feature owns the query because it is presentation state, while
 /// each domain section decides which of its authoritative rows match. Keeping the
 /// query here means a search survives switching between the Twin and Files
-/// tabs without introducing a second per-domain browser model.
+/// lenses without introducing a second per-domain browser model.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct BrowserQuery {
     /// Text entered in the browser filter. Empty or whitespace-only means no
@@ -113,36 +82,19 @@ pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 // Browser scope (Models / Files tab toggle)
 // ─────────────────────────────────────────────────────────────────────
 
-/// One of the top-level lenses the Twin Browser presents.
-///
-/// A Twin is composed of multiple modeling modalities (Modelica
-/// dynamics, USD scenes, SysML architecture, future Julia, …) plus
-/// raw on-disk content. The user wants quick toggle between
-/// *"what's modeled in this Twin"* and *"what's on disk"* — this enum
-/// names the two lenses.
-///
-/// Each [`BrowserSection`] declares which scope it belongs to via
-/// [`BrowserSection::scope`]. The panel renders only the sections
-/// matching the active scope (see `ActiveBrowserScope`).
-///
-/// More scopes may join later (a Subsystems / Usages tab once the
-/// cosim graph view exists, surfacing a Twin's `[scenarios.*]`
-/// instance graph). The enum is `#[non_exhaustive]` so the matching
-/// dispatch in the panel doesn't lock us out of additions.
+/// The Navigator's top-level lenses. Domain sections declare their scope;
+/// the active Twin file tree anchors both the Twin and Files lenses.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BrowserScope {
-    /// Sections rendered inside the Twin panel. Today: Modelica
-    /// workspace, source library standard library, bundled examples. Future:
-    /// USD scenes, SysML packages, Julia modules, pinned externals.
-    /// One panel hosts everything you'd browse "by name" — matches
-    /// Dymola/OMEdit's single-Package-Browser pattern where source library and
-    /// user packages share one tree.
+    /// Active Twin files and typed domain views.
     Models,
-    /// Sections rendered inside the Files panel. Raw on-disk content
+    /// Sections rendered in the Files lens. Raw on-disk content
     /// of the active Twin (or open Folder) — folder layout, file
     /// references, anything regardless of typed-Document status.
     Files,
+    /// Shared bundled content, kept separate from the active Twin.
+    Libraries,
 }
 
 impl BrowserScope {
@@ -152,6 +104,7 @@ impl BrowserScope {
         match self {
             BrowserScope::Models => "models",
             BrowserScope::Files => "files",
+            BrowserScope::Libraries => "libraries",
         }
     }
 
@@ -160,6 +113,7 @@ impl BrowserScope {
         match self {
             BrowserScope::Models => "Twin",
             BrowserScope::Files => "Files",
+            BrowserScope::Libraries => "Libraries",
         }
     }
 }
@@ -386,10 +340,7 @@ pub struct BrowserCtx<'a, 'w> {
 }
 
 impl<'a, 'w> BrowserCtx<'a, 'w> {
-    /// Build a section render context from the action outbox and the
-    /// narrowed [`PanelCtx`]. Used by sibling panels (e.g.
-    /// [`crate::FilesPanel`]) that drive the section registry from
-    /// outside this module, where the `panel` field isn't visible.
+    /// Build a section render context from the action outbox and narrowed panel context.
     pub fn new(actions: &'a mut BrowserActions, panel: &'a mut PanelCtx<'w>) -> Self {
         Self { actions, panel }
     }
@@ -504,7 +455,7 @@ impl Panel for TwinBrowserPanel {
     }
 
     fn title(&self) -> String {
-        "Twin".to_string()
+        "Navigator".to_string()
     }
 
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
@@ -516,7 +467,30 @@ impl Panel for TwinBrowserPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let scope = ctx
+            .resource::<crate::navigation::BrowserView>()
+            .map(|view| view.scope)
+            .unwrap_or(BrowserScope::Models);
+        ui.horizontal(|ui| {
+            for choice in [
+                BrowserScope::Models,
+                BrowserScope::Files,
+                BrowserScope::Libraries,
+            ] {
+                if ui
+                    .selectable_label(scope == choice, choice.label())
+                    .clicked()
+                {
+                    ctx.trigger(crate::navigation::SetBrowserScope {
+                        scope: choice.id().into(),
+                    });
+                }
+            }
+        });
         render_search_bar(ui, ctx);
+        let searching = ctx
+            .resource::<BrowserQuery>()
+            .is_some_and(BrowserQuery::is_active);
         ui.separator();
         // Scope the section registry + action outbox out of the world for
         // the duration of the render (the narrow, structural way to get
@@ -528,7 +502,16 @@ impl Panel for TwinBrowserPanel {
             // Precompute each section's `order()` in a single walk; sorting
             // by an `nth(i)` re-walk inside the comparator was O(n²)/frame.
             let orders: Vec<_> = registry.iter().map(|s| s.order()).collect();
-            let mut visible: Vec<usize> = (0..orders.len()).collect();
+            let mut visible: Vec<usize> = registry
+                .iter()
+                .enumerate()
+                .filter(|(_, section)| {
+                    section.scope() == scope
+                        || (scope == BrowserScope::Models
+                            && section.id() == "lunco.workbench.files")
+                })
+                .map(|(index, _)| index)
+                .collect();
             visible.sort_by_key(|&i| (orders[i], i));
 
             if visible.is_empty() {
@@ -545,14 +528,20 @@ impl Panel for TwinBrowserPanel {
                 // tree (~2500 entries) doesn't push later sections off
                 // screen. `auto_shrink=[false; 2]` fills the panel rect.
                 egui::ScrollArea::vertical()
-                    .id_salt("twin_panel_scroll")
+                    .id_salt(("twin_panel_scroll", scope.id()))
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         for &i in &visible {
                             let section = registry.section_mut(i);
+                            if section.id() == "lunco.workbench.files" {
+                                let mut bctx = BrowserCtx::new(&mut *actions, &mut *ctx);
+                                section.render(ui, &mut bctx);
+                                continue;
+                            }
                             let header = egui::CollapsingHeader::new(section.title())
-                                .id_salt(("twin_panel_section", section.id()))
-                                .default_open(section.default_open());
+                                .id_salt(("twin_panel_section", scope.id(), section.id()))
+                                .default_open(section.default_open())
+                                .open(searching.then_some(true));
                             let resp = header.show(ui, |ui| {
                                 let mut bctx = BrowserCtx {
                                     actions: &mut *actions,
@@ -584,9 +573,13 @@ pub(crate) fn clear_browser_state_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     query: Option<ResMut<BrowserQuery>>,
     registry: Option<ResMut<BrowserSectionRegistry>>,
+    view: Option<ResMut<crate::navigation::BrowserView>>,
 ) {
     let event = trigger.event();
     if event.was_active {
+        if let Some(mut view) = view {
+            *view = crate::navigation::BrowserView::default();
+        }
         if let Some(mut query) = query {
             query.text.clear();
         }

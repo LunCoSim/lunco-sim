@@ -594,7 +594,7 @@ impl BrowserSection for SceneFilesSection {
     }
 
     fn title(&self) -> &str {
-        "Scene"
+        "Document dependencies"
     }
 
     fn scope(&self) -> BrowserScope {
@@ -602,7 +602,7 @@ impl BrowserSection for SceneFilesSection {
     }
 
     fn default_open(&self) -> bool {
-        true
+        false
     }
 
     fn order(&self) -> u32 {

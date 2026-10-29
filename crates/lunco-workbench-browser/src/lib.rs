@@ -1,4 +1,4 @@
-//! Twin and Files browser panels for the LunCoSim workbench.
+//! Navigator with Twin, Files, and Libraries lenses for the workbench.
 //!
 //! The concrete workbench shell owns docking, source editing, and viewport
 //! presentation. This package owns the reusable browser feature. Dataset
@@ -10,10 +10,9 @@ use bevy::prelude::*;
 use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::commands::FocusPanel;
 
-mod files_panel;
+pub mod navigation;
 pub mod twin_browser;
 
-pub use files_panel::{FILES_PANEL_ID, FilesPanel};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
     BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TWIN_BROWSER_PANEL_ID,
@@ -35,9 +34,12 @@ impl Plugin for TwinBrowserPlugin {
             .init_resource::<UnsavedDocs>()
             .add_observer(twin_browser::clear_browser_state_on_twin_closed)
             .add_systems(Update, drain_browser_navigation);
+        app.init_resource::<twin_browser::files_section::FileTreeView>()
+            .add_systems(Update, twin_browser::files_section::prepare_file_tree)
+            .add_observer(twin_browser::files_section::retire_file_tree);
+        navigation::install(app);
 
-        app.register_panel(TwinBrowserPanel)
-            .register_panel(FilesPanel);
+        app.register_panel(TwinBrowserPanel);
         let mut sections = app.world_mut().resource_mut::<BrowserSectionRegistry>();
         sections.register(FilesSection::default());
         sections.register(LuncoLibrarySection::default());

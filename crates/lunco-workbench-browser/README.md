@@ -1,9 +1,9 @@
 # lunco-workbench-browser
 
-Reusable Twin and Files navigation for LunCoSim workbench applications.
+Reusable Twin, Files, and Libraries navigation for LunCoSim workbench applications.
 
 This package is an optional feature layer over `lunco-workbench`. It owns the
-standard `TwinBrowserPanel` and `FilesPanel`, browser query/action resources,
+standard `TwinBrowserPanel` (Navigator), shared lens/query/action resources,
 and filesystem and library sections. Domain UI crates contribute their own
 `BrowserSection` implementations without modifying the shell or depending on
 the private dock state. Dataset controls are supplied by the separate
@@ -34,3 +34,10 @@ they do not open USD layers or read asset bytes directly.
 
 See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.md)
 for the ownership and composition rules.
+
+The default Twin lens highlights only the active Twin's files. Domain sections,
+shared Libraries, and document dependencies start collapsed. Files and Libraries
+are lenses of the same Navigator. `SetBrowserScope` selects a lens;
+`RevealNavigationSource` reveals a known exact source without opening it.
+The browser contributes existing Twin/library inventories to the shell's
+`NavigationRegistry`, and **Browse Twin** provides access from every perspective.

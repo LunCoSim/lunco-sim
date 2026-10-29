@@ -189,6 +189,7 @@ pub(crate) fn render_workbench(
         .remove_resource::<DeferredWorldTriggers>()
         .expect("workbench render queue was installed above");
     deferred.apply(world);
+    crate::navigation::render_search(&ctx, world);
     // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
     // and egui occlusion is handled by bevy_egui's picking backend.
 }
@@ -595,9 +596,16 @@ pub(crate) fn menu_item(
         .on_disabled_hover_text(disabled_hint)
 }
 
-pub(crate) fn new_document_menu_label(index: usize, display: &str) -> String {
-    if index == 0 {
-        format!("{display}\tCtrl+N")
+pub(crate) fn configured_command_shortcut(world: &World, id: &str) -> String {
+    world
+        .get_resource::<lunco_input_core::ActiveInputBindings>()
+        .and_then(|settings| settings.label(id))
+        .unwrap_or_default()
+}
+
+pub(crate) fn new_document_menu_label(index: usize, display: &str, shortcut: &str) -> String {
+    if index == 0 && !shortcut.is_empty() {
+        format!("{display}\t{shortcut}")
     } else {
         display.to_owned()
     }
@@ -820,11 +828,27 @@ pub(crate) fn render_edit_menu(
     } else {
         "No document open"
     };
-    if menu_item(ui, can_undo, "Undo", "Ctrl+Z", undo_hint).clicked() {
+    if menu_item(
+        ui,
+        can_undo,
+        "Undo",
+        &configured_command_shortcut(world, "editor.undo"),
+        undo_hint,
+    )
+    .clicked()
+    {
         trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Undo);
         ui.close();
     }
-    if menu_item(ui, can_redo, "Redo", "Ctrl+Shift+Z", redo_hint).clicked() {
+    if menu_item(
+        ui,
+        can_redo,
+        "Redo",
+        &configured_command_shortcut(world, "editor.redo"),
+        redo_hint,
+    )
+    .clicked()
+    {
         trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Redo);
         ui.close();
     }
@@ -2134,9 +2158,9 @@ fn settings_submenu_max_width(content_width: f32) -> f32 {
 }
 
 const STATUS_BAR_MIN_SCOPE_WIDTH: f32 = 160.0;
-const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 280.0;
-const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.30;
-const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
+const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 336.0;
+const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.36;
+const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 168.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 64.0;
@@ -3302,10 +3326,13 @@ mod tests {
     #[test]
     fn new_document_shortcut_only_labels_the_default_entry() {
         assert_eq!(
-            new_document_menu_label(0, "Modelica Model"),
+            new_document_menu_label(0, "Modelica Model", "Ctrl+N"),
             "Modelica Model\tCtrl+N"
         );
-        assert_eq!(new_document_menu_label(1, "USD Stage"), "USD Stage");
+        assert_eq!(
+            new_document_menu_label(1, "USD Stage", "Ctrl+N"),
+            "USD Stage"
+        );
     }
 
     /// `FocusPanel` can arrive from another UI/domain plugin before (or without)
@@ -3492,8 +3519,8 @@ mod tests {
             status_bar_notification_width(1600.0, 120.0, 960.0),
             STATUS_BAR_NOTIFICATION_MAX_WIDTH
         );
-        assert_eq!(status_bar_notification_width(520.0, 120.0, 960.0), 280.0);
-        assert_eq!(status_bar_notification_width(400.0, 120.0, 420.0), 140.0);
+        assert_eq!(status_bar_notification_width(520.0, 120.0, 960.0), 336.0);
+        assert_eq!(status_bar_notification_width(400.0, 120.0, 420.0), 168.0);
         assert_eq!(status_bar_notification_width(120.0, 160.0, 420.0), 1.0);
     }
 

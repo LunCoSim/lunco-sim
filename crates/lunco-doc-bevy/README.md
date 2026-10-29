@@ -10,7 +10,7 @@ This crate provides the ECS-facing half of the Document System, adding generic d
 - **TwinJournal** — An append-only log of every document event in the session, useful for audit, replay, and diagnostics.
 - **Command-Based Mutation** — Standardizes document edits via Bevy `Command` observers (Undo, Redo, Save, Close).
 - **Intent-to-Command Resolution** — Maps abstract `EditorIntent` (e.g., `Undo`) to concrete document actions based on the active domain.
-- **Keybindings** — Standard IDE-style keyboard shortcuts (Ctrl+S, Ctrl+Z, etc.) for document operations.
+- **Command adapter** — `InvokeEditorIntent` routes configurable shortcuts through the same domain resolvers as menu actions. `lunco-input-core` owns bindings; `lunco-workbench` dispatches them.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ lunco-doc-bevy/
   ├── TwinJournal      — Append-only timeline of session events
   ├── EventOrigin      — Distinguishes Local vs Remote vs Replay sources
   ├── EditorIntent     — Domain-agnostic user actions (Undo, Save, Compile)
-  ├── Keybindings      — Resource mapping KeyChords to EditorIntents
+  ├── InvokeEditorIntent — Reflected command adapter for editor actions
   └── observer_paths   — Lifecycle observers that populate the journal
 ```
 

@@ -80,11 +80,9 @@ backends without depending on the shell. The
 workflow adapters, and `lunco-workbench-text-editor` owns the generic source
 editor and its tab lifecycle; both are composed by the shell without being
 modules of it. The optional
-`lunco-workbench-browser` crate builds the reusable Twin and Files navigation
-panels on top of the core/widget contracts. GPU health, adapter capability admission, and
+`lunco-workbench-browser` crate builds the reusable Twin, file and library Navigator on top of the core/widget contracts. GPU health, adapter capability admission, and
 presentation recovery are owned by the independent
-`lunco-render-recovery` crate, which the shell composes. A command palette and
-detachable-window host remain planned capabilities (§7–8).
+`lunco-render-recovery` crate, which the shell composes. The shell provides quick navigation (§7); a detachable-window host remains planned (§8).
 
 Terminology mapping:
 
@@ -403,8 +401,8 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | View (`sandbox_view`) | Observe and operate a mission | Full-window live scene |
 | Analyze (`analysis`) | Inspect and compare simulation signals | Live scene center; Graphs below the scene; Telemetry above Entities left; Ports right |
 | Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
-| Editor (`editor`) | Edit an explicitly opened document | Prim/Twin tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
-| Lunica (`modelica_analyze`) | Engineer continuous models | Twin/Files browser; Welcome or open model views center |
+| Editor (`editor`) | Edit an explicitly opened document | Navigator/Prims tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
+| Lunica (`modelica_analyze`) | Engineer continuous models | Navigator; Welcome or open model views center |
 
 Optional panel contributions still use `Panel::visible_in_perspective`, for
 example requirement details in Editor. Terrain is a specialist preset available under View → Perspectives, without
@@ -589,7 +587,7 @@ A panel's default slot derives from its `default_slot()` (and `id` substring con
 
 | Category | Default slot | Examples |
 |----------|--------------|----------|
-| Navigation | Left side | Twin panel, Files panel |
+| Navigation | Left side | Navigator |
 | Inspector | Right side | Properties, Modelica Inspector, Component Palette |
 | Detail | Lower-right pane | Requirement details |
 | Tool | Bottom | Diagram Editor |
@@ -616,7 +614,7 @@ perspective before opening and focusing the panel; panels without an owner
 perspective keep the active perspective. The menu keeps Reset Layout and
 Toggle Activity Bar directly available, then groups panel checkboxes into
 Build, Analyze, Editor, and Lunica submenus according to `PanelMenuGroup`;
-unclassified integrations use Other. The Editor default places Prim and Twin
+unclassified integrations use Other. The Editor default places Navigator first, beside Prims
 in the same left tab group, preserving the full height for either browser.
 Its center starts empty: Connections, source editors, and USD previews open
 only through an explicit document/tool action or a declared perspective layout.
@@ -628,79 +626,41 @@ the right column and leaves 38% for the Inspector; the dock divider remains
 resizable. The initial cross-layout gives the right column about 24% of the
 workspace width, with about 22% for the side browser and 54% for the center.
 
-### 5a. Side-browser architecture — Twin panel + Files panel
+### 5a. Navigator and domain sections
 
-The side-browser feature is implemented by `lunco-workbench-browser`, not by
-the base shell. Applications install `TwinBrowserPlugin` after
-`WorkbenchPlugin` when they need these panels. This keeps the shell reusable
-for hosts that need docking and source editing but do not need Twin discovery,
-filesystem browsing, or dataset provisioning.
+`lunco-workbench-browser` supplies one `TwinBrowserPanel`, titled **Navigator**.
+Its stable panel identity is `lunco.workbench.twin_browser`. The three lenses are:
 
-The two Navigation-slot panels follow a Dymola/OMEdit-style split:
+- **Twin** (default): the active Twin's files first, followed by collapsed domain
+  views. Modelica, open USD documents, Connections, and Twin resources start
+  collapsed. The active Twin's manifest name labels its root.
+- **Files**: the active Twin's filesystem plus collapsed **Document dependencies**.
+  The dependency closure belongs to open, in-scope USD documents; it is not a
+  list of loadable scenes or proof that those files drive the running world.
+- **Libraries**: shared application sources, with **LunCo Library** collapsed.
+  Individual Modelica library roots also start collapsed inside their domain view.
 
-- **Twin panel** — what you browse "by name" in the active Twin scope. One section per
-  domain (`ModelicaSection`, future `UsdSection`, `SysmlSection`,
-  `JuliaSection`), each section owning its own internal sub-grouping
-  (e.g. Modelica's section nests Modelica Standard Library + Bundled
-  Examples + Workspace as collapsing headers). Single tree per
-  domain matches Dymola/OMEdit's Package Browser; nesting under a
-  per-domain root scales as more domains land.
-- **Files panel** — raw filesystem view of the active Twin / open
-  Folder. Domain-agnostic. Documents from another open Twin remain in the
-  global Workspace registry but are outside this panel's scope until that Twin
-  becomes active; loose documents are shown only when no Twin is active.
+The existing `BrowserSectionRegistry` owns contributions; sections read their
+published owner view models and emit `BrowserActions` or typed commands. The
+browser feature depends on core/widgets, documents, and workspace contracts,
+not on the docking shell. Native dataset controls remain a separate package.
+**Browse Twin** in the persistent context bar reveals the same Navigator from
+any perspective. No additional file-browser panel is registered.
 
-Sections are pluggable via the `BrowserSection` trait + a registry
-resource:
+### 5b. Browser search and reveal
 
-```rust
-pub trait BrowserSection: Send + Sync + 'static {
-    fn id(&self) -> &str;
-    fn title(&self) -> &str;
-    fn scope(&self) -> BrowserScope { BrowserScope::Models }
-    fn default_open(&self) -> bool { true }
-    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx);
-}
+One transient `BrowserQuery` is shared by the Navigator lenses. The file tree
+is rebuilt outside painting only when its admitted workspace or filter changes;
+painting reuses that tree and visits expanded branches. Sections filter
+readable names and paths, retain matching ancestors, and open matching folder
+paths while filtering. Empty results are explicit. `RevealNavigationSource`
+selects the Files or Libraries lens and filters to the exact known source.
+It does not open a document or load a scene. Unknown external sources reject
+visibly; their original path remains available in the editor context.
 
-pub enum BrowserScope { Models, Files }
-```
-
-Domain plugins push their section impls into
-`BrowserSectionRegistry` at `build()` time; the panel iterates the
-registry per render, filtered by its `BrowserScope`. Sections emit
-user actions (clicks, drags, context-menu choices) into a frame-
-scoped `BrowserActions` outbox; a host system drains it and
-dispatches. A section that already resolved a file outside the active Twin
-uses the absolute `OpenFile` path form; relative actions are anchored only by
-the active Twin at the owning domain boundary.
-
-This keeps the browser feature domain-agnostic —
-`lunco-workbench-browser` ships `FilesPanel`, `TwinBrowserPanel`, and
-`FilesSection`, but nothing Modelica-specific. Adding USD/SysML/Julia is one
-new section per domain, with no central shell edits. The base
-`lunco-workbench` crate supplies only the generic shell services that the
-browser feature consumes, such as source-view routing and hierarchy-row
-presentation.
-
-### 5b. Shared browser search
-
-Both navigation panels expose one transient `BrowserQuery` owned by the
-browser feature. The query is presentation state, so domain sections do not keep
-parallel search resources or parse source during paint. Each section applies
-the same case-insensitive substring contract to its own authoritative display
-names, qualified paths, and authored file paths:
-
-- a matching leaf keeps its authored parents visible and open while filtering;
-- a matching parent keeps that parent's complete authored subtree available;
-- generated ids are routing details, not the primary search or display label;
-- an empty result is explicit, not an apparently empty or collapsed tree;
-- the active query and transient row state are cleared on the active `TwinClosed`
-  edge, so a replacement Twin cannot inherit stale navigation state.
-
-The browser feature owns only the field and the search affordance. USD,
-Modelica, scene-closure, library, and raw-file sections remain responsible for
-their own loading/error/empty rows and for emitting the existing typed
-navigation actions.
+The active `TwinClosed` edge clears the query and restores the Twin lens;
+closing an inactive Twin preserves the current navigation. Domain sections
+retire their own row state through the existing lifecycle callback.
 
 ### 5c. Shared hierarchy presentation
 
@@ -771,19 +731,49 @@ Selecting the same balloon in Analyze workspace shows the same, plus:
 Selection flows through a shared `SelectedEntity` resource. All workspaces
 read it; the panel system re-renders on change.
 
-## 7. Command palette
+## 7. Persistent context and quick navigation
 
-**Status: planned, not implemented.** Ctrl+P/Cmd+P is intentionally unbound;
-the current discoverability surface is the menu bar, including the grouped
-View panel list and perspective switcher. The planned palette will fuzzy-search:
+The context bar remains above the workbench body across perspectives. It shows
+**Twin: name**, **Browse Twin**, **Scene: name**, simulation transport state,
+and **Find…**. Twin and scene are independent facts: opening a source preview
+never replaces the loaded world. The Twin picker opens a Twin through `OpenTwin`;
+the scene picker reuses the Scenarios menu's existing typed load/restart actions.
+Both scene menus and search consume the asset owner's indexed scene inventory
+from admitted Twin manifests/files, without filesystem walks during presentation.
+Exact source paths are available from these controls.
 
-- Actions (workspaces, menu items, panel show/hide)
-- Entities (navigate to Space System by name)
-- Modelica models (open a `.mo` file)
-- Parameters (jump to a named parameter in the Inspector)
-- Commands applicable to the selected entity (discovered via the global command schema)
+Editor instance owners publish `InstancePanel::navigation_source`, containing
+an exact URI and a readable purpose such as **Editing USD preview**, **Editing
+Modelica**, or **Read-only source**. The shell shows that context for the focused
+editor and offers source reveal. It never interprets a tab instance id as a
+document id. USD preview tab titles explicitly say **Preview**.
 
-Integrates with the ontology's command schema pattern — the reflected metadata (name, fields, validation ranges, documentation) makes commands dynamically discoverable for humans and AI agents.
+- **Ctrl/Cmd+P** opens quick navigation; an empty query initially lists only
+  active-Twin files. Typing searches contributed readable labels and paths.
+- **Ctrl/Cmd+Shift+P** selects **Actions**, covering registered panels and task
+  perspectives. This is not an arbitrary parameterized-command executor.
+- Scope choices expose **Twin**, **Libraries**, **Scenes**, and **Actions**.
+  Scene destinations say **Load** and identify that the action replaces the
+  loaded scene. Source destinations use the existing preview/document route.
+- **Alt+Left/Right** or the arrow buttons visit document/perspective history.
+  Panel focus alone does not create history noise; navigation never replays a
+  scene load. A closed destination rejects visibly rather than reopening it.
+
+`NavigationRegistry` in `lunco-workbench-core` is a provider registry, not an
+asset index. Providers read existing domain inventories only on explicit search
+or activation requests. Entries have stable owner-qualified identities and
+callbacks emitting typed intents. Activation resolves the identity again against
+the current inventory. The shell bounds transient history in its owning resource
+and virtualizes search rows. Provider loading/failure messages remain visible,
+including when other providers return usable partial results. Active Twin closure clears search and history;
+queued requests retain the Twin identity captured at admission.
+
+Public commands are `SearchNavigation`, `ActivateNavigationEntry`,
+`NavigateHistory`, `RevealNavigationSource`, `SetBrowserScope`, and
+`OpenBrowserFile`. `InspectWorkbenchNavigation` exposes context, results,
+rejections, and history availability to production acceptance. The authored gate
+is `assets/scenarios/tests/workbench_navigation.rhai`, exercised by
+`scripts/api/test_workbench_navigation.py --port <free-port>`.
 
 ## 8. Detachable windows
 
@@ -1118,7 +1108,7 @@ surfaces, and user-global preferences remain in `settings.json`.
 
 - Theming via egui's visuals system. Built-in themes: Dark, Light, High
   Contrast. Per-user customization is a typed section in `settings.json`.
-- Embodiment and vessel input bindings are owned by `lunco-input-core` as the typed
+- Semantic actions and command shortcuts are owned by `lunco-input-core` as the typed
   `InputBindingsSettings` section in `<OS config dir>/lunco/settings.json`. The
   application discovers the authored default document by its
   `lunco.input-bindings.v1` kind through the runtime asset manifest; it is not
@@ -1131,8 +1121,30 @@ surfaces, and user-global preferences remain in `settings.json`.
   warning; invalid runtime values disable the live input maps and are reported
   in the status bar. The UI host remains available in either case.
 
-Both are simple pass-throughs to egui and `bevy_workbench`-style registries;
-no novel design.
+Settings → Keybindings opens the application-owned `input_settings` perspective.
+`command_bindings` maps an identity to a physical chord, reflected command,
+typed scalar arguments, and an explicit text-focus permission. Menu hints and
+Rhai `input_hint(...)` read the effective map. `SetCommandKeyBinding` validates
+command names and arguments before persisting through `lunco-settings`;
+`SetInputIntentBinding` edits semantic alternatives through the same owner.
+
+Twin composition removes conflicting lower-priority physical bindings from the
+transient effective map. Global preferences remain stored and return on Twin
+closure. `InputBindingConflicts` identifies each displaced action and winner;
+changes publish warning telemetry visible in Recent Events. Reassigning a global
+key uses the same resolver. Identical snapshots do not repeat notifications.
+Command chords claim their constituent semantic keys while held, preventing a
+save/navigation shortcut from simultaneously actuating a vessel. Focus permission
+is applied before dispatch and before this claim.
+
+The workbench dispatches shortcuts through the transport-free reflected command
+core, retaining command authorization, parameter validation and terminal results.
+`InvokeEditorIntent` is the document-owner adapter for editor actions. Rejected
+shortcut commands appear in Recent Events and Keybindings. Application and Twin
+binding documents use the same contract. The input contract owns parsing,
+normalization, collision resolution and projection; Rhai perspective policy owns
+only settings-panel placement. Shortcut definitions are authored data, not a
+second Rust product keymap.
 
 `lunco-theme::ThemePlugin` applies the shared egui typography roles in
 `ThemeApplySet`. The workbench orders its main render set after that boundary
@@ -1241,7 +1253,7 @@ dependency chain. In particular, `lunco-workbench-state` and
    │         │
    │         ▼
    ├── lunco-workbench-browser (optional navigation feature)
-   │     - Twin/Files panels and browser resources
+   │     - Navigator lenses and browser resources
    │     - filesystem/library sections and dataset controls
    │         │
    │         ▼
@@ -1279,8 +1291,8 @@ dependency chain. In particular, `lunco-workbench-state` and
   persistence. `lunco-workbench-state` owns per-Twin session persistence and
   exposes only the layout-provider contract; `lunco-workbench` remains the
   concrete app framework — layout, viewport composition, and panel host.
-- `lunco-workbench-browser` is the optional navigation feature — Twin/Files
-  panels, browser state/actions, and the built-in generic sections.
+- `lunco-workbench-browser` is the optional navigation feature — Navigator
+  and lenses, browser state/actions, and the built-in generic sections.
 - `lunco-ui` is the widget library — draws things inside panels.
   Its plugin initializes shared selection, embodiment roles and the modal
   host. Registered domain panels own their snapshots: Command Deck presents
@@ -1294,7 +1306,7 @@ dependency chain. In particular, `lunco-workbench-state` and
   widgets, `lunco-workbench-widgets`, and `lunco-workbench-core`'s Panel trait.
   They use `lunco-workbench` only for shell-owned commands or other concrete
   presentation integration. Browser consumers use `lunco-workbench-browser`
-  for Twin/Files state, panels, and section registration.
+  for Navigator state, lenses, and section registration.
 
 Both `lunco-workbench` and `lunco-ui` are LunCoSim-agnostic at their core —
 they don't know about balloons, solar panels, or Modelica. Domain knowledge

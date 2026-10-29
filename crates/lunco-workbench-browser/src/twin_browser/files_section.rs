@@ -1,18 +1,14 @@
-//! Built-in **Files** section — flat, domain-agnostic listing of every
-//! file the [`lunco_twin::Twin`] indexer found.
+//! Active-Twin filesystem navigation from the existing admitted inventory.
 //!
-//! Always present in the Twin Browser. Defaults to *collapsed* because
-//! the per-domain sections (Modelica, USD, …) are usually what the
-//! user wants; Files is the escape hatch for "show me the raw layout."
-//!
-//! Clicking a row opens that file in the source panel. Saving touches only the
-//! selected file; "Save & Update" then dispatches the standard `OpenFile`
-//! command so its owning domain can refresh it.
+//! The tree is prepared on workspace/query changes. Painting visits only
+//! expanded branches and emits the normal document/source and rename intents.
 
+use bevy::prelude::*;
 use egui;
 use lunco_doc_bevy::rename::RenameOpenDocument;
 use lunco_workbench_core::source::{OpenTwinSource, is_source_only_text_path};
 use lunco_workspace::rename::RenameTwinEntry;
+use std::sync::Arc;
 
 use super::{
     BrowserAction, BrowserCtx, BrowserScope, BrowserSection,
@@ -47,12 +43,63 @@ fn display_name_with_ext(entry: &super::UnsavedDocEntry) -> String {
 
 /// Bucket a flat file list into nested directories by walking each
 /// `relative_path`'s components.
-fn build_tree(files: &[lunco_twin::FileEntry]) -> PathTree<&lunco_twin::FileEntry> {
+fn build_tree(files: &[lunco_twin::FileEntry]) -> PathTree<lunco_twin::FileEntry> {
+    let mut files = files.to_vec();
+    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     build_path_tree(
         files
-            .iter()
-            .map(|file| (file.relative_path.as_path(), file)),
+            .into_iter()
+            .map(|file| (file.relative_path.clone(), file)),
     )
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct FileTreeView {
+    twin: Option<lunco_workspace::TwinId>,
+    query: String,
+    tree: Arc<PathTree<lunco_twin::FileEntry>>,
+}
+
+/// Project the existing inventory on workspace/filter changes, outside painting.
+pub(crate) fn prepare_file_tree(
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    query: Res<super::BrowserQuery>,
+    mut view: ResMut<FileTreeView>,
+) {
+    if !query.is_changed()
+        && !workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.is_changed())
+    {
+        return;
+    }
+    let twin = workspace.as_ref().and_then(|workspace| {
+        workspace
+            .active_twin
+            .and_then(|id| workspace.twin(id).map(|twin| (id, twin)))
+    });
+    view.twin = twin.map(|(id, _)| id);
+    view.query = query.text.clone();
+    view.tree = Arc::new(match twin {
+        Some((_, twin)) => build_tree(
+            &twin
+                .files()
+                .iter()
+                .filter(|file| query.matches(&file.relative_path.to_string_lossy()))
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        None => PathTree::default(),
+    });
+}
+
+pub(crate) fn retire_file_tree(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut view: ResMut<FileTreeView>,
+) {
+    if trigger.was_active {
+        *view = FileTreeView::default();
+    }
 }
 
 /// In-progress inline rename. At most one row across the section can
@@ -129,9 +176,8 @@ impl BrowserSection for FilesSection {
     }
 
     fn order(&self) -> u32 {
-        // Renders below Modelica (100) in the unified Twin panel; the
-        // standalone FilesPanel (when summoned) shows the same section.
-        200
+        // The active Twin anchors the Navigator ahead of secondary domain views.
+        0
     }
 
     fn on_twin_closed(&mut self, _event: &lunco_workspace::TwinClosed) {
@@ -386,10 +432,15 @@ impl BrowserSection for FilesSection {
 
         for (twin_id, twin) in &twins {
             let folder_name = twin
-                .root
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| twin.root.to_string_lossy().to_string());
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.name.clone())
+                .unwrap_or_else(|| {
+                    twin.root
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| twin.root.to_string_lossy().to_string())
+                });
             // Mark the workspace's focused Twin so it's clear which one the
             // editor tabs belong to. `●` matches the loaded-scene marker.
             let active_marker = if Some(*twin_id) == active_twin {
@@ -420,16 +471,15 @@ impl BrowserSection for FilesSection {
                     .clicked()
                 },
                 |ui| {
-                    let files: Vec<lunco_twin::FileEntry> = twin
-                        .files()
-                        .iter()
-                        .filter(|file| {
-                            !query.is_active()
-                                || query.matches(&file.relative_path.to_string_lossy())
-                        })
-                        .cloned()
-                        .collect();
-                    if files.is_empty() {
+                    let Some(view) = ctx
+                        .resource::<FileTreeView>()
+                        .filter(|view| view.twin == Some(*twin_id) && view.query == query.text)
+                    else {
+                        ui.label("Preparing Twin files…");
+                        return;
+                    };
+                    let tree = Arc::clone(&view.tree);
+                    if tree.files.is_empty() && tree.subdirs.is_empty() {
                         let message = if query.is_active() {
                             "No matching files."
                         } else {
@@ -448,7 +498,6 @@ impl BrowserSection for FilesSection {
                     // scrollbar — "tons of files but can't see them".
                     // Closed tree branches still skip their contents,
                     // so render cost scales with *expanded* entries.
-                    let tree = build_tree(&files);
                     let mut render_state = TreeRenderState {
                         twin_root: &twin_root,
                         active_rename_abs: active_rename_abs.as_deref(),
@@ -459,6 +508,7 @@ impl BrowserSection for FilesSection {
                         cancel_rename: &mut cancel_rename,
                         open_paths: &open_paths,
                         unsaved_paths: &unsaved_paths,
+                        searching: query.is_active(),
                     };
                     render_dir(&tree, std::path::Path::new(""), &mut render_state, ui);
                 },
@@ -525,7 +575,7 @@ impl BrowserSection for FilesSection {
 /// Other domain editors still require a deliberate double-click. Every
 /// document route remains gated on the host's registry so standalone Lunica
 /// keeps its source-viewer behaviour for unclaimed files.
-fn should_open_as_document(
+pub(crate) fn should_open_as_document(
     relative_path: &std::path::Path,
     registry: Option<&lunco_twin::DocumentKindRegistry>,
     pinned: bool,
@@ -554,7 +604,7 @@ fn should_open_as_document(
 /// `begin_rename`, …) so the egui closures can stay shallow; the
 /// caller drains them after the egui pass completes.
 fn render_dir(
-    node: &PathTree<&lunco_twin::FileEntry>,
+    node: &PathTree<lunco_twin::FileEntry>,
     rel_prefix: &std::path::Path,
     state: &mut TreeRenderState<'_>,
     ui: &mut egui::Ui,
@@ -581,7 +631,7 @@ fn render_dir(
                 ui,
                 id,
                 false,
-                None,
+                state.searching.then_some(true),
                 |ui| {
                     let width = ui.available_width();
                     let resp = lunco_workbench_widgets::tree::label(
@@ -614,13 +664,7 @@ fn render_dir(
     }
 
     // Then files in this directory, alphabetical by leaf name.
-    let mut files: Vec<&lunco_twin::FileEntry> = node.files.clone();
-    files.sort_by(|a, b| {
-        a.relative_path
-            .file_name()
-            .cmp(&b.relative_path.file_name())
-    });
-    for entry in files {
+    for entry in &node.files {
         let abs = twin_root.join(&entry.relative_path);
         let in_rename = state.active_rename_abs == Some(abs.as_path());
 
@@ -693,6 +737,7 @@ fn render_dir(
 /// tree renderer. Keeping them in one owner makes the renderer composable
 /// without a long parameter list or hidden global state.
 struct TreeRenderState<'a> {
+    searching: bool,
     twin_root: &'a std::path::Path,
     active_rename_abs: Option<&'a std::path::Path>,
     rename: &'a mut Option<RenameInProgress>,

@@ -1586,37 +1586,119 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    menus.register_custom_menu("Scenarios", |ui, ctx| {
-        let current_scene = ctx
+    menus.register_custom_menu("Scenarios", render_scenarios_menu);
+    menus.register_context_bar(|ui, ctx| {
+        let name = ctx
+            .resource::<CurrentSceneName>()
+            .filter(|scene| !scene.0.is_empty())
+            .map(|scene| scene.0.clone())
+            .unwrap_or_else(|| "None loaded".into());
+        let path = ctx
             .resource::<CurrentScenePath>()
-            .filter(|path| !path.0.is_empty())
-            .map(|path| lunco_assets_core::engine_asset_uri(&path.0));
-        let has_scene = current_scene.is_some();
-
-        ui.add_enabled_ui(has_scene, |ui| {
-            if ui.button("Restart Scenario").clicked() {
-                // `LoadScene` deliberately no-ops for the active `(stage, root)`.
-                // RestartScene is the lifecycle verb that clears the current world,
-                // invalidates the stage asset, and mounts a newly read source.
-                ctx.trigger(lunco_usd_bevy_runtime_core::scene::RestartScene::default());
-                ui.close();
+            .map(|scene| scene.0.clone())
+            .unwrap_or_default();
+        ui.menu_button(format!("Scene: {name}"), |ui| {
+            if !path.is_empty() {
+                ui.label(&path);
+                ui.separator();
             }
-        });
+            render_scenarios_menu(ui, ctx);
+        })
+        .response
+        .on_hover_text(path);
+        if let Some(transport) = ctx.resource::<lunco_time::TimeTransport>() {
+            ui.label(
+                if matches!(transport.mode, lunco_time::TransportMode::Paused) {
+                    "Paused"
+                } else {
+                    "Running"
+                },
+            );
+        }
+    });
+    world.init_resource::<lunco_workbench_core::navigation::NavigationRegistry>();
+    world
+        .resource_mut::<lunco_workbench_core::navigation::NavigationRegistry>()
+        .register(&["Scenes"], scene_navigation_entries);
+}
 
-        ui.separator();
+fn scene_navigation_entries(
+    world: &World,
+) -> Result<Vec<lunco_workbench_core::navigation::NavigationEntry>, String> {
+    let manifest = world
+        .get_resource::<lunco_assets_runtime::discovery::AssetManifest>()
+        .ok_or("Scene inventory unavailable")?;
+    if !manifest.ready() {
+        return Err("Scene inventory is loading".into());
+    }
+    let roots = world
+        .get_resource::<lunco_assets_core::TwinRoots>()
+        .ok_or("Scene source registry unavailable")?;
+    let twins: Vec<_> = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| workspace.twins().map(|(_, twin)| twin).collect())
+        .unwrap_or_default();
+    let assets =
+        lunco_assets_runtime::discovery::list_indexed_scene_assets(manifest, roots, &twins)
+            .map_err(|error| error.to_string())?;
+    assets
+        .into_iter()
+        .filter(|asset| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
+        .map(|asset| {
+            let path = lunco_assets_core::engine_asset_uri(&asset.asset_path);
+            let owner = match asset.twin.as_deref() {
+                Some(authority) => roots
+                    .logical_name(authority)
+                    .map_err(|error| error.to_string())?,
+                None => "LunCo Library".into(),
+            };
+            Ok(lunco_workbench_core::navigation::NavigationEntry {
+                id: format!("scene:{path}"),
+                label: format!("Load {}", clean_scene_name(&asset.stem)),
+                detail: format!("{owner} / {} · replaces the loaded scene", asset.rel),
+                category: "Scenes".into(),
+                activate: std::sync::Arc::new(move |ctx| {
+                    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
+                        path: path.clone(),
+                        root_prim: String::new(),
+                    })
+                }),
+            })
+        })
+        .collect()
+}
 
-        // ── Downloaded Twins (scenario-sync cache, G3) ───────────────────
-        // Twins fetched from a server into the local cache — loadable offline
-        // as a `twin://` root over the cache dir. Networking-only; the registry rebuilds from
-        // `<cache>/scenarios/index.json` at boot and updates as downloads finish.
-        #[cfg(feature = "networking")]
-        {
-            use lunco_networking_sync::scenario_sync::CachedTwinsRegistry;
-            let entries = ctx
-                .resource::<CachedTwinsRegistry>()
-                .map(|r| r.entries.clone())
-                .unwrap_or_default();
-            ui.menu_button(format!("Downloaded Twins ({})", entries.len()), |ui| {
+fn render_scenarios_menu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
+    let current_scene = ctx
+        .resource::<CurrentScenePath>()
+        .filter(|path| !path.0.is_empty())
+        .map(|path| lunco_assets_core::engine_asset_uri(&path.0));
+    let has_scene = current_scene.is_some();
+
+    ui.add_enabled_ui(has_scene, |ui| {
+        if ui.button("Restart Scenario").clicked() {
+            // `LoadScene` deliberately no-ops for the active `(stage, root)`.
+            // RestartScene is the lifecycle verb that clears the current world,
+            // invalidates the stage asset, and mounts a newly read source.
+            ctx.trigger(lunco_usd_bevy_runtime_core::scene::RestartScene::default());
+            ui.close();
+        }
+    });
+
+    ui.separator();
+
+    // ── Downloaded Twins (scenario-sync cache, G3) ───────────────────
+    // Twins fetched from a server into the local cache — loadable offline
+    // as a `twin://` root over the cache dir. Networking-only; the registry rebuilds from
+    // `<cache>/scenarios/index.json` at boot and updates as downloads finish.
+    #[cfg(feature = "networking")]
+    {
+        use lunco_networking_sync::scenario_sync::CachedTwinsRegistry;
+        let entries = ctx
+            .resource::<CachedTwinsRegistry>()
+            .map(|r| r.entries.clone())
+            .unwrap_or_default();
+        ui.menu_button(format!("Downloaded Twins ({})", entries.len()), |ui| {
                 ui.set_min_width(ui.spacing().menu_width);
                 ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 if entries.is_empty() {
@@ -1700,211 +1782,211 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         };
 
-        if ctx
-            .resource::<scenario_fixture::ScenarioRegistryFixture>()
-            .is_some_and(|fixture| fixture.unavailable)
-        {
-            report_scenario_registry_error(
-                ctx,
-                "the injected production-harness fixture is active",
-            );
+    if ctx
+        .resource::<scenario_fixture::ScenarioRegistryFixture>()
+        .is_some_and(|fixture| fixture.unavailable)
+    {
+        report_scenario_registry_error(ctx, "the injected production-harness fixture is active");
+        render_scenario_registry_unavailable(ui);
+        return;
+    }
+
+    let Some(manifest) = ctx.resource::<lunco_assets_runtime::discovery::AssetManifest>() else {
+        render_scenario_registry_unavailable(ui);
+        return;
+    };
+    // On the web the listing arrives by fetch. "Not loaded yet" is not "no
+    // scenes" — say which, rather than showing an empty menu that looks final.
+    if !manifest.ready() {
+        ui.label(
+            bevy_egui::egui::RichText::new("(loading asset list…)")
+                .weak()
+                .italics(),
+        );
+        return;
+    }
+
+    // Every loadable scene in the project. Which files those are is the
+    // project's answer, not this menu's: each Twin declares `[usd] scenes`
+    // in its `twin.toml`, the engine library uses its own `scenes/` layout.
+    // See `discovery::list_scene_assets` for why the menu stopped deciding.
+    let twins: Vec<_> = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| workspace.twins().map(|(_, twin)| twin).collect())
+        .unwrap_or_default();
+    let mut assets = match lunco_assets_runtime::discovery::list_indexed_scene_assets(
+        manifest, &roots, &twins,
+    ) {
+        Ok(assets) => assets,
+        Err(error) => {
+            report_scenario_registry_error(ctx, error.to_string());
             render_scenario_registry_unavailable(ui);
             return;
         }
-
-        let Some(manifest) = ctx.resource::<lunco_assets_runtime::discovery::AssetManifest>() else {
+    };
+    // Names copied out here so every click can dispatch through `MenuCtx`.
+    let twin_names = match roots.names().and_then(|names| {
+        names
+            .into_iter()
+            .map(|authority| {
+                let label = roots.logical_name(&authority)?;
+                Ok((authority, label))
+            })
+            .collect::<Result<Vec<_>, lunco_assets_core::TwinRootsError>>()
+    }) {
+        Ok(names) => names,
+        Err(error) => {
+            report_scenario_registry_error(ctx, error.to_string());
             render_scenario_registry_unavailable(ui);
             return;
-        };
-        // On the web the listing arrives by fetch. "Not loaded yet" is not "no
-        // scenes" — say which, rather than showing an empty menu that looks final.
-        if !manifest.ready() {
-            ui.label(
-                bevy_egui::egui::RichText::new("(loading asset list…)")
-                    .weak()
-                    .italics(),
-            );
+        }
+    };
+
+    // Twin tests stay reachable in their own submenu. The browser preference
+    // controls the engine library's test collection, independently of Twins.
+    let show_tests = ctx
+        .resource::<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>()
+        .is_some_and(|s| s.show_test_assets);
+    if !show_tests {
+        assets.retain(|asset| {
+            asset.twin.is_some() || !lunco_assets_runtime::discovery::is_test_asset(&asset.rel)
+        });
+    }
+    assets.sort_by(|a, b| a.stem.cmp(&b.stem));
+
+    if assets.is_empty() {
+        ui.label(
+            bevy_egui::egui::RichText::new("(no scenes found)")
+                .weak()
+                .italics(),
+        );
+        return;
+    }
+
+    // Each scene's standard USD `doc` metadata, straight from the catalogue's
+    // metadata store — the scan already read and parsed every project
+    // `*.usda`, so re-reading them here would be a second parse of the
+    // same default prim of the same file.
+    //
+    // The store fills asynchronously, so a scene not yet read simply
+    // shows no tooltip this frame and gets one on the next redraw.
+    let descs: Vec<Option<String>> = {
+        let Some(store) = ctx.resource::<lunco_scene_catalog::catalog::AssetMetaStore>() else {
             return;
-        }
-
-        // Every loadable scene in the project. Which files those are is the
-        // project's answer, not this menu's: each Twin declares `[usd] scenes`
-        // in its `twin.toml`, the engine library uses its own `scenes/` layout.
-        // See `discovery::list_scene_assets` for why the menu stopped deciding.
-        let mut assets = match lunco_assets_runtime::discovery::list_scene_assets(manifest, &roots) {
-            Ok(assets) => assets,
-            Err(error) => {
-                report_scenario_registry_error(ctx, error.to_string());
-                render_scenario_registry_unavailable(ui);
-                return;
-            }
         };
-        // Names copied out here so every click can dispatch through `MenuCtx`.
-        let twin_names = match roots.names().and_then(|names| {
-            names
-                .into_iter()
-                .map(|authority| {
-                    let label = roots.logical_name(&authority)?;
-                    Ok((authority, label))
-                })
-                .collect::<Result<Vec<_>, lunco_assets_core::TwinRootsError>>()
-        }) {
-            Ok(names) => names,
-            Err(error) => {
-                report_scenario_registry_error(ctx, error.to_string());
-                render_scenario_registry_unavailable(ui);
-                return;
-            }
-        };
+        assets
+            .iter()
+            .map(|a| store.description(&a.asset_path).map(str::to_string))
+            .collect()
+    };
 
-        // Twin tests stay reachable in their own submenu. The browser preference
-        // controls the engine library's test collection, independently of Twins.
-        let show_tests = ctx
-            .resource::<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>()
-            .is_some_and(|s| s.show_test_assets);
-        if !show_tests {
-            assets.retain(|asset| {
-                asset.twin.is_some()
-                    || !lunco_assets_runtime::discovery::is_test_asset(&asset.rel)
-            });
-        }
-        assets.sort_by(|a, b| a.stem.cmp(&b.stem));
-
-        if assets.is_empty() {
-            ui.label(
-                bevy_egui::egui::RichText::new("(no scenes found)")
-                    .weak()
-                    .italics(),
-            );
-            return;
-        }
-
-        // Each scene's standard USD `doc` metadata, straight from the catalogue's
-        // metadata store — the scan already read and parsed every project
-        // `*.usda`, so re-reading them here would be a second parse of the
-        // same default prim of the same file.
-        //
-        // The store fills asynchronously, so a scene not yet read simply
-        // shows no tooltip this frame and gets one on the next redraw.
-        let descs: Vec<Option<String>> = {
-            let Some(store) = ctx.resource::<lunco_scene_catalog::catalog::AssetMetaStore>()
-            else {
-                return;
-            };
-            assets
-                .iter()
-                .map(|a| store.description(&a.asset_path).map(str::to_string))
-                .collect()
-        };
-
-        let render =
-            |ui: &mut bevy_egui::egui::Ui,
-             ctx: &mut MenuCtx,
-             items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
-                ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
-                bevy_egui::egui::ScrollArea::vertical()
-                    .max_height(SCENARIO_MENU_HEIGHT)
-                    .auto_shrink([true, true])
-                    .show(ui, |ui| {
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                            for (asset, desc) in items {
-                                let label = clean_scene_name(&asset.stem);
-                                let path = lunco_assets_core::engine_asset_uri(&asset.asset_path);
-                                let selected = current_scene.as_deref() == Some(path.as_str());
-                                let resp = ui.radio(selected, label);
-                                // Show the plain-language "what is this demo" blurb on hover.
-                                // `on_hover_text` consumes and returns the `Response` (chaining API).
-                                let resp = match desc {
-                                    Some(d) => resp.on_hover_text(d.as_str()),
-                                    None => resp,
-                                };
-                                if resp.clicked() {
-                                    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
-                                        path,
-                                        root_prim: String::new(),
-                                    });
-                                    ui.close();
-                                }
+    let render =
+        |ui: &mut bevy_egui::egui::Ui,
+         ctx: &mut MenuCtx,
+         items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
+            ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
+            bevy_egui::egui::ScrollArea::vertical()
+                .max_height(SCENARIO_MENU_HEIGHT)
+                .auto_shrink([true, true])
+                .show(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        for (asset, desc) in items {
+                            let label = clean_scene_name(&asset.stem);
+                            let path = lunco_assets_core::engine_asset_uri(&asset.asset_path);
+                            let selected = current_scene.as_deref() == Some(path.as_str());
+                            let resp = ui.radio(selected, label);
+                            // Show the plain-language "what is this demo" blurb on hover.
+                            // `on_hover_text` consumes and returns the `Response` (chaining API).
+                            let resp = match desc {
+                                Some(d) => resp.on_hover_text(d.as_str()),
+                                None => resp,
+                            };
+                            if resp.clicked() {
+                                ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
+                                    path,
+                                    root_prim: String::new(),
+                                });
+                                ui.close();
                             }
-                        });
-                    });
-            };
-
-        let paired: Vec<(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)> =
-            assets.iter().zip(descs.iter()).collect();
-        let regular: Vec<_> = paired
-            .iter()
-            .copied()
-            .filter(|(asset, _)| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
-            .collect();
-        let tests: Vec<_> = paired
-            .iter()
-            .copied()
-            .filter(|(asset, _)| lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
-            .collect();
-
-        // Presentation labels never expose mount authorities. With several open
-        // Twins, their stable logical names disambiguate the nested lists.
-        let render_twins =
-            |ui: &mut bevy_egui::egui::Ui,
-             ctx: &mut MenuCtx,
-             items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
-                if twin_names.len() == 1 {
-                    render(ui, ctx, items);
-                } else {
-                    for (authority, label) in &twin_names {
-                        let group: Vec<_> = items
-                            .iter()
-                            .copied()
-                            .filter(|(asset, _)| asset.twin.as_deref() == Some(authority.as_str()))
-                            .collect();
-                        if !group.is_empty() {
-                            ui.menu_button(label, |ui| render(ui, ctx, &group));
                         }
+                    });
+                });
+        };
+
+    let paired: Vec<(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)> =
+        assets.iter().zip(descs.iter()).collect();
+    let regular: Vec<_> = paired
+        .iter()
+        .copied()
+        .filter(|(asset, _)| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
+        .collect();
+    let tests: Vec<_> = paired
+        .iter()
+        .copied()
+        .filter(|(asset, _)| lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
+        .collect();
+
+    // Presentation labels never expose mount authorities. With several open
+    // Twins, their stable logical names disambiguate the nested lists.
+    let render_twins =
+        |ui: &mut bevy_egui::egui::Ui,
+         ctx: &mut MenuCtx,
+         items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
+            if twin_names.len() == 1 {
+                render(ui, ctx, items);
+            } else {
+                for (authority, label) in &twin_names {
+                    let group: Vec<_> = items
+                        .iter()
+                        .copied()
+                        .filter(|(asset, _)| asset.twin.as_deref() == Some(authority.as_str()))
+                        .collect();
+                    if !group.is_empty() {
+                        ui.menu_button(label, |ui| render(ui, ctx, &group));
                     }
                 }
-            };
-        let twin_scenes: Vec<_> = regular
-            .iter()
-            .copied()
-            .filter(|(asset, _)| asset.twin.is_some())
-            .collect();
-        if !twin_scenes.is_empty() {
-            ui.menu_button("Scenario", |ui| render_twins(ui, ctx, &twin_scenes));
-        }
-        let twin_tests: Vec<_> = tests
-            .iter()
-            .copied()
-            .filter(|(asset, _)| asset.twin.is_some())
-            .collect();
-        if !twin_tests.is_empty() {
-            ui.menu_button("Test Scenarios", |ui| render_twins(ui, ctx, &twin_tests));
-        }
-
-        let library: Vec<_> = regular
-            .iter()
-            .copied()
-            .filter(|(a, _)| a.twin.is_none())
-            .collect();
-        if !library.is_empty() {
-            if !twin_scenes.is_empty() || !twin_tests.is_empty() {
-                ui.separator();
             }
-            ui.menu_button("Library", |ui| {
-                render(ui, ctx, &library);
-            });
+        };
+    let twin_scenes: Vec<_> = regular
+        .iter()
+        .copied()
+        .filter(|(asset, _)| asset.twin.is_some())
+        .collect();
+    if !twin_scenes.is_empty() {
+        ui.menu_button("Scenario", |ui| render_twins(ui, ctx, &twin_scenes));
+    }
+    let twin_tests: Vec<_> = tests
+        .iter()
+        .copied()
+        .filter(|(asset, _)| asset.twin.is_some())
+        .collect();
+    if !twin_tests.is_empty() {
+        ui.menu_button("Test Scenarios", |ui| render_twins(ui, ctx, &twin_tests));
+    }
+
+    let library: Vec<_> = regular
+        .iter()
+        .copied()
+        .filter(|(a, _)| a.twin.is_none())
+        .collect();
+    if !library.is_empty() {
+        if !twin_scenes.is_empty() || !twin_tests.is_empty() {
+            ui.separator();
         }
-        let library_tests: Vec<_> = tests
-            .iter()
-            .copied()
-            .filter(|(a, _)| a.twin.is_none())
-            .collect();
-        if show_tests && !library_tests.is_empty() {
-            ui.menu_button("Library tests", |ui| {
-                render(ui, ctx, &library_tests);
-            });
-        }
-    });
+        ui.menu_button("Library", |ui| {
+            render(ui, ctx, &library);
+        });
+    }
+    let library_tests: Vec<_> = tests
+        .iter()
+        .copied()
+        .filter(|(a, _)| a.twin.is_none())
+        .collect();
+    if show_tests && !library_tests.is_empty() {
+        ui.menu_button("Library tests", |ui| {
+            render(ui, ctx, &library_tests);
+        });
+    }
 }
 
 fn clean_scene_name(stem: &str) -> String {

@@ -802,6 +802,15 @@ impl WorkbenchLayout {
         }
     }
 
+    /// Focus an already-open exact tab without reopening a document or world.
+    pub fn focus_existing_tab(&mut self, tab: TabId) -> bool {
+        let Some(path) = self.dock.find_tab(&tab) else {
+            return false;
+        };
+        self.dock.set_focused_node_and_surface(path.node_path());
+        self.dock.set_active_tab(path).is_ok()
+    }
+
     /// The `instance` discriminant of the currently *focused* tab, when
     /// it's a multi-instance tab. Document tabs open with their
     /// `DocumentId.raw()` as the instance (see `open_instance` callers),

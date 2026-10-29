@@ -294,7 +294,7 @@ impl Panel for ExperimentsPanel {
 
                 match (active_doc, has_class) {
                     (None, _) => {
-                        ui.weak("① Open a model — pick one in the Files panel,");
+                        ui.weak("① Open a model — pick one in Navigator,");
                         ui.weak("   or use File → New / Open Example.");
                         ui.weak("② A Run button appears above once a model is active.");
                     }

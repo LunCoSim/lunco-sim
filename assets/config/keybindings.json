@@ -38,5 +38,203 @@
     "route.context": [
       {"button": "Right"}
     ]
+  },
+  "command_bindings": {
+    "navigation.find": {
+      "keys": [
+        "ControlLeft",
+        "KeyP"
+      ],
+      "command": "SearchNavigation",
+      "arguments": [],
+      "allow_in_text": true
+    },
+    "navigation.actions": {
+      "keys": [
+        "ControlLeft",
+        "ShiftLeft",
+        "KeyP"
+      ],
+      "command": "SearchNavigation",
+      "arguments": [
+        {
+          "name": "category",
+          "value": {
+            "Text": "Actions"
+          }
+        }
+      ],
+      "allow_in_text": true
+    },
+    "navigation.back": {
+      "keys": [
+        "AltLeft",
+        "ArrowLeft"
+      ],
+      "command": "NavigateHistory",
+      "arguments": [
+        {
+          "name": "forward",
+          "value": {
+            "Bool": false
+          }
+        }
+      ],
+      "allow_in_text": false
+    },
+    "navigation.forward": {
+      "keys": [
+        "AltLeft",
+        "ArrowRight"
+      ],
+      "command": "NavigateHistory",
+      "arguments": [
+        {
+          "name": "forward",
+          "value": {
+            "Bool": true
+          }
+        }
+      ],
+      "allow_in_text": false
+    },
+    "editor.undo": {
+      "keys": [
+        "ControlLeft",
+        "KeyZ"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "Undo"
+          }
+        }
+      ],
+      "allow_in_text": false
+    },
+    "editor.redo": {
+      "keys": [
+        "ControlLeft",
+        "ShiftLeft",
+        "KeyZ"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "Redo"
+          }
+        }
+      ],
+      "allow_in_text": false
+    },
+    "editor.redo-y": {
+      "keys": [
+        "ControlLeft",
+        "KeyY"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "Redo"
+          }
+        }
+      ],
+      "allow_in_text": false
+    },
+    "editor.save": {
+      "keys": [
+        "ControlLeft",
+        "KeyS"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "Save"
+          }
+        }
+      ],
+      "allow_in_text": true
+    },
+    "editor.save-as": {
+      "keys": [
+        "ControlLeft",
+        "ShiftLeft",
+        "KeyS"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "SaveAs"
+          }
+        }
+      ],
+      "allow_in_text": true
+    },
+    "editor.close": {
+      "keys": [
+        "ControlLeft",
+        "KeyW"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "Close"
+          }
+        }
+      ],
+      "allow_in_text": true
+    },
+    "editor.new": {
+      "keys": [
+        "ControlLeft",
+        "KeyN"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "NewDocument"
+          }
+        }
+      ],
+      "allow_in_text": true
+    },
+    "editor.compile": {
+      "keys": [
+        "F5"
+      ],
+      "command": "InvokeEditorIntent",
+      "arguments": [
+        {
+          "name": "intent",
+          "value": {
+            "Text": "Compile"
+          }
+        }
+      ],
+      "allow_in_text": true
+    },
+    "editor.open-file": {
+      "keys": [
+        "ControlLeft",
+        "KeyO"
+      ],
+      "command": "ShowOpenFilePicker",
+      "arguments": [],
+      "allow_in_text": true
+    }
   }
 }
