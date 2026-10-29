@@ -674,8 +674,13 @@ World-space vehicle trails are transient render presentation, not UI-owned
 state. Read solved wheel contacts after `WheelRaycastResultsSet`, retain bounded
 stroke history, and clear it on frame changes and `SceneTeardown`. A moving
 endpoint provides sub-spacing continuity; missing wheel support starts a new
-stroke, including airborne and inverted motion. Use the physical wheel's full
-width. DEM contacts resolve their `ColliderTileOf` owner and reuse streaming
+stroke, including airborne and inverted motion. Wheel marks set
+`SurfaceCurveAnnotation.receives_lighting` and blend into the ground material
+before lighting, so they receive shadows. Route overlays retain their unlit
+colour. Use the physical wheel's full
+width for both shared-tire and native-material contact realizations; the
+optional `JointedWheelTire` force component must not gate contact history.
+DEM contacts resolve their `ColliderTileOf` owner and reuse streaming
 `SurfaceCurveAnnotation` segments painted on terrain fragments; ordinary static
 supports use the shared contact-plane ribbon builder. Do not derive tracks from
 root motion, visual wheel roll, controller input or authored routes. Inspect

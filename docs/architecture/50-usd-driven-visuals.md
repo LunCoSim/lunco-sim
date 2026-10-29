@@ -81,7 +81,17 @@ the render loop. Width is measured in the terrain-local horizontal plane.
 The fragment shader opts into `lunco.surface-annotations.v1` through its
 reflected `//!@capability` declaration and uses the `SurfaceAnnotations`
 non-filtered texture role at binding 16. Both production and diagnostic terrain
-shaders composite the unlit, antialiased stroke. Unsupported shaders report a
+shaders use the same antialiased stroke coverage. Route annotations composite
+after lighting so their colours remain readable. Physical marks set
+`SurfaceCurveAnnotation.receives_lighting`: wheel trails use this mode and
+blend into the ground albedo before PBR, directional shadows and terrain
+horizon shadows. The diagnostic view shows both kinds without lighting.
+The second segment-record texel stores radius in x and the lighting flag in y;
+style-only updates preserve segment identities and update that flag.
+Physical wheel sampling uses native contacts for every `PhysicalWheel`, including
+native-material wheels without the shared slip-force component. Choosing a
+different tire-force realization does not remove the wheel's contact history.
+Unsupported shaders report a
 terminal error rather than claiming an invisible annotation is ready. The
 independent curve mesh is hidden on terrain. Pointer context resolves the
 annotation identity only on a foreground terrain hit, preserving occlusion by
