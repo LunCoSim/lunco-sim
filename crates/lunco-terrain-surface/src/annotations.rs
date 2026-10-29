@@ -31,6 +31,8 @@ pub struct SurfaceCurveAnnotation {
     pub streaming: bool,
     pub width_m: f64,
     pub color: LinearRgba,
+    /// Physical surface marks participate in material lighting; route overlays do not.
+    pub receives_lighting: bool,
     segments: Arc<BTreeMap<u64, Pair>>,
     edits: BTreeMap<u64, Option<Pair>>,
     next_id: u64,
@@ -44,6 +46,7 @@ impl SurfaceCurveAnnotation {
             streaming,
             width_m,
             color,
+            receives_lighting: false,
             segments: Arc::new(BTreeMap::new()),
             edits: BTreeMap::new(),
             next_id: 0,
@@ -95,6 +98,7 @@ impl SurfaceCurveAnnotation {
             streaming: self.streaming,
             width_m: self.width_m,
             color: self.color,
+            receives_lighting: self.receives_lighting,
             segments: self.segments.clone(),
             edits: BTreeMap::new(),
             next_id: self.next_id,
@@ -138,6 +142,7 @@ impl SurfaceCurveAnnotation {
         }
         self.width_m = replacement.width_m;
         self.color = replacement.color;
+        self.receives_lighting = replacement.receives_lighting;
         self.revision = replacement.revision;
     }
     pub fn distance(&self, point: DVec2) -> f64 {
@@ -234,6 +239,7 @@ struct SourcePatch {
     revision: u64,
     width: f64,
     color: LinearRgba,
+    receives_lighting: bool,
     clear: bool,
     remove: bool,
     edits: BTreeMap<u64, Option<Pair>>,
@@ -245,6 +251,7 @@ impl SourcePatch {
             revision: 0,
             width: 1.0,
             color: LinearRgba::WHITE,
+            receives_lighting: false,
             clear: true,
             remove: true,
             edits: BTreeMap::new(),
@@ -272,6 +279,7 @@ struct Segment {
     pair: Pair,
     radius: f64,
     color: LinearRgba,
+    receives_lighting: bool,
     slot: usize,
 }
 #[derive(Clone)]
@@ -305,7 +313,7 @@ struct Index {
     nodes: BTreeMap<usize, Node>,
     segments: BTreeMap<Key, Segment>,
     slots: BTreeMap<usize, Key>,
-    sources: BTreeMap<Entity, (u64, f64, LinearRgba)>,
+    sources: BTreeMap<Entity, (u64, f64, LinearRgba, bool)>,
     dirty: BTreeSet<usize>,
     reference_capacity: usize,
     source_work: BTreeMap<Entity, AnnotationWork>,
@@ -561,11 +569,15 @@ impl Index {
         pair: Option<Pair>,
         width: f64,
         color: LinearRgba,
+        receives_lighting: bool,
         undo: &mut Undo,
     ) -> Result<bool, String> {
         let old = self.segments.get(&key).cloned();
         if old.as_ref().is_some_and(|old| {
-            Some(old.pair) == pair && old.radius == width * 0.5 && old.color == color
+            Some(old.pair) == pair
+                && old.radius == width * 0.5
+                && old.color == color
+                && old.receives_lighting == receives_lighting
         }) {
             return Ok(false);
         }
@@ -596,6 +608,7 @@ impl Index {
                 pair,
                 radius: width * 0.5,
                 color,
+                receives_lighting,
                 slot,
             };
             self.segments.insert(key, segment.clone());
@@ -610,7 +623,16 @@ impl Index {
                 ],
                 undo,
             );
-            self.write(slot + 1, [segment.radius as f32, 0.0, 0.0, 0.0], undo);
+            self.write(
+                slot + 1,
+                [
+                    segment.radius as f32,
+                    u8::from(segment.receives_lighting) as f32,
+                    0.0,
+                    0.0,
+                ],
+                undo,
+            );
             self.write(slot + 2, color.to_f32_array(), undo);
             for root in self.roots(&segment) {
                 self.insert_node(root, slot, &segment, undo)?;
@@ -648,6 +670,7 @@ impl Index {
                             None,
                             patch.width,
                             patch.color,
+                            patch.receives_lighting,
                             &mut undo,
                         )?);
                     }
@@ -657,12 +680,13 @@ impl Index {
                     self.source_work.remove(&patch.entity);
                     continue;
                 }
-                let style_changed =
-                    self.sources
-                        .get(&patch.entity)
-                        .is_some_and(|(_, width, color)| {
-                            *width != patch.width || *color != patch.color
-                        });
+                let style_changed = self.sources.get(&patch.entity).is_some_and(
+                    |(_, width, color, receives_lighting)| {
+                        *width != patch.width
+                            || *color != patch.color
+                            || *receives_lighting != patch.receives_lighting
+                    },
+                );
                 if style_changed {
                     let values: Vec<_> = self
                         .segments
@@ -675,6 +699,7 @@ impl Index {
                             Some(pair),
                             patch.width,
                             patch.color,
+                            patch.receives_lighting,
                             &mut undo,
                         )?);
                     }
@@ -685,11 +710,19 @@ impl Index {
                         pair,
                         patch.width,
                         patch.color,
+                        patch.receives_lighting,
                         &mut undo,
                     )?);
                 }
-                self.sources
-                    .insert(patch.entity, (patch.revision, patch.width, patch.color));
+                self.sources.insert(
+                    patch.entity,
+                    (
+                        patch.revision,
+                        patch.width,
+                        patch.color,
+                        patch.receives_lighting,
+                    ),
+                );
                 self.source_work.insert(
                     patch.entity,
                     AnnotationWork {
@@ -944,6 +977,7 @@ pub(crate) fn prepare_surface_annotations(
             revision: annotation.revision,
             width: annotation.width_m,
             color: annotation.color,
+            receives_lighting: annotation.receives_lighting,
             clear: reset,
             remove: false,
             edits,
@@ -952,6 +986,7 @@ pub(crate) fn prepare_surface_annotations(
             previous.revision = patch.revision;
             previous.width = patch.width;
             previous.color = patch.color;
+            previous.receives_lighting = patch.receives_lighting;
             previous.clear |= patch.clear || previous.remove;
             previous.remove = false;
             previous.edits.extend(patch.edits);
@@ -1268,6 +1303,7 @@ mod tests {
             revision: 1,
             width: 0.2,
             color: LinearRgba::WHITE,
+            receives_lighting: false,
             clear: false,
             remove: false,
             edits: edits.into_iter().collect(),
@@ -1275,6 +1311,25 @@ mod tests {
     }
     fn pair(x: f64) -> Pair {
         [DVec2::new(x, 0.0), DVec2::new(x + 0.5, 0.0)]
+    }
+    #[test]
+    fn surface_mark_lighting_survives_index_and_style_updates() {
+        let mut world = World::new();
+        let source = world.spawn_empty().id();
+        let mut index = Index::new(10.0, SurfaceAnnotationSettings::default()).unwrap();
+        index
+            .apply(vec![patch(source, [(0, Some(pair(0.0)))])])
+            .unwrap();
+        let slot = index.segments[&(source, 0)].slot;
+        assert_eq!(index.texels[slot + 1][1], 0.0);
+        let mut physical = patch(source, []);
+        physical.receives_lighting = true;
+        let work = index.apply(vec![physical]).unwrap();
+        assert_eq!(work.updated_segments, 1);
+        assert_eq!(index.segments[&(source, 0)].slot, slot);
+        assert_eq!(index.texels[slot + 1][1], 1.0);
+        index.apply(vec![patch(source, [])]).unwrap();
+        assert_eq!(index.texels[slot + 1][1], 0.0);
     }
     #[test]
     fn surface_annotation_index_edits_are_local_and_transactional() {

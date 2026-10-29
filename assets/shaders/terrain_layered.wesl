@@ -422,6 +422,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             mix(mat.surge_width, mat.site_photometry.y, mat.site_base_color.a * site_material_weight),
             mix(mat.photometry_gain, mat.site_photometry.z, mat.site_base_color.a * site_material_weight));
     }
+    // Wheel marks change the ground reflectance and receive the same shadows.
+    @if((VERTEX_UVS_A)) albedo = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, vec4(albedo, 1.0), 1).rgb;
     pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
@@ -457,7 +459,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         color = vec4(mix(color.rgb, m, mat.weight_mineral), color.a);
     }
 
-    @if((VERTEX_UVS_A)) color = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, color);
+    @if((VERTEX_UVS_A)) color = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, color, 0);
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;
 }

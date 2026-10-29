@@ -295,3 +295,11 @@ worker output; the latter acknowledge writes queued by the render adapter.
 capacity. Source revisions identify CPU publication, not completion of a GPU
 submission. `uploaded_patch_sequence` at or beyond `index_upload_sequence`
 acknowledges inclusion of the source patch despite render-side coalescing.
+
+Wheel marks are physical ground colour: verify a trail crossing a vehicle or
+terrain shadow becomes dark with the surrounding soil. Route colours remain
+unlit overlays. `SurfaceCurveAnnotation.receives_lighting` selects the material
+pass for wheel trails; publication counters alone cannot verify that lighting.
+Physical-wheel trails read native solved contacts for every `PhysicalWheel`,
+including wheels bound to a `PhysicsMaterial`. They do not depend on the
+optional shared slip-force realization being present.
