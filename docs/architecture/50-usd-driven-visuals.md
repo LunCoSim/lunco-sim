@@ -241,6 +241,13 @@ visual session. The plugin is shared by the interactive viewport and GPU
 recorder; contact math, history and bounded preparation are generic continuous
 presentation mechanisms rather than script polling or a second motion model.
 
+DEM contact marks feather inward through `SurfaceCurveAnnotation.edge_softness_m`.
+The source keeps canonical metre precision; the index validates a finite width
+between zero and half the stroke width before narrowing at the GPU boundary.
+Style-only edits republish the feather value with the existing segment identity.
+Routes retain their hard antialiased edge. Wheel marks use a quarter-width feather
+and a low-opacity neutral grey, preserving underlying soil texture and lighting.
+
 ## The unit-primitive idiom — live size is `xformOp:scale`
 
 **`radius`/`height` are read once, at instantiation, and baked into the `Mesh` handle.**

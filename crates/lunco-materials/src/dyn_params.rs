@@ -25,8 +25,8 @@
 //!
 //! [`ParamSchema::parse`] reads the struct (field names + WESL types →
 //! std140/uniform byte offsets) and the annotations (UI metadata). Values
-//! are stored by name and packed into a fixed 256-byte uniform block
-//! (`[Vec4; 16]`) at their reflected offsets — the shader reinterprets those
+//! are stored by name and packed into a fixed 512-byte uniform block
+//! (`[Vec4; 32]`) at their reflected offsets — the shader reinterprets those
 //! bytes through its own struct. Nothing about the layout lives in Rust.
 //!
 //! Shaders that DON'T declare a `Material` struct reflect to an empty schema
@@ -36,8 +36,8 @@
 use bevy::math::Vec4;
 use std::collections::BTreeMap;
 
-/// Number of `vec4` lanes in the uniform block (256 bytes = 64 scalars).
-pub const BLOCK_VEC4S: usize = 16;
+/// Number of `vec4` lanes in the uniform block (512 bytes = 128 scalars).
+pub const BLOCK_VEC4S: usize = 32;
 const BLOCK_F32S: usize = BLOCK_VEC4S * 4;
 const BLOCK_BYTES: usize = BLOCK_F32S * 4;
 
@@ -218,11 +218,11 @@ pub struct ParamSchema {
 
 impl ParamSchema {
     /// Packs `values` (falling back to each field's default, then zero) into
-    /// the fixed `[Vec4; 16]` uniform block at reflected offsets.
+    /// the fixed `[Vec4; 32]` uniform block at reflected offsets.
     pub fn pack(&self, values: &BTreeMap<String, ParamValue>) -> [Vec4; BLOCK_VEC4S] {
         let mut flat = [0.0f32; BLOCK_F32S];
         for f in &self.fields {
-            // A `Material` struct reflecting past 256 bytes (parse only warns,
+            // A `Material` struct reflecting past 512 bytes (parse only warns,
             // it does not clip) would index `flat` out of bounds and panic —
             // and this runs on the per-frame engine-field write path plus on
             // hot-reload/discovery of arbitrary on-disk shaders. Skip any field
@@ -437,6 +437,29 @@ fn parse_annotations(wgsl: &str) -> BTreeMap<String, Annotation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packs_detail_fields_beyond_base_block() {
+        let fields = (0..18)
+            .map(|i| format!("lane_{i}: vec4<f32>,\n"))
+            .collect::<String>();
+        let source = format!("struct Material {{\n{fields}}}");
+        let schema = ParamSchema::parse(&source).expect("reflected material");
+        let values = BTreeMap::from([
+            ("lane_0".into(), ParamValue::Vec4([1.0, 2.0, 3.0, 4.0])),
+            ("lane_17".into(), ParamValue::Vec4([5.0, 6.0, 7.0, 8.0])),
+        ]);
+        let packed = schema.pack(&values);
+        assert!(
+            packed.len() >= 18,
+            "material capacity must include reflected detail fields"
+        );
+        assert_eq!(packed[0].to_array(), [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            packed.get(17).expect("detail lane exists").to_array(),
+            [5.0, 6.0, 7.0, 8.0]
+        );
+    }
 
     #[test]
     fn parses_named_struct_with_std140_offsets() {

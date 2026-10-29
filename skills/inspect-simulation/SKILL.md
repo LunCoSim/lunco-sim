@@ -300,6 +300,9 @@ Wheel marks are physical ground colour: verify a trail crossing a vehicle or
 terrain shadow becomes dark with the surrounding soil. Route colours remain
 unlit overlays. `SurfaceCurveAnnotation.receives_lighting` selects the material
 pass for wheel trails; publication counters alone cannot verify that lighting.
+Inspect contact marks close up as well as from the route camera: the neutral grey
+should blend into the soil through the inward feather, with terrain texture and
+shadow response visible through it. A paint-like opaque ribbon is not acceptable.
 Physical-wheel trails read native solved contacts for every `PhysicalWheel`,
 including wheels bound to a `PhysicsMaterial`. They do not depend on the
 optional shared slip-force realization being present.

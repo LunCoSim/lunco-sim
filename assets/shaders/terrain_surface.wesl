@@ -483,7 +483,11 @@ fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>
         let coverage = clamp((radius - dist + aa) / (2.0 * aa), 0.0, 1.0)
             - clamp((-radius - dist + aa) / (2.0 * aa), 0.0, 1.0);
         let color = annotation_texel(data, record + 2u);
-        let alpha = coverage * color.a;
+        var edge_profile = 1.0;
+        if (style.z > 0.0) {
+            edge_profile = 1.0 - smoothstep(max(0.0, radius - style.z), radius, dist);
+        }
+        let alpha = coverage * edge_profile * color.a;
         // A joint is one stroke, not several overlapping transparent quads.
         if (alpha >= tint.a) { tint = vec4<f32>(color.rgb, alpha); }
     }

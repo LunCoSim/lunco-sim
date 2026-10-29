@@ -108,11 +108,14 @@ impl ShaderTexture {
             return Err(RasterSourceError::ContainerLabel(path));
         }
         let mode = match layer {
-            TextureLayer::Albedo | TextureLayer::Mineral | TextureLayer::ContinuationAlbedo => {
-                Some(Rgba8MipMode::SrgbColor)
-            }
-            TextureLayer::Surface | TextureLayer::ContinuationSurface => Some(Rgba8MipMode::Linear),
-            TextureLayer::Normal => Some(Rgba8MipMode::Normal),
+            TextureLayer::Albedo
+            | TextureLayer::Mineral
+            | TextureLayer::ContinuationAlbedo
+            | TextureLayer::DetailAlbedo => Some(Rgba8MipMode::SrgbColor),
+            TextureLayer::Surface
+            | TextureLayer::ContinuationSurface
+            | TextureLayer::DetailSurface => Some(Rgba8MipMode::Linear),
+            TextureLayer::Normal | TextureLayer::DetailNormal => Some(Rgba8MipMode::Normal),
             TextureLayer::Height | TextureLayer::ShadowCache | TextureLayer::SurfaceAnnotations => {
                 None
             }
@@ -125,6 +128,15 @@ impl ShaderTexture {
                     if mode.is_some() {
                         let mut sampler = ImageSamplerDescriptor::linear();
                         sampler.set_anisotropic_filter(anisotropy);
+                        if matches!(
+                            layer,
+                            TextureLayer::DetailAlbedo
+                                | TextureLayer::DetailNormal
+                                | TextureLayer::DetailSurface
+                        ) {
+                            sampler.address_mode_u = bevy::image::ImageAddressMode::Repeat;
+                            sampler.address_mode_v = bevy::image::ImageAddressMode::Repeat;
+                        }
                         settings.sampler = ImageSampler::Descriptor(sampler);
                     }
                 });

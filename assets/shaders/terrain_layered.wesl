@@ -131,6 +131,19 @@ import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter
 // `info:wesl:vertexAsset` can pair this fragment with `terrain_geomorph.wesl`.
 // Both stages therefore declare this exact uniform ABI; the cross-file contract
 // test in `lunco-materials` prevents either stage from silently drifting.
+//!@ui detail_tile_size_m 0.01 100.0 "Detail texture width (m)"
+//!@default detail_tile_size_m 1.0
+//!@ui detail_albedo_weight 0.0 1.0 "Detail color weight"
+//!@default detail_albedo_weight 0.0
+//!@ui detail_albedo_mean 0.001 1.0 "Detail linear luminance mean"
+//!@default detail_albedo_mean 0.18
+//!@ui detail_normal_strength 0.0 2.0 "Detail tangent normal strength"
+//!@default detail_normal_strength 0.0
+//!@ui detail_rough_weight 0.0 1.0 "Detail roughness weight"
+//!@default detail_rough_weight 0.0
+//!@ui detail_ao_weight 0.0 1.0 "Detail ambient occlusion weight"
+//!@default detail_ao_weight 0.0
+
 struct Material {
     albedo:            vec3<f32>,
     micro_scale:       f32,
@@ -177,10 +190,30 @@ struct Material {
     stitch_edges:     vec4<f32>, // engine-filled: coarser-neighbour edge mask
     site_base_color: vec4<f32>,
     site_photometry: vec4<f32>,
+    detail_tile_size_m: f32,
+    detail_albedo_weight: f32,
+    detail_albedo_mean: f32,
+    detail_normal_strength: f32,
+    detail_rough_weight: f32,
+    detail_ao_weight: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(16)
 var surface_annotations: texture_2d<f32>;
+
+// Physical-scale detail textures repeat independently of site raster UVs.
+@group(constants::MATERIAL_BIND_GROUP) @binding(17)
+var detail_albedo_tex: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(18)
+var detail_albedo_smp: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(19)
+var detail_normal_tex: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(20)
+var detail_normal_smp: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(21)
+var detail_surface_tex: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(22)
+var detail_surface_smp: sampler;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
@@ -224,6 +257,27 @@ var continuation_albedo_smp: sampler;
 var continuation_surface_tex: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(15)
 var continuation_surface_smp: sampler;
+
+// Blend shared random offsets at lattice corners. Adjacent cells use the
+// same corner samples, so a physical-scale detail map loses its visible square
+// repeat without seams. Preserve explicit derivatives and native mip filtering.
+fn detail_offset(cell: vec2<i32>) -> vec2<f32> {
+    let p = vec2<f32>(cell);
+    let seed = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(seed) * 43758.5453);
+}
+
+fn sample_regolith_detail(tex: texture_2d<f32>, smp: sampler,
+    uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    let base = vec2<i32>(floor(uv));
+    let f = fract(uv);
+    let blend = f * f * (vec2(3.0) - 2.0 * f);
+    let a = textureSampleGrad(tex, smp, uv + detail_offset(base), dx, dy);
+    let b = textureSampleGrad(tex, smp, uv + detail_offset(base + vec2<i32>(1, 0)), dx, dy);
+    let c = textureSampleGrad(tex, smp, uv + detail_offset(base + vec2<i32>(0, 1)), dx, dy);
+    let d = textureSampleGrad(tex, smp, uv + detail_offset(base + vec2<i32>(1, 1)), dx, dy);
+    return mix(mix(a, b, blend.x), mix(c, d, blend.x), blend.y);
+}
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -378,6 +432,36 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // The derived normal's alpha carries the same DEM-anchored relief tone as
     // the streamed path. Authored normal maps intentionally do not supply it.
     @if((VERTEX_UVS_A)) albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * map_weight_tone);
+
+    // Site imagery owns broad color and the DEM owns landform normals. Detail
+    // maps add meter-scaled material variation without changing that geometry.
+    let detail_uv = vec2(detail_p.x, -detail_p.z) / max(mat.detail_tile_size_m, 0.001);
+    let detail_dx = dpdx(detail_uv);
+    let detail_dy = dpdy(detail_uv);
+    if (mat.detail_albedo_weight > 0.0) {
+        let detail_color = sample_regolith_detail(detail_albedo_tex, detail_albedo_smp,
+            detail_uv, detail_dx, detail_dy).rgb;
+        let luminance = dot(detail_color, vec3(0.2126, 0.7152, 0.0722));
+        let relative_tone = clamp(luminance / max(mat.detail_albedo_mean, 0.001), 0.25, 4.0);
+        albedo *= mix(1.0, relative_tone, clamp(mat.detail_albedo_weight, 0.0, 1.0));
+    }
+    if (mat.detail_normal_strength > 0.0) {
+        let ts = sample_regolith_detail(detail_normal_tex, detail_normal_smp,
+            detail_uv, detail_dx, detail_dy).xyz * 2.0 - vec3(1.0);
+        var axis_x = vec3(1.0, 0.0, 0.0);
+        @if((VERTEX_UVS_A)) axis_x = normalize(mesh_functions::get_world_from_local(in.instance_index)[0].xyz);
+        let tangent = normalize(axis_x - n * dot(axis_x, n));
+        let bitangent = normalize(cross(n, tangent));
+        let strength = mat.detail_normal_strength;
+        n = normalize(tangent * ts.x * strength + bitangent * ts.y * strength + n * max(ts.z, 0.05));
+    }
+    if (mat.detail_rough_weight > 0.0 || mat.detail_ao_weight > 0.0) {
+        let detail_surface = sample_regolith_detail(detail_surface_tex, detail_surface_smp,
+            detail_uv, detail_dx, detail_dy);
+        roughness = clamp(mix(roughness, detail_surface.r,
+            clamp(mat.detail_rough_weight, 0.0, 1.0)), 0.05, 1.0);
+        @if((VERTEX_UVS_A)) map_ao *= mix(1.0, detail_surface.g, clamp(mat.detail_ao_weight, 0.0, 1.0));
+    }
 
     // Resolved sub-texel grain modulates the material colour around its mean.
     // The same stable position and footprint fade used for its normal prevent

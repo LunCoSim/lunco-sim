@@ -16,6 +16,32 @@ scalar math, preserving the renderer's GPU ABI and native culling and shadows.
 See [the physics integration review](../reviews/upstream-only-physics-integration.md)
 for dependency feature selection and current runtime qualification.
 
+## Physical-scale surface detail
+
+The canonical DEM material can combine georeferenced site rasters with optional
+repeatable material scans. `inputs:detail_albedo_map`, `inputs:detail_normal_map`
+and `inputs:detail_surface_map` are asset-typed `UsdShade` inputs. They use the
+shared `ShaderLook` roles `DetailAlbedo`, `DetailNormal` and `DetailSurface`,
+bound at 17/18, 19/20 and 21/22. Twelve sampled texture roles remain within the
+portable sixteen-texture limit. Their native raster samplers repeat and their
+mip chains preserve sRGB color, tangent normals and linear scalar semantics.
+
+`detail_tile_size_m` defines one repeat in terrain-local metres. Coordinates
+remain stable as tiles and the camera move; explicit gradients select mip levels
+across wrap boundaries. Detail normals use +X/-Z tangent axes and perturb the
+existing DEM/procedural normal, fading below the resolved pixel footprint.
+They never replace the DEM normal map or change height queries and colliders.
+The scalar detail map uses R=roughness and G=ambient occlusion, with independent
+weights. A single-channel roughness image requires `detail_ao_weight = 0`.
+
+Color detail multiplies the site albedo by scan luminance relative to the
+USD-authored `detail_albedo_mean` in linear light. This preserves the site's
+broad tone while adding photographed variation. Weights default to zero, so
+existing scenes do not request detail maps or change appearance. The shared
+reflected material block holds 512 bytes; fragment and geomorph layouts agree.
+Source scans remain declared Twin assets, downloaded into `.cache` through the
+asset manager, with provenance and hashes retained in `Assets.toml`.
+
 ## Terrain material decision record (2026-09-21)
 
 The current source inventory has one authored terrain appearance contract, one
@@ -153,7 +179,7 @@ belongs to the renderer, with no terrain-specific shader or visibility policy.
 The exterior also carries the site lunar photometry parameters and fades
 its direct-sun response to the body response. Shared PBR and terrain lighting
 helpers own lighting; no heightfield shadow march runs for the collar. The
-packed terrain uniform remains within 256 bytes.
+packed terrain uniform uses the shared 512-byte reflected parameter block.
 
 A body fragment shader that accepts these local roles declares
 `//!@interface lunco.lunar-surface-continuation.v1` in WESL and authors the same

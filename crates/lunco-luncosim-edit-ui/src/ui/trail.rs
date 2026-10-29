@@ -676,7 +676,7 @@ fn trail_look() -> PbrLook {
         // Contact-disturbed soil is a neutral dark mark, including the live
         // endpoint under a stationary wheel. Both terrain stamps and support
         // ribbons consume this same look.
-        base_color: LinearRgba::new(0.025, 0.025, 0.025, 0.78),
+        base_color: LinearRgba::new(0.06, 0.06, 0.06, 0.32),
         emissive: LinearRgba::BLACK,
         alpha: SurfaceAlpha::Blend,
         unlit: true,
@@ -739,6 +739,7 @@ fn sync_ground_trail_annotations(
                     }
                     let annotation_data = annotation.bypass_change_detection();
                     annotation_data.width_m = lane.width;
+                    annotation_data.edge_softness_m = lane.width * 0.25;
                     let mut valid = true;
                     for (id, pair) in updates {
                         if let Some(pair) = pair {
@@ -769,6 +770,7 @@ fn sync_ground_trail_annotations(
                         trail_look().base_color,
                     );
                     annotation.receives_lighting = true;
+                    annotation.edge_softness_m = lane.width * 0.25;
                     let mut valid = true;
                     // A source is created from its first pending contacts. A frame
                     // change resets history, so no historical replay is needed.

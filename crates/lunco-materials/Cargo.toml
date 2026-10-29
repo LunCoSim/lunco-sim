@@ -16,7 +16,9 @@ license.workspace = true
 # `zstd_rust`: bevy_image refuses to build without a zstd backend chosen. It was
 # only ever compiling because another crate in the graph happened to select one —
 # name it here so this crate stands alone.
-bevy = { workspace = true, features = ["bevy_mesh", "bevy_image", "zstd_rust"] }
+bevy = { workspace = true, features = ["bevy_mesh", "bevy_image", "zstd_rust", "png", "jpeg"] }
+# PNG/JPEG are the supported external shader-raster formats, including prepared
+# color, scalar, and normal maps. Declare codecs at this loader owner.
 # `SurfaceAlpha` — transparency is a property of a SURFACE, not of a shading
 # model, so a `ShaderLook` states it in the same vocabulary a `PbrLook` does
 # instead of in a second enum free to drift from it. `lunco-render` is itself

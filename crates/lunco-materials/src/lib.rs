@@ -11,7 +11,7 @@
 //!   declares its own `struct Material` (real field names) plus `//!@` annotation
 //!   comments (UI ranges, defaults, engine-filled fields); [`ParamSchema`] parses
 //!   that source into name → std140 offset, and [`ParamValue`]s pack into the
-//!   opaque 256-byte uniform block at those offsets. **No parameter names, ranges
+//!   opaque 512-byte uniform block at those offsets. **No parameter names, ranges
 //!   or defaults are hardcoded in Rust** — adding a parameter is editing a shader.
 //! - [`look`] — [`ShaderLook`], the appearance **intent**: a shader *path*, an open
 //!   `BTreeMap` of named params, and named [`TextureLayer`]s. Insert it next to
