@@ -162,7 +162,7 @@ fn on_event(me, evt, ctx) {
     } else if evt.name == "waypoint_2_reached" {
         hint("Two down. Continue to the final marker.");
     } else if evt.name == "MISSION_COMPLETE" {
-        tutorials::finish(ctx, "You completed the landing handoff and rover route. Choose the next lesson below.");
+        tutorials::finish(ctx, "You completed the landing handoff and rover route.");
         // The engine emits MISSION_COMPLETE once every objective is done.
         notify_kind("Lander & Rover Mission complete", "success");
     }

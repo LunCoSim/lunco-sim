@@ -6,7 +6,7 @@ fn steps() {
         #{ anchor: "model_view.compile_buttons",  focus: (),                     title: "Choose a run mode",      body: "Click Run for interactive stepping and live inputs. Click Fast Run to integrate from 0 to `t_end` in the background." },
         #{ anchor: "panel.modelica_inspector",    focus: "modelica_inspector",   title: "Change a live input",        body: "During Run, select an input in Telemetry and drag its slider. Watch the signal change. Parameters stay part of the model configuration." },
         #{ anchor: "panel.modelica_plot",         focus: (),        title: "Read the result",      body: "Select a signal in Graphs while Run is active. Then use Fast Run and compare the complete trajectory." },
-        #{ anchor: "",                            focus: (),                     title: "Sweep parameters next",         body: "Use the next-lesson button to learn how to test several parameter values without editing source." },
+        #{ anchor: "",                            focus: (),                     title: "Choose the right run",         body: "Use interactive Run to inspect live inputs. Use Fast Run for a complete trajectory. Before continuing, explain which mode fits your next experiment." },
     ]
 }
 

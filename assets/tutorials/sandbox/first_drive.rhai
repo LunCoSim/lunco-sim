@@ -143,7 +143,7 @@ fn on_event(me, evt, ctx) {
 
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
-        tutorials::finish(ctx, "You took control and reached the flag. Choose the next exercise below, or keep exploring.");
+        tutorials::finish(ctx, "You took control and reached the flag.");
         notify_kind("First Drive complete", "success");
     }
 }

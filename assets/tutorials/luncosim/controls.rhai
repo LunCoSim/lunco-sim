@@ -70,8 +70,8 @@ fn mission(me, ctx) {
 fn on_event(me, evt, ctx) {
     if tutorials::navigation(evt, ctx) { return; }
     if evt.name == "MISSION_COMPLETE" {
-        tutorials::finish(ctx, "You took and released rover control. Choose the next exercise below, or keep exploring.");
-        notify_kind("Authority Handoff complete — next: Moon Driving Basics", "success");
+        tutorials::finish(ctx, "You took and released rover control.");
+        notify_kind("Authority Handoff complete", "success");
     }
 }
 

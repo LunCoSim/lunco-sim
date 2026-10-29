@@ -8,7 +8,7 @@ fn steps() {
         #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Open a Twin",     body: "In Twin Browser, expand a Twin and select a model. A Twin contains `.mo` files and a manifest." },
         #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Duplicate before editing", body: "Bundled demos and the Modelica Standard Library are read-only. Right-click a class and choose Duplicate to make an editable copy." },
         #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Follow a Learning Path",   body: "Open Learning Paths and choose Circuits, Control, or Mechanics. Select a class and follow its signal or behaviour goal." },
-        #{ anchor: "",                         focus: (),                     title: "Open a model next",   body: "Use the next-lesson button to learn the four model views." },
+        #{ anchor: "",                         focus: (),                     title: "Choose a model",   body: "Find a model you want to investigate and identify its source in the Twin browser. Finish this tour to choose your next lesson." },
     ]
 }
 

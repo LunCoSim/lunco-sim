@@ -373,6 +373,16 @@ policy uses this host to project its catalog and launch lessons through the
 generic `RunScenarioAsset` command. `WorkbenchSnapshot` supplies normal shell
 geometry; lesson lifecycle and scene composition remain outside the workbench.
 
+`InspectScriptedMenus` reads the installed provider/Twin identities, labels,
+enabled states, and typed tool action arguments. The application menu host
+retains immutable bound trees shared by its renderer and this reader; it keeps
+no second catalog. Replacing a provider or closing its Twin retires that tree
+and its bindings together. Missing bindings reject inspection visibly. This
+read surface does not invoke callbacks or bypass their source-scope validation.
+The `tutorials::application_path` reader selects one enabled application lesson
+from those actions, allowing a reopened report to resume the current catalog
+path. Curriculum selection and continuation remain Rhai policy.
+
 The generic `ViewportPlaceholder` carries the domain's current empty-state
 message plus host-authored guidance and typed actions. Each action provides a
 short visible description alongside its button. The shell renders those actions

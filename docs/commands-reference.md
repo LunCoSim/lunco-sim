@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**301 commands** across **57** crates. 4 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**302 commands** across **57** crates. 4 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -99,7 +99,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-services`](#lunco-luncosim-services) (2 commands)
-- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (5 commands)
+- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (6 commands)
 - [`lunco-modelica-api`](#lunco-modelica-api) (10 commands)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
@@ -2496,6 +2496,14 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `scope` | `String` |   |
 
+#### `InspectScriptedMenus`
+
+ Inspect the currently installed script menu trees and typed action arguments.
+ Application and Twin contributions retain their exact provider and owner.
+
+- *defined in:* `crates/lunco-luncosim-ui/src/ui/scripted_menus.rs`
+- *fields:* none — call with `InspectScriptedMenus` (no params)
+
 #### `SaveScenario`
 
  Save a live-edited Rhai scenario's current source back onto the
@@ -4514,7 +4522,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 301 commands from the runtime schema; scanned 1053 .rs files for docs (0 parse failure(s) skipped).
+<!-- 302 commands from the runtime schema; scanned 1053 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

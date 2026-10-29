@@ -86,10 +86,14 @@ reads those authored values; it does not fabricate missing results. **Save as
 Twin…** uses the existing `SaveAsTwin` document-promotion workflow and asks for
 a new folder. Cancelling leaves the save step unfinished.
 
-Reopening the saved Twin displays the recorded measurements and a next driving
-exercise. The saved scene retains standard `lunco://` references to the
+Reopening the saved Twin displays the recorded measurements and the next lesson
+from the installed application catalog. Its full continuation path is retained
+when that lesson starts. The saved scene retains standard `lunco://` references to the
 installed shared library. It is a project that uses the normal LunCoSim asset
 bundle, not a self-contained export of every referenced asset.
+Moon Driving Basics authors an overview that keeps its starting rover, ramp
+and finish marker in view; its low-angle lunar lighting remains part of that
+later driving exercise.
 
 ## Tours, exercises, and continuation
 
@@ -104,6 +108,12 @@ typed learning path. Missing targets and cycles reject the catalog visibly.
 The shared `tutorials` tool supplies the continuation buttons and cursor
 policy. A standalone scenario without catalog context promises no next button.
 Lesson-specific objectives and classroom decisions stay in Rhai.
+
+**Restart lesson** relaunches that catalog guide with its path and exact Twin
+owner. It works when no scene is mounted and preserves existing scene edits.
+The classroom's explicit **Restart whole lab (discard edits)** remains the
+document-reset action. Completion cards remain usable across perspectives.
+Standalone launches direct the learner to Tutorials when no path was supplied.
 
 ## Verification and classroom pilot
 
@@ -130,6 +140,17 @@ LUNCOSIM_BIN=target/debug/luncosim python3 scripts/api/test_classroom_onboarding
 Inspect its screenshots at ordinary classroom resolution. The driver uses the
 production command and lesson-action surfaces. API and headless verdicts do not establish classroom
 usability, projector readability, package completeness or offline installation.
+
+The focused navigation gate exercises two shipped presentation guides with no
+scene, including restart, Next/Back, visible completion actions, exact Twin
+ownership, stale actions and Skip. It also checks installed catalog lookup and
+rejection of an unknown lesson:
+
+```bash
+python3 scripts/api/test_tutorial_navigation.py --port 4196 --output target/tutorial-navigation
+```
+
+Use a new output directory for each run.
 
 Before using the flow as a default curriculum, pilot it with 5–8 first-time
 participants. Record time to first successful drive, help requests, recovery

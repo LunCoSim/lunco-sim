@@ -46,6 +46,16 @@ another entry in the same catalog. The application policy rejects missing
 targets and cycles, and passes the resolved path as typed scenario parameters.
 The shared `tutorials::navigation` and `tutorials::finish` functions consume
 that path. Standalone scenario launches omit catalog navigation.
+Restart relaunches the selected guide through the same launcher and retains its
+path and exact Twin owner. It does not require or reset a mounted scene.
+Completion actions are visible across perspectives.
+
+A persisted report can read `tutorials::application_path(source_asset)` to
+resume an installed application lesson. This uses `InspectScriptedMenus`'s
+current bound action tree, not a second curriculum registry. The report builds
+its continuation label from the returned path and passes that path to
+`tutorials::start_path` when the learner chooses Next. This is an interactive
+presentation operation; headless report validation does not need menu actions.
 
 A project lesson can instead declare `twin_asset`, an exact registered manifest
 URI. The launcher submits `OpenTwinAsset`; the manifest selects the scene and

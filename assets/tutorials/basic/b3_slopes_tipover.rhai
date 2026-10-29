@@ -116,7 +116,7 @@ fn mission(me, ctx) {
 fn on_event(me, evt, ctx) {
     if tutorials::navigation(evt, ctx) { return; }
     if evt.name == "MISSION_COMPLETE" {
-        tutorials::finish(ctx, "You observed the Hauler lean and reached the top marker. Choose the next lesson below.");
+        tutorials::finish(ctx, "The Hauler leaned and you reached the top marker.");
         clear_spotlight();
         notify_kind("Lesson complete — next: Rover Variants", "success");
     }
