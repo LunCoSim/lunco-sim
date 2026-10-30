@@ -230,8 +230,11 @@ background run thread waits for compilation.
 Known-source read, decode, parse, or rewrite failures end the operation visibly;
 source and target retirement cancel it. Failed or cancelled duplicates release
 their pending document metadata, name, tab and busy handle. Successful native
-duplicates use the canonical syntax cache and install before the projection busy
-handoff. Browser tasks retain the deferred editor parsing contract; Bevy tasks
+duplicates use the canonical syntax cache. Opening busy handles finish when the
+document is installed, independent of tab visibility or view mode. Diagram
+projection owns its own tracked task only when a canvas requests it; hidden,
+text-only, or already-projected documents retain no opening handle.
+Browser tasks retain the deferred editor parsing contract; Bevy tasks
 in a browser do not imply execution on a separate JavaScript worker.
 
 File opening captures local root IDs and the exact replicated mount before it

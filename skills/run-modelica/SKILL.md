@@ -22,6 +22,11 @@ the primary surface; only fall back to MCP if a human explicitly asks.
 
 ## 0. Launch an app in API mode
 
+For loading checks, open a model while its canvas is hidden or in Text mode.
+Opening completes when the document is installed; diagram projection is separate
+demand-driven work. Verify source readiness and the disappearance of the opening
+notice without requiring a switch to Diagram mode.
+
 Modelica runs inside any app that embeds `LunCoApiPlugin` + the Modelica
 workbench. Build the named binary in the current worktree, then invoke it
 directly. The API server only exists when you pass `--api`. Default port is
