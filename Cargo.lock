@@ -8537,6 +8537,7 @@ dependencies = [
  "lunco-core-runtime",
  "lunco-core-session",
  "lunco-cosim-core",
+ "lunco-embodiment-core",
  "lunco-engineering-values",
  "lunco-hooks",
  "lunco-modelica-runtime",

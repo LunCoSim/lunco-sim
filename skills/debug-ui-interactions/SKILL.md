@@ -83,6 +83,11 @@ with repeat presses. `LunCoControlPlugin` orders the shared input reset before
 unification; release and native focus loss still end the physical hold. Capture
 semantic edges and actuator response across pause/resume and rate changes.
 
+Check authored avatars while simulation transport is paused as well as playing.
+Their `LocalEmbodiment` role keeps camera input on the interaction clock even
+when USD supplies a stable entity identity. A possessed vehicle must still obey
+simulation pause. Verify movement, release, and the unchanged simulation clock.
+
 For a modifier gesture, use separate event phases and allow a frame between
 them when the result matters:
 

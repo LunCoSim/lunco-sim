@@ -1446,6 +1446,13 @@ fn should_admit_port_input(
     origin: Option<CommandOrigin>,
     producer_id: Option<u64>,
 ) -> bool {
+    // Local embodiment commands belong to the unpaused interaction clock.
+    if world
+        .get::<lunco_embodiment_core::roles::LocalEmbodiment>(target)
+        .is_some()
+    {
+        return false;
+    }
     match origin {
         Some(CommandOrigin::ApiTransport) => true,
         Some(CommandOrigin::LocalUser { .. }) => world.get::<GlobalEntityId>(target).is_some(),
@@ -1786,7 +1793,12 @@ fn validate_port_input_target_state(
     let user_paused = world
         .get_resource::<lunco_time::TimeTransport>()
         .is_some_and(|transport| !transport.is_running());
-    if user_paused && world.get::<GlobalEntityId>(target).is_some() {
+    if user_paused
+        && world.get::<GlobalEntityId>(target).is_some()
+        && world
+            .get::<lunco_embodiment_core::roles::LocalEmbodiment>(target)
+            .is_none()
+    {
         return Err((
             "simulation is paused".to_owned(),
             lunco_api_core::ApiErrorCode::CommandRejected,

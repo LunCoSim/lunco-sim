@@ -20,6 +20,12 @@ without depending on Avian. It also owns the backend-neutral
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
+User pause rejects simulation-target port writes. The process-local
+`LocalEmbodiment` remains an interaction-clock endpoint even when it has an
+authored USD identity: its camera movement writes bypass fixed simulation-input
+admission and remain valid while paused. This exception does not apply to a
+possessed vessel or to remote embodiments.
+
 Avian contact ports consume the physics owner's retained-interval interpretation
 of its native contact graph. Native normal impulse counts applied warm-start,
 incremental solver and restitution impulses once, independently of relaxation

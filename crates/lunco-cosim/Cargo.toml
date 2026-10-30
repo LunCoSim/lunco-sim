@@ -20,6 +20,7 @@ lunco-engineering-values = { path = "../lunco-engineering-values" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-control-core = { path = "../lunco-control-core" }
+lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
