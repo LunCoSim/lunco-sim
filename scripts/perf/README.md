@@ -20,6 +20,22 @@ pauses and render/script failures. Record camera differences and other workloads
 before interpreting its frame summaries as comparable graphics measurements.
 Receipts retain the exact readiness, body, terrain and handoff facts at a
 qualification loss, including source and process/port state after failure.
+A capture is requested at the first qualified physics-ready result and its
+publication time is recorded separately. Inspect `first-ready.png` as well as
+the final mission image; a physics-ready timestamp alone does not prove that
+all visual assets are already visible.
+By default the driver opens the Twin's current default scene with `OpenTwin`.
+Use `--scene scenes/example.usda` to open an exact Twin-relative scene through
+`OpenFile`, which mounts its owning Twin without changing the manifest. Receipts
+record the command and path; keep them consistent when comparing runs.
+Use `--max-load-seconds 5` to require physics readiness strictly below five
+seconds. The driver still completes mission and rendering checks and writes its
+receipt before reporting a failed load budget. Report cache conditions separately;
+this interval excludes application bootstrap and the later landing milestone.
+Bootstrap qualification requires the requested startup document, committed scene
+epoch, clear readiness and a spawned scene marker before the timed open. The
+receipt records those facts and bootstrap duration separately; older receipts
+without `bootstrap_qualification` may overlap startup-scene preparation.
 
 ```sh
 LUNCOSIM_BIN="$PWD/target/debug/luncosim" python3 scripts/perf/twin_startup.py \

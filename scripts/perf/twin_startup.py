@@ -5,6 +5,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import statistics
@@ -13,7 +14,9 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
-from runtime import BINARY, ROOT, ProductionSession, assert_render_log_clean, port_is_open
+from runtime import (BINARY, ROOT, ProductionSession, assert_render_log_clean,
+                     port_is_open, wait_for_ready)
+from run_editor_scene_test import wait_for_scene, wait_for_scene_time_selection
 
 
 def source_snapshot(root):
@@ -21,7 +24,8 @@ def source_snapshot(root):
         ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"]
     ).decode().split("\0")
     suffixes = {".mo", ".rhai", ".usd", ".usda", ".usdc", ".toml", ".sysml",
-                ".kerml", ".wesl", ".gltf", ".glb", ".obj", ".png", ".jpg", ".ktx2"}
+                ".kerml", ".wesl", ".gltf", ".glb", ".obj", ".png", ".jpg", ".ktx2",
+                ".json", ".html", ".css"}
     return {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
             for name in sorted(set(names))
             if name and (root / name).is_file() and Path(name).suffix.lower() in suffixes}
@@ -43,6 +47,8 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--twin", type=Path, required=True)
     parser.add_argument("--twin-name", required=True)
+    parser.add_argument("--scene", type=Path,
+                        help="explicit Twin-relative scene, opened through OpenFile")
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--body", required=True)
     parser.add_argument("--handoff-property")
@@ -50,11 +56,23 @@ def main():
     parser.add_argument("--symbols", action="store_true")
     parser.add_argument("--tracy-port", type=int)
     parser.add_argument("--timeout", type=float, default=180)
+    parser.add_argument("--max-load-seconds", type=float,
+                        help="require scene-open-to-physics readiness strictly below this limit")
     args = parser.parse_args()
+    if args.max_load_seconds is not None and (
+            not math.isfinite(args.max_load_seconds) or args.max_load_seconds <= 0):
+        parser.error("--max-load-seconds must be finite and greater than zero")
     if not os.environ.get("LUNCOSIM_BIN"):
         parser.error("set LUNCOSIM_BIN to the production executable")
     if not BINARY.is_file():
         parser.error(f"production executable is missing: {BINARY}")
+    scene = None
+    if args.scene is not None:
+        scene = (args.twin.resolve() / args.scene).resolve()
+        if not scene.is_relative_to(args.twin.resolve()) or not scene.is_file():
+            parser.error("--scene must name an existing file inside the Twin")
+    open_command = "OpenFile" if scene is not None else "OpenTwin"
+    open_path = scene if scene is not None else args.twin.resolve()
     output = args.output.resolve()
     ignored = subprocess.run(["git", "check-ignore", "-q", str(output)], cwd=ROOT)
     if ignored.returncode:
@@ -75,6 +93,8 @@ def main():
         "source_before": source_snapshot(source_root), "workloads": workloads(),
         "port": args.port, "tracy_port": args.tracy_port, "twin": str(args.twin.resolve()),
         "physical_root": args.body, "samples": [], "readiness_events": [],
+        "open_command": open_command, "open_path": str(open_path),
+        "max_load_seconds": args.max_load_seconds,
     }
     frames = {}
     started = time.monotonic()
@@ -103,9 +123,20 @@ def main():
                         if len(fields) == 3 and fields[1] in ("t", "T"):
                             symbols.write(line)
                     assert index.wait() == 0
+            wait_for_scene(session, str(bootstrap), args.timeout)
+            wait_for_scene_time_selection(session, output / "runtime.log", args.timeout)
+            wait_for_ready(session.port, args.timeout)
+            bootstrap_prim = command(session, "QueryUsdPrim", {"path": "/World/TestLight"})
+            if not bootstrap_prim.get("spawned"):
+                raise RuntimeError("bootstrap readiness did not admit its scene marker")
+            receipt["bootstrap_qualification"] = {
+                "prim": bootstrap_prim,
+                "readiness": command(session, "GetReadiness"),
+                "twin": command(session, "ReadActiveTwinContract"),
+            }
             receipt["bootstrap_ready_s"] = time.monotonic() - started
             opened = time.monotonic()
-            receipt["open_response"] = command(session, "OpenTwin", {"path": str(args.twin.resolve())})
+            receipt["open_response"] = command(session, open_command, {"path": str(open_path)})
             last_readiness = None
             clear_since = measurement = None
             initial_frame = initial_tick = measured_body = None
@@ -134,7 +165,11 @@ def main():
                                 if body_state.get("simulation_object_paused"):
                                     raise RuntimeError(f"coupled object paused: {body_state.get('simulation_object_pause_reason')}")
                                 if body_state.get("physics_state_ready"):
-                                    receipt.setdefault("first_scene_ready_s", time.monotonic() - opened)
+                                    if "first_scene_ready_s" not in receipt:
+                                        receipt["first_scene_ready_s"] = time.monotonic() - opened
+                                        print("SCENE_READY", receipt["first_scene_ready_s"], flush=True)
+                                        session.capture_screenshot(output / "first-ready.png")
+                                        receipt["first_ready_capture_s"] = time.monotonic() - opened
                                     physics = command(session, "PhysicsPerformance")
                                     terrain = command(session, "TerrainLodStatus")
                                     qualification["terrain"] = terrain
@@ -199,6 +234,12 @@ def main():
         receipt["frame_summary"] = {"count": len(values), "p50_ms": statistics.median(values),
                                     "p95_ms": values[min(len(values) - 1, int(.95 * len(values)))], "max_ms": max(values)}
         receipt["fixed_tick_summary"] = receipt["samples"][-1]["SimulationTimingProfile"]["fixed_tick"]
+        if args.max_load_seconds is not None:
+            receipt["load_budget_passed"] = receipt["first_scene_ready_s"] < args.max_load_seconds
+            if not receipt["load_budget_passed"]:
+                raise RuntimeError(
+                    f"Twin load took {receipt['first_scene_ready_s']:.3f}s; "
+                    f"required less than {args.max_load_seconds:.3f}s")
         print("COMPLETE", receipt["first_scene_ready_s"], receipt["frame_summary"], receipt["fixed_tick_summary"], flush=True)
     except Exception as error:
         receipt["error"] = str(error)

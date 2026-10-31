@@ -393,14 +393,12 @@ impl Default for UsdVisualProjectionSettings {
 
 /// Stable continuation queue for a prim's direct children.
 ///
-/// `deferred` receives children discovered during the current projection pass;
-/// `ready` contains children eligible for admission on this pass. Keeping the
-/// queues separate ensures a parent has committed its projected identity and
-/// readiness markers before a later update admits its children.
+/// Admission runs after the projection system's deferred commands commit, so
+/// newly discovered children can use their parent's projected identity in the
+/// same update. Child projection itself runs on the following update.
 #[derive(Resource, Default)]
 struct UsdPendingChildAdmissions {
     ready: std::collections::BTreeSet<(String, Entity)>,
-    deferred: std::collections::BTreeSet<(String, Entity)>,
     counts_by_parent: std::collections::HashMap<Entity, usize>,
     live_child_keys_by_parent: std::collections::HashMap<Entity, PendingLiveChildKeys>,
 }
@@ -414,16 +412,11 @@ struct PendingLiveChildKeys {
 impl UsdPendingChildAdmissions {
     fn enqueue(&mut self, parent: Entity, child_path: &SdfPath) -> bool {
         let key = (child_path.as_str().to_owned(), parent);
-        if self.ready.contains(&key) || self.deferred.contains(&key) {
+        if !self.ready.insert(key) {
             return false;
         }
-        self.deferred.insert(key);
         *self.counts_by_parent.entry(parent).or_default() += 1;
         true
-    }
-
-    fn promote_deferred(&mut self) {
-        self.ready.append(&mut self.deferred);
     }
 
     fn pop_first_ready(&mut self) -> Option<(String, Entity)> {
@@ -500,8 +493,6 @@ impl UsdPendingChildAdmissions {
     /// Discard all remaining child work for a parent that failed or went stale.
     fn discard_parent(&mut self, parent: Entity) {
         self.ready
-            .retain(|(_, queued_parent)| *queued_parent != parent);
-        self.deferred
             .retain(|(_, queued_parent)| *queued_parent != parent);
         self.counts_by_parent.remove(&parent);
         self.live_child_keys_by_parent.remove(&parent);
@@ -1822,8 +1813,8 @@ fn project_spawnable_selectable(
 ///
 /// Initial loads use the worker-produced [`UsdStageProjectionPlan`]. This pass
 /// stores stable child paths only; transform reads and ECS command recording
-/// happen in bounded batches on later updates. Live structural edits use the
-/// same queue with the canonical [`StageView`].
+/// happen in bounded batches after parent projection commits. Live structural
+/// edits use the same queue with the canonical [`StageView`].
 fn commit_usd_children<R: UsdRead>(
     parent: Entity,
     stage_handle: &Handle<UsdStageAsset>,
@@ -2295,7 +2286,7 @@ fn process_queued_usd_visuals(
 }
 
 fn has_pending_usd_children(pending: Res<UsdPendingChildAdmissions>) -> bool {
-    !pending.ready.is_empty() || !pending.deferred.is_empty()
+    !pending.ready.is_empty()
 }
 
 #[derive(SystemParam)]
@@ -2566,7 +2557,6 @@ fn admit_pending_usd_children(
         admitted += 1;
         finish_pending_usd_child(parent, &mut pending_children, &mut commands);
     }
-    pending_children.promote_deferred();
 }
 
 fn finish_pending_usd_child(

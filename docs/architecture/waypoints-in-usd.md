@@ -184,6 +184,11 @@ used for selection and menu dispatch.
 
 ## Progression
 
+Route control and selection identify points through the admitted composed
+stage's `lunco:triggerZone` attribute. References and selected variants are
+resolved by `QueryUsdPrim`; a missing trigger excludes that child from route
+topology. Document edit validation remains owned by the document tools.
+
 Every Avian sensor transition emits `SENSOR_ENTER` or `SENSOR_EXIT`, with the
 sensor GID in `TelemetryEvent.source` and the moving body's GID in the event
 value. This identity-based event does not require a `TriggerZone` label. A

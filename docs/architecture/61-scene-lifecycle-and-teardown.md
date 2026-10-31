@@ -444,6 +444,16 @@ shares immutable property-path derivation while every read still uses native
 composition. Handles expire after that prim is prepared; none crosses the
 worker boundary or survives as a cache of another document revision.
 
+Purpose extraction reuses native `PurposeInfo` through the snapshot's existing
+prim index. `Imageable::purpose_info_from` consumes the parent's native result;
+region boundaries with omitted ancestors use the native full query. The same
+resolved purpose feeds native effective visibility. This preparation state ends
+with extraction and does not duplicate USD inheritance or visibility rules.
+Transform preparation validates the authored stack once, then uses one native
+`XformQuery` for local composition, reset and time-variation facts. Inactive
+prims retain metadata without evaluating a matrix. The shared conversion keeps
+canonical geometry in `DMat4` and narrows only for the render transform.
+
 `UsdVisualProjectionSettings::frame_budget` bounds prim binding because entity
 allocation and Bevy asset mutation are main-thread responsibilities. A prim
 count cap bounds the deferred command batch applied after that system returns;
@@ -451,7 +461,10 @@ the time budget alone cannot bound this flush when many prims bind quickly.
 `child_spawn_budget` and `max_child_spawns_per_update` bound direct-child
 admission and its separate deferred command flush. Defaults are 4 ms and 64
 prim work items per update, plus 1 ms and 128 child entities per update. Each
-parent records children in stable composed-path order and keeps its
+parent records children in stable composed-path order. The admission system
+runs after the projection system's command flush, so its single ordered queue
+can admit newly discovered children in that update; those children project on
+the next update. The parent keeps its
 `UsdSceneAwaitingStage` and `UsdSceneProjectionQueued`
 fences until every direct child has entered the ECS queue. Admission re-reads
 the current composed stage. Bevy child-set changes refresh that parent's live

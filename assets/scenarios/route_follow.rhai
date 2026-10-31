@@ -77,27 +77,16 @@ fn simulation_dependencies(me, ctx) {
 // A route point is an ordinary direct child with the standard trigger-zone
 // attribute. This keeps presentation prims and program implementations out of
 // the ordered control set without relying on a prim-name convention.
-fn is_route_point(doc, path) {
+fn is_route_point(path) {
     if path == () || path == "" { return false; }
     let trigger = query("QueryUsdPrim", #{
         path: path + "/Trigger",
         attrs: ["lunco:triggerZone"],
     });
-    if trigger != () && trigger.ok != false && trigger.attrs != ()
-        && trigger.attrs["lunco:triggerZone"] != () {
-        return true;
-    }
-    // Authoring queries are allowed to lead the disposable scene projection.
-    // Resolve the trigger against the document/canonical stage so a referenced
-    // point or a just-created point remains part of the policy's topology at
-    // that handoff boundary.
-    let resolved = query("ResolveUsdTarget", #{
-        doc_id: doc,
-        path: path + "/Trigger",
-        edit_target: "@root@",
-    });
-    resolved != () && resolved.ok != false
-        && (resolved.composed_exists == true || resolved.authored_in_document == true)
+    // Control and selection use the admitted composed stage, including its
+    // references and variants. A missing trigger is not a route point.
+    trigger != () && trigger.ok != false && trigger.attrs != ()
+        && trigger.attrs["lunco:triggerZone"] != ()
 }
 
 fn route_children(me) {
@@ -112,7 +101,7 @@ fn route_children(me) {
     if result == () || result.ok == false || result.children == () { return (); }
     let points = [];
     for path in result.children {
-        if !is_route_point(doc, path) { continue; }
+        if !is_route_point(path) { continue; }
         let point = query("QueryUsdPrim", #{ path: path });
         if point == () || point.ok == false { return (); }
         if point.active == true { points.push(path); }
@@ -265,7 +254,7 @@ fn subject_selects_unique_program(subject, program) {
     programs != () && programs.len() == 1 && programs[0] == program
 }
 
-fn route_selection_matches(path, route, doc) {
+fn route_selection_matches(path, route) {
     if path == () || path == "" || route == () || route == "" {
         return false;
     }
@@ -276,7 +265,7 @@ fn route_selection_matches(path, route, doc) {
     if !path.starts_with(prefix) { return false; }
     let remainder = path.sub_string(prefix.len());
     if remainder == "" || remainder.index_of("/") >= 0 { return false; }
-    is_route_point(doc, path)
+    is_route_point(path)
 }
 
 fn program_path_from_route(route) {
@@ -309,7 +298,7 @@ fn route_is_selected(me) {
         if selected_path == subject && subject_selects_unique_program(subject, program) {
             return true;
         }
-        if route_selection_matches(selected_path, route, doc) {
+        if route_selection_matches(selected_path, route) {
             return true;
         }
     }
@@ -319,7 +308,7 @@ fn route_is_selected(me) {
             if selected_path == subject && subject_selects_unique_program(subject, program) {
                 return true;
             }
-            if route_selection_matches(selected_path, route, doc) {
+            if route_selection_matches(selected_path, route) {
                 return true;
             }
         }

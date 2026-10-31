@@ -107,23 +107,52 @@ pub(crate) fn compose_live_xform_order_at(
     Ok(Some(convention.local_transform(raw)))
 }
 
-/// Prepare both snapshot representations from one native composition. Render
-/// decomposition precedes convention conversion; geometry retains the matrix's
-/// original precision through its separate canonical conversion.
-pub(crate) fn local_transform_pair_at(
+/// Transform facts retained by one immutable projection snapshot.
+pub(crate) struct PreparedTransform {
+    pub local: Option<(Transform, DMat4)>,
+    pub resets_stack: bool,
+    pub might_vary: bool,
+}
+
+/// Resolve the validated native op query once for the snapshot's matrix,
+/// reset and variation facts. Inactive prims retain metadata without evaluating
+/// a local matrix. Render decomposition and canonical geometry conversion keep
+/// their separate precision boundaries.
+pub(crate) fn prepare_transform_at(
     reader: &StageView<'_>,
     path: &SdfPath,
     time: f64,
-) -> Result<Option<(Transform, DMat4)>, TransformReadError> {
-    let Some((matrix, convention)) = live_local_matrix_and_convention_at(reader, path, time)?
-    else {
-        return Ok(None);
+    active: bool,
+) -> Result<PreparedTransform, TransformReadError> {
+    use openusd_schemas::geom::{XformQuery, Xformable};
+    let order = validated_live_xform_op_order(reader, path)?;
+    let prim = reader
+        .stage()
+        .prim(path)
+        .map_err(|_| malformed_transform(path))?;
+    let query = XformQuery::new(&Xformable::from_prim_unchecked(prim))
+        .map_err(|_| malformed_transform(path))?;
+    let local = if active && order.is_some() {
+        let matrix = query
+            .local_transform(openusd::usd::TimeCode::new(time))
+            .map_err(|_| malformed_transform(path))?;
+        let matrix = native_matrix_d(matrix, path)?;
+        let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
+        let raw = project_transform_matrix_d(matrix, path)?;
+        Some((
+            convention.local_transform(raw),
+            convention.canonical_local_matrix_d(matrix),
+        ))
+    } else {
+        None
     };
-    let raw = project_transform_matrix_d(matrix, path)?;
-    Ok(Some((
-        convention.local_transform(raw),
-        convention.canonical_local_matrix_d(matrix),
-    )))
+    Ok(PreparedTransform {
+        local,
+        resets_stack: query.resets_xform_stack(),
+        might_vary: query
+            .transform_might_be_time_varying()
+            .map_err(|_| malformed_transform(path))?,
+    })
 }
 
 fn live_local_matrix_and_convention_at(
@@ -187,6 +216,13 @@ fn local_to_parent_matrix_d_at(
     )
     .local_transform(openusd::usd::TimeCode::new(time))
     .map_err(|_| malformed_transform(path))?;
+    native_matrix_d(matrix, path)
+}
+
+fn native_matrix_d(
+    matrix: openusd::gf::Mat4d,
+    path: &SdfPath,
+) -> Result<DMat4, TransformReadError> {
     // Gf matrices are row-major for row-vector transforms. Interpreting that
     // storage as Bevy columns transposes into the equivalent column-vector
     // matrix, including moving translation into the final column.

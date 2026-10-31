@@ -1,91 +1,70 @@
-# Avoid preparing discarded chain candidates
+# Rumoca output preparation
 
-Status: proposed native Rumoca change; implementation and publication need
-explicit approval. The application remains at Rumoca `eca3948416fa`.
+The approved local dependency change lives in the adjacent
+`rumoca-griffin-loading` worktree, branch `fix/griffin-loading`. Application
+workspace dependencies resolve to that worktree. Nothing has been published.
+The implementation and current performance evidence are tracked in
+[Griffin loading budget](griffin-loading-budget-2026-10-30.md).
 
-## Current evidence
+## Owner and contract
 
-Application `c4841c194` uses its regular profile with opt-in Tracy, adjacent
-Tracy 0.14.1 tools and 1 kHz CPU sampling. Owned application PID 1021015/API
-5530 connects to collector PID 1020998/port 8462. The Griffin driver qualifies
-landing and settled operation; all 271 source hashes match before admission,
-at qualification and after exit. The final image shows the lander, terrain,
-shadow and four-pad handoff HUD. Both owned processes and ports close.
+`rumoca-eval-solve::PreparedScalarProgramBlock::torn_sweep_runs` discovers run
+membership by incrementally extending the same checked, source-bound candidate
+used by executable chains. Each appended step is materialized once; a declined
+extension starts a fresh candidate. Executable consumers invoke shared-value
+optimization only after admission.
+Target dependencies, failable operations, prefix order, register materialization,
+final equivalence proofs and runtime agreement checks remain authoritative.
 
-The saved capture is 330,300,113 bytes: six header bytes, 14,935 four-byte
-block lengths and 330,240,367 payload bytes, agreeing with the collector's
-314.94 MiB report. Native zone and CPU exports succeed. Three native CSV rows
-contain commas inside preparation-span names; splitting from the six trailing
-columns recovers all 434,320 Modelica rows. These three rows are preparation
-jobs, not the exact constructor or settled integration zones below.
+Output-only chain and directional-JVP consumers use `PreparedEvaluationBlock`.
+Projection and state-manifold Jacobians use that type for whole and selected
+output evaluation as well. Assignment certificates remain with source residuals;
+output consumers cannot query certificates they do not own. Alternate charts
+reuse the existing checked replacement-program mechanism.
 
-Initializer construction takes 4.192 s, with 16,482 native cache hits and no
-compilations or evictions. Exact-zone selection contains 3,524 CPU samples,
-zero missing stacks and one constructor zone. Application addresses are
-resolved against its recorded ELF maps and symbol table. Inclusive sample
-groups overlap and must not be summed:
+These are immutable compiler/evaluator mechanisms, not application lifecycle
+policy. No new Rhai hook, simulation-state cache or alternate solver is involved.
+The canonical dependency specification is `SPEC_0043_CONSTRUCTION_CATALOG.md`.
 
-| Work | Samples |
-| --- | ---: |
-| Cranelift and SHA-256 | 776 |
-| Shared-value preparation | 683 |
-| LinearOp cloning | 239 |
-| Tensor-affine preparation | 178 |
-| Assignment-producer lookup | 150 |
+The canonical assignment constructor first asks the existing checked structural
+dependency owner whether the output can depend on the candidate target. A proven
+absence rejects that target before deriving or materializing its isolator.
+Unbounded dependency sets keep their ordinary candidate checks. This prevents
+a tensor range from issuing certificates for unrelated output coordinates.
 
-2,596 samples have only one native frame. These observations establish owner
-costs but cannot assign all shared-value work to the chain-probing loop, or
-all cloning to whole-model copies. Warm executable reuse still requires
-construction and compiler-input hashing. These diagnostic timings are not
-product performance or an isolated comparison with previous captures.
+Within one `SolveRuntime`, exact refresh sequences with identical ordered
+compiler-issued program IDs share one checked segment preparation and native
+compilation result. The first issued sequence identifies that shared result.
+Identity reuse is scoped to the same immutable model and runtime; independently
+constructed runtimes retain separate preparation and live scratch.
 
-For the last 240 complete fixed ticks before the twenty-tick shutdown margin,
-CSV worker 55 spends 1,885.752 ms in 479 fully contained integration zones and
-328.703 ms collecting observations. That lane services multiple models;
-its aggregate is not a per-model or complete coupled-step duration. Exact-zone
-sampling selects 1,888 integration samples on this lane, including 233 leaf
-samples in the independent torn-sweep agreement check. That check stays intact.
-The 302 observation samples include name cloning, hashing and refresh checks;
-dropping observations or validation is not an optimization proposed here.
+`rumoca-exec-cranelift` groups independently selectable residual and Jacobian
+programs into bounded native dispatch functions. Each arm retains its own
+register and value state and executes only the requested program. Grouping
+reduces function construction, cache lookup and relocation work; it does not
+change equations, output placement, input validation or numerical execution.
+Shared conditional owners retain their complete-call boundary, and large
+residual programs retain bounded chunk emission.
 
-Raw captures, exports, symbols and receipts remain ignored in
-`.cache/codex-evidence/performance-20261027/current-tracy/` and
-`scripts/perf/captures/griffin-torn-workspace-20261027.tracy`.
+Structural dependency propagation shares immutable ordered sets through its
+existing register walk and refresh dependency reader. Unions detach before
+mutation; owned public results retain their original contract. This removes
+repeated tree copies during checked prepared-model reconstruction without
+changing wire data, dependency rules, provenance or rejection of invalid input.
+The local dependency review and fixed-canary comparison are in
+`docs/reviews/shared-dependency-sets-2026-11-01.md` and
+`docs/reviews/shared-dependency-sets-canary.json` in the adjacent Rumoca worktree.
 
-## Native owner and proposed change
+## Qualification
 
-`rumoca-eval-solve::PreparedScalarProgramBlock::torn_sweep_runs` extends a run
-through `extends_run`. Each attempt calls `target_isolation_chain_program`
-and discards the returned program after checking `is_some()`. That constructor
-validates target dependencies, failable operations, prefix order and register
-materialization, then invokes `share_program_values`. The sharing operation
-always returns a program; its result cannot change the probe's admission.
-The accepted run is constructed again by both the prepared sweep and generated
-C consumers before execution.
+The native chain fixture covers 64 ordered outputs and exact evaluated values.
+Existing tests cover split chains, target dependence and failable operations.
+Evaluator tests assert that output-only blocks derive no assignment certificates
+and preserve whole/selected tensor outputs. Solver tests exercise projection,
+sensitivity, initial continuation and manifold behavior.
 
-Separate the existing chain construction from shared-value optimization inside
-this authoritative owner. Membership probes use the same checked construction
-without optimizing a program that will be discarded. Executable programs
-still run shared-value derivation and its equivalence proof. Preserve every
-admission check, final proof, numerical guard, error/decline decision and
-floating-point operation. Keep a single construction implementation and update
-all consumers; add no application cache, alternate solver or compatibility API.
-
-This is immutable compiler preparation, with no lifecycle policy or Rhai hook.
-The expected saving is discarded optimization work, not fewer model equations.
-Its magnitude remains unmeasured until a focused native comparison is run.
-
-## Required qualification
-
-Establish an unchanged-input native baseline for complete run discovery plus
-final preparation, covering long admissible chains, split runs, target
-dependence, decreasing prefixes and failable operations. Require identical run
-membership and final programs, including refusals. Reuse the native chain,
-failable-operation and generated-C checks and fixed MSL canary. Retain the
-runtime independent per-row agreement checks.
-
-Only publish and pin a candidate after those gates pass. Then use the regular
-production binary for the bounded coupled/replay checks and a source-matched
-Griffin landing window. Compare cold/warm preparation and native cache counts
-separately; verify rendering and owned-session closure. Loading and complete
-coupled-step targets remain open.
+Product acceptance requires a normal production Griffin run through physics
+readiness, landing handoff, diagnostics, visual inspection and owned-session
+closure. Profiler timings and native microbenchmarks do not establish the
+five-second product budget. The current results and validation limits belong in
+the loading-budget review.

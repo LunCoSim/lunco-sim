@@ -1535,6 +1535,20 @@ items per update as well as elapsed time. Direct-child admission has its own
 `child_spawn_budget` and `max_child_spawns_per_update`; the parent keeps its
 awaiting/projecting markers until its direct children enter the ECS queue, so
 scene readiness must remain held while batches drain.
+The admission system follows the parent's projection command flush. Keep one
+ordered child queue so hierarchy depth costs one projection update per level,
+without an additional queue-promotion update. Verify initial file projection
+with `scripts/api/test_usd_child_admission.py`; incremental `ApplyUsdOps` alone
+does not exercise that initial continuation path.
+Snapshot extraction can reuse native `PurposeInfo` through the existing prim
+index and `Imageable::purpose_info_from`, including its inheritance flag. Use
+the resolved purpose for native effective visibility as well. Keep this state
+within one immutable extraction, and verify native parity for overrides,
+non-imageable ancestors, inactive regions and invalid visibility. The ignored
+`native_projection_snapshot_benchmark` compares shallow and deep hierarchies.
+Reuse one validated native `XformQuery` for each prim's matrix, reset and
+variation facts. Preserve omitted/blocked stacks, inactive metadata, malformed
+stack rejection and the separate canonical-double/render conversion boundaries.
 Within each prim's deferred work, use native component bundles for facts that
 commit together. Primitive shape identity accompanies its pending mesh request;
 grid cell and spatial projection publish together. Clear projection markers and

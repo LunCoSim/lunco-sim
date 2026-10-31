@@ -1,0 +1,205 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def DistantLight "TestLight"
+    {
+    }
+    def Scope "AdmissionChain"
+    {
+        def Scope "Child"
+        {
+            def Scope "Child"
+            {
+                def Scope "Child"
+                {
+                    def Scope "Child"
+                    {
+                        def Scope "Child"
+                        {
+                            def Scope "Child"
+                            {
+                                def Scope "Child"
+                                {
+                                    def Scope "Child"
+                                    {
+                                        def Scope "Child"
+                                        {
+                                            def Scope "Child"
+                                            {
+                                                def Scope "Child"
+                                                {
+                                                    def Scope "Child"
+                                                    {
+                                                        def Scope "Child"
+                                                        {
+                                                            def Scope "Child"
+                                                            {
+                                                                def Scope "Child"
+                                                                {
+                                                                    def Scope "Child"
+                                                                    {
+                                                                        def Scope "Child"
+                                                                        {
+                                                                            def Scope "Child"
+                                                                            {
+                                                                                def Scope "Child"
+                                                                                {
+                                                                                    def Scope "Child"
+                                                                                    {
+                                                                                        def Scope "Child"
+                                                                                        {
+                                                                                            def Scope "Child"
+                                                                                            {
+                                                                                                def Scope "Child"
+                                                                                                {
+                                                                                                    def Scope "Child"
+                                                                                                    {
+                                                                                                        def Scope "Child"
+                                                                                                        {
+                                                                                                            def Scope "Child"
+                                                                                                            {
+                                                                                                                def Scope "Child"
+                                                                                                                {
+                                                                                                                    def Scope "Child"
+                                                                                                                    {
+                                                                                                                        def Scope "Child"
+                                                                                                                        {
+                                                                                                                            def Scope "Child"
+                                                                                                                            {
+                                                                                                                                def Scope "Child"
+                                                                                                                                {
+                                                                                                                                    def Scope "Child"
+                                                                                                                                    {
+                                                                                                                                        def Scope "Child"
+                                                                                                                                        {
+                                                                                                                                            def Scope "Child"
+                                                                                                                                            {
+                                                                                                                                                def Scope "Child"
+                                                                                                                                                {
+                                                                                                                                                    def Scope "Child"
+                                                                                                                                                    {
+                                                                                                                                                        def Scope "Child"
+                                                                                                                                                        {
+                                                                                                                                                            def Scope "Child"
+                                                                                                                                                            {
+                                                                                                                                                                def Scope "Child"
+                                                                                                                                                                {
+                                                                                                                                                                    def Scope "Child"
+                                                                                                                                                                    {
+                                                                                                                                                                        def Scope "Child"
+                                                                                                                                                                        {
+                                                                                                                                                                            def Scope "Child"
+                                                                                                                                                                            {
+                                                                                                                                                                                def Scope "Child"
+                                                                                                                                                                                {
+                                                                                                                                                                                    def Scope "Child"
+                                                                                                                                                                                    {
+                                                                                                                                                                                        def Scope "Child"
+                                                                                                                                                                                        {
+                                                                                                                                                                                            def Scope "Child"
+                                                                                                                                                                                            {
+                                                                                                                                                                                                def Scope "Child"
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    def Scope "Child"
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        def Scope "Child"
+                                                                                                                                                                                                        {
+                                                                                                                                                                                                            def Scope "Child"
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                def Scope "Child"
+                                                                                                                                                                                                                {
+                                                                                                                                                                                                                    def Scope "Child"
+                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                        def Scope "Child"
+                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                            def Scope "Child"
+                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                def Scope "Child"
+                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                    def Scope "Child"
+                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                        def Scope "Child"
+                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                            def Scope "Child"
+                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                def Scope "Child"
+                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                    def Scope "Child"
+                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                        def Scope "Child"
+                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                            def Scope "Child"
+                                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                                def Scope "Child"
+                                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                }
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                }
+                                                                                                                                                                                            }
+                                                                                                                                                                                        }
+                                                                                                                                                                                    }
+                                                                                                                                                                                }
+                                                                                                                                                                            }
+                                                                                                                                                                        }
+                                                                                                                                                                    }
+                                                                                                                                                                }
+                                                                                                                                                            }
+                                                                                                                                                        }
+                                                                                                                                                    }
+                                                                                                                                                }
+                                                                                                                                            }
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                                                                }
+                                                                                                                            }
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

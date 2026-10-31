@@ -16,6 +16,7 @@ use anyhow::{Result, anyhow};
 use bevy::prelude::Transform;
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{MembershipQuery, Stage};
+use openusd_schemas::geom::{Imageable, ImageableExt, PurposeInfo};
 
 use crate::{MaterialPurpose, StageView, UsdRead, UsdReadPrimFacts};
 use lunco_usd_compose::recipe::StageRecipe;
@@ -205,19 +206,19 @@ impl UsdStageProjectionPlan {
         // The stage and universal render context are fixed for this snapshot.
         let mut material_surface_shaders = HashMap::<String, Option<SdfPath>>::new();
         let mut surface_terminal_requests = 0;
+        // Native purpose info is valid only within this immutable stage. Reuse
+        // its inheritable state through the existing prim index during traversal.
+        let mut purpose_infos = Vec::<PurposeInfo>::new();
         for path in paths {
             let path_string = path.to_string();
             let active = reader
                 .is_active(&path)
                 .map_err(|error| anyhow!("{path_string}: {error}"))?;
             let transform_span = bevy::log::debug_span!("usd_projection_transforms").entered();
-            let (transform, transform_matrix_d) = if active {
-                crate::transform::local_transform_pair_at(&reader, &path, 0.0)
-                    .map_err(|error| anyhow!("{path_string}: {error}"))?
-                    .unzip()
-            } else {
-                (None, None)
-            };
+            let prepared_transform =
+                crate::transform::prepare_transform_at(&reader, &path, 0.0, active)
+                    .map_err(|error| anyhow!("{path_string}: {error}"))?;
+            let (transform, transform_matrix_d) = prepared_transform.local.unzip();
             drop(transform_span);
             let properties_span = bevy::log::debug_span!("usd_projection_property_names").entered();
             let attribute_names = reader.attr_names(&path);
@@ -428,6 +429,22 @@ impl UsdStageProjectionPlan {
                 .collect();
             drop(assets_span);
             let identity_span = bevy::log::debug_span!("usd_projection_prim_identity").entered();
+            let imageable = Imageable::from_prim_unchecked(native_prim.clone());
+            let parent_purpose = path
+                .parent()
+                .and_then(|parent| data.prim_indices.get(parent.as_str()))
+                .map(|index| purpose_infos[*index]);
+            let purpose_info = match parent_purpose {
+                Some(parent) => imageable.purpose_info_from(parent),
+                // A snapshot region can omit ancestors, including abstract
+                // parents of retained inactive prims. Resolve that boundary
+                // through the same native owner before reusing its descendants.
+                None => imageable.purpose_info(),
+            }
+            .map_err(|error| anyhow!("{path_string}: {error}"))?;
+            let effective_visibility = imageable
+                .effective_visibility(purpose_info.purpose, None)
+                .map_err(|error| anyhow!("{path_string}: {error}"))?;
             let prim = UsdPrimProjectionPlan {
                 path: path_string.clone(),
                 transform,
@@ -456,16 +473,10 @@ impl UsdStageProjectionPlan {
                 has_composition_arc: reader
                     .has_composition_arc(&path)
                     .map_err(|error| anyhow!(error))?,
-                transform_might_be_time_varying: reader
-                    .transform_might_be_time_varying(&path)
-                    .map_err(|error| anyhow!(error))?,
-                resets_xform_stack: reader
-                    .resets_xform_stack(&path)
-                    .map_err(|error| anyhow!(error))?,
-                purpose: reader.purpose(&path).map_err(|error| anyhow!(error))?,
-                effective_visibility: reader
-                    .effective_visibility(&path)
-                    .map_err(|error| anyhow!(error))?,
+                transform_might_be_time_varying: prepared_transform.might_vary,
+                resets_xform_stack: prepared_transform.resets_stack,
+                purpose: purpose_info.purpose,
+                effective_visibility,
                 bound_materials,
                 bound_shader,
             };
@@ -473,6 +484,7 @@ impl UsdStageProjectionPlan {
             let index = data.prims.len();
             data.prim_indices.insert(path_string.clone(), index);
             data.prims.push(prim);
+            purpose_infos.push(purpose_info);
 
             if active {
                 if let Some(parent) = path.parent() {
@@ -1134,9 +1146,18 @@ def Xform "Inactive" (active = false) {{
                             crate::local_transform_at(&live, &path, time).unwrap(),
                             crate::local_transform_matrix_d_at(&live, &path, time).unwrap(),
                         );
-                        let actual = crate::transform::local_transform_pair_at(&live, &path, time)
-                            .unwrap()
-                            .unzip();
+                        let prepared =
+                            crate::transform::prepare_transform_at(&live, &path, time, true)
+                                .unwrap();
+                        assert_eq!(
+                            prepared.resets_stack,
+                            live.resets_xform_stack(&path).unwrap()
+                        );
+                        assert_eq!(
+                            prepared.might_vary,
+                            live.transform_might_be_time_varying(&path).unwrap()
+                        );
+                        let actual = prepared.local.unzip();
                         assert_eq!(actual, expected, "{name} at {time}, {axis}, {meters}");
                         if time == 0.0 {
                             assert_eq!(plan.local_transform_at(&path, time).unwrap(), expected.0);
@@ -1171,64 +1192,79 @@ def Xform "Inactive" (active = false) {{
     #[test]
     #[ignore = "diagnostic timing; run explicitly for snapshot read changes"]
     fn native_projection_snapshot_benchmark() {
-        for authored_transform in [false, true] {
-            let mut source = String::from(
-                "#usda 1.0\n(metersPerUnit = 1\nupAxis = \"Y\")\ndef Xform \"RootWithRepresentativeAssemblyNamespace\" {\n",
-            );
-            for index in 0..1000 {
-                source.push_str(&format!(
-                    "def Xform \"ComponentWithRepresentativeNamespace{index}\" {{\n"
-                ));
-                if authored_transform {
+        for depth in [1, 16] {
+            for authored_transform in [false, true] {
+                let mut source = String::from(
+                    "#usda 1.0\n(metersPerUnit = 1\nupAxis = \"Y\")\ndef Xform \"RootWithRepresentativeAssemblyNamespace\" {\n",
+                );
+                for _ in 1..depth {
+                    source.push_str("def Xform \"HierarchyLevel\" {\n");
+                }
+                let root_path = "/RootWithRepresentativeAssemblyNamespace".to_owned()
+                    + &"/HierarchyLevel".repeat(depth - 1);
+                for index in 0..1000 {
                     source.push_str(&format!(
+                        "def Xform \"ComponentWithRepresentativeNamespace{index}\" {{\n"
+                    ));
+                    if authored_transform {
+                        source.push_str(&format!(
                     "double3 xformOp:translate = ({}, 0.125, -3)\n\
                      double3 xformOp:rotateXYZ = (13, 27, 43)\n\
                      double3 xformOp:scale = (1, 1.000001, 2)\n\
                      uniform token[] xformOpOrder = [\"xformOp:translate\", \"xformOp:rotateXYZ\", \"xformOp:scale\"]\n",
                     1_000_000_000.125_f64 + f64::from(index),
                 ));
-                }
-                for field in 0..12 {
-                    source.push_str(&format!(
-                        "custom double value{field} = {}\n",
-                        index * 12 + field
-                    ));
-                }
-                source.push_str("}\n");
-            }
-            source.push_str("}\n");
-            let recipe = StageRecipe::from_source("snapshot.usda", &source);
-            for complete_recipe in [false, true] {
-                let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
-                let mut durations = Vec::new();
-                for _ in 0..5 {
-                    let started = std::time::Instant::now();
-                    let snapshot = if complete_recipe {
-                        UsdStageProjectionPlan::from_recipe(&recipe).unwrap()
-                    } else {
-                        UsdStageProjectionPlan::from_stage(&stage).unwrap()
-                    };
-                    durations.push(started.elapsed().as_nanos());
-                    assert_eq!(snapshot.data.prims.len(), 1001);
-                    let path = SdfPath::new("/RootWithRepresentativeAssemblyNamespace/ComponentWithRepresentativeNamespace999").unwrap();
-                    assert_eq!(
-                        snapshot.attr_value(&path, "value11"),
-                        Some(Value::Double(11999.0))
-                    );
-                    let prim = &snapshot.data.prims[snapshot.data.prim_indices[path.as_str()]];
-                    if authored_transform {
-                        assert_eq!(prim.transform_matrix_d.unwrap().w_axis.x, 1_000_000_999.125);
-                        assert!(prim.transform.is_some());
-                    } else {
-                        assert!(prim.transform_matrix_d.is_none() && prim.transform.is_none());
                     }
-                    std::hint::black_box(snapshot);
+                    for field in 0..12 {
+                        source.push_str(&format!(
+                            "custom double value{field} = {}\n",
+                            index * 12 + field
+                        ));
+                    }
+                    source.push_str("}\n");
                 }
-                durations.sort_unstable();
-                println!(
-                    "authored_transform={authored_transform} complete_recipe={complete_recipe} snapshot_ns={durations:?} median_ns={}",
-                    durations[2]
-                );
+                for _ in 0..depth {
+                    source.push_str("}\n");
+                }
+                let recipe = StageRecipe::from_source("snapshot.usda", &source);
+                for complete_recipe in [false, true] {
+                    let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+                    let mut durations = Vec::new();
+                    for _ in 0..5 {
+                        let started = std::time::Instant::now();
+                        let snapshot = if complete_recipe {
+                            UsdStageProjectionPlan::from_recipe(&recipe).unwrap()
+                        } else {
+                            UsdStageProjectionPlan::from_stage(&stage).unwrap()
+                        };
+                        durations.push(started.elapsed().as_nanos());
+                        assert_eq!(snapshot.data.prims.len(), 1000 + depth);
+                        let path = SdfPath::new(&format!(
+                            "{root_path}/ComponentWithRepresentativeNamespace999"
+                        ))
+                        .unwrap();
+                        assert_eq!(
+                            snapshot.attr_value(&path, "value11"),
+                            Some(Value::Double(11999.0))
+                        );
+                        let prim = &snapshot.data.prims[snapshot.data.prim_indices[path.as_str()]];
+                        if authored_transform {
+                            assert_eq!(
+                                prim.transform_matrix_d.unwrap().w_axis.x,
+                                1_000_000_999.125
+                            );
+                            assert!(prim.transform.is_some());
+                        } else {
+                            assert!(prim.transform_matrix_d.is_none() && prim.transform.is_none());
+                        }
+                        std::hint::black_box(snapshot);
+                    }
+                    durations.sort_unstable();
+                    println!(
+                        "depth={depth} authored_transform={authored_transform} complete_recipe={complete_recipe} snapshot_ns={durations:?} median_ns={}",
+                        durations[2]
+                    );
+                }
             }
         }
     }
@@ -1634,10 +1670,23 @@ def Xform "Root" {
     uniform token purpose = "guide"
     def Cube "Inherited" {}
     def Cube "Override" { uniform token purpose = "default" }
+    def Cube "Blocked" { uniform token purpose = None }
+    def Xform "Unknown" {
+        uniform token purpose = "unrecognized-purpose"
+        def Cube "Child" {}
+    }
+    def Material "Bridge" {
+        uniform token purpose = "proxy"
+        def Cube "Shape" {}
+    }
     def Xform "Proxy" {
         uniform token purpose = "proxy"
         def Cube "Shape" {}
     }
+}
+class Xform "Abstract" {
+    uniform token purpose = "render"
+    def Cube "Inactive" (active = false) {}
 }
 "#,
         );
@@ -1647,7 +1696,14 @@ def Xform "Root" {
         for (path, expected) in [
             ("/Root/Inherited", openusd_schemas::geom::Purpose::Guide),
             ("/Root/Override", openusd_schemas::geom::Purpose::Default),
+            ("/Root/Blocked", openusd_schemas::geom::Purpose::Guide),
+            (
+                "/Root/Unknown/Child",
+                openusd_schemas::geom::Purpose::Default,
+            ),
+            ("/Root/Bridge/Shape", openusd_schemas::geom::Purpose::Guide),
             ("/Root/Proxy/Shape", openusd_schemas::geom::Purpose::Proxy),
+            ("/Abstract/Inactive", openusd_schemas::geom::Purpose::Render),
         ] {
             let path = SdfPath::new(path).unwrap();
             assert_eq!(live.purpose(&path), Ok(expected));
