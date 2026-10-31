@@ -8,7 +8,7 @@
 mod physics_presentation;
 
 use avian3d::prelude::PhysicsPlugins;
-use bevy::ecs::schedule::SingleThreadedExecutor;
+use bevy::ecs::schedule::{ScheduleLabel, SingleThreadedExecutor};
 use bevy::prelude::*;
 use big_space::prelude::*;
 
@@ -282,11 +282,19 @@ mod big_space_propagation_gate_tests {
 
 impl Plugin for LunCoSimSimulationPlugin {
     fn build(&self, app: &mut App) {
-        // Pose admission, geometry preparation, the native solver and writeback
-        // form the application's ordered physical commit chain.
-        app.edit_schedule(FixedPostUpdate, |schedule| {
-            schedule.set_executor(SingleThreadedExecutor::new());
-        });
+        // Admission and physical commit are short, ordered World transactions.
+        // FixedUpdate retains its native parallel input/dispatch scheduling.
+        for label in [
+            FixedFirst.intern(),
+            FixedPreUpdate.intern(),
+            FixedPostUpdate.intern(),
+            FixedLast.intern(),
+            lunco_core_runtime::SimulationCompletions.intern(),
+        ] {
+            app.edit_schedule(label, |schedule| {
+                schedule.set_executor(SingleThreadedExecutor::new());
+            });
+        }
         // Publish the observed Compute width for clock_snapshot diagnostics.
         // This describes the pool profile; it is not a determinism verdict.
         if !app

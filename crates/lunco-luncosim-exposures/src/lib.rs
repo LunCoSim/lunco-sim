@@ -21,7 +21,9 @@ use lunco_control_core::ControlLink;
 use lunco_core::GlobalEntityId;
 use lunco_core::SceneMountState;
 use lunco_core::{AppSceneExt, SceneResource};
-use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealthSnapshot};
+use lunco_core_runtime::{
+    ApplicationCadence, EngineHealthSnapshot, ModelicaHealthSnapshot, PhysicsHealthSnapshot,
+};
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_exposure_core::{
@@ -112,9 +114,13 @@ fn install_exposure_state(app: &mut App) {
 fn publish_engine_health_exposure(
     engine: Res<EngineHealthSnapshot>,
     physics: Res<PhysicsHealthSnapshot>,
+    modelica: Option<Res<ModelicaHealthSnapshot>>,
     mut exposures: ResMut<EngineExposures>,
 ) {
-    if !engine.is_changed() && !physics.is_changed() {
+    if !engine.is_changed()
+        && !physics.is_changed()
+        && !modelica.as_ref().is_some_and(|sample| sample.is_changed())
+    {
         return;
     }
 
@@ -134,13 +140,29 @@ fn publish_engine_health_exposure(
         surface.property("physics_step_ms", step_time_ms);
         surface.property("physics_step_number", physics.step_number as f64);
     }
+    let modelica_available = modelica.as_ref().is_some_and(|sample| sample.fps.is_some());
+    if let Some(modelica) = modelica {
+        if let Some(fps) = modelica.fps {
+            surface.property("modelica_fps", fps);
+        }
+        if let Some(ms) = modelica.worker_step_ms {
+            surface.property("modelica_worker_step_ms", ms);
+        }
+        if let Some(seconds) = modelica.sample_wall_secs {
+            surface.property("modelica_sample_wall_secs", seconds);
+        }
+        surface.property("modelica_participants", modelica.participants.to_string());
+    }
     // Revisions are diagnostic identity, not measurements. Keep them typed as
     // strings so a large u64 can never be narrowed through a presentation
     // value just to make it fit a numeric HUD property.
     surface.property("engine_revision", engine.revision.to_string());
     surface.property("physics_revision", physics.revision.to_string());
     surface.visible(
-        engine.fps.is_some() || engine.frame_time_ms.is_some() || physics.step_time_ms.is_some(),
+        engine.fps.is_some()
+            || engine.frame_time_ms.is_some()
+            || physics.step_time_ms.is_some()
+            || modelica_available,
     );
 }
 

@@ -7,6 +7,8 @@
 
 mod application;
 mod camera;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_simulation_host;
 #[cfg(feature = "api-transport")]
 mod offscreen;
 mod render_settings;

@@ -8,6 +8,7 @@
 //! [`lunco_modelica_library`].
 
 use bevy::prelude::*;
+mod health;
 use crossbeam_channel::unbounded;
 use lunco_core::scene_lifecycle::AppSceneExt;
 #[cfg(target_arch = "wasm32")]
@@ -153,6 +154,16 @@ impl Plugin for ModelicaExecutionPlugin {
         app.init_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>();
         app.add_message::<ModelicaSessionStarted>();
         app.init_resource::<lunco_modelica_runtime::ModelicaStepDiagnostics>();
+        app.init_scene_resource::<health::ModelicaHealthWindow>()
+            .init_scene_resource::<lunco_core_runtime::ModelicaHealthSnapshot>()
+            .register_type::<lunco_core_runtime::ModelicaHealthSnapshot>()
+            .add_systems(
+                PostUpdate,
+                health::publish_modelica_health
+                    .run_if(health::modelica_health_due)
+                    .before(lunco_core_runtime::health::publish_engine_health)
+                    .in_set(lunco_core::RuntimeCycleSet::Presentation),
+            );
         app.add_message::<ModelicaNotice>()
             .init_scene_resource::<Messages<ModelicaNotice>>();
         app.add_message::<CompileRequested>();

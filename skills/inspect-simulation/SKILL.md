@@ -192,6 +192,36 @@ native entity name. `SimulationTimingProfile` reports retained fixed demand;
 render easing must remain within completed endpoints even when that demand
 exceeds a timestep.
 
+For a Time-menu acceleration report, compare completed `sim_tick` intervals
+against `clock_snapshot().wall_elapsed_s` at 1x and the requested rate. A selected
+`transport_rate` alone is not throughput evidence. Inspect `SimulationTimingProfile`
+for fixed-cycle cost and retained pending duration. Test ordinary window pacing
+and loss of focus: `--no-throttle` masks missing cadence demand or solver wake-ups.
+The native regression uses an authored Rhai verdict and an owned X11 focus window:
+
+```sh
+python3 scripts/api/test_simulation_transport_rate.py --port <free-port> --output <workspace-path>
+```
+
+For a Twin, pass `--twin <root>` and its expected
+`--participants <count>`. Its measurement does not poll the HTTP API, which would
+wake the window and invalidate a background-pacing result.
+Use `--settle-seconds <seconds>` to exclude scene preparation and `--rates <rates>`
+to qualify specific requested rates; the default gate remains 2x, 4x and 8x.
+Use `--sample-seconds 30` for a sustained window; authored and independent
+wall-clock rates must both be within one percent of the requested setting.
+Each rate runs for three seconds before sampling (`--warmup-seconds`); this
+retains all fixed debt and excludes the rate-change presentation transient.
+`--keep-focus` leaves focus unchanged, so report any transitions. `--no-vsync`
+is a presentation diagnostic and does not qualify ordinary desktop pacing.
+`--check-modelica-hud` adds the production running/pause/clear gate after rate
+measurement and captures the visible meter. The meter reports actual completion
+bursts; its one-second rate can differ from the requested pacing cadence.
+`--scene <scene>` exercises an existing fixture with the same gate. Distinguish a
+failed requested rate from a passing lower rate; retain the timing evidence for
+both. Native readiness, render handoff and fixed-service ownership are defined in
+[the time architecture](../../docs/architecture/19-unified-time-and-clock.md).
+
 For DEM terrain, read the typed `TerrainLodStatus` query as the authoritative
 geometry stream state. A settled visual terrain requires `wanted == resident`
 and `pending == 0`; the status-bar text is presentation history and is not a

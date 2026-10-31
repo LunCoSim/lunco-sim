@@ -125,7 +125,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
             .resource::<super::TelemetrySettings>()
             .max_sample_deliveries_per_update;
         let delivery_capacity =
-            delivery_budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_FRAME as usize);
+            delivery_budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_SERVICE as usize);
 
         let mut channels: Vec<ApiValue> = signals
             .iter_scalar()

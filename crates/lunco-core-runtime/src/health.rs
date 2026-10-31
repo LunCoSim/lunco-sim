@@ -53,6 +53,21 @@ pub struct PhysicsHealthSnapshot {
     pub revision: u64,
 }
 
+/// Completed Modelica communication steps measured against the native wall clock.
+#[derive(Resource, Reflect, Debug, Clone, Copy, Default, PartialEq)]
+#[reflect(Resource, Debug)]
+pub struct ModelicaHealthSnapshot {
+    /// Minimum completed steps per second across instances with live samples.
+    /// Paused instances contribute zero; absent measurements remain `None`.
+    pub fps: Option<f64>,
+    /// Largest per-instance mean worker service time over this sample window.
+    pub worker_step_ms: Option<f64>,
+    pub participants: usize,
+    pub sample_wall_secs: Option<f64>,
+}
+
+impl lunco_core::SceneResource for ModelicaHealthSnapshot {}
+
 /// Publish the engine diagnostics after the frame's Update systems have
 /// recorded them, before the UI and render hand-off consume the snapshot.
 pub fn publish_engine_health(

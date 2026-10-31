@@ -27,7 +27,9 @@ pub use async_work::{
     AsyncWorkPriority, AsyncWorkRejection, AsyncWorkSnapshot,
 };
 pub use cadence::{ApplicationCadence, CadenceClock};
-pub use health::{ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, PhysicsHealthSnapshot};
+pub use health::{
+    ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, ModelicaHealthSnapshot, PhysicsHealthSnapshot,
+};
 pub use pacing::{
     FramePacingDemand, SimulationBarrier, SimulationBarrierParticipants, SimulationDependencyKey,
     SimulationDependencyStates, SimulationDependencyStatus, SimulationExecutionMode,
@@ -83,6 +85,10 @@ pub struct SimulationCompletionSet;
 /// physics, scripts, or presentation.
 pub fn admit_simulation_completions(world: &mut World) {
     world.run_schedule(SimulationCompletions);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(mut sources) = world.get_resource_mut::<SimulationCompletionSources>() {
+        sources.rearm_waker();
+    }
 }
 
 /// Shared completion service for simulation and standalone execution hosts.

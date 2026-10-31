@@ -388,6 +388,20 @@ smoothed, while the retained `engine.frame_time` channel keeps the raw diagnosti
 short hitches remain visible. `lunco-viz` renders both sources with the same sparkline
 presentation and does not create another history.
 
+The same `engine-health` namespace publishes `modelica_fps` and
+`modelica_worker_step_ms` from `ModelicaHealthSnapshot`. The Modelica execution
+owner samples its existing validated completion counters over native wall-clock
+windows of at least one second. FPS is the minimum completed-step rate across
+current instances; worker time is the largest per-instance mean over that
+window. `modelica_participants` and `modelica_sample_wall_secs` describe the
+sample cohort. Two instances completing 60 steps/s therefore show 60 Modelica
+FPS. Paused instances report zero completion FPS. An empty worker window has
+no mean service time; a scene without sampled instances has no FPS measurement.
+The snapshot and its sampling window reset through registered scene teardown,
+and a changed instance/session starts a fresh measurement window. The status-bar
+HUD reads this exposure and keeps Modelica FPS with its required metrics;
+worker service time is available in the tooltip.
+
 `EnginePerformance` reads the same application-owned frame history on demand through
 `lunco-api`. It returns chronological `frame_time_samples_ms`, the retained capacity,
 the latest diagnostic values and `frame_sample_count`. The process-scoped counter

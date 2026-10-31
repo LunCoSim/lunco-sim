@@ -1534,6 +1534,16 @@ leave the receipt unavailable and do not change numerical admission. The
 `modelica_initialization_network` production Rhai gate checks the retained receipt
 alongside initial values, communication rates, pause/resume and clock behavior.
 
+Modelica execution also publishes the scene-scoped `ModelicaHealthSnapshot`
+from the same admitted step counters used by `CosimStatus`. Its one-second
+native wall-clock window reports completed-step FPS and worker service time
+through the shared `engine-health` exposure. See the
+[telemetry health contract](telemetry-subsystem.md) for aggregation, pause,
+unavailable samples and teardown semantics. This continuous diagnostic math
+does not change simulation scheduling or require authored selection policy.
+The production `modelica_perf_hud.rhai` gate covers running, paused and cleared
+states, including absence of measurements after the participants retire.
+
 `lunco-usd-avian-joints` seats native joint definitions after validated initial
 body poses and installs them disabled. `PhysicsJointPrepared` keeps those
 measurements available while body readiness prevents solver-island admission.

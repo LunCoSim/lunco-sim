@@ -41,6 +41,11 @@ native click-duration limit. For an ordinary click after layout settles, use
 slow frames cannot turn the click into a long hold. Use separate phases for
 drags and held-gesture assertions; measure their wall duration when a click is
 expected. `InjectWindowInput` exposes the individual transitions directly.
+
+For Time-menu throughput after selection, follow
+[`inspect-simulation`](../inspect-simulation/SKILL.md): its ordinary-pacing gate
+measures completed simulation time without a forced frame cadence or API wake-ups.
+
 After publishing or switching a surface, capture its rendered layout before
 injecting pointer input. A command acknowledgement precedes widget layout and
 does not establish a hit target.

@@ -193,7 +193,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-viewport-core`** | Small renderer-independent measured viewport geometry contract. Owns the physical-pixel `PanelRect` value shared by scene, camera, editor, and shell adapters without coupling that value to egui or the Workbench implementation. |
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows styled by `Theme.typography.tree`. Recursive and header-only branches share disclosure state; virtualized trees allocate only a fixed-height header. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench-layout`** | Renderer-independent `egui_dock` layout state: perspective registration/activation, live and cached tab retirement, view-owned instance restoration, dock snapshots, panel placement, split sanitization, and scene-interaction synchronization. It consumes workbench contracts/state without the concrete Bevy/egui shell. |
-| **`lunco-workbench-perf-ui`** | Reusable performance capability: persisted HUD settings, typed toggle command, Bevy frame diagnostics, and live `PerfStats`. Physics adapters publish optional step timing into this package; the concrete shell only renders the values. |
+| **`lunco-workbench-perf-ui`** | Reusable performance capability: persisted HUD settings, typed toggle command, Bevy frame diagnostics, and live `PerfStats`. It reads render, physics and Modelica measurements from the shared engine-health exposure; the concrete shell only renders the values. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `bevy_egui` rendering, panel-host consumption, viewport integration, shell-owned command observers, and revision-fenced Rhai perspective composition with `InspectWorkbench`. Dock layout state and perspective materialization are supplied by `lunco-workbench-layout`; headless adapters use the core/layout contracts without linking this shell. |
 | **`lunco-workbench-help-ui`** | Optional perspective help popup, control-reference registry and live control sections. Task descriptions and titles come from the perspective owner; the shell builds Help navigation from the current registry. It keeps egui rendering outside `lunco-workbench-core`. |
 | **`lunco-workbench-guided-ui`** | Optional application-level adapter for scene-scoped guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. Its registered scene resource resets after shutdown and entity-removal callbacks; objectives visibility is an application preference. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
@@ -1191,10 +1191,11 @@ full vessel-control adapter.
 
 **`lunco-workbench-perf-ui`**
 Reusable performance capability. It owns the persisted HUD preference, typed
-toggle command, Bevy frame-time diagnostics, and live `PerfStats`; the
-physics-aware editor bridge only publishes optional step timing. The concrete
-workbench imports this package for rendering, so status presentation changes
-do not make the shell the owner of diagnostics state.
+toggle command, Bevy frame-time diagnostics, and live `PerfStats`; the typed
+engine-health exposure supplies render FPS, physics timing, and Modelica
+completion FPS with worker service timing. The concrete workbench imports this
+package for rendering, so status presentation changes do not make the shell the
+owner of diagnostics state.
 
 **`lunco-workbench-help-ui`**
 Rendered Help/About presentation for the Workbench. It owns the help registry's
@@ -1453,7 +1454,9 @@ launch, and the wasm `lunica_worker` transport. It composes the generic
 by `lunco-modelica-runner`; source-library readiness and per-run routing remain
 Modelica-specific here. Compiler-only consumers do not inherit this host.
 It registers the lifecycle-notice queue with scene teardown so unread notices
-cannot repopulate cleared presentation state.
+cannot repopulate cleared presentation state. It also owns the scene-registered
+Modelica performance window, publishing admitted completion FPS and mean worker
+service time through the shared typed health/exposure boundary.
 
 **`lunco-modelica-worker`**
 Stateful Modelica worker engine. It owns live solver construction and stepping,

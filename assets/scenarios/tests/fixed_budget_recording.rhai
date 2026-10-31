@@ -45,7 +45,7 @@ fn on_tick(me, ctx) {
             "three frames completed through production GPU readback"),
         t_true(this.saw_pending, "whole fixed cycles remain queued after a budgeted update"),
         t_true(this.saw_budget, "complete fixed cycles yield with remaining demand queued"),
-        t_true(!this.budget_exceeded, "no update exceeds the fixed-cycle budget"),
+        t_true(!this.budget_exceeded, "no fixed-loop service pass exceeds its cycle budget"),
         t_true(!this.partial_capture, "readback never starts with whole fixed cycles pending"),
         t_true(timing.max_delta_limited_simulation_secs_total == 0.0,
             "recorded simulation demand is not clipped"),

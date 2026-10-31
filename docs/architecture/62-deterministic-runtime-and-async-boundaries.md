@@ -1660,14 +1660,16 @@ The whole-simulation guarantee remains open because:
     together at the diagnostics boundary, so optimization cannot target an
     owner using comparable cycle evidence.
 12. Bevy's fixed loop executes synchronously on the GUI app thread before
-    `Update`. The owner drains at most 64 complete cycles per update and retains
+    `Update`. The owner drains at most 64 complete cycles per host service pass and retains
     remaining admitted time; a fixed delta preserves numerical step size but does not
     promise 60 wall-clock physics ticks per second or responsive UI during a
     long tick/burst. `SimulationTimingProfile` now reports bounded tick and
     fixed-loop service/budget samples and recoverable pending simulation duration.
     The separate max-delta diagnostic detects unexpected virtual-clock clipping.
     It cannot report wall-paced deadline misses and does not move fixed work off
-    the GUI thread.
+    the GUI thread. The native pipelined host can also service ready completions
+    and existing fixed debt during the render handoff, before clock sampling;
+    this retains the same World and fixed runner rather than isolating UI work.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
     invocation at 100,000 Rhai operations. This bounds interpreter work per

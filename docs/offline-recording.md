@@ -179,7 +179,7 @@ with the last one each frame silently winning:
 system has run.
 
 `lunco-time` admits each running manual duration in full and drains at most 64
-complete fixed cycles per app update. The recorder reads the same
+complete fixed cycles per host service pass. The recorder reads the same
 `Time<Fixed>::overstep`: while a whole cycle remains, it writes zero additional
 duration and waits before requesting readback. This preserves the logical frame
 through budget and causal holds, including a 25 FPS frame at 64x. It does not

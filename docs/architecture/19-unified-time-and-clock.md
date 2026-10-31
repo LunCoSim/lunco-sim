@@ -57,11 +57,46 @@ The live transport exposes one bounded ladder: `0.1x, 0.25x, 0.5x, 1x, 2x,
 world. The fixed timestep does not change, so a higher rate performs more
 completed physics ticks per rendered frame.
 
-`ClockProjectionSet` projects `TimeTransport` and causal holds onto Bevy's
+The time owner holds one `FramePacingDemand` realtime request while automatic
+transport or queued manual cycles need service. Native background pacing therefore
+services a running world even when it has no Modelica participants. Pause and
+manual hold release only this owner's request; other cadence owners retain theirs.
+The request has application lifetime and follows the transport's scene retirement.
+
+Native solver readiness also wakes the window host. `SimulationCompletionSources`
+owns one channel-readiness waiter, and the window adapter supplies the winit
+wake callback. The waiter never receives participant results or advances a clock.
+Notifications coalesce until `SimulationCompletions` has admitted results through
+the existing deterministic owners, then rearm. Late registrations join the same
+waiter; worker leases retire sources, and dropping the host closes the waiter.
+Failure to create the waiter raises `simulation-completion-waker-failed` through
+the existing runtime-fault owner and holds simulation admission.
+The UI never waits for a worker, and headless deadline waiting retains its owner.
+The native pipelined render host receives the previous render frame in `First`,
+before completion admission and clock projection, through Bevy's public
+`RenderAppChannels` API. During that existing GPU
+handoff it services ready simulation completions and already-admitted fixed
+cycles on the main thread. Render readiness always ends the handoff; solver
+readiness can never prolong it. Each service pass retains the fixed runner's
+bounded work budget and never samples or accumulates wall time. The normal `First`
+clock systems then sample the clock once, and presentation producers run before the
+received frame is extracted and sent back to the renderer. This preserves the
+single extraction path, asset events, scene teardown and physical easing while
+removing the one-asynchronous-step-per-rendered-frame limit. The render frame is
+application-owned, never shared with a concurrent World evaluator.
+This is a generic host-service invariant, with no authored routing or selection
+decision requiring a Rhai policy hook. The native window gate is
+`scripts/api/test_simulation_transport_rate.py`: it verifies actual 2x, 4x and 8x
+completed time while unfocused, without `--no-throttle` or HTTP polling during
+measurement. `--twin` and `--participants` run the same authored gate on a Twin.
+Requested rates remain bounded by the cost of complete physical and solver cycles.
+
+`ClockProjectionSet` projects `TimeTransport` and preparation/manual holds onto Bevy's
 virtual clock in `First`, before `TimeSystems` samples the next delta.
 The Modelica execution host drains and validates completed worker transactions
 before this projection, after message rotation. An outstanding causal
-participant still holds the clock; completed work can resume admission during
+participant still holds fixed-cycle admission while pacing demand accumulates;
+completed work can resume execution during
 the same update without waiting for a later lifecycle cycle.
 `SimulationAdmissionSet` is the `PreUpdate` boundary after lifecycle and
 readiness owners publish their current holds. The fixed runner checks admission
@@ -75,8 +110,8 @@ plus pending overstep
 equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
-The runner drains at most `MAX_FIXED_STEPS_PER_FRAME` (64) complete cycles per
-app update at every transport rate. It also yields after one fixed timestep of
+The runner drains at most `MAX_FIXED_STEPS_PER_SERVICE` (64) complete cycles per
+host service pass at every transport rate. It also yields after one fixed timestep of
 measured wall-clock service, checked between complete causal cycles. This is a
 host service boundary derived from the existing fixed clock, not an authored
 mission decision. It keeps an overloaded catch-up batch from monopolizing

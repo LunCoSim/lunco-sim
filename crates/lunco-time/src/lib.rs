@@ -94,7 +94,7 @@ pub struct FixedLoopTimingSample {
     /// Simulation-time demand omitted by `Time<Virtual>::max_delta` this update.
     pub max_delta_limited_simulation_secs: Option<f64>,
     /// Admitted simulation duration still queued in the fixed accumulator,
-    /// including whole ticks held by admission or the per-update work budget.
+    /// including whole ticks held by admission or the host service budget.
     pub pending_simulation_secs: f64,
 }
 
@@ -447,9 +447,9 @@ pub fn realtime_rate_label(rate: f64) -> String {
     format!("{rate}x")
 }
 
-/// Maximum number of complete causal fixed cycles one app update may drain.
+/// Maximum number of complete causal fixed cycles one host service pass may drain.
 /// Remaining admitted duration stays queued in `Time<Fixed>::overstep`.
-pub const MAX_FIXED_STEPS_PER_FRAME: u32 = 64;
+pub const MAX_FIXED_STEPS_PER_SERVICE: u32 = 64;
 
 /// Run condition for systems that mutate the causal simulation. The virtual
 /// clock is mandatory in a composed host; an absent clock fails closed instead
@@ -566,7 +566,7 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 /// each fixed cycle transfers one timestep from `overstep` to `elapsed`. A
 /// solver or scene admission barrier can arise inside a burst, so the remaining
 /// admitted time stays in the shared accumulator until its owner releases the
-/// hold. The per-update work budget also retains time rather than clipping the
+/// hold. The host service budget also retains time rather than clipping the
 /// input delta or discarding pending fixed cycles. Yield after one fixed
 /// quantum of wall-clock service so overloaded catch-up cannot monopolize
 /// presentation. A complete causal cycle remains indivisible.
@@ -578,7 +578,25 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    for cycle in 0..MAX_FIXED_STEPS_PER_FRAME {
+    run_pending_fixed_main_schedule(world, service_started, service_budget);
+}
+
+/// Service already admitted cycles while a native host waits for presentation.
+/// No wall time is sampled or accumulated here, and no participant is awaited.
+/// The next ordinary application update publishes all presentation projections.
+pub fn service_pending_simulation(world: &mut World) {
+    lunco_core_runtime::admit_simulation_completions(world);
+    let service_started = Instant::now();
+    let service_budget = world.resource::<Time<Fixed>>().timestep();
+    run_pending_fixed_main_schedule(world, service_started, service_budget);
+}
+
+fn run_pending_fixed_main_schedule(
+    world: &mut World,
+    service_started: Instant,
+    service_budget: Duration,
+) {
+    for cycle in 0..MAX_FIXED_STEPS_PER_SERVICE {
         if cycle > 0 && service_started.elapsed() >= service_budget {
             break;
         }
@@ -1092,6 +1110,7 @@ impl Plugin for TimePlugin {
         app.init_schedule(lunco_core_runtime::SimulationCompletions)
             .init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<SimTick>()
+            .init_resource::<lunco_core_runtime::FramePacingDemand>()
             .init_resource::<SimulationTimingProfile>()
             .init_resource::<TimeUpdateTimingInput>()
             .init_resource::<SimulationTimingStart>()
@@ -1125,7 +1144,11 @@ impl Plugin for TimePlugin {
             )
             .add_systems(FixedFirst, begin_fixed_tick_timing)
             .add_systems(FixedLast, finish_fixed_tick_timing)
-            .add_systems(First, project_time_transport.in_set(ClockProjectionSet));
+            .add_systems(First, project_time_transport.in_set(ClockProjectionSet))
+            .add_systems(
+                First,
+                realtime::sync_simulation_pacing.after(ClockProjectionSet),
+            );
 
         app.remove_systems_in_set(
             RunFixedMainLoop,
@@ -1653,7 +1676,7 @@ mod tests {
             );
             let expected_ticks = (admitted.as_nanos() / timestep.as_nanos()) as u32;
             let completed = app.world().resource::<FixedRunCount>().0;
-            assert!(completed > 0 && completed <= expected_ticks.min(MAX_FIXED_STEPS_PER_FRAME));
+            assert!(completed > 0 && completed <= expected_ticks.min(MAX_FIXED_STEPS_PER_SERVICE));
 
             app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
                 Duration::ZERO,
@@ -1674,7 +1697,7 @@ mod tests {
                 let before = app.world().resource::<FixedRunCount>().0;
                 app.update();
                 let after = app.world().resource::<FixedRunCount>().0;
-                assert!(after > before && after - before <= MAX_FIXED_STEPS_PER_FRAME);
+                assert!(after > before && after - before <= MAX_FIXED_STEPS_PER_SERVICE);
                 let fixed = app.world().resource::<Time<Fixed>>();
                 assert_eq!(fixed.elapsed() + fixed.overstep(), admitted);
             }

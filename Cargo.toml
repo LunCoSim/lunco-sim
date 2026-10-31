@@ -624,6 +624,23 @@ opt-level = 3
 [profile.dev.package.lunco-luncosim-simulation]
 opt-level = 3
 
+# Fixed-cycle scheduling and its workspace-owned numerical/input consumers.
+# The dependency wildcard excludes these callers and their monomorphizations.
+[profile.dev.package.lunco-time]
+opt-level = 3
+
+[profile.dev.package.lunco-celestial-spatial]
+opt-level = 3
+
+[profile.dev.package.lunco-celestial-ephemeris]
+opt-level = 3
+
+[profile.dev.package.lunco-scripting-rhai-world]
+opt-level = 3
+
+[profile.dev.package.lunco-usd-sim-cosim]
+opt-level = 3
+
 # Keep Avian's overflow checks enabled in development. Physics teardown is
 # explicitly retired through Avian's graph-removal components above, so the
 # development profile must retain the engine's assertions as a real invariant

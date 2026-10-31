@@ -299,7 +299,9 @@ fn register_hud_settings_menu(world: &mut World) {
         };
         let original_performance = performance;
         ui.checkbox(&mut performance.enabled, "Performance HUD (status bar)")
-            .on_hover_text("Show live FPS, frame time, and optional physics timing.");
+            .on_hover_text(
+                "Show rendering FPS, frame time, physics timing, and Modelica completion FPS.",
+            );
         if performance != original_performance {
             ctx.set_resource(performance);
         }

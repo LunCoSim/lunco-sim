@@ -14,18 +14,18 @@
 //! - **Typed command** — [`TogglePerfHud`] over the API/script bus.
 //! - **Direct mutation** — write to [`PerfHudSettings::enabled`].
 //!
-//! Live samples (`fps`, `frame_ms`, `physics_ms`) live on a separate
+//! Live render, physics and Modelica samples live on a separate
 //! [`PerfStats`] resource — those don't belong in persistable
 //! settings. The status bar reads from `PerfStats` for the numbers
 //! and from `PerfHudSettings.enabled` for visibility.
 //!
-//! Workbench itself stays physics-agnostic: `physics_ms` is a plain
-//! `Option<f32>` that another crate (e.g. `lunco-luncosim-edit-ui`)
-//! populates when avian is in the build.
+//! The domain owners publish typed health snapshots through the shared
+//! `engine-health` exposure. This adapter copies those measurements; the
+//! workbench renders them without depending on solver implementations.
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_commands};
 use lunco_exposure_core::{EngineExposures, ExposureValue};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,19 @@ pub struct PerfStats {
     /// Wall-clock cost of the avian physics step, ms. `None` when no
     /// physics-aware plugin is publishing.
     pub physics_ms: Option<f32>,
+    /// Completed steps per real second of the slowest current Modelica instance.
+    pub modelica_fps: Option<f64>,
+    /// Largest per-instance mean worker service time in the same wall-clock window.
+    pub modelica_worker_step_ms: Option<f64>,
+}
+
+impl SceneResource for PerfStats {
+    fn clear_scene(&mut self) {
+        // Render/physics health belongs to the application; Modelica samples
+        // belong to the retired scene's participant cohort.
+        self.modelica_fps = None;
+        self.modelica_worker_step_ms = None;
+    }
 }
 
 /// Flip the perf HUD on/off. Persisted via `lunco-settings`.
@@ -95,7 +108,12 @@ fn sync_perf_stats(
     mut stats: ResMut<PerfStats>,
 ) {
     if !settings.enabled {
-        if stats.fps != 0.0 || stats.frame_ms != 0.0 || stats.physics_ms.is_some() {
+        if stats.fps != 0.0
+            || stats.frame_ms != 0.0
+            || stats.physics_ms.is_some()
+            || stats.modelica_fps.is_some()
+            || stats.modelica_worker_step_ms.is_some()
+        {
             *stats = PerfStats::default();
         }
         return;
@@ -105,6 +123,9 @@ fn sync_perf_stats(
         exposure_number(exposures.as_deref(), "frame_time_ms").unwrap_or_default() as f32;
     stats.physics_ms =
         exposure_number(exposures.as_deref(), "physics_step_ms").map(|value| value as f32);
+    stats.modelica_fps = exposure_number(exposures.as_deref(), "modelica_fps");
+    stats.modelica_worker_step_ms =
+        exposure_number(exposures.as_deref(), "modelica_worker_step_ms");
 }
 
 /// Push the perf HUD's row into the workbench Settings menu.
@@ -127,8 +148,8 @@ fn register_settings_submenu(world: &mut World) {
         ui.checkbox(&mut settings.enabled, "Show FPS / frame time in status bar")
             .on_hover_text(
                 "Bottom-right of the status bar shows live FPS, frame \
-                 time, and physics step time when an avian-aware crate \
-                 is loaded. Persisted to the shared LunCoSim settings file.",
+                 time, physics step time, and Modelica completion FPS. \
+                 Persisted to the shared LunCoSim settings file.",
             );
         if settings != original {
             ctx.set_resource(settings);
@@ -148,7 +169,7 @@ pub struct PerfHudPlugin;
 impl Plugin for PerfHudPlugin {
     fn build(&self, app: &mut App) {
         app.register_settings_section::<PerfHudSettings>();
-        app.init_resource::<PerfStats>();
+        app.init_scene_resource::<PerfStats>();
         // Frame diagnostics are the raw source retained by Bevy. The runtime
         // snapshot publisher consumes them once for all application surfaces.
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {

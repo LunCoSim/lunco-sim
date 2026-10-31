@@ -853,7 +853,7 @@ fn deliver_sampled_parameters(world: &mut World) {
         warn_once!("telemetry: sample delivery is disabled because its per-update budget is zero");
         return;
     }
-    let capacity = budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_FRAME as usize);
+    let capacity = budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_SERVICE as usize);
     let batch = {
         let mut queue = world.resource_mut::<SampleDeliveryQueue>();
         let count = budget.min(queue.samples.len());
@@ -1042,7 +1042,7 @@ fn sample_parameters(world: &mut World) {
         .expect("LunCoTelemetryPlugin requires its SampleDeliveryQueue resource");
     let delivery_budget = settings.max_sample_deliveries_per_update;
     let delivery_capacity =
-        delivery_budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_FRAME as usize);
+        delivery_budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_SERVICE as usize);
 
     if plan.channels.len() > settings.max_channels {
         warn_once!(

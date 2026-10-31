@@ -1771,7 +1771,7 @@ settled owned run. It summarizes the latest 240 fixed ticks and 240 app-update
 fixed-loop bursts: p50/p95/p99/max service time, per-tick realtime service-budget
 exceedances, fixed steps per app update, and retained pending simulation duration
 (`fixed_loop.latest_pending_simulation_secs`, whole ticks plus fractional
-overstep). The owner drains at most 64 complete cycles per update and yields
+overstep). The owner drains at most 64 complete cycles per host service pass and yields
 between complete ticks after one fixed quantum of monotonic wall-clock service,
 while admitting the full running delta. An expensive first tick still completes;
 the remaining demand stays queued instead of becoming a synchronous 64-tick
@@ -1784,12 +1784,35 @@ it excludes asynchronous solver work and completion admission outside that
 interval. Do not label that number complete coupled-step time or use it alone
 to certify a coupled-step budget. Trace the causal worker critical path and
 response/commit boundary without adding overlapping worker spans.
+The performance HUD also shows `engine-health.modelica_fps`, the slowest
+instance's admitted completions per native wall-clock second. Its tooltip
+shows the largest per-instance mean worker service time. These come from the
+Modelica execution owner's scene-scoped health window. Inspect
+`modelica_sample_wall_secs` and `modelica_participants` when comparing the meter
+with a rate gate; the status-bar value updates over a one-second window.
+See [the health contract](../../docs/architecture/telemetry-subsystem.md).
 `SimulationCompletions` runs in `First`, after message
 rotation and before `ClockProjectionSet`, and in the native driver's bounded
 completion wait. The shared fixed runner also services it once before checking
 admission for a held pending cycle; compile requests remain in
 the `Update` lifecycle cycle. Preserve session/source/communication-point
 validation and the all-causal-participant hold when changing this boundary.
+The native pipelined host also services ready completions and existing fixed
+debt during its render-frame handoff, before clock sampling. That service never
+adds wall time or waits for a solver; rendering readiness ends the handoff.
+See [the time owner](../../docs/architecture/19-unified-time-and-clock.md).
+Use `scripts/api/test_simulation_transport_rate.py --twin <root>
+--participants <count> --sample-seconds 30 --rates 8 --output <path> --port <free-port>`
+for a sustained rate gate. Both clocks must agree with the requested rate within
+one percent. Three seconds at each rate precede sampling (`--warmup-seconds`), without
+resetting pending fixed time. This excludes the rate-change transient.
+The default gate tests background pacing; `--keep-focus` leaves focus unchanged
+and requires its actual transitions to be reported. `--no-vsync`
+and `--no-throttle` are separate diagnostic comparisons, not ordinary desktop
+acceptance. The latter forces continuous host updates while unfocused; it does
+not change the simulation transport clock or fixed timestep.
+Distinguish development-build reference replay cost from the normal release
+profile without removing agreement checks or changing numerical settings.
 The profile is read on demand and is not a replay or UI-isolation verdict; a
 nonzero clipped-time total means wall-clock demand was already excluded by the
 clock admission, distinct from the recoverable pending duration.

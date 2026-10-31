@@ -228,6 +228,8 @@ impl Plugin for LunCoSimUiPlugin {
         // each frame, so inserting it from this plugin (after DefaultPlugins) is
         // fine.
         let args: Vec<String> = std::env::args().collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::native_simulation_host::install(app);
         let networked = args.iter().any(|a| a == "--host" || a == "--connect");
         let no_throttle = args.iter().any(|a| a == "--no-throttle");
         if networked || no_throttle {
@@ -1741,17 +1743,17 @@ fn render_scenarios_menu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                         }
                     });
             });
-            ui.separator();
-        }
+        ui.separator();
+    }
 
-        let Some(roots) = ctx
-            .resource::<lunco_assets_core::twin_source::TwinRoots>()
-            .cloned()
-        else {
-            report_scenario_registry_error(ctx, "the Twin registry resource is unavailable");
-            render_scenario_registry_unavailable(ui);
-            return;
-        };
+    let Some(roots) = ctx
+        .resource::<lunco_assets_core::twin_source::TwinRoots>()
+        .cloned()
+    else {
+        report_scenario_registry_error(ctx, "the Twin registry resource is unavailable");
+        render_scenario_registry_unavailable(ui);
+        return;
+    };
 
     if ctx
         .resource::<scenario_fixture::ScenarioRegistryFixture>()

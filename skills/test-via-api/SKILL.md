@@ -38,6 +38,13 @@ to run without a visible window. If a requested visual check cannot run
 headfully, stop and report the display/session blocker instead of silently
 falling back to headless mode.
 
+For Time-menu throughput, use the ordinary-pacing acceptance driver in
+[`inspect-simulation`](../inspect-simulation/SKILL.md). Synthetic gesture flags
+and repeated API requests can mask the host-pacing defect that this gate measures.
+Its `--check-modelica-hud` option runs ten authored checks for live completion
+FPS, pause and the negative cleared-scene case, with running/cleared screenshots.
+This checks actual completed-step throughput independently of requested cadence.
+
 ## Live shader iteration
 
 Shader source edits are a live-test path. Keep the production luncosim running, edit the

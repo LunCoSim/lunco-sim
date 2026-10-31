@@ -3,6 +3,25 @@ use bevy::prelude::*;
 use bevy::time::{Real, TimeUpdateStrategy};
 use std::time::Duration;
 
+/// The time owner holds one application-lifetime cadence request while live
+/// transport or explicit manual cycles need service, independent of participants.
+pub(crate) fn sync_simulation_pacing(
+    time: Res<Time<Virtual>>,
+    steps: Res<crate::SimulationStepControl>,
+    mut demand: ResMut<lunco_core_runtime::FramePacingDemand>,
+    mut requested: Local<bool>,
+) {
+    let needed = !time.is_paused() || steps.remaining() > 0;
+    if needed != *requested {
+        if needed {
+            demand.acquire_realtime();
+        } else {
+            demand.release_realtime();
+        }
+        *requested = needed;
+    }
+}
+
 /// Change the native clock's update source without admitting a source-time gap.
 ///
 /// Manual updates move Bevy's native wall-clock sample independently of the
@@ -34,6 +53,70 @@ fn set_time_update_strategy_at(world: &mut World, strategy: TimeUpdateStrategy, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simulation_pacing_lease_tracks_transport_and_preserves_other_owners() {
+        use crate::{SimulationStepControl, TimePlugin, TimeTransport, TransportMode};
+        use lunco_core_runtime::FramePacingDemand;
+
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+            .init_resource::<FramePacingDemand>();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<FramePacingDemand>()
+                .realtime_wanted(),
+            "a running simulation needs host updates without Modelica participants"
+        );
+        // Repeated projection must not acquire additional leases.
+        app.update();
+        app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<FramePacingDemand>()
+                .realtime_wanted()
+        );
+
+        app.world_mut()
+            .resource_mut::<FramePacingDemand>()
+            .acquire_realtime();
+        app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Playing;
+        app.update();
+        app.world_mut()
+            .resource_mut::<SimulationStepControl>()
+            .request(Some(true), None, true)
+            .unwrap();
+        app.update();
+        app.world_mut()
+            .resource_mut::<FramePacingDemand>()
+            .release_realtime();
+        assert!(
+            !app.world()
+                .resource::<FramePacingDemand>()
+                .realtime_wanted(),
+            "a held simulation releases only its own lease"
+        );
+
+        // Queued manual cycles still require service while automatic time is held.
+        app.world_mut()
+            .resource_mut::<SimulationStepControl>()
+            .request(None, Some(1), false)
+            .unwrap();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<FramePacingDemand>()
+                .realtime_wanted()
+        );
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<FramePacingDemand>()
+                .realtime_wanted()
+        );
+    }
 
     #[test]
     fn manual_clock_handoff_preserves_elapsed_and_excludes_wall_clock_gap() {

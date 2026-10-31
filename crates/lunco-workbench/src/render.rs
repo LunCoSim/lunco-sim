@@ -1621,8 +1621,16 @@ pub(crate) fn render_status_bar_inner(
                     perf_stats.fps,
                     perf_stats.frame_ms,
                     perf_stats.physics_ms,
+                    perf_stats.modelica_fps,
                     frame_time_p99,
                 );
+                let mut perf_tooltip = perf_text.clone();
+                if perf_stats.modelica_fps.is_some() {
+                    perf_tooltip.push_str("\nModelica FPS: minimum completed steps per real second across current instances.");
+                }
+                if let Some(ms) = perf_stats.modelica_worker_step_ms {
+                    perf_tooltip.push_str(&format!("\nModelica worker: {ms:.3} ms, largest instance mean over the latest wall-clock window."));
+                }
                 ui.allocate_ui_with_layout(
                     egui::vec2(perf_width, 18.0),
                     egui::Layout::right_to_left(egui::Align::Center),
@@ -1647,7 +1655,7 @@ pub(crate) fn render_status_bar_inner(
                                 ),
                             ),
                         )
-                        .on_hover_text(&perf_text);
+                        .on_hover_text(&perf_tooltip);
                         render_values_sparkline(
                             ui,
                             &frame_time_samples,
@@ -2231,6 +2239,7 @@ fn perf_hud_text(
     fps: f32,
     frame_ms: f32,
     physics_ms: Option<f32>,
+    modelica_fps: Option<f64>,
     p99_ms: Option<f32>,
 ) -> (String, String) {
     // Keep the required metrics together at the front. The width-aware
@@ -2239,6 +2248,9 @@ fn perf_hud_text(
     let mut required = format!("FPS {:05.1} · {:05.1}ms", fps, frame_ms);
     if let Some(ms) = physics_ms {
         required.push_str(&format!(" · phys {:05.1}ms", ms));
+    }
+    if let Some(fps) = modelica_fps {
+        required.push_str(&format!(" · Modelica {fps:05.1}fps"));
     }
 
     let mut full = required.clone();
@@ -3597,17 +3609,23 @@ mod tests {
 
     #[test]
     fn perf_hud_keeps_required_metrics_before_optional_detail() {
-        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(92.4));
+        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(480.0), Some(92.4));
 
         assert!(full.starts_with(&required));
-        assert_eq!(required, "FPS 022.3 · 044.8ms · phys 000.5ms");
-        assert_eq!(full, "FPS 022.3 · 044.8ms · phys 000.5ms · p99 092.4ms");
+        assert_eq!(
+            required,
+            "FPS 022.3 · 044.8ms · phys 000.5ms · Modelica 480.0fps"
+        );
+        assert_eq!(
+            full,
+            "FPS 022.3 · 044.8ms · phys 000.5ms · Modelica 480.0fps · p99 092.4ms"
+        );
         assert!(full.find("phys").unwrap() < full.find("p99").unwrap());
     }
 
     #[test]
     fn perf_hud_drops_optional_detail_before_ellipsizing_required_metrics() {
-        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(492.4));
+        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(480.0), Some(492.4));
         let width = |text: &str| text.chars().count() as f32;
 
         assert_eq!(
