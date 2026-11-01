@@ -99,7 +99,10 @@ tests, then rejects the discovery test's invalid UTF-8 filename during fixture
 creation (`EILSEQ`). The native byte-filename rejection fixture runs on Linux;
 the common Unix discovery fixture still checks literal names, containment,
 cycles and relative-root rejection. In-memory source admission also rejects
-non-UTF-8 identities on every Unix host without requiring filesystem support.
+non-UTF-8 identities on every Unix host and unpaired UTF-16 surrogates on Windows
+without requiring filesystem support. Both cases require the owner's
+`InvalidInput` diagnostic. This separates portable source-identity rejection from
+the native filesystem's representable filename set; runtime admission is unchanged.
 
 Production Windows verification used `target/debug/luncosim.exe` built with
 `cargo build -p lunco-luncosim --bin luncosim -j 4`:

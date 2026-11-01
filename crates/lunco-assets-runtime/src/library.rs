@@ -442,16 +442,22 @@ mod resolution_tests {
             files: HashMap::from([(PathBuf::from("../escape"), vec![])]),
         }));
         assert!(admit_sources(vec![invalid]).is_err());
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
+            #[cfg(unix)]
             use std::os::unix::ffi::OsStringExt;
+            #[cfg(windows)]
+            use std::os::windows::ffi::OsStringExt;
+            #[cfg(unix)]
+            let invalid_name = std::ffi::OsString::from_vec(b"invalid\xff.mo".to_vec());
+            #[cfg(windows)]
+            let invalid_name = std::ffi::OsString::from_wide(&[0xd800, 0x2e, 0x6d, 0x6f]);
             let invalid = LibrarySource::InMemory(Arc::new(InMemoryLibrary {
-                files: HashMap::from([(
-                    PathBuf::from(std::ffi::OsString::from_vec(b"invalid\xff.mo".to_vec())),
-                    vec![],
-                )]),
+                files: HashMap::from([(PathBuf::from(invalid_name), vec![])]),
             }));
-            assert!(admit_sources(vec![invalid]).is_err());
+            let error = admit_sources(vec![invalid]).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("relative UTF-8 identities"));
         }
         let memory = LibrarySource::InMemory(Arc::new(InMemoryLibrary {
             files: HashMap::from([(literal.to_path_buf(), b"inside".to_vec())]),
