@@ -57,7 +57,9 @@ The output must be ignored by Git. For a separate Tracy run, start the matching
 collector first, set `TRACY_PORT` and `TRACY_SAMPLING_HZ=1000`, then add
 `--tracy-port <port> --symbols`. The driver verifies the profiler socket against
 its owned PID and saves native maps/ELF/symbols for subsequent sample resolution.
-Profiler timings remain diagnostic; retain a separate regular build/run.
+Profiler timings remain diagnostic; retain a separate regular build/run. Workload
+snapshots are retained before launch, at first readiness and after mission
+qualification; distinguish restarts during these separate windows.
 
 Keep unprofiled product measurements separate. `ReadExposures` on `engine-health`
 provides raw frame time and `engine_revision`; de-duplicate revisions when

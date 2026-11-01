@@ -2070,6 +2070,11 @@ Coupled capture waits for domain discovery and all pending port declarations,
 including generated networks not yet present among Modelica participants.
 An identical composite source can still be superseded by unrelated wiring;
 retain complete plan validation and settle its declaration owners first.
+Compare `resolve_member_classes` CPU time and network-root discovery timestamps
+with visual projection completion. `DomainProjectionSettings` bounds discovery
+by one millisecond and 512 candidates per Update; unvisited candidates retain
+their existing discovery hold. A per-update item cap can delay cheap discovery
+long after visual projection when its admission rate is lower than the producer.
 `PendingInputConnections` records sources awaiting port-surface projection;
 initialization consumes that owner fact rather than treating omitted edges as
 unconnected inputs.

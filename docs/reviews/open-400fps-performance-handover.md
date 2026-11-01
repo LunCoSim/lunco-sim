@@ -32,17 +32,21 @@ The regular build is installed and owned sessions are closed.
 
 ## Current constructor attribution
 
-The original Griffin landing scene currently reaches physics readiness in
-6.894 seconds with the atomic World probe in a warm normal release run; another
-simulator remains active. The loading work is based on remote main `02ba65ac2`;
-the approved local Rumoca dependency is `2db205a9`. Complete declaration admission
-and bounded repeated projection construct one
-initializer, with 660.5 ms checked prepared-IR loading and 1465.4 ms live solver
-construction. Source hashes, landing handoff, zero runtime diagnostics and owned
-shutdown pass. The under-five-second target remains unmet. Earlier sequential
-query and different-workload numbers are not directly comparable.
-The [loading-budget review](griffin-loading-budget-2026-10-30.md) owns current
-measurements, tests, source limits and remaining attribution. Captures stay ignored.
+The original Griffin landing scene reaches physics readiness in 4.494 seconds
+in a normal-release warm-cache run without another simulator during loading.
+A concurrent Griffin media run takes 7.942 seconds; consistent under-five-second
+acceptance under contention and cold compiler-cache acceptance remain open.
+The loading work is based on remote main `02ba65ac2`; the approved local Rumoca
+dependency is `2db205a9`. Source hashes, landing, zero runtime diagnostics and
+owned shutdown pass. One initializer uses 1785/1785 native cache hits.
+
+The current domain owner admits discovery within one millisecond and a
+512-candidate cap per Update, retaining the readiness hold for unvisited work.
+Tracy found 7.761 ms of discovery work stretched across 34 updates and 2.3245
+seconds with the preceding cap. Complete declaration admission and initial
+mechanical topology checks remain authoritative. The
+[loading-budget review](griffin-loading-budget-2026-10-30.md) owns exact results,
+source/workload limits, tests and capture attribution. Captures stay ignored.
 
 ## Native Modelica sweep storage
 

@@ -189,6 +189,7 @@ def main():
                     receipt["first_scene_ready_s"] = time.monotonic() - opened
                     receipt["first_ready_body"] = int(status.split()[1])
                     print("SCENE_READY", receipt["first_scene_ready_s"], flush=True)
+                    receipt["first_ready_workloads"] = workloads()
                     receipt["first_ready_engine"] = command(session, "EnginePerformance")
                     session.capture_screenshot(output / "first-ready.png")
                     receipt["first_ready_capture_s"] = time.monotonic() - opened

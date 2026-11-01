@@ -141,6 +141,8 @@ pub struct DomainNetworkProjectionPending;
 pub struct DomainDiscoveryAdmission<'w, 's> {
     commands: Commands<'w, 's>,
     progress: ResMut<'w, lunco_core_runtime::SimulationProgress>,
+    settings: Res<'w, DomainProjectionSettings>,
+    faults: ResMut<'w, lunco_core::RuntimeFaults>,
 }
 
 #[derive(SystemParam)]
@@ -564,23 +566,27 @@ impl PendingDomainProjections {
     }
 }
 
-/// Publication budget for prepared networks that still own their initial
-/// fixed-clock admission hold. Live replacements remain one per Update.
+/// Main-thread discovery and publication budgets for USD domain networks.
+/// Live replacements remain one publication per Update.
 #[derive(Resource, Debug, Clone)]
-pub struct DomainProjectionPublicationSettings {
+pub struct DomainProjectionSettings {
     pub max_initial_network_commits_per_update: usize,
+    pub max_discovery_candidates_per_update: usize,
+    pub discovery_budget: std::time::Duration,
 }
 
-impl Default for DomainProjectionPublicationSettings {
+impl Default for DomainProjectionSettings {
     fn default() -> Self {
         Self {
             max_initial_network_commits_per_update: 4,
+            max_discovery_candidates_per_update: 512,
+            discovery_budget: std::time::Duration::from_millis(1),
         }
     }
 }
 
 fn initial_domain_publication_is_admitted(
-    settings: &DomainProjectionPublicationSettings,
+    settings: &DomainProjectionSettings,
     commits: usize,
     published: &HashSet<Entity>,
     entity: Entity,
@@ -1860,7 +1866,7 @@ pub fn poll_domain_projection_tasks(
     modelica_channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
     publication: (
-        Res<DomainProjectionPublicationSettings>,
+        Res<DomainProjectionSettings>,
         Res<lunco_core_runtime::SimulationProgress>,
         ResMut<lunco_core::RuntimeFaults>,
     ),
@@ -2693,7 +2699,17 @@ pub fn resolve_member_classes(
         return;
     }
     let (asset_server, roots) = assets;
-    const MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE: usize = 64;
+    if admission.settings.max_discovery_candidates_per_update == 0
+        || admission.settings.discovery_budget.is_zero()
+    {
+        admission.faults.raise(
+            "usd-domain-discovery-budget",
+            None,
+            "usd-domain",
+            "USD domain discovery requires nonzero time and candidate limits",
+        );
+        return;
+    }
 
     let mut loaded = HashSet::new();
     let mut modified = HashSet::new();
@@ -2819,11 +2835,21 @@ pub fn resolve_member_classes(
         classes.pending.insert(asset, handle);
     }
     if discover {
-        let discovery_entities = candidates
-            .take_discovery_batch(MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE)
-            .into_iter()
-            .filter_map(|entity| prims.get(entity).ok());
-        for (entity, prim, projection_state, projection_pending) in discovery_entities {
+        let discovery_started = web_time::Instant::now();
+        let discovery_entities =
+            candidates.take_discovery_batch(admission.settings.max_discovery_candidates_per_update);
+        for (index, entity) in discovery_entities.iter().copied().enumerate() {
+            // One candidate is atomic. Unvisited candidates retain discovery's
+            // admission hold and resume in the same stable entity order.
+            if index != 0 && discovery_started.elapsed() >= admission.settings.discovery_budget {
+                candidates
+                    .discovery
+                    .extend(discovery_entities[index..].iter().copied());
+                break;
+            }
+            let Ok((entity, prim, projection_state, projection_pending)) = prims.get(entity) else {
+                continue;
+            };
             if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
                 class_users.remove_root(entity);
                 if projection_pending {
@@ -3063,7 +3089,7 @@ mod tests {
 
     #[test]
     fn initial_domain_publication_requires_a_hold_and_distinct_roots() {
-        let settings = DomainProjectionPublicationSettings::default();
+        let settings = DomainProjectionSettings::default();
         let root = Entity::from_bits(1);
         let other = Entity::from_bits(2);
         let mut published = HashSet::new();
@@ -3088,8 +3114,9 @@ mod tests {
         assert!(initial_domain_publication_is_admitted(
             &settings, 1, &published, other, true
         ));
-        let zero = DomainProjectionPublicationSettings {
+        let zero = DomainProjectionSettings {
             max_initial_network_commits_per_update: 0,
+            ..Default::default()
         };
         assert!(!initial_domain_publication_is_admitted(
             &zero,

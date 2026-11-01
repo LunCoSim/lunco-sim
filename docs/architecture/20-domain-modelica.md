@@ -735,6 +735,11 @@ instance-key reader still resolves instance-root and derived ownership. Stage,
 USD wiring, and member-source invalidations retain their existing root passes.
 Discovery applies the shared `is_domain_network_root` predicate through the
 composed USD reader; unrelated visual identities do not resynthesize networks.
+`DomainProjectionSettings` admits at most 512 discovery candidates and one
+millisecond of discovery work per Update by default. Each candidate is atomic;
+unvisited candidates retain the discovery hold and resume in stable entity
+order. Queue preparation counts toward the time budget. Zero time or candidate
+limits fault at the owner without consuming queued work.
 
 Network synthesis is admitted through the shared bounded async-work owner.
 Immutable prepared USD plans run graph extraction, Rhai policy, source parsing,
@@ -744,7 +749,7 @@ dispatches the policy and validation work to a worker. Results publish in
 request order after Twin, stage, and instance generation checks. Initial
 networks that still own their fixed-clock admission hold publish a bounded
 prefix of distinct roots (four per Update by default), configured by
-`DomainProjectionPublicationSettings`. A zero budget faults at the owner before
+`DomainProjectionSettings`. A zero budget faults at the owner before
 consuming work. Live replacements remain one network per Update, and repeated
 results for one root wait for the next ECS publication boundary. Live readers snapshot at most one network per
 Update so independent edits cannot stack their extraction cost in one frame.

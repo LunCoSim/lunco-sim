@@ -1,11 +1,12 @@
 # Griffin loading budget
 
-The less-than-five-second target is **not met**. The current normal release
-reaches physics readiness in **6.894 seconds** with prepared/native cache hits
-and another simulator active. It constructs one coupled initializer, completes
-the original landing scene, preserves its source hashes and reports zero runtime
-diagnostic errors/warnings. This excludes application bootstrap and the later
-landing maneuver. Instrumented timings are diagnostic, not product acceptance.
+The original Griffin landing scene reaches physics readiness in **4.494 seconds**
+in a normal-release, warm-cache run with no other simulator loading. That run
+passes landing, all 394 source hashes, runtime diagnostics and owned shutdown.
+A concurrent-simulator repeat takes **7.942 seconds**: consistent under-five-second
+loading under contention is **not established**. Cold compiler-cache acceptance
+is also unmeasured for the final change. These times exclude application bootstrap
+and the later landing maneuver.
 
 ## Integration and scope
 
@@ -96,17 +97,20 @@ comparable: changing the probe improves measurement accuracy, not the applicatio
 
 | Normal release, same atomic probe and original landing source | Physics ready | Conditions |
 | --- | ---: | --- |
-| Single projection pass, complete initial joint topology | 6.819 s | 128 prim/child caps; prepared/native hits |
-| Independent acyclic numerical admission | 6.409 s | One coupled initializer; prepared/native hits |
-| Repeated projection passes before declaration admission fix | 7.325 s | Two identical-source initializers; thermal wiring superseded the first |
-| Current complete declaration admission | 6.894 s | One coupled initializer; prepared/native hits |
+| Complete declaration admission, fixed discovery batches | 6.894 s | Another simulator; one initializer; prepared/native hits |
+| Bounded discovery, first run | **4.494 s** | No other simulator during loading; prepared/native hits |
+| Prior binary comparison attempt | 7.074 s | Another simulator restarted before this run; not a quiet baseline |
+| Bounded discovery, repeat | 7.942 s | Concurrent Griffin media simulator; prepared/native hits |
 
-Another simulator was active throughout these cohorts; they are not quiet-machine
-acceptance. The current initializer loads checked prepared IR in 660.5 ms and
-constructs its live solver in 1465.4 ms, with 1785/1785 native cache hits and zero
-native compilations. Physics projection settles about 2.66 seconds after opening;
-thermal/FLIP declarations finish later, before coupled capture at about 3.83
-seconds. A fresh diagnostic capture is needed to attribute that remaining gap.
+Changing workloads prevent an isolated whole-scene speedup claim. The first
+bounded-discovery run loads checked initializer IR in 513.6 ms and constructs
+its live solver in 982.0 ms; the contended repeat takes 880.1 ms and 1517.2 ms.
+Both construct one initializer with 1785/1785 native cache hits and zero native
+compilations. In both, all six networks publish before physics projection settles.
+The single-simulator run opens at 01:06:14.990 UTC and reaches readiness around
+01:06:19.484 UTC. The other simulator's `/proc` start time is 01:06:32.300 UTC,
+confirming that it starts after that loading window; it remains active for the
+comparison and repeat. No foreign session was controlled.
 
 The current first-ready image shows terrain and the descent controls; the final
 image shows the landed vehicle and its shadow with touchdown controls. All source
@@ -126,7 +130,7 @@ warm cohorts; bounded artifacts can be evicted by tests or other Twins.
   assertions: initial 64-level projection with 1024 siblings, malformed edits and
   replacement while child admission remains pending. It verifies retired entities
   stay absent and API shutdown completes. The expanded hierarchy takes 24 updates,
-  below the 32-update gate. Before adding the siblings, the same deep chain took
+  below the 32-update gate. The final discovery-budget build takes 25 updates. Before adding the siblings, the same deep chain took
   72 updates on the single-pass baseline and seven with bounded repeated passes.
   The fixture expansion was authored, saved and read back through the USD API.
 - The existing `native_reset_stack` gate passes 10/12 checks on both the
@@ -134,7 +138,7 @@ warm cohorts; bounded artifacts can be evicted by tests or other Twins.
   checks fail; initial deep/shallow reset projection and malformed-edit rejection
   pass. This is retained as an unresolved pre-existing validation limit.
 - The production initialization network and receipt retirement pass all 46
-  authored checks. The inconsistent-initial-equation scene exits with its owner
+  authored checks on the final discovery-budget build. The inconsistent-initial-equation scene exits with its owner
   diagnostic and code 1, without a panic or missing verdict; its port is released.
 - Windowed production `route_lifecycle`: 124 authored checks pass, including
   topology edits, invalid targets and live program replacement.
@@ -171,13 +175,34 @@ inside 53 updates totaling 2688.4 ms. The bounded repeated-pass change addresses
 hierarchy-dependent update delays; the authored deep-chain comparison above is
 its direct evidence. It does not establish the whole-scene five-second target.
 
+The declaration-admission diagnostic captures 51.61 seconds and 6,283,584 zones
+with the owned PID 743198 and a verified 1 ms sampling period. Native export
+passes; its 69,514,344 bytes contain 69,500,254 compressed payload bytes plus
+14,090 framing bytes across 3521 blocks. The run uses
+`info,bevy_ecs::schedule::executor=warn,lunco_usd_bevy=debug`; its 8.288-second
+readiness is instrumented and does not replace normal-release acceptance.
+The binary is stripped, so attribution uses named zones rather than an `nm`
+symbol index.
+
+Between first and last network classification, discovery executes 34 updates
+and 7.761 ms of CPU work across 2.3245 seconds. Visual projection completes
+in 24 updates before FLIP's late classification. This identifies discovery
+admission pacing as avoidable delay. The final owner uses a one-millisecond time
+budget and 512-candidate cap; unvisited candidates retain their readiness hold
+and resume in stable entity order. `domain-admission-tracy/discovery-attribution.json`
+retains the exact root events and interval; `domain-discovery-comparison.json`
+records normal-build timings, cache counts, source equality and workload limits.
+
 Evidence stays ignored under `.cache/griffin-loading-20261030/`:
 `main-integration/dependency-production-first/`,
 `main-integration/dependency-production-open-twin/`,
 `main-integration/projection-pass-large.log`,
 `main-integration/admission-enlarge-receipt.json`,
 `main-integration/domain-admission-atomic-0/`,
-`main-integration/domain-admission-initialization/`, purpose/transform comparison JSONs,
+`main-integration/domain-discovery-initialization/`,
+`main-integration/domain-discovery-atomic-0/`,
+`main-integration/domain-discovery-atomic-1/`,
+`main-integration/domain-admission-tracy/`, purpose/transform comparison JSONs,
 `main-integration/dependency-comparison.json`, `dependency-canary-results/` and
 `main-integration/loading-tracy-warm/`. Earlier baseline/route/geometry receipts
 remain in that root. Task API ports are 5641 and 5642; completed sessions are

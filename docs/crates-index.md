@@ -1093,7 +1093,8 @@ Render-free USD domain projection. It reads composed component-network facts,
 resolves Modelica member classes through a source-to-root dependency index,
 waits for all referenced classes to settle before synthesis, invokes authored
 Rhai synthesizers, and publishes generated Modelica sources. Its
-`DomainProjectionPublicationSettings` bounds initial, clock-held result
+`DomainProjectionSettings` bounds main-thread discovery by time and item count,
+and initial, clock-held result
 publication; live replacements keep their single-network boundary.
 Generic force/torque actuator lowering belongs to `lunco-usd-actuation`, while
 USD wiring and participant lifecycle belong to `lunco-usd-sim-cosim`. Optional
