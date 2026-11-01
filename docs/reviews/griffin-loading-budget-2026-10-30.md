@@ -13,16 +13,31 @@ and the later landing maneuver.
 The application is based on latest main `02ba65ac2`. The October 31 fast-forward
 from `389e91911` preserved all 21 non-overlapping dirty/untracked files and merged
 the loading work with main's native simulation-host contracts. The user authorized
-local integration and proceeding without Trello. No remote push is authorized.
+local integration and proceeding without Trello.
 Unrelated terrain, propulsion, runtime UI and waypoint-editor work remains outside
 this change.
 
-The approved local Rumoca worktree is `../rumoca-griffin-loading`, branch
-`fix/griffin-loading`, at signed-off commit `2db205a9d9468c08adda46c36ada02078db9b34f`.
-All application Rumoca consumers use that same relative path. The dependency is
-local and unpublished; the adjacent checkout is required to build this integration.
+All application Rumoca consumers pin signed-off commit
+`2db205a9d9468c08adda46c36ada02078db9b34f` from `LunCoSim/rumoca` through Git
+dependencies and `Cargo.lock`. Builds require no adjacent dependency checkout.
 Its owner contracts are documented in
 [Rumoca output preparation](rumoca-chain-probe-preparation-2026-10-27.md).
+
+Publication verification on November 1:
+
+- Rumoca main includes the seven signed-off loading commits ending at the pinned
+  revision. Fresh locked library tests pass: evaluator 242, native execution 115,
+  Solve IR 426 and solver 553; one IR timing diagnostic is ignored.
+- LunCoSim's compiler and solver consumers pass
+  `cargo check --locked -p lunco-modelica-compiler -p lunco-modelica-solver -j 4`
+  against the published Git source. The lockfile changes only the 29 Rumoca-family
+  source revisions, preserving other dependency versions and edges.
+- Nightly metadata generation rejects Cargo failure and a missing application
+  package before publishing a version. The workflow executes its regression test
+  before metadata generation; the real local metadata produces
+  `0.6.0-nightly.139.2` for run 139, attempt 2.
+- This publication reuses the retained canary and production evidence below;
+  it does not establish a new full-cohort or packaged desktop acceptance result.
 
 The target is `astrobotic-griffin-1/scenes/griffin_1_surface_ops.usda`, physical
 root `/Griffin1SurfaceOps/Lander`, with `landing_handoff` as mission acceptance.

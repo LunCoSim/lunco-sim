@@ -1,8 +1,8 @@
 # Rumoca output preparation
 
-The approved local dependency change lives in the adjacent
-`rumoca-griffin-loading` worktree, branch `fix/griffin-loading`. Application
-workspace dependencies resolve to that worktree. Nothing has been published.
+The application pins the Rumoca loading changes from `LunCoSim/rumoca` at
+`2db205a9d9468c08adda46c36ada02078db9b34f` through Git dependencies and the lockfile.
+Normal builds require no adjacent dependency checkout.
 The implementation and current performance evidence are tracked in
 [Griffin loading budget](griffin-loading-budget-2026-10-30.md).
 
@@ -51,9 +51,9 @@ existing register walk and refresh dependency reader. Unions detach before
 mutation; owned public results retain their original contract. This removes
 repeated tree copies during checked prepared-model reconstruction without
 changing wire data, dependency rules, provenance or rejection of invalid input.
-The local dependency review and fixed-canary comparison are in
+The dependency review and fixed-canary comparison are in
 `docs/reviews/shared-dependency-sets-2026-11-01.md` and
-`docs/reviews/shared-dependency-sets-canary.json` in the adjacent Rumoca worktree.
+`docs/reviews/shared-dependency-sets-canary.json` in the pinned Rumoca source.
 
 ## Qualification
 

@@ -61,6 +61,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify nightly version generation
+        run: python3 -m unittest scripts.tests.test_nightly_release_contract.NightlyReleaseContractTests.test_version_generation_rejects_failed_or_missing_metadata
       - id: metadata
         env:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
@@ -91,8 +93,8 @@ jobs:
         run: |
           # The app crate owns the product base version. Strip only its
           # development marker; do not rewrite Cargo.toml in CI.
-          base_version=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "lunco-luncosim") | .version')
+          metadata=$(cargo metadata --locked --no-deps --format-version 1)
+          base_version=$(jq -er '.packages[] | select(.name == "lunco-luncosim") | .version' <<< "$metadata")
           base_version="${base_version%-dev}"
           version="${base_version}-nightly.${RUN_NUMBER}.${RUN_ATTEMPT}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
