@@ -4,15 +4,24 @@
 //! inherit their ancestor's case semantics; comparisons perform no I/O.
 
 use std::ffi::OsString;
-use std::path::{Component, Path};
+#[cfg(windows)]
+use std::path::Component;
+use std::path::Path;
 
-use crate::{StorageError, StorageResult};
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::StorageError;
+use crate::StorageResult;
 
 #[derive(Clone, Debug)]
-enum CaseSensitivity {
+enum DirectorySemantics {
     Sensitive,
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
     Insensitive,
+    #[cfg(target_os = "macos")]
+    Mac(macos::DirectorySemantics),
     #[cfg(any(windows, target_os = "macos"))]
     Unknown(String),
 }
@@ -25,7 +34,7 @@ enum CaseSensitivity {
 pub struct FilePathIdentity {
     components: Vec<OsString>,
     existing: usize,
-    sensitivity: CaseSensitivity,
+    semantics: DirectorySemantics,
 }
 
 impl FilePathIdentity {
@@ -61,8 +70,8 @@ impl FilePathIdentity {
                 Err(error) => return Err(StorageError::Io(error)),
             }
         };
-        let sensitivity = if missing.is_empty() {
-            CaseSensitivity::Sensitive
+        let semantics = if missing.is_empty() {
+            DirectorySemantics::Sensitive
         } else {
             if !canonical.is_dir() {
                 return Err(std::io::Error::new(
@@ -71,7 +80,7 @@ impl FilePathIdentity {
                 )
                 .into());
             }
-            directory_sensitivity(&canonical)
+            directory_semantics(&canonical)
         };
         let mut components: Vec<_> = canonical
             .components()
@@ -82,7 +91,7 @@ impl FilePathIdentity {
         Ok(Self {
             components,
             existing,
-            sensitivity,
+            semantics,
         })
     }
 
@@ -97,7 +106,7 @@ impl FilePathIdentity {
         Ok(Self {
             existing: components.len(),
             components,
-            sensitivity: CaseSensitivity::Sensitive,
+            semantics: DirectorySemantics::Sensitive,
         })
     }
 
@@ -107,45 +116,48 @@ impl FilePathIdentity {
             if left == right {
                 continue;
             }
+            #[cfg(windows)]
             // Native Windows volume/share identities are case-insensitive.
-            let prefix = matches!(
+            if matches!(
                 Path::new(left).components().next(),
                 Some(Component::Prefix(_))
-            );
-            if prefix {
+            ) {
                 if !component_equal(left, right, false)? {
                     return Ok(false);
                 }
                 continue;
             }
-            let sensitivity = if index >= self.existing {
-                &self.sensitivity
+            let semantics = if index >= self.existing {
+                &self.semantics
             } else if index >= other.existing {
-                &other.sensitivity
+                &other.semantics
             } else {
                 // Existing canonical names came from the filesystem itself.
                 return Ok(false);
             };
-            match sensitivity {
-                CaseSensitivity::Sensitive => {
-                    if !component_equal(left, right, true)? {
-                        return Ok(false);
-                    }
-                }
-                #[cfg(any(windows, target_os = "macos"))]
-                CaseSensitivity::Insensitive => {
+            match semantics {
+                DirectorySemantics::Sensitive => return Ok(false),
+                #[cfg(windows)]
+                DirectorySemantics::Insensitive => {
                     if !component_equal(left, right, false)? {
                         return Ok(false);
                     }
                 }
-                #[cfg(any(windows, target_os = "macos"))]
-                CaseSensitivity::Unknown(detail) => {
-                    if component_equal(left, right, false)? {
-                        return Err(StorageError::Unsupported(format!(
-                            "cannot establish destination case identity: {detail}"
-                        )));
+                #[cfg(target_os = "macos")]
+                DirectorySemantics::Mac(semantics) => {
+                    if !semantics.equal(left, right)? {
+                        return Ok(false);
                     }
-                    return Ok(false);
+                }
+                #[cfg(any(windows, target_os = "macos"))]
+                DirectorySemantics::Unknown(detail) => {
+                    #[cfg(windows)]
+                    if !component_equal(left, right, false)? {
+                        return Ok(false);
+                    }
+                    return Err(StorageError::Unsupported(format!(
+                        "cannot establish destination case identity: {detail}"
+                    )));
                 }
             }
         }
@@ -153,47 +165,21 @@ impl FilePathIdentity {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-fn directory_sensitivity(_path: &Path) -> CaseSensitivity {
-    CaseSensitivity::Sensitive
+#[cfg(all(not(target_arch = "wasm32"), not(any(windows, target_os = "macos"))))]
+fn directory_semantics(_path: &Path) -> DirectorySemantics {
+    DirectorySemantics::Sensitive
 }
 
 #[cfg(target_os = "macos")]
-fn directory_sensitivity(path: &Path) -> CaseSensitivity {
-    use std::os::unix::ffi::OsStrExt;
-    let result = (|| -> std::io::Result<bool> {
-        let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-        // SAFETY: the C string is live and terminated. errno is thread-local;
-        // clearing it distinguishes an unsupported option from a syscall error.
-        let result = unsafe {
-            *libc::__error() = 0;
-            libc::pathconf(path.as_ptr(), libc::_PC_CASE_SENSITIVE)
-        };
-        match result {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() == Some(0) {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::Unsupported,
-                        "filesystem did not report directory case semantics",
-                    ))
-                } else {
-                    Err(error)
-                }
-            }
-        }
-    })();
-    match result {
-        Ok(true) => CaseSensitivity::Sensitive,
-        Ok(false) => CaseSensitivity::Insensitive,
-        Err(error) => CaseSensitivity::Unknown(format!("{}: {error}", path.display())),
+fn directory_semantics(path: &Path) -> DirectorySemantics {
+    match macos::DirectorySemantics::prepare(path) {
+        Ok(semantics) => DirectorySemantics::Mac(semantics),
+        Err(error) => DirectorySemantics::Unknown(format!("{}: {error}", path.display())),
     }
 }
 
 #[cfg(windows)]
-fn directory_sensitivity(path: &Path) -> CaseSensitivity {
+fn directory_semantics(path: &Path) -> DirectorySemantics {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -222,9 +208,9 @@ fn directory_sensitivity(path: &Path) -> CaseSensitivity {
         Ok(info.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0)
     })();
     match result {
-        Ok(true) => CaseSensitivity::Sensitive,
-        Ok(false) => CaseSensitivity::Insensitive,
-        Err(error) => CaseSensitivity::Unknown(format!("{}: {error}", path.display())),
+        Ok(true) => DirectorySemantics::Sensitive,
+        Ok(false) => DirectorySemantics::Insensitive,
+        Err(error) => DirectorySemantics::Unknown(format!("{}: {error}", path.display())),
     }
 }
 
@@ -260,51 +246,6 @@ fn component_equal(
         return Err(std::io::Error::last_os_error().into());
     }
     Ok(result == CSTR_EQUAL)
-}
-
-#[cfg(target_os = "macos")]
-fn component_equal(
-    left: &std::ffi::OsStr,
-    right: &std::ffi::OsStr,
-    sensitive: bool,
-) -> StorageResult<bool> {
-    use core_foundation::base::{CFComparisonResult, TCFType};
-    use core_foundation::string::{
-        CFString, CFStringCompare, kCFCompareCaseInsensitive, kCFCompareNonliteral,
-    };
-    let string = |name: &std::ffi::OsStr| -> StorageResult<CFString> {
-        let name = name.to_str().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid UTF-8 filename")
-        })?;
-        isize::try_from(name.len()).map_err(std::io::Error::other)?;
-        name.parse()
-            .map_err(|()| std::io::Error::other("cannot prepare native filename comparison").into())
-    };
-    let left = string(left)?;
-    let right = string(right)?;
-    let options = kCFCompareNonliteral
-        | if sensitive {
-            0
-        } else {
-            kCFCompareCaseInsensitive
-        };
-    // SAFETY: both retained CF strings outlive this locale-independent compare.
-    Ok(unsafe {
-        CFStringCompare(
-            left.as_concrete_TypeRef(),
-            right.as_concrete_TypeRef(),
-            options,
-        ) == CFComparisonResult::EqualTo
-    })
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn component_equal(
-    left: &std::ffi::OsStr,
-    right: &std::ffi::OsStr,
-    _sensitive: bool,
-) -> StorageResult<bool> {
-    Ok(left == right)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -370,7 +311,7 @@ mod tests {
             let unknown = FilePathIdentity {
                 components: vec!["root".into(), "Case".into()],
                 existing: 1,
-                sensitivity: CaseSensitivity::Unknown("case query failed".into()),
+                semantics: DirectorySemantics::Unknown("case query failed".into()),
             };
             let alias = FilePathIdentity {
                 components: vec!["root".into(), "case".into()],

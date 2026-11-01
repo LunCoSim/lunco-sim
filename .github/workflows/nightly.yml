@@ -229,17 +229,21 @@ jobs:
       - name: Verify native destination identities
         run: cargo test --locked -j 4 -p lunco-storage --lib -- --exact path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases
 
-      - name: Verify case-sensitive macOS destination identities
+      - name: Verify HFS macOS destination identities
         if: runner.os == 'macOS'
         run: |
-          image="$RUNNER_TEMP/lunco-path-identity.dmg"
-          mount="$RUNNER_TEMP/lunco-path-identity"
-          hdiutil create -size 128m -fs HFSX -volname LuncoPathIdentity "$image"
-          mkdir -p "$mount"
-          hdiutil attach -nobrowse -mountpoint "$mount" "$image"
-          trap 'hdiutil detach "$mount"' EXIT
-          mkdir "$mount/tmp"
-          TMPDIR="$mount/tmp" cargo test --locked -j 4 -p lunco-storage --lib -- --exact path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases
+          for filesystem in HFS+ HFSX; do
+            image="$RUNNER_TEMP/lunco-path-identity-$filesystem.dmg"
+            mount="$RUNNER_TEMP/lunco-path-identity-$filesystem"
+            hdiutil create -size 128m -fs "$filesystem" -volname LuncoPathIdentity "$image"
+            mkdir -p "$mount"
+            hdiutil attach -nobrowse -mountpoint "$mount" "$image"
+            trap 'hdiutil detach "$mount"' EXIT
+            mkdir "$mount/tmp"
+            TMPDIR="$mount/tmp" cargo test --locked -j 4 -p lunco-storage --lib -- --exact path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases
+            hdiutil detach "$mount"
+            trap - EXIT
+          done
 
       # --velopack turns the complete staged directory into an installer,
       # update package, and channel feed. docs/ + AGENTS.md + all assets are

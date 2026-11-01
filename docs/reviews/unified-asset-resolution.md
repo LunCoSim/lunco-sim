@@ -104,24 +104,30 @@ without requiring filesystem support. Both cases require the owner's
 `InvalidInput` diagnostic. This separates portable source-identity rejection from
 the native filesystem's representable filename set; runtime admission is unchanged.
 
-Run `41329925142` confirms that both corrected source-admission fixtures pass on
-macOS. It exposes a separate destination-identity gap: a Windows-only test
-expectation and a non-Windows case-sensitive default disagree with the macOS
-volume. `FilePathIdentity` now queries macOS `_PC_CASE_SENSITIVE` and compares
-future components with Core Foundation's locale-independent case/canonical
-Unicode comparison. The existing Windows ordinal comparison remains native;
-no portable uppercase key is used for filesystem identity. A failed case query
-still rejects ambiguous ownership with its diagnostic. The low-level test
-compares missing-path snapshots against later filesystem lookups for ASCII case,
-Unicode case and canonical Unicode equivalence, and checks unknown-case failure.
-It runs before desktop packaging on each native runner; macOS also exercises a
-temporary case-sensitive HFSX volume with the same built test binary. This is a storage
-invariant consumed by dataset output admission; no Rhai selection policy or
-third-party source change is involved.
+Native destination identity is owned by `lunco-storage::FilePathIdentity`.
+Preparation records the existing ancestor's volume format and case mode;
+comparisons use those immutable facts without filesystem I/O. Windows uses its
+native ordinal name comparison. macOS APFS uses native canonical Unicode
+comparison, while HFS uses Core Foundation's filesystem representation and
+Apple's fixed HFS Extended collation API. HFSX uses the same HFS representation
+with case-sensitive binary comparison. This preserves the format's decomposition
+exclusions, including the Kelvin sign. Unknown case/collation facts produce an
+explicit ownership diagnostic rather than a guessed identity.
 
-The native query follows Apple's [`pathconf` usage](https://github.com/apple-oss-distributions/apache_mod_hfs_apple/blob/main/mod_hfs_apple2.c).
-Core Foundation's [`nonliteral comparison`](https://developer.apple.com/documentation/corefoundation/cfstringcompareflags/kcfcomparenonliteral?language=objc)
-compares canonical Unicode representations without ignoring diacritics.
+The low-level test compares missing-path snapshots against later filesystem
+lookups for ASCII case, canonical Unicode equivalence and Unicode case edges,
+and checks unknown-case failure. It runs before desktop packaging on each native
+runner. macOS repeats the same built binary on temporary HFS+ and HFSX volumes.
+This is a storage invariant consumed by dataset output admission; no Rhai
+selection policy or third-party source change is involved. Published framework
+bindings were searched first; the CoreServices crate omits Unicode Utilities,
+so storage declares the single documented native comparison ABI. No collation
+table is copied into the application.
+
+Native contracts: Apple's [`pathconf` usage](https://github.com/apple-oss-distributions/apache_mod_hfs_apple/blob/main/mod_hfs_apple2.c),
+[HFS format comparison](https://developer.apple.com/library/archive/technotes/tn/tn1150.html),
+[fixed HFS collation API](https://developer.apple.com/documentation/coreservices/1390513-uccomparetextnolocale),
+and [APFS Unicode behavior](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/FAQ/FAQ.html).
 
 Production Windows verification used `target/debug/luncosim.exe` built with
 `cargo build -p lunco-luncosim --bin luncosim -j 4`:
