@@ -9,22 +9,8 @@
 //! the listing describes the bundle that actually shipped rather than one someone
 //! compiled against.
 //!
-//! # Why this is a Rust binary and not four lines of shell
-//!
-//! Because "which files ship" already has a definition —
-//! [`lunco_assets_runtime::discovery::scan_library`] — and the runtime reads the result. A
-//! packaging step that re-derives it with its own `find`/`os.walk` is a *second*
-//! implementation of the same rule, in another language, kept in step by discipline.
-//! That is how the native and web builds come to disagree about what an asset is,
-//! and it is the same defect as the `build.rs` bake this whole manifest replaced.
-//!
-//! The shell version this replaced was not a hypothetical drift. It walked hidden
-//! directories, which `scan_library` skips — and it runs over the **staged** tree,
-//! into which `build_web.sh` copies Twins, and a Twin carries `.lunco/runtime/*.usda`.
-//! The web catalog would have listed a Twin's private runtime layers that native
-//! discovery never sees.
-//!
-//! So the packager calls the scanner. One rule, one place.
+//! [`lunco_assets_runtime::discovery::scan_library`] owns catalog selection,
+//! containment and diagnostics. Inventory failure exits before writing a manifest.
 //!
 //! Native-only (it writes a file, and the web build runs it on the host).
 #![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
@@ -44,12 +30,16 @@ fn main() {
         std::process::exit(2);
     };
 
-    if !dir.is_dir() {
-        eprintln!("build_asset_manifest: {} is not a directory", dir.display());
-        std::process::exit(1);
-    }
-
-    let rels = lunco_assets_runtime::discovery::scan_library(&dir);
+    let rels = match lunco_assets_runtime::discovery::scan_library(&dir) {
+        Ok(rels) => rels,
+        Err(error) => {
+            eprintln!(
+                "build_asset_manifest: cannot inventory {}: {error}",
+                dir.display()
+            );
+            std::process::exit(1);
+        }
+    };
     if rels.is_empty() {
         // Not fatal on its own, but it means the web spawn palette and shader
         // catalog will be empty — almost certainly a staging bug, so say so.

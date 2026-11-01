@@ -593,6 +593,7 @@ mod file_open_admission_tests {
             .insert_resource(crate::package_tree::PackageTreeCache {
                 roots: vec![],
                 tasks: vec![],
+                scan_errors: std::collections::HashMap::new(),
                 in_memory_models: vec![],
                 bundled_tree_indexed: false,
                 library_roots_synced: true,

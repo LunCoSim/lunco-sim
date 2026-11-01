@@ -111,10 +111,10 @@ fn admit_sources(sources: Vec<LibrarySource>) -> std::io::Result<Vec<LibrarySour
             LibrarySource::Filesystem(store) => Ok(LibrarySource::Filesystem(store)),
             LibrarySource::InMemory(tree) => {
                 for path in tree.files.keys() {
-                    if path.is_absolute() {
+                    if path.is_absolute() || path.to_str().is_none() {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            "absolute in-memory library identity",
+                            "in-memory library members require relative UTF-8 identities",
                         ));
                     }
                     validate_request(path)?;
@@ -303,7 +303,8 @@ impl LibrarySource {
     /// Return whether this source contains an already-joined candidate path.
     ///
     /// Filesystem membership uses one resident path set rather than a `stat`
-    /// per candidate. In-memory membership is a map lookup.
+    /// per candidate. Candidates use this source's admitted [`Self::base`],
+    /// including its native namespace. In-memory membership is a map lookup.
     pub fn contains(&self, candidate: &std::path::Path) -> bool {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -433,6 +434,7 @@ mod resolution_tests {
         let outside = folder.path().join("outside.bin");
         std::fs::write(&outside, b"outside").unwrap();
         let native = LibrarySource::filesystem(root.clone()).unwrap();
+        let root = native.base().to_path_buf();
         assert!(native.contains(&root.join(literal)));
         assert!(LibrarySource::filesystem(PathBuf::from("relative")).is_err());
         assert!(LibrarySource::filesystem(outside.clone()).is_err());
@@ -440,6 +442,17 @@ mod resolution_tests {
             files: HashMap::from([(PathBuf::from("../escape"), vec![])]),
         }));
         assert!(admit_sources(vec![invalid]).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let invalid = LibrarySource::InMemory(Arc::new(InMemoryLibrary {
+                files: HashMap::from([(
+                    PathBuf::from(std::ffi::OsString::from_vec(b"invalid\xff.mo".to_vec())),
+                    vec![],
+                )]),
+            }));
+            assert!(admit_sources(vec![invalid]).is_err());
+        }
         let memory = LibrarySource::InMemory(Arc::new(InMemoryLibrary {
             files: HashMap::from([(literal.to_path_buf(), b"inside".to_vec())]),
         }));

@@ -15,7 +15,7 @@ pub(super) enum PackageAction {
 /// `&PackageTreeCache` (no `&mut`) — e.g. the Twin Browser's
 /// [`BrowserCtx`](lunco_workbench_browser::BrowserCtx), which can't take the
 /// cache mutably. Instead of mutating `is_loading` / pushing scan
-/// tasks in place, an unscanned Category pushes its `(id, package_path)`
+/// tasks in place, an unscanned Category pushes its ID
 /// into `load_out`; the caller schedules the scan through the package-tree
 /// owner. The shared workbench tree renderer owns expansion and row layout,
 /// so this read-only render only supplies package data and actions.
@@ -25,7 +25,8 @@ pub(crate) fn render_node_single_ro(
     active_path: Option<&str>,
     _active_drill: Option<&str>,
     _depth: usize,
-    load_out: &mut Vec<(String, String)>,
+    load_out: &mut Vec<String>,
+    scan_errors: &std::collections::HashMap<String, String>,
     theme: &lunco_theme::Theme,
     query: &BrowserQuery,
     ancestor_matches: bool,
@@ -36,7 +37,6 @@ pub(crate) fn render_node_single_ro(
             id,
             name,
             package_path,
-            fs_path: _,
             children,
             is_loading,
         } => {
@@ -68,6 +68,13 @@ pub(crate) fn render_node_single_ro(
                     .clicked()
                 },
                 |ui| {
+                    if let Some(error) = scan_errors.get(id) {
+                        ui.add(egui::Label::new(format!("Could not load package: {error}")).wrap());
+                        if ui.button("Retry").clicked() {
+                            load_out.push(id.clone());
+                        }
+                        return;
+                    }
                     if let Some(kids) = children {
                         for kid in kids {
                             if let Some(a) = render_node_single_ro(
@@ -77,6 +84,7 @@ pub(crate) fn render_node_single_ro(
                                 _active_drill,
                                 _depth + 1,
                                 load_out,
+                                scan_errors,
                                 theme,
                                 query,
                                 row_matches,
@@ -88,7 +96,7 @@ pub(crate) fn render_node_single_ro(
                         // Unscanned: request a lazy scan (the caller
                         // defers the AsyncComputeTaskPool spawn) and show
                         // a loading row until the `ScanResult` lands.
-                        load_out.push((id.clone(), package_path.clone()));
+                        load_out.push(id.clone());
                     }
                     if children.is_none() || *is_loading {
                         ui.horizontal(|ui| {

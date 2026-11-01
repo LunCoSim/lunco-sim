@@ -159,6 +159,12 @@ fn scene_paths(scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(lunco_assets_runtime::discovery::scan_library(scenes_dir)
+        .map_err(|error| {
+            format!(
+                "cannot inventory scene-test directory {}: {error}",
+                scenes_dir.display()
+            )
+        })?
         .into_iter()
         .filter(|relative| relative.ends_with(".usda"))
         .map(|relative| scenes_dir.join(relative))

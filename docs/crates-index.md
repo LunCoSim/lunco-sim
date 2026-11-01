@@ -421,6 +421,8 @@ source registration, discovery/catalogs, scene choices from admitted Twin invent
 policy-requested dataset artifact reads, web fetch integration, the optional
 shared egui byte loader, and the asset-manifest tool while consuming identity and storage contracts from
 `lunco-assets-core` and dataset declarations from `lunco-assets-datasets`.
+Native source and catalog discovery share one contained traversal; catalog and
+packaging consumers must propagate inventory errors.
 
 **`lunco-assets-datasets`**
 The lightweight dataset contract boundary. It owns `Assets.toml` declarations,
@@ -1411,6 +1413,11 @@ asset tooling, command-line hosts, and the compiler's own tests all call this
 same package directly.
 
 **`lunco-modelica-core`**
+
+Its package browser projects admitted source inventories and reads through the
+shared library store. Tree nodes contain logical class/package identities;
+native filesystem paths stay at the asset/storage boundary. Lazy scan results
+carry success or a terminal diagnostic to the UI cache.
 
 Owns Modelica `CloseDocument` in every host: linked execution entities and the
 document registry are retired together, including during workspace replacement.

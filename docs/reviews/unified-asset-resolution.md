@@ -187,6 +187,60 @@ Source commits and a checkout rebuild do not update that executable. Testing
 the new binary against installed assets does not establish installer/update
 acceptance.
 
+## Catalog and package-browser boundary review (2026-11-01)
+
+The catalog regression reproduced an outside directory link being published as
+`twin://probe/escape/outside.rhai` (`target/path-catalog-before.log`). Native
+catalog discovery now projects the same contained traversal used by complete
+source inventories. Extension and private-directory filters are explicit inputs;
+escape, repeated identity and I/O diagnostics reject publication. Startup,
+packaging and scene-test discovery consume the scanner's `Result`. Both live
+and indexed catalogs reject filenames that cannot become logical identities;
+native separators convert without aliasing literal Unix backslashes.
+
+The package browser now projects admitted `LibrarySource` membership and reads
+through its existing reader. Modelica's `package_paths` remains the file-layout
+owner. Parsing validates the requested declaration, including its `within`
+namespace; corrupt bytes and missing members remain terminal diagnostics.
+The UI shows a wrapped error and explicit Retry. Scan requests carry only a node
+identity and resolve its authoritative package path through the current tree.
+Package nodes no longer carry an unused native filesystem field. The browser's
+parsed-bundle adapter implements the same success/error interface.
+
+DRY discovery found the existing contained inventory, library byte reader and
+Modelica file mapper; these were extended or composed without another resolver,
+dependency, fork or policy hook. Containment and storage identity are generic
+owner invariants. Native paths remain `PathBuf` at the filesystem boundary;
+logical source/class identities cross UI and compiler boundaries.
+
+Windows verification:
+
+- Four focused contracts passed: catalog traversal, structured package inventory,
+  native/in-memory store resolution and package-tree parsing. Logs are
+  `target/path-catalog-contracts.log` and `target/path-catalog-final-tests.log`.
+  Store membership fixtures use the admitted source base, preserving Windows
+  canonical native namespace semantics.
+- `cargo build -p lunco-luncosim -p lunco-assets-runtime --bin luncosim --bin build_asset_manifest -j 4`
+  passed without warnings (`target/path-catalog-production-build.log`). The
+  packager accepted a Unicode/space/`#`/`%` fixture and rejected an outside
+  junction with exit 1 while preserving the existing manifest
+  (`target/path-catalog-packager.log`).
+- Owned production PID 27108, port 4212: seven reviewed captures show the narrow
+  package browser, a corrupt-byte diagnostic, retained failure after file repair,
+  explicit Retry recovery and opening the correct read-only class. Native DPI was
+  measured at 144 before converting captured coordinates to logical input.
+  Three authored Rhai assertions passed (`target/path-package-browser-verdict.log`).
+  Captures and runtime logs are under `target/package-browser-review/500f1e5a-c647-4ed6-87ec-408ec22456e0/`.
+- `LUNCOSIM_API_PORT=4213 python scripts/api/test_path_interoperability.py`
+  passed 43 authored assertions with owned PID 20912, including the reported
+  allocator's logical catalog address and USD-bound Modelica execution
+  (`target/path-catalog-interoperability.log`). Both owned runtimes exited through
+  the API and released their ports. The skill validator passed all 43 entries.
+
+Local Windows evidence does not establish macOS/Linux or browser execution;
+the native CI gate includes these mechanism contracts on all three desktop hosts.
+The installed 2026-10-31 executable still requires a new packaged release.
+
 ## External conformance review
 
 Microsoft's namespace rules and Rust's pinned standard-library implementation

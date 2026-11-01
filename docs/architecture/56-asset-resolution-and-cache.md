@@ -129,6 +129,21 @@ Top-level Modelica reads and catalog probes also use the native entry selector.
 package's read/inventory failure is terminal in both synchronous and asynchronous
 compiler admission; it cannot select another source bundle.
 
+Native manifest, Twin catalog and source-library discovery share one contained
+inventory traversal. Catalogs supply extension and private/build-directory
+filters; source inventories include every member. Excluded directories are not
+descended into. Discovery failures reject the catalog rather than publishing a
+partial or fabricated empty listing. `scan_library` returns a `Result`, consumed
+by startup admission, the manifest packager and scene-test discovery. Native
+filenames convert to logical IDs only after containment; unrepresentable logical
+names reject rather than being rewritten into another path.
+
+The Modelica package browser projects the admitted library inventory. Its native
+adapter uses the existing Modelica file-layout mapper and `LibrarySource::read`;
+the browser adapter projects the admitted parsed bundle. Neither guesses a native
+root or walks the filesystem independently. Failed lazy scans retain a visible
+diagnostic and stop; an explicit Retry or source reconciliation clears it.
+
 Synchronous USD composition captures a `TwinReadScope` through
 `TwinRoots::read_scope`, or admits an explicit standalone source through the
 same registry. `read_asset_bytes_in_scope` validates the requested mount or

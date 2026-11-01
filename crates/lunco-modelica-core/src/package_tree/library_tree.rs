@@ -5,6 +5,9 @@
 //! asset source registry; web roots come from the parsed source bundle. Both
 //! backends expose the same package-tree queries.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+
 use lunco_modelica_index::package_tree::types::PackageNode;
 
 /// A browsable Modelica source tree.
@@ -13,7 +16,7 @@ pub trait LibraryTree {
     fn library_roots(&self) -> Vec<String>;
 
     /// Immediate child nodes of a package path, ready to render.
-    fn children(&self, package_path: &str) -> Vec<PackageNode>;
+    fn children(&self, package_path: &str) -> Result<Vec<PackageNode>, String>;
 }
 
 /// The process-wide provider, selected once per target.
@@ -24,7 +27,7 @@ pub fn library_tree() -> &'static dyn LibraryTree {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        &FsLibraryTree
+        &InstalledLibraryTree
     }
 }
 
@@ -37,30 +40,30 @@ impl LibraryTree for InMemoryLibraryTree {
         super::scanner::library_inmem_top_level_libs()
     }
 
-    fn children(&self, package_path: &str) -> Vec<PackageNode> {
+    fn children(&self, package_path: &str) -> Result<Vec<PackageNode>, String> {
         super::scanner::scan_library_inmem(package_path)
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct FsLibraryTree;
+pub struct InstalledLibraryTree;
 
 #[cfg(not(target_arch = "wasm32"))]
-impl LibraryTree for FsLibraryTree {
+impl LibraryTree for InstalledLibraryTree {
     fn library_roots(&self) -> Vec<String> {
         let mut roots = Vec::new();
         for source in lunco_assets_runtime::library::global_library_sources() {
-            let base = source.base();
-            let Ok(entries) = std::fs::read_dir(base) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir()
-                    && path.join("package.mo").is_file()
-                    && entry.file_name().to_str().is_some()
+            for file in source.files() {
+                if file.file_name().is_some_and(|name| name == "package.mo")
+                    && file.components().count() == 2
                 {
-                    roots.push(entry.file_name().to_string_lossy().into_owned());
+                    if let Some(name) = file
+                        .parent()
+                        .and_then(Path::file_name)
+                        .and_then(|name| name.to_str())
+                    {
+                        roots.push(name.to_owned());
+                    }
                 }
             }
         }
@@ -69,30 +72,20 @@ impl LibraryTree for FsLibraryTree {
         roots
     }
 
-    fn children(&self, package_path: &str) -> Vec<PackageNode> {
-        super::scanner::scan_library_dir_native(
-            &fs_root_for(package_path),
-            package_path.to_string(),
-        )
-    }
-}
-
-/// Map a qualified package path to the explicitly installed filesystem root
-/// that owns its top-level package. An unknown root yields an empty path so a
-/// scan produces no fabricated children.
-#[cfg(not(target_arch = "wasm32"))]
-fn fs_root_for(package_path: &str) -> std::path::PathBuf {
-    let top = rumoca_core::qualified_name_segments(package_path)
-        .next()
-        .unwrap_or(package_path);
-    let rel: std::path::PathBuf = rumoca_core::qualified_name_segments(package_path).collect();
-    for source in lunco_assets_runtime::library::global_library_sources() {
-        let candidate = source.base().join(top);
-        if candidate.is_dir() {
-            return source.base().join(&rel);
+    fn children(&self, package_path: &str) -> Result<Vec<PackageNode>, String> {
+        let file = lunco_modelica_library::package_paths::locate_library_file(package_path)
+            .ok_or_else(|| format!("unknown source package `{package_path}`"))?;
+        let relative: std::path::PathBuf =
+            rumoca_core::qualified_name_segments(package_path).collect();
+        for source in lunco_assets_runtime::library::global_library_sources() {
+            if source.contains(&file) && source.base().join(&relative).join("package.mo") == file {
+                return super::scanner::scan_library_source(source, &relative, package_path);
+            }
         }
+        Err(format!(
+            "source package `{package_path}` has no admitted directory member"
+        ))
     }
-    std::path::PathBuf::new()
 }
 
 /// Build a palette root for one top-level source package.
@@ -101,7 +94,6 @@ pub fn library_root_node(lib: &str) -> PackageNode {
         id: format!("{lib}_root"),
         name: lib.to_string(),
         package_path: lib.to_string(),
-        fs_path: std::path::PathBuf::new(),
         children: None,
         is_loading: false,
     }

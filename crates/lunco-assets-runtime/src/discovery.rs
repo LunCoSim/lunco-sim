@@ -18,15 +18,8 @@
 //! **`assets/manifest.json`**, generated from the staged tree by
 //! `scripts/build_web.sh` and fetched at boot.
 //!
-//! It used to be baked into the wasm by a `build.rs` (`BAKED_ASSET_RELS`). The
-//! difference is not cosmetic: a baked listing describes the bundle the *binary was
-//! compiled against*, while the manifest describes the bundle that actually
-//! *shipped*. They agree right up until they don't — drop an asset into a deployed
-//! `dist/` and a baked listing will never see it, with no error, because the binary
-//! is certain it already knows what exists.
-//!
-//! So the bundle now carries its own table of contents, and nothing about the
-//! assets lives in the binary.
+//! The manifest describes the staged bundle rather than the compiler's source
+//! tree. Native runtime and packaging use the same contained inventory.
 
 use std::path::Path;
 
@@ -261,7 +254,17 @@ fn load_manifest_native(mut manifest: ResMut<AssetManifest>, mut commands: Comma
             return;
         }
     };
-    let rels = scan_library(&dir);
+    let rels = match scan_library(&dir) {
+        Ok(rels) => rels,
+        Err(error) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "asset-inventory-invalid",
+                error.to_string(),
+            );
+            return;
+        }
+    };
     info!(
         "ASSET_MANIFEST: {} file(s) under {}",
         rels.len(),
@@ -277,23 +280,11 @@ fn load_manifest_native(mut manifest: ResMut<AssetManifest>, mut commands: Comma
 /// `manifest.json` the web build ships. One function, so the two platforms cannot
 /// disagree about what an asset is.
 ///
-/// It used to be two: this, and an `os.walk` inlined in `scripts/build_web.sh` that
-/// re-decided the extensions and the skip rules for itself. On the source `assets/`
-/// tree the two agreed (86 files, exactly) — which is the trap, because they were
-/// not the same rule. The shell walk descended into hidden directories; this one
-/// skips them. And the manifest is generated from the **staged** `dist/assets/`
-/// tree, into which `build_web.sh` copies Twins — and a Twin carries
-/// `.lunco/runtime/*.usda`. So the web listing would have contained a Twin's
-/// private runtime layers that native discovery never sees: a native/web
-/// divergence, which is exactly what the deleted `build.rs` bake used to cause.
-///
-/// A packaging step must not re-derive what the runtime already defines.
+/// Hidden directories and build outputs are excluded. Inventory failures reject
+/// the listing; callers must not publish a partial catalog.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn scan_library(dir: &Path) -> Vec<String> {
-    let mut rels = Vec::new();
-    walk_any(dir, dir, &mut |rel| rels.push(rel));
-    rels.sort();
-    rels
+pub fn scan_library(dir: &Path) -> std::io::Result<Vec<String>> {
+    catalog_files(dir, MANIFEST_EXTS)
 }
 
 /// Inventory every file below a caller-selected native source root.
@@ -305,6 +296,14 @@ pub fn scan_library(dir: &Path) -> Vec<String> {
 /// inventory atomically while surfacing every failed path.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn inventory_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
+    inventory_files_with(root, |_, _| true)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn inventory_files_with(
+    root: &Path,
+    include: impl Fn(&Path, Option<lunco_storage::StorageEntryKind>) -> bool,
+) -> (Vec<std::path::PathBuf>, Vec<String>) {
     let mut files = Vec::new();
     let mut diagnostics = Vec::new();
     if !root.is_absolute() {
@@ -351,6 +350,19 @@ pub fn inventory_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
                     continue;
                 }
             };
+            let kind = match lunco_storage::entry_kind_file_sync(&path) {
+                Ok(kind) => kind,
+                Err(lunco_storage::StorageError::Unsupported(_)) if !include(relative, None) => {
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(format!("cannot inspect {}: {error}", path.display()));
+                    continue;
+                }
+            };
+            if !include(relative, Some(kind)) {
+                continue;
+            }
             let resolved = match lunco_assets_core::existing_path_within_root(root, relative) {
                 Ok(Some(resolved)) => resolved,
                 Ok(None) => {
@@ -362,9 +374,9 @@ pub fn inventory_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
                     continue;
                 }
             };
-            match lunco_storage::entry_kind_file_sync(&resolved) {
-                Ok(lunco_storage::StorageEntryKind::Directory) => stack.push(path),
-                Ok(lunco_storage::StorageEntryKind::File) => {
+            match kind {
+                lunco_storage::StorageEntryKind::Directory => stack.push(path),
+                lunco_storage::StorageEntryKind::File => {
                     if !visited.insert(resolved) {
                         diagnostics.push(format!(
                             "source file is reachable more than once: {}",
@@ -381,10 +393,7 @@ pub fn inventory_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
                     }
                     files.push(path);
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    diagnostics.push(format!("cannot inspect {}: {error}", path.display()))
-                }
+                _ => {}
             }
         }
     }
@@ -573,7 +582,9 @@ pub fn list_assets_with_extensions(
     #[cfg(not(target_arch = "wasm32"))]
     for name in roots.names()? {
         if let Some(root) = roots.root_of(&name)? {
-            walk_matching(&root, &root, extensions, &mut |rel| {
+            for rel in catalog_files(&root, extensions).map_err(|error| {
+                lunco_assets_core::TwinRootsError::AssetResolution(error.kind(), error.to_string())
+            })? {
                 out.push(AssetFile {
                     asset_path: lunco_assets_core::twin_uri(&name, &rel),
                     stem: stem_of(&rel),
@@ -581,7 +592,7 @@ pub fn list_assets_with_extensions(
                     twin: Some(name.clone()),
                     rel,
                 });
-            });
+            }
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -665,7 +676,9 @@ pub fn list_indexed_scene_assets(
         })?;
         let globs = scene_globs_from_manifest(twin.manifest.as_ref());
         for file in twin.files() {
-            let rel = file.relative_path.to_string_lossy().replace('\\', "/");
+            let rel = logical_catalog_path(&file.relative_path).map_err(|error| {
+                lunco_assets_core::TwinRootsError::AssetResolution(error.kind(), error.to_string())
+            })?;
             let matches = globs
                 .iter()
                 .any(|glob| lunco_twin::glob_matches(glob, &rel));
@@ -736,55 +749,56 @@ fn scene_globs_of_twin(_root: &Path) -> Result<Vec<String>, lunco_assets_core::T
 const MANIFEST_EXTS: &[&str] = &["json", "rhai", "usda", "wesl"];
 
 #[cfg(not(target_arch = "wasm32"))]
-fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            match p.file_name().and_then(|s| s.to_str()) {
-                Some(n) if n.starts_with('.') || n == "target" => continue,
-                _ => walk_any(base, &p, f),
-            }
-        } else if p
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|e| MANIFEST_EXTS.contains(&e))
-        {
-            if let Ok(rel) = p.strip_prefix(base) {
-                if let Some(rel_s) = rel.to_str() {
-                    f(lunco_assets_path::slashed(rel_s));
-                }
-            }
+fn catalog_files(dir: &Path, extensions: &[&str]) -> std::io::Result<Vec<String>> {
+    let root = lunco_storage::canonicalize_file_path(dir).map_err(|error| match error {
+        lunco_storage::StorageError::Io(error) => error,
+        error => std::io::Error::other(error.to_string()),
+    })?;
+    let (files, diagnostics) = inventory_files_with(&root, |relative, kind| {
+        if kind == Some(lunco_storage::StorageEntryKind::Directory) {
+            return relative
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_none_or(|name| !name.starts_with('.') && name != "target");
         }
+        relative
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extensions.contains(&extension))
+    });
+    if !diagnostics.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            diagnostics.join("\n"),
+        ));
     }
+    files
+        .into_iter()
+        .map(|path| {
+            let relative = path.strip_prefix(&root).map_err(std::io::Error::other)?;
+            logical_catalog_path(relative)
+        })
+        .collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn walk_matching(base: &Path, dir: &Path, extensions: &[&str], f: &mut impl FnMut(String)) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            match p.file_name().and_then(|s| s.to_str()) {
-                Some(n) if n.starts_with('.') || n == "target" => continue,
-                _ => walk_matching(base, &p, extensions, f),
-            }
-        } else if p
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|ext| extensions.contains(&ext))
-        {
-            if let Ok(rel) = p.strip_prefix(base) {
-                if let Some(rel_s) = rel.to_str() {
-                    f(lunco_assets_path::slashed(rel_s));
-                }
-            }
-        }
+fn logical_catalog_path(relative: &Path) -> std::io::Result<String> {
+    // A literal backslash in a Unix filename must not become another directory.
+    let rel = relative
+        .to_str()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "catalog path is not UTF-8")
+        })?
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    if !lunco_assets_path::is_safe_relative_path(&rel) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "catalog path cannot be represented as a logical asset: {}",
+                relative.display()
+            ),
+        ));
     }
+    Ok(rel)
 }
 
 fn stem_of(rel: &str) -> String {
@@ -795,9 +809,103 @@ fn stem_of(rel: &str) -> String {
         .to_string()
 }
 
+/// Construct an owned directory-link fixture without interpolating native paths into shell code.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn link_test_directory(link: &Path, target: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let result = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command",
+                "New-Item -ItemType Junction -Path $env:LUNCO_TEST_LINK -Target $env:LUNCO_TEST_TARGET -ErrorAction Stop | Out-Null"])
+            .env("LUNCO_TEST_LINK", link)
+            .env("LUNCO_TEST_TARGET", target)
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn catalog_inventory_contract() {
+        const CHILD: &str = "LUNCO_CATALOG_INVENTORY_TEST";
+        if let Ok(root) = std::env::var(CHILD) {
+            let roots = TwinRoots::default();
+            roots
+                .register("probe", std::path::PathBuf::from(&root))
+                .unwrap();
+            let result = list_assets(&AssetManifest::default(), &roots, "rhai");
+            let error = result.expect_err("an escaped catalog entry must reject discovery");
+            assert!(error.to_string().contains("outside"), "{error}");
+            assert!(error.to_string().contains("more than once"), "{error}");
+            assert!(scan_library(Path::new(&root)).is_err());
+            return;
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("catalog # % 日本語");
+        let outside = folder.path().join("outside");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(root.join("visible.rhai"), "// visible").unwrap();
+        std::fs::write(root.join(".hidden.rhai"), "// visible file").unwrap();
+        for name in [".private", "target"] {
+            std::fs::create_dir(root.join(name)).unwrap();
+            std::fs::write(root.join(name).join("hidden.rhai"), "// hidden directory").unwrap();
+        }
+        std::fs::write(outside.join("outside.rhai"), "// outside").unwrap();
+        #[cfg(unix)]
+        {
+            let result = std::process::Command::new("mkfifo")
+                .arg(root.join("ignored.pipe"))
+                .status()
+                .unwrap();
+            assert!(result.success());
+        }
+        link_test_directory(&root.join(".excluded"), &outside);
+        assert_eq!(
+            scan_library(&root).unwrap(),
+            [".hidden.rhai", "visible.rhai"]
+        );
+        assert!(scan_library(&root.join("missing")).is_err());
+        assert!(scan_library(&root.join("visible.rhai")).is_err());
+        #[cfg(unix)]
+        for (index, name) in [r"literal\name.rhai", "literal:name.rhai"]
+            .into_iter()
+            .enumerate()
+        {
+            let invalid = folder.path().join(format!("invalid-{index}"));
+            std::fs::create_dir(&invalid).unwrap();
+            std::fs::write(invalid.join(name), "// native name").unwrap();
+            assert!(scan_library(&invalid).is_err());
+        }
+        link_test_directory(&root.join("escape"), &outside);
+        link_test_directory(&root.join("cycle"), &root);
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "discovery::tests::catalog_inventory_contract",
+                "--nocapture",
+            ])
+            .env(CHILD, &root)
+            .env(lunco_assets_core::ASSET_ROOT_ENV, &root)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 
     /// A test asset is one under a `tests/` DIRECTORY, in any library. The name
     /// decides nothing: a scene called `something_test.usda` sitting beside the

@@ -250,40 +250,15 @@ mod tests {
         let outside = folder.path().join("outside");
         std::fs::create_dir(&outside).unwrap();
         std::fs::write(outside.join("Escaped.mo"), "model Escaped end Escaped;").unwrap();
-        let link_directory = |link: &Path| {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&outside, link).unwrap();
-            #[cfg(windows)]
-            {
-                // Junctions need no Windows symbolic-link privilege.
-                let result = std::process::Command::new("powershell")
-                    .args([
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-Command",
-                        "New-Item -ItemType Junction -Path $env:LUNCO_TEST_LINK -Target $env:LUNCO_TEST_TARGET -ErrorAction Stop | Out-Null",
-                    ])
-                    .env("LUNCO_TEST_LINK", link)
-                    .env("LUNCO_TEST_TARGET", &outside)
-                    .output()
-                    .unwrap();
-                assert!(
-                    result.status.success(),
-                    "{}\n{}",
-                    String::from_utf8_lossy(&result.stdout),
-                    String::from_utf8_lossy(&result.stderr)
-                );
-            }
-        };
-        link_directory(&package.join("escape"));
+        crate::discovery::link_test_directory(&package.join("escape"), &outside);
         run("escaped");
         std::fs::write(
             outside.join("package.mo"),
             "package EscapedRoot end EscapedRoot;",
         )
         .unwrap();
-        link_directory(&assets.join("models").join("EscapedRoot"));
-        link_directory(&assets.join("models").join("Escaped.mo"));
+        crate::discovery::link_test_directory(&assets.join("models").join("EscapedRoot"), &outside);
+        crate::discovery::link_test_directory(&assets.join("models").join("Escaped.mo"), &outside);
         run("escaped_root");
     }
 }

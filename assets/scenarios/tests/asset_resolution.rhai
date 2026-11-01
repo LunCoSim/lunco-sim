@@ -1,4 +1,14 @@
 // One-shot assertions for the owned production asset/UI driver.
+fn verify_browsed_library_source(id, expected_source) {
+    let document = query("GetDocumentSource", #{doc_id: id});
+    let status = query("CompileStatus", #{doc_id: id});
+    report_verdict([
+        t_true(document.source == expected_source, "browser opened the requested source class"),
+        t_true(!document.dirty, "library source opens without fabricated edits"),
+        t_true(status.ast_parsed, "browser source has a valid current parse"),
+    ], "Package browser source", "PACKAGE_BROWSER_SOURCE")
+}
+
 fn verify_scheme_scope(lower_diagnostic, mixed_diagnostic) {
     report_verdict([
         t_true(lower_diagnostic.contains("without an active Twin"), "lowercase Twin source requires its owner"),

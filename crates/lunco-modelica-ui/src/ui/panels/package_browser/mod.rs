@@ -184,14 +184,25 @@ pub fn handle_package_loading_tasks(mut cache: ResMut<PackageTreeCache>) {
     });
 
     for result in finished_results {
-        find_and_update_node(&mut cache.roots, &result.parent_id, result.children);
+        match result.children {
+            Ok(children) => {
+                cache.scan_errors.remove(&result.parent_id);
+                find_and_update_node(&mut cache.roots, &result.parent_id, Some(children));
+            }
+            Err(error) => {
+                bevy::log::warn!("[PackageBrowser] {}: {error}", result.parent_id);
+                if find_and_update_node(&mut cache.roots, &result.parent_id, None) {
+                    cache.scan_errors.insert(result.parent_id, error);
+                }
+            }
+        }
     }
 }
 
 fn find_and_update_node(
     nodes: &mut [PackageNode],
     parent_id: &str,
-    children: Vec<PackageNode>,
+    children: Option<Vec<PackageNode>>,
 ) -> bool {
     for node in nodes {
         if let PackageNode::Category {
@@ -202,7 +213,7 @@ fn find_and_update_node(
         } = node
         {
             if id == parent_id {
-                *node_children = Some(children);
+                *node_children = children;
                 *is_loading = false;
                 return true;
             }
@@ -244,7 +255,7 @@ pub fn render_root_subtree(
     // collect (1) any user action and (2) lazy-scan requests. Both are
     // dispatched through typed intents after the read borrow ends.
     let mut action: Option<render::PackageAction> = None;
-    let mut load_out: Vec<(String, String)> = Vec::new();
+    let mut load_out: Vec<String> = Vec::new();
     if let Some(cache) = ctx.resource::<PackageTreeCache>() {
         if let Some(PackageNode::Category { children, .. }) = cache
             .roots
@@ -273,7 +284,12 @@ pub fn render_root_subtree(
                     _ => None,
                 })
                 .unwrap_or(false);
-            if let Some(kids) = children {
+            if let Some(error) = cache.scan_errors.get(root_id) {
+                ui.add(egui::Label::new(format!("Could not load package: {error}")).wrap());
+                if ui.button("Retry").clicked() {
+                    load_out.push(root_id.to_owned());
+                }
+            } else if let Some(kids) = children {
                 for kid in kids.iter() {
                     if let Some(a) = render::render_node_single_ro(
                         kid,
@@ -282,6 +298,7 @@ pub fn render_root_subtree(
                         None,
                         0,
                         &mut load_out,
+                        &cache.scan_errors,
                         &theme,
                         &query,
                         root_matches,
@@ -290,7 +307,7 @@ pub fn render_root_subtree(
                     }
                 }
             } else {
-                load_out.push((root_id.to_string(), root_id.to_string()));
+                load_out.push(root_id.to_string());
                 ui.horizontal(|ui| {
                     ui.add_space(20.0);
                     ui.label(
@@ -306,15 +323,11 @@ pub fn render_root_subtree(
         }
     }
 
-    // Spawn lazy scans for the categories that were requested this frame.
-    // Replicates `render_node_single`'s in-place scan, but deferred so it
-    // runs after the egui pass. `find_category_path` →
-    // resolve by id; only spawns when still unscanned & not already
-    // loading. The existing scan-task poller integrates `ScanResult` on a
-    // later frame (one-frame delay is fine).
-    for (id, pkg_path) in load_out {
+    // Resolve requested IDs through the current tree after the egui pass.
+    for id in load_out {
         let _ = ctx.resource_scope::<PackageTreeCache, _>(move |_, cache| {
             use bevy::tasks::AsyncComputeTaskPool;
+            cache.scan_errors.remove(&id);
             // Resolve the package_path for `id` from the live tree (the
             // read-only renderer only had the id for nested categories).
             if let Some((children, is_loading, package_path)) =
@@ -324,16 +337,9 @@ pub fn render_root_subtree(
                     *is_loading = true;
                     let pool = AsyncComputeTaskPool::get();
                     let parent_id = id.clone();
-                    // Prefer the live package_path; fall back to the id-as-path
-                    // hint passed from the read-only renderer for root rows.
-                    let pp = if package_path.is_empty() {
-                        pkg_path.clone()
-                    } else {
-                        package_path
-                    };
                     let task = pool.spawn(async move {
-                        let children =
-                            crate::package_tree::library_tree::library_tree().children(&pp);
+                        let children = crate::package_tree::library_tree::library_tree()
+                            .children(&package_path);
                         crate::package_tree::cache::ScanResult {
                             parent_id,
                             children,

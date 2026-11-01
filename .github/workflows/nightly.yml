@@ -241,7 +241,7 @@ jobs:
       - name: Verify native path contracts
         run: |
           cargo test --release --locked -j 4 --lib \
-            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-runtime -p lunco-assets-path -p lunco-workspace -p lunco-networking-scenario -p lunco-assets-datasets -p lunco-assets-download -p lunco-scripting-rhai-core -p lunco-modelica-compiler \
+            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-runtime -p lunco-assets-path -p lunco-workspace -p lunco-networking-scenario -p lunco-assets-datasets -p lunco-assets-download -p lunco-scripting-rhai-core -p lunco-modelica-core -p lunco-modelica-compiler \
             -- --exact \
             file_uri_tests::file_uris_preserve_native_paths_and_reject_invalid_addresses \
             file_uri_tests::authored_windows_references_use_native_identity_or_explicit_host_rejection \
@@ -275,6 +275,9 @@ jobs:
             tests::root_relative_paths_reject_traversal_and_absolute_spellings \
             twin_source::tests::unsafe_overlay_paths_are_not_stored_or_read \
             models::tests::package_inventory_contract \
+            library::resolution_tests::asset_resolution_contract \
+            discovery::tests::catalog_inventory_contract \
+            package_tree::scanner::tests::source_tree_reads_admitted_members_and_rejects_invalid_source \
             discovery::source_root_contract_tests::asset_resolution_contract \
             asset_path::tests::native_load_paths_keep_filesystem_characters_and_separate_labels \
             asset_path::tests::native_load_paths_reject_missing_retired_and_foreign_ownership \

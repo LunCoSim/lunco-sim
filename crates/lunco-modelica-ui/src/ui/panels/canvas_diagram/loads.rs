@@ -857,6 +857,7 @@ mod duplicate_retirement_tests {
         app.insert_resource(crate::package_tree::PackageTreeCache {
             roots: Vec::new(),
             tasks: Vec::new(),
+            scan_errors: std::collections::HashMap::new(),
             in_memory_models: Vec::new(),
             bundled_tree_indexed: false,
             library_roots_synced: false,
@@ -999,6 +1000,7 @@ mod duplicate_retirement_tests {
         world.insert_resource(crate::package_tree::PackageTreeCache {
             roots: Vec::new(),
             tasks: Vec::new(),
+            scan_errors: std::collections::HashMap::new(),
             in_memory_models: Vec::new(),
             bundled_tree_indexed: false,
             library_roots_synced: false,
