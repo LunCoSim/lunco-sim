@@ -1019,14 +1019,26 @@ mod source_root_contract_tests {
             "{errors:?}"
         );
         assert!(read_files_with_extension(Path::new("relative"), "mo").1[0].contains("absolute"));
+    }
+
+    // Linux permits byte filenames that the macOS runner's filesystem rejects
+    // at creation. Exercise discovery's UTF-8 boundary where that input exists.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn source_inventory_rejects_non_utf8_native_filenames() {
+        let folder = tempfile::tempdir().unwrap();
         use std::os::unix::ffi::OsStringExt;
         let invalid_name = std::ffi::OsString::from_vec(b"invalid\xff.mo".to_vec());
-        std::fs::write(root.join(invalid_name), "model Invalid end Invalid;").unwrap();
+        std::fs::write(
+            folder.path().join(invalid_name),
+            "model Invalid end Invalid;",
+        )
+        .unwrap();
+        let (files, errors) = read_files_with_extension(folder.path(), "mo");
+        assert!(files.is_empty());
         assert!(
-            read_files_with_extension(&root, "mo")
-                .1
-                .iter()
-                .any(|error| error.contains("UTF-8 identity"))
+            errors.iter().any(|error| error.contains("UTF-8 identity")),
+            "{errors:?}"
         );
     }
 }

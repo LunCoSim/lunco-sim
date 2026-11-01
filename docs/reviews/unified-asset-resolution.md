@@ -93,6 +93,14 @@ USD composition cases, four source-content closure cases and two storage
 file-URI cases. The shared native CI gate runs on Windows, macOS and Linux;
 macOS/Linux execution is not established by this local Windows run.
 
+Nightly run `41320439024` passes Linux and Windows, including the Windows native
+runtime gates. macOS builds the application and passes the preceding native
+tests, then rejects the discovery test's invalid UTF-8 filename during fixture
+creation (`EILSEQ`). The native byte-filename rejection fixture runs on Linux;
+the common Unix discovery fixture still checks literal names, containment,
+cycles and relative-root rejection. In-memory source admission also rejects
+non-UTF-8 identities on every Unix host without requiring filesystem support.
+
 Production Windows verification used `target/debug/luncosim.exe` built with
 `cargo build -p lunco-luncosim --bin luncosim -j 4`:
 

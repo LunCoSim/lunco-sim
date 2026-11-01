@@ -281,6 +281,7 @@ jobs:
             discovery::tests::catalog_inventory_contract \
             package_tree::scanner::tests::source_tree_reads_admitted_members_and_rejects_invalid_source \
             discovery::source_root_contract_tests::asset_resolution_contract \
+            discovery::source_root_contract_tests::source_inventory_rejects_non_utf8_native_filenames \
             asset_path::tests::native_load_paths_keep_filesystem_characters_and_separate_labels \
             asset_path::tests::native_load_paths_reject_missing_retired_and_foreign_ownership \
             asset_path::tests::windows_native_load_paths_normalize_verbatim_mount_roots \
