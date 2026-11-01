@@ -268,7 +268,7 @@ fn component_equal(
     right: &std::ffi::OsStr,
     sensitive: bool,
 ) -> StorageResult<bool> {
-    use core_foundation::base::{TCFType, kCFCompareEqualTo};
+    use core_foundation::base::{CFComparisonResult, TCFType};
     use core_foundation::string::{
         CFString, CFStringCompare, kCFCompareCaseInsensitive, kCFCompareNonliteral,
     };
@@ -294,7 +294,7 @@ fn component_equal(
             left.as_concrete_TypeRef(),
             right.as_concrete_TypeRef(),
             options,
-        ) == kCFCompareEqualTo
+        ) == CFComparisonResult::EqualTo
     })
 }
 
