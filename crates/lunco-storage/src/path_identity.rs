@@ -11,9 +11,9 @@ use crate::{StorageError, StorageResult};
 #[derive(Clone, Debug)]
 enum CaseSensitivity {
     Sensitive,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     Insensitive,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     Unknown(String),
 }
 
@@ -127,14 +127,18 @@ impl FilePathIdentity {
                 return Ok(false);
             };
             match sensitivity {
-                CaseSensitivity::Sensitive => return Ok(false),
-                #[cfg(windows)]
+                CaseSensitivity::Sensitive => {
+                    if !component_equal(left, right, true)? {
+                        return Ok(false);
+                    }
+                }
+                #[cfg(any(windows, target_os = "macos"))]
                 CaseSensitivity::Insensitive => {
                     if !component_equal(left, right, false)? {
                         return Ok(false);
                     }
                 }
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 CaseSensitivity::Unknown(detail) => {
                     if component_equal(left, right, false)? {
                         return Err(StorageError::Unsupported(format!(
@@ -149,9 +153,43 @@ impl FilePathIdentity {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn directory_sensitivity(_path: &Path) -> CaseSensitivity {
     CaseSensitivity::Sensitive
+}
+
+#[cfg(target_os = "macos")]
+fn directory_sensitivity(path: &Path) -> CaseSensitivity {
+    use std::os::unix::ffi::OsStrExt;
+    let result = (|| -> std::io::Result<bool> {
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        // SAFETY: the C string is live and terminated. errno is thread-local;
+        // clearing it distinguishes an unsupported option from a syscall error.
+        let result = unsafe {
+            *libc::__error() = 0;
+            libc::pathconf(path.as_ptr(), libc::_PC_CASE_SENSITIVE)
+        };
+        match result {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(0) {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "filesystem did not report directory case semantics",
+                    ))
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    })();
+    match result {
+        Ok(true) => CaseSensitivity::Sensitive,
+        Ok(false) => CaseSensitivity::Insensitive,
+        Err(error) => CaseSensitivity::Unknown(format!("{}: {error}", path.display())),
+    }
 }
 
 #[cfg(windows)]
@@ -224,7 +262,43 @@ fn component_equal(
     Ok(result == CSTR_EQUAL)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn component_equal(
+    left: &std::ffi::OsStr,
+    right: &std::ffi::OsStr,
+    sensitive: bool,
+) -> StorageResult<bool> {
+    use core_foundation::base::{TCFType, kCFCompareEqualTo};
+    use core_foundation::string::{
+        CFString, CFStringCompare, kCFCompareCaseInsensitive, kCFCompareNonliteral,
+    };
+    let string = |name: &std::ffi::OsStr| -> StorageResult<CFString> {
+        let name = name.to_str().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid UTF-8 filename")
+        })?;
+        isize::try_from(name.len()).map_err(std::io::Error::other)?;
+        name.parse()
+            .map_err(|()| std::io::Error::other("cannot prepare native filename comparison").into())
+    };
+    let left = string(left)?;
+    let right = string(right)?;
+    let options = kCFCompareNonliteral
+        | if sensitive {
+            0
+        } else {
+            kCFCompareCaseInsensitive
+        };
+    // SAFETY: both retained CF strings outlive this locale-independent compare.
+    Ok(unsafe {
+        CFStringCompare(
+            left.as_concrete_TypeRef(),
+            right.as_concrete_TypeRef(),
+            options,
+        ) == kCFCompareEqualTo
+    })
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn component_equal(
     left: &std::ffi::OsStr,
     right: &std::ffi::OsStr,
@@ -257,11 +331,53 @@ mod tests {
         );
         let alias =
             FilePathIdentity::prepare(&root.path().join("site/missing/texture.png")).unwrap();
-        assert_eq!(identity.overlaps(&alias).unwrap(), cfg!(windows));
-        let missing =
-            FilePathIdentity::prepare(&root.path().join("uncreated/texture.png")).unwrap();
-        let other = FilePathIdentity::prepare(&root.path().join("UNCREATED/Texture.png")).unwrap();
-        assert_eq!(missing.overlaps(&other).unwrap(), cfg!(windows));
+        assert_eq!(
+            identity.overlaps(&alias).unwrap(),
+            root.path().join("site").exists()
+        );
+        for (left, right) in [
+            ("uncreated/texture.png", "UNCREATED/Texture.png"),
+            ("café/texture.png", "CAFÉ/Texture.png"),
+            ("décomposed/texture.png", "de\u{301}composed/texture.png"),
+        ] {
+            let left = root.path().join(left);
+            let right = root.path().join(right);
+            let missing = FilePathIdentity::prepare(&left).unwrap();
+            let other = FilePathIdentity::prepare(&right).unwrap();
+            // Compare the prepared missing identities with the real filesystem's
+            // later lookup, including case and canonical Unicode aliases.
+            std::fs::create_dir_all(left.parent().unwrap()).unwrap();
+            std::fs::write(&left, b"identity probe").unwrap();
+            let aliases = right.try_exists().unwrap();
+            assert_eq!(
+                missing.overlaps(&other).unwrap(),
+                aliases,
+                "{left:?} vs {right:?}"
+            );
+            assert_eq!(
+                other.overlaps(&missing).unwrap(),
+                aliases,
+                "{right:?} vs {left:?}"
+            );
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let unknown = FilePathIdentity {
+                components: vec!["root".into(), "Case".into()],
+                existing: 1,
+                sensitivity: CaseSensitivity::Unknown("case query failed".into()),
+            };
+            let alias = FilePathIdentity {
+                components: vec!["root".into(), "case".into()],
+                ..unknown.clone()
+            };
+            let error = unknown.overlaps(&alias).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot establish destination case identity")
+            );
+        }
         #[cfg(unix)]
         {
             let link = root.path().join("linked");

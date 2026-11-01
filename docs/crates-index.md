@@ -395,7 +395,8 @@ I/O abstraction layer providing a unified `Storage` trait for reading, writing,
 renaming, entry-kind inspection, directory listing/preparation, and backend
 selection through handles.
 Owns worker-prepared `FilePathIdentity` snapshots for native destination
-ownership, including missing paths and Windows directory case semantics.
+ownership, including missing paths, Windows directory case semantics and macOS
+volume case and canonical Unicode comparison.
 Owns standard native file URI decoding/encoding through `file_uri_to_path`
 and `file_path_to_uri`; malformed addresses fail before filesystem access.
 Supports native FS, memory, browser localStorage and OPFS. Native and OPFS

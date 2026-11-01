@@ -452,7 +452,13 @@ This portability key is not used for native filesystem identity.
 Dataset scan workers prepare native source/output identities through
 `FilePathIdentity`: canonical existing ancestors resolve links and Windows
 verbatim prefixes; missing descendants inherit the ancestor's native directory
-case mode. Windows comparisons use ordinal filesystem-name comparison. An
+case mode. Windows comparisons use ordinal filesystem-name comparison. macOS
+queries `_PC_CASE_SENSITIVE` at the admitted ancestor and uses Core Foundation
+comparison for case and canonical Unicode aliases; it does not infer volume
+semantics from the operating-system name. The native identity fixture compares
+snapshots of missing destinations against subsequent filesystem lookups and
+runs before desktop packaging on each runner, including a separate case-sensitive
+macOS test volume. An
 unknown case mode rejects ambiguous ownership visibly. Admission and worker
 merge compare the prepared identities without I/O, rejecting outputs that
 could replace another output or source. These snapshots do not lock out

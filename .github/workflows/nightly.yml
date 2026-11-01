@@ -226,6 +226,21 @@ jobs:
             ${{ matrix.platform }}-native-assets-
 
       # ── Build + package LunCoSim (native arch) ──────────────────────────
+      - name: Verify native destination identities
+        run: cargo test --locked -j 4 -p lunco-storage --lib -- --exact path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases
+
+      - name: Verify case-sensitive macOS destination identities
+        if: runner.os == 'macOS'
+        run: |
+          image="$RUNNER_TEMP/lunco-path-identity.dmg"
+          mount="$RUNNER_TEMP/lunco-path-identity"
+          hdiutil create -size 128m -fs HFSX -volname LuncoPathIdentity "$image"
+          mkdir -p "$mount"
+          hdiutil attach -nobrowse -mountpoint "$mount" "$image"
+          trap 'hdiutil detach "$mount"' EXIT
+          mkdir "$mount/tmp"
+          TMPDIR="$mount/tmp" cargo test --locked -j 4 -p lunco-storage --lib -- --exact path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases
+
       # --velopack turns the complete staged directory into an installer,
       # update package, and channel feed. docs/ + AGENTS.md + all assets are
       # therefore part of the package's authoritative file set. The native
@@ -251,7 +266,6 @@ jobs:
             source_root_smoke::source_root_content_closure_is_stable_exact_and_portable \
             source_root_smoke::source_root_content_closure_rejects_incomplete_or_nonportable_sources \
             source_root_smoke::source_root_content_closure_keeps_package_read_failures_terminal \
-            path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases \
             tests::asset_root_admission_reports_invalid_overrides_and_discovers_canonical_library \
             twin_source::tests::directory_root_designator_retains_mount_ownership_and_rejects_parent_escape \
             tests::portable_materialization_rejects_aliases_and_accepts_literal_names \

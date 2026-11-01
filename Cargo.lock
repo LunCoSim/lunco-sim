@@ -10620,8 +10620,10 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-trait",
+ "core-foundation 0.10.1",
  "futures-lite",
  "js-sys",
+ "libc",
  "serde",
  "tempfile",
  "thiserror 2.0.18",

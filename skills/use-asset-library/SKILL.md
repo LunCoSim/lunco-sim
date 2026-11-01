@@ -55,6 +55,13 @@ asset paths after stripping their native root. See the
 [asset addressing boundary](../../docs/architecture/56-asset-resolution-and-cache.md#usd-references-stay-logical-through-loading)
 for Windows verbatim and UNC handling.
 
+Dataset output ownership uses worker-prepared `lunco-storage::FilePathIdentity`;
+do not infer case sensitivity from the OS or lowercase native paths. Missing
+destinations inherit their admitted ancestor's directory/volume semantics.
+Windows uses native ordinal comparison; macOS queries its volume case mode and
+uses native canonical Unicode comparison. Keep preparation on the I/O worker
+and consume snapshots without filesystem work at admission.
+
 - USD owns assembly, transforms, variants, references, and wiring.
 - Modelica owns continuous/domain math.
 - Rhai owns scenario orchestration, rules, scoring, and assertions.
