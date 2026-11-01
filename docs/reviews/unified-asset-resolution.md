@@ -106,6 +106,26 @@ Runtime logs are under `target/path-resolution-final-{twin,sandbox,api,demo}.log
 This checkout reports missing optional DejaVu font data and an empty installed
 library index; neither prevented these source/runtime gates from passing.
 
+Windows UX verification used the same production binary at 150% display scale.
+`test_resource_preview_layout.py --uri-point 640 202 --text-point 640 360`
+and `--compact --uri-point 480 112 --text-point 480 270` both exited 0.
+Their 24 captures were inspected at 1920x1080 and 1440x810 physical pixels
+(1280x720 and 960x540 logical window sizes). Missing-file diagnostics, four image
+corners, title/close controls, full long-URI hover text, Copy URI, bounded text,
+scroll/reload and image-after-text remained within the viewport. The long native
+filename contains Unicode, spaces, `#`, `%` and `+` and exceeds 260 characters.
+The driver takes measured logical hit positions and records them; screenshot
+dimensions alone do not identify a widget or its input coordinates.
+
+An additional owned compact session (PID 25760, port 4198, native window DPI 144)
+clicked Copy URI and read back the Windows Unicode clipboard: the complete
+402-character encoded URI matched exactly. Evidence is in
+`target/path-ux-measured-{standard,compact}/` and `target/path-ux-clipboard/`.
+All sessions exited through the API and released their ports, with clean render
+logs. These input gestures exercise application events and clipboard output;
+physical Explorer drag delivery, a fresh installer, macOS/Linux desktop UX and
+browser acceptance were not exercised by this run.
+
 ## External conformance review
 
 Microsoft's namespace rules and Rust's pinned standard-library implementation
@@ -206,11 +226,6 @@ contract; language adapters do not add ambient filesystem searches.
 - Rename follow-up: `cargo test -p lunco-modelica-source-roots --lib asset_resolution_contract -j 4` passed three cases, including relocation, saved facts and stale-operation rejection. The production binary rebuilt successfully. `scripts/api/test_asset_resource_renames.py` passed 20 authored assertions and exited 0; ten reviewed captures show resource recovery and the expected retired/missing diagnostics. The owned session released port 4286. Evidence is in `.lunco/asset-resolution-rereview/fixed/` and its adjacent `rename-*` logs. This verifies resource loading; preview layout is covered separately below.
 - Preview layout: the production build passed, and `scripts/api/test_resource_preview_layout.py` completed both standard 1280x720 and compact 960x540 runs with exit 0. All 24 directed captures were reviewed: image corner markers, title/close controls, long-URI tooltip and copy menu, bounded text notice, scroll/reload and image-after-text stayed within the viewport. The copy menu was inspected; OS clipboard delivery was not exercised. Both owned API sessions on port 4286 exited with clean render logs. Evidence is in `.lunco/resource-preview-layout/complete-standard/` and `complete-compact/`. The driver records captures and lifecycle; visual review supplies the layout verdict.
 - Local-main integration: the merged production build and ten focused discovery tests passed. The path driver passed 43 authored assertions; resource renames passed 20 assertions with all ten captures reviewed. The sunrise gate passed nine checks and the sun-disc occlusion gate passed three GPU frames. Owned API sessions used port 4286 and exited cleanly. Evidence is in `.lunco/usd-main-integration/` and the corresponding `target/scene-tests/` logs.
-
-Current evidence is under `.lunco/asset-resolution-fix/` and the `fix-*` logs in
-`.lunco/asset-resolution-audit/`. These runs do not establish native Windows or
-full browser-application acceptance, nor full Modelica external-function/resource
-compatibility.
 
 ## Shared boundary regression coverage
 

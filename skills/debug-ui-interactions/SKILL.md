@@ -53,6 +53,10 @@ does not establish a hit target.
 For shared resource-window layout, run
 `scripts/api/test_resource_preview_layout.py` with `LUNCOSIM_BIN`, an explicit
 free `LUNCOSIM_API_PORT`, and a fresh `LUNCOSIM_PREVIEW_TEST_OUTPUT` directory.
+Supply `--uri-point X Y` and `--text-point X Y` measured from a current capture,
+converting screenshot physical pixels to logical window coordinates with the
+window's scale factor. The driver records these points and disables throttling
+for its timed gestures. Do not infer widget positions from screenshot dimensions.
 Repeat with `--compact` for the 960x540 production window profile. Inspect all
 captures: the four colored image corners, title/close controls, long URI hover
 text/copy action, text-size notice and image-after-text transition must remain reachable
