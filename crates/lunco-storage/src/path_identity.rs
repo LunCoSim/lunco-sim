@@ -339,6 +339,11 @@ mod tests {
             ("uncreated/texture.png", "UNCREATED/Texture.png"),
             ("café/texture.png", "CAFÉ/Texture.png"),
             ("décomposed/texture.png", "de\u{301}composed/texture.png"),
+            ("sharp/straße", "sharp/STRASSE"),
+            ("ligature/ﬃ", "ligature/FFI"),
+            ("kelvin/K", "kelvin/K"),
+            ("turkish/ı", "turkish/I"),
+            ("sigma/ς", "sigma/Σ"),
         ] {
             let left = root.path().join(left);
             let right = root.path().join(right);
