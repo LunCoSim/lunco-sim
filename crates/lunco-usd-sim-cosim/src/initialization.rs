@@ -376,6 +376,20 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
     else {
         return Ok(None);
     };
+    // The certificate covers every wire, including independently initialized
+    // networks. Their declarations must exist before taking that snapshot.
+    // Domain discovery holds admission before a network has an entity surface.
+    if world
+        .resource::<lunco_core_runtime::SimulationProgress>()
+        .contains(lunco_core_runtime::SimulationProgressKey::usd_domain_discovery())
+        || world
+            .query_filtered::<Entity, With<lunco_port_core::PortSurfacePending>>()
+            .iter(world)
+            .next()
+            .is_some()
+    {
+        return Ok(None);
+    }
     let mut query = world.query_filtered::<(
         Entity,
         &UsdPrimPath,
@@ -437,9 +451,10 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
         {
             return Ok(None);
         }
-        // Acyclic admission uses the same owner and does not need a composite.
+        // Ready acyclic participants use their own admission. Dependencies on
+        // their outputs still wait in InitialExpressions until samples exist.
         if lunco_cosim_core::initialization::initialization_inputs(world, entity)?.is_some() {
-            return Ok(None);
+            continue;
         }
         let (handle, resume) = if let Some((handle, _, _, resume)) = &pending {
             (Some(handle.clone()), *resume)

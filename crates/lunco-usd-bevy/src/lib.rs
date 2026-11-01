@@ -39,6 +39,7 @@
 //! single reader and marks each projected entity with `UsdSceneProjected`.
 
 use bevy::asset::AssetId;
+use bevy::ecs::schedule::{ScheduleLabel, SingleThreadedExecutor};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
@@ -172,6 +173,20 @@ impl Plugin for UsdVisualPlugin {
             .register_type::<lathe::UsdLathe>()
             .register_type::<lathe::LatheProfile>()
             .init_resource::<UsdVisualProjectionSettings>()
+            .init_resource::<UsdProjectionWorkBudget>()
+            .init_schedule(UsdProjectionPass)
+            .edit_schedule(UsdProjectionPass, |schedule| {
+                schedule.set_executor(SingleThreadedExecutor::new());
+            })
+            .add_systems(
+                UsdProjectionPass,
+                (
+                    process_queued_usd_visuals.run_if(any_queued_usd_visuals),
+                    admit_pending_usd_children.run_if(has_pending_usd_children),
+                    detach_reset_xform_stack_prims,
+                )
+                    .chain(),
+            )
             // The live canonical stages are main-thread `NonSend` resources
             // because OpenUSD `Stage` is `!Send`. Initial projection uses each
             // asset's worker-produced `UsdStageProjectionPlan`; this resource
@@ -187,18 +202,6 @@ impl Plugin for UsdVisualPlugin {
             // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
             // as a grid-direct follower. `resolve` rigs it once during load; `follow`
             // tracks the mount each frame, before transform propagation.
-            // `!resetXformStack!` detachment. In `Update`, so the reparent has
-            // flushed before simulation projection consumes body poses and
-            // before `PostUpdate` propagates transforms. A body must not be
-            // admitted with its discarded ancestor transform applied.
-            // Runs every frame rather than once: the ancestry a prim must be
-            // lifted out of is itself spawned asynchronously during load.
-            .add_systems(
-                Update,
-                detach_reset_xform_stack_prims
-                    .after(admit_pending_usd_children)
-                    .in_set(UsdVisualProjectionSet),
-            )
             // Parametric lathes. BOTH are `Changed`-filtered, so on a scene nobody is
             // editing they iterate NOTHING — a nozzle's shape does not change while
             // the engine burns, and re-lathing it per frame is the exact mistake the
@@ -253,17 +256,17 @@ impl Plugin for UsdVisualPlugin {
                         )
                         .after(canonical::sync_canonical_stages)
                         .in_set(UsdSceneSyncSet),
-                    process_queued_usd_visuals
-                        .run_if(any_queued_usd_visuals)
+                    drain_usd_projection
+                        .run_if(
+                            any_queued_usd_visuals
+                                .or_else(has_pending_usd_children)
+                                .or_else(has_reset_xform_stack_work),
+                        )
                         .after(sync_usd_visuals)
-                        .in_set(UsdVisualProjectionSet),
-                    admit_pending_usd_children
-                        .run_if(has_pending_usd_children)
-                        .after(process_queued_usd_visuals)
                         .in_set(UsdVisualProjectionSet),
                     poll_pending_usd_meshes
                         .run_if(any_pending_usd_meshes)
-                        .after(admit_pending_usd_children)
+                        .after(drain_usd_projection)
                         .in_set(UsdVisualProjectionSet),
                     resolve_point_instancer_meshes
                         .run_if(point_instance_render_inputs_changed)
@@ -272,11 +275,11 @@ impl Plugin for UsdVisualPlugin {
                         .in_set(UsdVisualProjectionSet),
                     hide_point_instancer_prototypes
                         .run_if(point_instancer_visibility_inputs_changed)
-                        .after(process_queued_usd_visuals)
+                        .after(drain_usd_projection)
                         .in_set(UsdVisualProjectionSet),
                     ensure_point_instancer_prototypes
                         .run_if(point_instancer_structure_changed)
-                        .after(process_queued_usd_visuals)
+                        .after(drain_usd_projection)
                         .in_set(UsdVisualProjectionSet),
                     retry_awaiting_usd_visuals_after_quality_change
                         .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
@@ -301,7 +304,7 @@ impl Plugin for UsdVisualPlugin {
         app.add_systems(
             Update,
             refresh_standard_surface_material_intents
-                .after(process_queued_usd_visuals)
+                .after(drain_usd_projection)
                 .before(lunco_render::LookRebind)
                 .in_set(UsdVisualProjectionSet)
                 .run_if(bevy::ecs::schedule::common_conditions::on_message::<UsdSceneChangeBatch>),
@@ -384,18 +387,62 @@ impl Default for UsdVisualProjectionSettings {
             // batch. The independent child cap bounds its own later command
             // flush after the admission system returns.
             frame_budget: std::time::Duration::from_millis(4),
-            max_prim_work_items_per_update: 64,
+            max_prim_work_items_per_update: 128,
             child_spawn_budget: std::time::Duration::from_millis(1),
             max_child_spawns_per_update: 128,
         }
     }
 }
 
+#[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+struct UsdProjectionPass;
+
+/// Per-update accounting shared by every parent/child pass. It contains no
+/// scene identity and resets before each admitted projection update.
+#[derive(Resource, Default)]
+struct UsdProjectionWorkBudget {
+    prim_work: usize,
+    child_spawns: usize,
+    prim_elapsed: std::time::Duration,
+    child_elapsed: std::time::Duration,
+    progress: usize,
+}
+
+/// Continue through committed parents while the same update's budgets permit.
+/// Each pass flushes parent binding, child admission and reset-stack reparenting
+/// before the next pass reads the hierarchy. The combined wall limit also
+/// accounts for schedule and command-flush time between atomic batches.
+fn drain_usd_projection(world: &mut World) {
+    let _span = bevy::log::info_span!("usd_projection_update").entered();
+    let settings = *world.resource::<UsdVisualProjectionSettings>();
+    *world.resource_mut::<UsdProjectionWorkBudget>() = UsdProjectionWorkBudget::default();
+    let started = web_time::Instant::now();
+    loop {
+        let before = world.resource::<UsdProjectionWorkBudget>().progress;
+        world.run_schedule(UsdProjectionPass);
+        if world.resource::<UsdProjectionWorkBudget>().progress == before
+            || started.elapsed()
+                >= settings
+                    .frame_budget
+                    .saturating_add(settings.child_spawn_budget)
+        {
+            break;
+        }
+    }
+    let budget = world.resource::<UsdProjectionWorkBudget>();
+    debug!(
+        prim_work = budget.prim_work,
+        child_spawns = budget.child_spawns,
+        elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+        "[usd-bevy] completed bounded projection update"
+    );
+}
+
 /// Stable continuation queue for a prim's direct children.
 ///
 /// Admission runs after the projection system's deferred commands commit, so
 /// newly discovered children can use their parent's projected identity in the
-/// same update. Child projection itself runs on the following update.
+/// same update. A subsequent bounded pass can project those children.
 #[derive(Resource, Default)]
 struct UsdPendingChildAdmissions {
     ready: std::collections::BTreeSet<(String, Entity)>,
@@ -2073,6 +2120,7 @@ fn any_pending_usd_meshes(q: Query<(), With<PendingUsdMesh>>) -> bool {
 
 #[derive(SystemParam)]
 struct UsdVisualProjectionState<'w, 's> {
+    budget: ResMut<'w, UsdProjectionWorkBudget>,
     twin_roots: Option<Res<'w, lunco_assets_core::TwinRoots>>,
     newly_queued: Query<
         'w,
@@ -2098,8 +2146,8 @@ struct UsdVisualProjectionState<'w, 's> {
 /// Project USD prims until the configured wall-clock budget is exhausted.
 ///
 /// The queue is the only structural projection boundary: each admitted prim is
-/// bound once, its prepared direct children are queued, and the next frame
-/// continues from that ownership fence. Initial reads use the worker-produced
+/// bound once, its prepared direct children are queued, and the next bounded
+/// pass continues from that ownership fence. Initial reads use the worker-produced
 /// plan; later generations use the canonical live reader. CPU geometry retains
 /// the existing async compute path, while ECS and Bevy asset mutation stay on
 /// the main thread.
@@ -2171,16 +2219,19 @@ fn process_queued_usd_visuals(
         );
         return;
     }
+    let budget = &mut visual_state.budget;
     let started = web_time::Instant::now();
     let mut projected = 0usize;
     let mut visited = 0usize;
     let mut native_deferred = Vec::new();
 
     while !visual_state.queued.is_empty() {
-        if visited != 0 && started.elapsed() >= settings.frame_budget {
+        if (visited != 0 || budget.prim_work != 0)
+            && budget.prim_elapsed.saturating_add(started.elapsed()) >= settings.frame_budget
+        {
             break;
         }
-        if visited >= settings.max_prim_work_items_per_update {
+        if budget.prim_work + visited >= settings.max_prim_work_items_per_update {
             break;
         }
         let Some((_, entity)) = visual_state.queued.pop_first() else {
@@ -2277,6 +2328,9 @@ fn process_queued_usd_visuals(
         projected += 1;
     }
     visual_state.queued.extend(native_deferred);
+    budget.prim_work += visited;
+    budget.prim_elapsed += started.elapsed();
+    budget.progress += projected;
     if projected > 0 {
         debug!(
             "[usd-bevy] projected {projected} prim(s) in {:.2} ms",
@@ -2333,6 +2387,7 @@ struct UsdChildAdmissionContext<'w, 's> {
 fn admit_pending_usd_children(
     mut pending_children: ResMut<UsdPendingChildAdmissions>,
     context: UsdChildAdmissionContext,
+    mut budget: ResMut<UsdProjectionWorkBudget>,
     mut commands: Commands,
 ) {
     if context.settings.child_spawn_budget.is_zero()
@@ -2349,10 +2404,13 @@ fn admit_pending_usd_children(
     let mut visited = 0usize;
 
     while !pending_children.ready.is_empty() {
-        if visited != 0 && started.elapsed() >= context.settings.child_spawn_budget {
+        if (visited != 0 || !budget.child_elapsed.is_zero())
+            && budget.child_elapsed.saturating_add(started.elapsed())
+                >= context.settings.child_spawn_budget
+        {
             break;
         }
-        if admitted >= context.settings.max_child_spawns_per_update {
+        if budget.child_spawns + admitted >= context.settings.max_child_spawns_per_update {
             break;
         }
         let Some((child_path_text, parent)) = pending_children.pop_first_ready() else {
@@ -2557,6 +2615,9 @@ fn admit_pending_usd_children(
         admitted += 1;
         finish_pending_usd_child(parent, &mut pending_children, &mut commands);
     }
+    budget.child_spawns += admitted;
+    budget.child_elapsed += started.elapsed();
+    budget.progress += visited;
 }
 
 fn finish_pending_usd_child(
@@ -3448,6 +3509,18 @@ struct ResetXformStackApplied {
     authored_parent: Entity,
 }
 
+type PendingResetXformStack = (
+    With<UsdResetXformStack>,
+    Or<(Without<ResetXformStackApplied>, Changed<UsdResetXformStack>)>,
+);
+
+fn has_reset_xform_stack_work(
+    pending: Query<(), PendingResetXformStack>,
+    restore: Query<(), (With<ResetXformStackApplied>, Without<UsdResetXformStack>)>,
+) -> bool {
+    !pending.is_empty() || !restore.is_empty()
+}
+
 /// Re-anchor every `!resetXformStack!` prim onto its stage's world frame.
 ///
 /// Native USD reset semantics discard the ancestor stack and operations
@@ -3480,10 +3553,7 @@ fn detach_reset_xform_stack_prims(
             &Transform,
             Option<&ResetXformStackApplied>,
         ),
-        (
-            With<UsdResetXformStack>,
-            Or<(Without<ResetXformStackApplied>, Changed<UsdResetXformStack>)>,
-        ),
+        PendingResetXformStack,
     >,
     q_restore: Query<(Entity, &UsdPrimPath, &ResetXformStackApplied), Without<UsdResetXformStack>>,
     q_prims: Query<(&UsdPrimPath, Option<&ChildOf>, &Transform)>,

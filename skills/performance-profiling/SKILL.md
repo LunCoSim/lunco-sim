@@ -202,11 +202,20 @@ certification. Pending constructors supply no certifiable observation; the owner
 waits on their outcomes and revalidates current source, wiring and physical
 samples at final admission. Include coordinator counts and main-thread time
 when measuring startup; worker timing alone misses repeated certification work.
+Independent participants whose initial inputs are complete must not serialize
+an unrelated coupled plan. Compare dispatch timestamps and generated membership;
+external producers still need real initial expressions or samples, and final
+certification retains source, wiring and physical-value validation.
 Bootstrap API readiness does not certify the requested Twin. Record the exact
 active Twin and its physics admission. An interactive replacement retires the
 startup failure guard on `TwinClosed`; a late canceled asset result must not
 terminate the replacement. The focused production gate is
 `scripts/api/test_startup_scene_replacement.py --port <free-port> --log-dir <ignored-evidence-directory>`.
+Use `scripts/perf/twin_startup.py` for a windowed loading budget. Its
+`atomic-world-v1` probe reads readiness, Twin, projected root and physics state
+in one read-only evaluation. Compare matching probe versions; removing
+inter-query delays improves measurement accuracy, not application performance.
+Inspect first-ready and final screenshots as well as the mission verdict.
 Record prepared-solver hits and native attempts/hits/compilations alongside
 startup time; tests and other Twins can legitimately evict bounded artifacts.
 An immediate repeat with unchanged inputs distinguishes cold-cache work from
@@ -738,6 +747,11 @@ rejected negative writes and island splitting through `joint_island_mass.rhai`,
 plus exact replay against the unchanged artifact. Quiet steps must not rebuild
 islands; marker removal, body removal and paused lifecycle edits must still
 invalidate them. Preserve native sums and the full-island invalid-mass result.
+Initial membership must retain a joint held by the physics readiness owner,
+while an authored disabled joint remains excluded. Reuse the exact freeze marker
+and invalidate membership when it changes. Compare generated initialization
+inputs and constructor counts during a bounded-projection load; faster projection
+must not cause a second composite from a transiently incomplete mechanical graph.
 For a system that queues many compatible ECS component changes, inspect its
 `system_commands` flush separately from the system body. Collect changed values
 and use the owning crate's existing batch command path where it preserves the
@@ -1536,8 +1550,11 @@ items per update as well as elapsed time. Direct-child admission has its own
 awaiting/projecting markers until its direct children enter the ECS queue, so
 scene readiness must remain held while batches drain.
 The admission system follows the parent's projection command flush. Keep one
-ordered child queue so hierarchy depth costs one projection update per level,
-without an additional queue-promotion update. Verify initial file projection
+ordered child queue and continue through committed parents while the same
+update's cumulative budgets permit. Reset-stack reparenting must commit before
+the next descendant pass. Include inner-schedule and deferred-flush time in the
+combined wall limit, stop on no progress, and retain the per-update item caps.
+Verify initial file projection
 with `scripts/api/test_usd_child_admission.py`; incremental `ApplyUsdOps` alone
 does not exercise that initial continuation path.
 Snapshot extraction can reuse native `PurposeInfo` through the existing prim
@@ -2049,6 +2066,10 @@ providers and revalidates the full plan before admitting participants.
 Check that participant surfaces publish before connection rebuilding and that
 the wiring transaction commits before initialization. Compare admitted inputs
 with authored connections when a missing-input failure varies between runs.
+Coupled capture waits for domain discovery and all pending port declarations,
+including generated networks not yet present among Modelica participants.
+An identical composite source can still be superseded by unrelated wiring;
+retain complete plan validation and settle its declaration owners first.
 `PendingInputConnections` records sources awaiting port-surface projection;
 initialization consumes that owner fact rather than treating omitted edges as
 unconnected inputs.

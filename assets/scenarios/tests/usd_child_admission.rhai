@@ -17,9 +17,12 @@ fn admission_verify(doc, started) {
         if find(path) < 0 { complete = false; }
         path += "/Child";
     }
+    for index in 0..1024 {
+        if find("/World/AdmissionChain/Batch" + index) < 0 { complete = false; }
+    }
     report_verdict([
-        t_true(elapsed <= 88, "64 levels project within 88 updates including document admission: " + elapsed),
-        t_true(complete, "all admitted ancestors remain projected"),
+        t_true(elapsed <= 32, "64 levels and 1024 siblings project within 32 updates including document admission: " + elapsed),
+        t_true(complete, "all admitted ancestors and siblings remain projected"),
         t_true(prim.type_name == "Scope", "saved fixture leaf reads back through its document owner")
     ], "USD CHILD ADMISSION", "USD_CHILD_ADMISSION");
 }

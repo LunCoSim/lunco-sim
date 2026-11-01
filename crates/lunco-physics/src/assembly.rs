@@ -5,6 +5,7 @@
 //! from Avian body state and [`PhysicsJointLink`] topology; callers remain
 //! responsible for deciding which control or analysis model consumes it.
 
+use crate::readiness::FrozenJointForReadiness;
 use lunco_core::AppSceneExt;
 
 use std::collections::{HashMap, HashSet};
@@ -63,6 +64,7 @@ impl DynamicJointIslandMasses {
     }
 
     /// Complete mechanical topology at the prepared initial coordinate.
+    /// Readiness-held joints remain connected; authored disabled joints do not.
     /// Mass dependencies remain equation-owned until all members are solved.
     pub fn initial_members(&self, body: Entity) -> Option<&[Entity]> {
         self.initial_members
@@ -103,6 +105,7 @@ impl Plugin for DynamicJointIslandMassPlugin {
         track!(ComputedMass);
         track!(PhysicsJointLink);
         track!(JointDisabled);
+        track!(FrozenJointForReadiness);
         track!(PhysicsJointPending);
         track!(PhysicsJointTopologyPending);
         track!(PhysicsJointPrepared);
@@ -225,6 +228,7 @@ pub fn refresh_dynamic_joint_island_masses(
     all_links: Query<(
         &PhysicsJointLink,
         Has<JointDisabled>,
+        Has<FrozenJointForReadiness>,
         Has<PhysicsJointPending>,
         Has<PhysicsJointTopologyPending>,
         Option<&PhysicsJointPrepared>,
@@ -255,20 +259,22 @@ pub fn refresh_dynamic_joint_island_masses(
     let mut preparing = HashSet::new();
     let initial_links = all_links
         .iter()
-        .filter_map(|(link, disabled, pending, topology_pending, prepared)| {
-            if prepared.is_some_and(|prepared| !prepared.activate) {
-                return None;
-            }
-            let prepared = prepared.is_some_and(|prepared| prepared.activate);
-            if disabled && !prepared && !pending && !topology_pending {
-                return None;
-            }
-            if (pending || topology_pending) && !prepared {
-                preparing.insert(link.body0);
-                preparing.insert(link.body1);
-            }
-            Some((link.body0, link.body1))
-        })
+        .filter_map(
+            |(link, disabled, readiness_frozen, pending, topology_pending, prepared)| {
+                if prepared.is_some_and(|prepared| !prepared.activate) {
+                    return None;
+                }
+                let prepared = prepared.is_some_and(|prepared| prepared.activate);
+                if disabled && !readiness_frozen && !prepared && !pending && !topology_pending {
+                    return None;
+                }
+                if (pending || topology_pending) && !prepared {
+                    preparing.insert(link.body0);
+                    preparing.insert(link.body1);
+                }
+                Some((link.body0, link.body1))
+            },
+        )
         .collect::<Vec<_>>();
     cache.initial_members.clear();
     for mut members in dynamic_joint_islands(dynamic_entities, initial_links) {
@@ -606,6 +612,98 @@ mod tests {
                 .entries
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn readiness_frozen_joints_retain_complete_initial_membership() {
+        let mut app = App::new();
+        app.add_plugins(DynamicJointIslandMassPlugin)
+            .add_systems(Update, refresh_dynamic_joint_island_masses);
+        let root = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                ComputedMass::new(2.0),
+                PhysicsOrderKey("a".into()),
+            ))
+            .id();
+        let part = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                ComputedMass::new(5.0),
+                PhysicsOrderKey("b".into()),
+            ))
+            .id();
+        let excluded = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                ComputedMass::new(11.0),
+                PhysicsOrderKey("c".into()),
+            ))
+            .id();
+        let joint = app
+            .world_mut()
+            .spawn((
+                PhysicsJointLink {
+                    body0: root,
+                    body1: part,
+                },
+                JointDisabled,
+            ))
+            .id();
+        app.world_mut().spawn((
+            PhysicsJointLink {
+                body0: root,
+                body1: excluded,
+            },
+            JointDisabled,
+        ));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .initial_members(root),
+            Some([root].as_slice())
+        );
+        app.world_mut()
+            .entity_mut(joint)
+            .insert(FrozenJointForReadiness { owner: root });
+        app.update();
+        let masses = app.world().resource::<DynamicJointIslandMasses>();
+        assert_eq!(masses.initial_members(root), Some([root, part].as_slice()));
+        assert_eq!(masses.initial_members(part), Some([root, part].as_slice()));
+        assert_eq!(
+            masses.initial_members(excluded),
+            Some([excluded].as_slice())
+        );
+        assert_eq!(
+            masses.get(root).unwrap().mass_kg,
+            Some(2.0),
+            "live disabled joints stay excluded from active mass"
+        );
+        app.world_mut()
+            .entity_mut(joint)
+            .remove::<FrozenJointForReadiness>();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<DynamicJointIslandMasses>()
+                .initial_members(root),
+            Some([root].as_slice())
+        );
+        app.world_mut()
+            .entity_mut(joint)
+            .insert(FrozenJointForReadiness { owner: root });
+        app.update();
+        app.world_mut()
+            .entity_mut(joint)
+            .remove::<(JointDisabled, FrozenJointForReadiness)>();
+        app.update();
+        let masses = app.world().resource::<DynamicJointIslandMasses>();
+        assert_eq!(masses.initial_members(root), Some([root, part].as_slice()));
+        assert_eq!(masses.get(root).unwrap().mass_kg, Some(7.0));
     }
 
     #[test]

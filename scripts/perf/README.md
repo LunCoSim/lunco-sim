@@ -13,6 +13,11 @@ can be ready before scene preparation finishes.
 
 `twin_startup.py` owns a windowed production session and measures
 `OpenTwin` to physics readiness separately from the settled mission window.
+First readiness uses one read-only Rhai evaluation of readiness, Twin identity,
+projected root and physics state in the same World snapshot. The driver records
+the response time and polls at 50 ms; HTTP and frame scheduling remain a positive
+measurement delay. Receipts identify this method as `atomic-world-v1`; earlier
+sequential-query timings include additional frames and are not directly comparable.
 The latter requires settled terrain, an optional authored handoff signal, five
 seconds of readiness, then ten seconds and at least 240 fresh simulation ticks.
 It rejects source changes, retired body identity, runtime faults, coupled-object
@@ -24,6 +29,10 @@ A capture is requested at the first qualified physics-ready result and its
 publication time is recorded separately. Inspect `first-ready.png` as well as
 the final mission image; a physics-ready timestamp alone does not prove that
 all visual assets are already visible.
+Receipts retain the starting frame count and the first-ready engine history so
+loading-frame count and recent stalls can be compared alongside wall-clock
+readiness. The engine history retains only 240 frames; it does not certify the
+maximum stall over a longer load.
 By default the driver opens the Twin's current default scene with `OpenTwin`.
 Use `--scene scenes/example.usda` to open an exact Twin-relative scene through
 `OpenFile`, which mounts its owning Twin without changing the manifest. Receipts

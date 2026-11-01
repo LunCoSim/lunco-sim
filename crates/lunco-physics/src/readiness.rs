@@ -90,11 +90,12 @@ pub struct FrozenForReadiness {
 /// body cannot be removed from an island while one of its joints is still
 /// linked there: the later joint removal would underflow the island's joint
 /// count. This marker lets release restore only the joints this module took,
-/// and lets release happen after the bodies have been admitted again.
+/// and lets release happen after the bodies have been admitted again. Initial
+/// joint-island membership retains these readiness-owned mechanical links.
 #[derive(Component, Debug, Clone, Copy)]
-struct FrozenJointForReadiness {
+pub struct FrozenJointForReadiness {
     /// The [`HeldForReadiness`] entity that owns this freeze.
-    owner: Entity,
+    pub(crate) owner: Entity,
 }
 
 /// Project [`ReadinessState::world_hold`] onto [`PhysicsHolds`].

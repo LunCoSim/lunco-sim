@@ -459,12 +459,16 @@ allocation and Bevy asset mutation are main-thread responsibilities. A prim
 count cap bounds the deferred command batch applied after that system returns;
 the time budget alone cannot bound this flush when many prims bind quickly.
 `child_spawn_budget` and `max_child_spawns_per_update` bound direct-child
-admission and its separate deferred command flush. Defaults are 4 ms and 64
+admission and its separate deferred command flush. Defaults are 4 ms and 128
 prim work items per update, plus 1 ms and 128 child entities per update. Each
 parent records children in stable composed-path order. The admission system
-runs after the projection system's command flush, so its single ordered queue
-can admit newly discovered children in that update; those children project on
-the next update. The parent keeps its
+runs after the projection system's command flush in `UsdProjectionPass`.
+The invoking `Update` drains further passes while the same cumulative time and
+item budgets permit; each pass commits child admission and reset-stack
+reparenting before descendants project. A combined wall limit includes schedule
+and command-flush time between atomic batches. Exhausted budgets or no progress
+return control to the application. Per-update accounting contains no scene
+identity and resets at entry. The parent keeps its
 `UsdSceneAwaitingStage` and `UsdSceneProjectionQueued`
 fences until every direct child has entered the ECS queue. Admission re-reads
 the current composed stage. Bevy child-set changes refresh that parent's live

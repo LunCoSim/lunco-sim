@@ -42,6 +42,34 @@ def workloads():
     return subprocess.check_output(["ps", "-eo", "pid,pcpu,args", "--sort=-pcpu"], text=True).splitlines()[:12]
 
 
+def readiness_probe(twin_name, body_path):
+    """Qualify one World snapshot without adding inter-query frame delays."""
+    return f"""
+let readiness = query("GetReadiness");
+let status = "pending";
+if readiness.faulted {{
+    status = "faulted";
+}} else if readiness.ready && !readiness.world_hold {{
+    let twin = query("ReadActiveTwinContract");
+    if twin.name == {json.dumps(twin_name)} {{
+        let body = find_path({json.dumps(body_path)});
+        if body >= 0 {{
+            let prim = query("QueryUsdPrim", #{{path: {json.dumps(body_path)}}});
+            if prim.spawned {{
+                let physics = query("QueryPhysicsState", #{{id: body}});
+                if physics.simulation_object_paused {{
+                    status = "paused " + body;
+                }} else if physics.physics_state_ready {{
+                    status = "ready " + body;
+                }}
+            }}
+        }}
+    }}
+}}
+print(status);
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, required=True)
@@ -135,12 +163,35 @@ def main():
                 "twin": command(session, "ReadActiveTwinContract"),
             }
             receipt["bootstrap_ready_s"] = time.monotonic() - started
+            probe = readiness_probe(args.twin_name, args.body)
+            assert command(session, "RunRhai", {"code": probe})["stdout"].strip() == "pending", \
+                "bootstrap incorrectly qualified as the target Twin"
+            receipt["readiness_probe"] = "atomic-world-v1"
+            receipt["load_start_frame"] = command(session, "EnginePerformance")["frame_sample_count"]
             opened = time.monotonic()
             receipt["open_response"] = command(session, open_command, {"path": str(open_path)})
             last_readiness = None
             clear_since = measurement = None
             initial_frame = initial_tick = measured_body = None
             while time.monotonic() - opened < args.timeout:
+                if "first_scene_ready_s" not in receipt:
+                    status = command(session, "RunRhai", {"code": probe})["stdout"].strip()
+                    if status == "pending":
+                        time.sleep(0.05)
+                        continue
+                    if status == "faulted":
+                        raise RuntimeError(f"runtime fault: {command(session, 'GetReadiness')}")
+                    if status.startswith("paused "):
+                        body_state = command(session, "QueryPhysicsState", {"id": int(status.split()[1])})
+                        raise RuntimeError(f"coupled object paused: {body_state}")
+                    if not status.startswith("ready "):
+                        raise RuntimeError(f"invalid readiness probe result: {status!r}")
+                    receipt["first_scene_ready_s"] = time.monotonic() - opened
+                    receipt["first_ready_body"] = int(status.split()[1])
+                    print("SCENE_READY", receipt["first_scene_ready_s"], flush=True)
+                    receipt["first_ready_engine"] = command(session, "EnginePerformance")
+                    session.capture_screenshot(output / "first-ready.png")
+                    receipt["first_ready_capture_s"] = time.monotonic() - opened
                 now = time.monotonic() - opened
                 ready = command(session, "GetReadiness")
                 qualification = {"readiness": ready}
@@ -165,11 +216,8 @@ def main():
                                 if body_state.get("simulation_object_paused"):
                                     raise RuntimeError(f"coupled object paused: {body_state.get('simulation_object_pause_reason')}")
                                 if body_state.get("physics_state_ready"):
-                                    if "first_scene_ready_s" not in receipt:
-                                        receipt["first_scene_ready_s"] = time.monotonic() - opened
-                                        print("SCENE_READY", receipt["first_scene_ready_s"], flush=True)
-                                        session.capture_screenshot(output / "first-ready.png")
-                                        receipt["first_ready_capture_s"] = time.monotonic() - opened
+                                    if body != receipt["first_ready_body"]:
+                                        raise RuntimeError("qualified body lease changed after first readiness")
                                     physics = command(session, "PhysicsPerformance")
                                     terrain = command(session, "TerrainLodStatus")
                                     qualification["terrain"] = terrain

@@ -33,17 +33,16 @@ The regular build is installed and owned sessions are closed.
 ## Current constructor attribution
 
 The original Griffin landing scene currently reaches physics readiness in
-7.659 seconds in a warm normal release run with another simulator active.
-The latest-main integration is `02ba65ac2`; the approved local Rumoca dependency
-is `2db205a9`. Its initializer spends 741.5 ms loading checked prepared IR and
-1393.2 ms constructing the live solver. Source hashes, landing handoff, zero
-runtime diagnostics, visual inspection and owned shutdown pass. The first
-prepared-cache fill takes 13.545 seconds. The under-five-second target remains
-unmet; the earlier quiet 5.313-second run is a different source/workload cohort.
-The [preparation review](rumoca-chain-probe-preparation-2026-10-27.md) records
-owner contracts; the [loading-budget review](griffin-loading-budget-2026-10-30.md)
-records current measurements, tests, canary limits and remaining attribution.
-Current captures stay ignored.
+6.894 seconds with the atomic World probe in a warm normal release run; another
+simulator remains active. The loading work is based on remote main `02ba65ac2`;
+the approved local Rumoca dependency is `2db205a9`. Complete declaration admission
+and bounded repeated projection construct one
+initializer, with 660.5 ms checked prepared-IR loading and 1465.4 ms live solver
+construction. Source hashes, landing handoff, zero runtime diagnostics and owned
+shutdown pass. The under-five-second target remains unmet. Earlier sequential
+query and different-workload numbers are not directly comparable.
+The [loading-budget review](griffin-loading-budget-2026-10-30.md) owns current
+measurements, tests, source limits and remaining attribution. Captures stay ignored.
 
 ## Native Modelica sweep storage
 

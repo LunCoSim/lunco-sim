@@ -1,13 +1,11 @@
 # Griffin loading budget
 
 The less-than-five-second target is **not met**. The current normal release
-reaches physics readiness in **7.659 seconds** with prepared/native cache hits
-and another simulator active. It completes the original landing scene, preserves
-its source hashes and reports zero runtime diagnostic errors/warnings. The first
-run with the current compiler identity takes **13.545 seconds** while populating
-prepared artifacts. Neither timing includes application bootstrap or the later
-landing maneuver. Do not present microbenchmarks or instrumented timings as
-product acceptance.
+reaches physics readiness in **6.894 seconds** with prepared/native cache hits
+and another simulator active. It constructs one coupled initializer, completes
+the original landing scene, preserves its source hashes and reports zero runtime
+diagnostic errors/warnings. This excludes application bootstrap and the later
+landing maneuver. Instrumented timings are diagnostic, not product acceptance.
 
 ## Integration and scope
 
@@ -48,10 +46,12 @@ edit was reverted, and no duplicate-manifest rejection was weakened.
   43.0 MB to 8.464 MB. The model's
   `contracts/evidence/loading-geometry-2026-10-30.json` records hashes and sizes.
 - `lunco-usd-bevy::UsdPendingChildAdmissions` uses one ordered queue after the
-  existing projection-command flush. Direct children enter after the parent
-  commits; child projection runs on the following update. The 4 ms/64-prim and
-  1 ms/128-child budgets, parent readiness, stage generation, mount, duplicate
-  and cancellation checks remain authoritative. This is ECS ordering, not policy.
+  existing projection-command flush. A single-threaded nested schedule repeats
+  parent binding, child admission and reset-stack detachment within one Update.
+  Cumulative 4 ms/128-prim and 1 ms/128-child budgets bound all passes, with a
+  combined wall limit between atomic batches. Parent readiness, stage generation,
+  mount, duplicate and cancellation checks remain authoritative. This is ECS
+  ordering, not policy.
 - `UsdStageProjectionPlan` reuses native `PurposeInfo` through its existing prim
   index for one immutable extraction. It calls maintained `purpose_info_from`
   for descendants and `purpose_info` at omitted-ancestor boundaries. The same
@@ -69,48 +69,73 @@ edit was reverted, and no duplicate-manifest rejection was weakened.
   rejection and numerical execution retain their contracts. No solver proof,
   equation, precision or readiness check was removed.
 
+The physics assembly owner retains readiness-frozen joints in initial mechanical
+membership while excluding authored disabled joints. Live active mass still uses
+active links. The focused regression failed before this fix and passes after it;
+readiness release no longer changes the initializer's authored mass expression.
+
+The coupled owner waits for existing domain-discovery and pending-port holds,
+including generated networks without a participant yet. Its certificate still
+validates the complete source, parameters and wiring snapshot. Ready acyclic
+participants use their own numerical preparation; missing external samples remain
+pending. This prevents publication of an independent network from superseding an
+otherwise identical composite source during its construction.
+
 These are generic preparation and projection mechanisms, not changeable lifecycle
 or Twin policy. No additional Rhai policy hook is needed. Architecture 61 and the
 performance-profiling runbook describe snapshot lifetime and child ordering.
 
 ## Product measurements
 
-The driver requires a qualified bootstrap, then the expected Twin, spawned root,
-clear `GetReadiness` and `physics_state_ready`. It records first-ready screenshot
-publication separately, completes landing and a settled measurement window,
-checks source hashes and diagnostics, and exits the owned app before enforcing
-`--max-load-seconds 5`. Keep entrypoint, cache state and concurrent workloads
-consistent when comparing timings.
+The driver's `atomic-world-v1` probe reads readiness, expected Twin identity,
+spawned root and unpaused physics admission in one read-only World evaluation.
+The settled bootstrap must fail that target probe. Screenshot publication is a
+separate timestamp; landing, settled terrain, source hashes, diagnostics and
+owned shutdown remain required. Earlier sequential-query timings are not directly
+comparable: changing the probe improves measurement accuracy, not the application.
 
-| Normal release cohort | Physics ready | Conditions |
+| Normal release, same atomic probe and original landing source | Physics ready | Conditions |
 | --- | ---: | --- |
-| Earlier quiet warm | 5.313 s | Before latest-main integration; no other simulator/build |
-| Integrated-main baseline | 6.042 s | Before native query/set reuse; quiet loading window |
-| Current dependency first fill | 13.545 s | Exact-file open; prepared misses, native hits |
-| Current dependency warm | 7.659 s | Direct Twin open; prepared/native hits; another simulator |
+| Single projection pass, complete initial joint topology | 6.819 s | 128 prim/child caps; prepared/native hits |
+| Independent acyclic numerical admission | 6.409 s | One coupled initializer; prepared/native hits |
+| Repeated projection passes before declaration admission fix | 7.325 s | Two identical-source initializers; thermal wiring superseded the first |
+| Current complete declaration admission | 6.894 s | One coupled initializer; prepared/native hits |
 
-The current warm run publishes its first screenshot at 8.066 s and reaches landing
-handoff at 29.300 s. Terrain, lander, shadows and touchdown controls are visible.
-All source hashes match, diagnostics report zero errors/warnings, and the process
-and port are gone. Its initializer spends 741.5 ms loading checked prepared IR
-and 1393.2 ms constructing the live solver. A separate exact-file warm attempt
-reached readiness at 7.330 s, but its driver exited with signal 15 before writing
-its receipt; it is incomplete evidence. Its owned app was verified and closed
-through API `Exit`. Direct Twin opening does not establish a loading improvement.
+Another simulator was active throughout these cohorts; they are not quiet-machine
+acceptance. The current initializer loads checked prepared IR in 660.5 ms and
+constructs its live solver in 1465.4 ms, with 1785/1785 native cache hits and zero
+native compilations. Physics projection settles about 2.66 seconds after opening;
+thermal/FLIP declarations finish later, before coupled capture at about 3.83
+seconds. A fresh diagnostic capture is needed to attribute that remaining gap.
 
-The differing workloads and revisions prevent an isolated whole-scene speedup
-claim. The original scene in the shared model checkout remains subject to its
-concurrent duplicate UI-manifest issue; the isolated receipt does not certify
-that shared checkout.
+The current first-ready image shows terrain and the descent controls; the final
+image shows the landed vehicle and its shadow with touchdown controls. All source
+hashes match, runtime diagnostics report zero errors/warnings, and the process
+and port are gone. The source cohort is the isolated original landing Twin;
+concurrent shared-checkout media/UI-manifest changes are not certified by it.
+
+The 240-frame engine history is a tail window, not proof of the worst stall across
+the entire load. Cache first-fill timing must be measured separately from these
+warm cohorts; bounded artifacts can be evicted by tests or other Twins.
 
 ## Focused validation
 
 - Normal production build:
   `cargo build --release --locked -p lunco-luncosim --bin luncosim -j 4` passes.
 - `scripts/api/test_usd_child_admission.py` exercises nine authored production
-  assertions: initial 64-level projection, malformed edits and replacement while
-  child admission remains pending. It verifies retired entities stay absent and
-  API shutdown completes. The final integrated hierarchy takes 73 updates, below the 88-update gate.
+  assertions: initial 64-level projection with 1024 siblings, malformed edits and
+  replacement while child admission remains pending. It verifies retired entities
+  stay absent and API shutdown completes. The expanded hierarchy takes 24 updates,
+  below the 32-update gate. Before adding the siblings, the same deep chain took
+  72 updates on the single-pass baseline and seven with bounded repeated passes.
+  The fixture expansion was authored, saved and read back through the USD API.
+- The existing `native_reset_stack` gate passes 10/12 checks on both the
+  single-pass baseline and repeated-pass build. The same two live reset-removal
+  checks fail; initial deep/shallow reset projection and malformed-edit rejection
+  pass. This is retained as an unresolved pre-existing validation limit.
+- The production initialization network and receipt retirement pass all 46
+  authored checks. The inconsistent-initial-equation scene exits with its owner
+  diagnostic and code 1, without a panic or missing verdict; its port is released.
 - Windowed production `route_lifecycle`: 124 authored checks pass, including
   topology edits, invalid targets and live program replacement.
 - All 17 native projection-plan tests pass, covering omitted/blocked/unknown
@@ -141,16 +166,18 @@ shared dependency-set change. Exact-zone CPU samples identify dependency-tree
 copies in preparation and symbolic shared-value construction plus Cranelift
 IR/hash work in the constructor.
 
-Its projection-admission interval has 43 projection batches totaling 75.3 ms,
-inside 53 updates totaling 2688.4 ms. Batches commonly finish below the 4 ms
-budget while the 64-item cap limits progress. This is a candidate for a bounded
-pacing experiment, not proof that increasing the cap preserves responsiveness
-or reaches the loading target.
+The retained pre-change capture showed 43 projection batches totaling 75.3 ms
+inside 53 updates totaling 2688.4 ms. The bounded repeated-pass change addresses
+hierarchy-dependent update delays; the authored deep-chain comparison above is
+its direct evidence. It does not establish the whole-scene five-second target.
 
 Evidence stays ignored under `.cache/griffin-loading-20261030/`:
 `main-integration/dependency-production-first/`,
 `main-integration/dependency-production-open-twin/`,
-`main-integration/child-admission-final.log`, purpose/transform comparison JSONs,
+`main-integration/projection-pass-large.log`,
+`main-integration/admission-enlarge-receipt.json`,
+`main-integration/domain-admission-atomic-0/`,
+`main-integration/domain-admission-initialization/`, purpose/transform comparison JSONs,
 `main-integration/dependency-comparison.json`, `dependency-canary-results/` and
 `main-integration/loading-tracy-warm/`. Earlier baseline/route/geometry receipts
 remain in that root. Task API ports are 5641 and 5642; completed sessions are

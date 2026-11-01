@@ -1484,8 +1484,16 @@ surfaces and missing samples.
 `lunco-usd-sim-cosim` owns admission of connected USD Modelica participants at
 `t=0`. Source interfaces and native physical definitions become available before
 numerical admission. Acyclic participants initialize from finite producer samples.
+Participants with complete initial inputs enter their independent preparation
+without delaying a separate coupled plan. Required external outputs still wait
+for their registered initial expressions or samples; absent values remain pending.
 When the remaining participants depend on one another, the owner captures their
-exact source, authored bindings, scene generation and ordered wiring. It invokes
+exact source, authored bindings, scene generation and ordered wiring. Capture
+waits for the existing domain-discovery hold and every pending port surface,
+including generated networks without a published participant. Independently
+initialized networks can still add wires to the complete certification snapshot.
+Their numerical preparation does not hold coupled capture once declarations
+and wiring are available. The owner invokes
 the required `synth.coupled-initialization` hook to emit a transient Modelica
 composite containing those instances, their input bindings and input probes.
 The existing Modelica worker compiles and solves the composite while paused;
@@ -1494,6 +1502,12 @@ or solver construction. While the transient worker has no outcome, the
 coordinator's native readiness gate skips its World boundary and initial
 physical sampling. A compiled result or worker error wakes the same coordinator;
 acceptance still samples the current providers and compares the complete plan.
+
+The physics owner's initial joint-island membership includes joints temporarily
+disabled by its readiness freeze, using that freeze's exact ownership marker.
+Authored disabled joints remain excluded. Live mass sampling still follows active
+Avian links; releasing readiness does not change the initialization topology.
+Marker insertion/removal invalidates the same scene-owned membership cache.
 
 Compile admission retains pending requests in source-document/entity/class order.
 `lunco-modelica-worker` runs `InitializationSampling` once for that ordered batch,
