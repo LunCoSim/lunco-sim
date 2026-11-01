@@ -194,9 +194,9 @@ fn render_dir(
         })
         .inner
         .interact(egui::Sense::click_and_drag());
-        response.dnd_set_drag_payload(lunco_workbench_core::source::SourceDragPayload {
-            source: lunco_assets_core::engine_asset_uri(&asset.asset_path),
-        });
+        response.dnd_set_drag_payload(lunco_workbench_core::source::SourceDragPayload::Registered(
+            lunco_assets_core::engine_asset_uri(&asset.asset_path),
+        ));
         if response.clicked() {
             *clicked = Some(asset.asset_path.clone());
         }

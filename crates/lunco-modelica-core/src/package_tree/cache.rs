@@ -6,7 +6,7 @@ use lunco_modelica_index::package_tree::types::{InMemoryEntry, ModelSource, Pack
 
 pub struct ScanResult {
     pub parent_id: String,
-    pub children: Vec<PackageNode>,
+    pub children: Result<Vec<PackageNode>, String>,
 }
 
 /// Output of a bundled or user-file load task. `result` is the
@@ -32,6 +32,8 @@ pub struct FileLoadResult {
 pub struct PackageTreeCache {
     pub roots: Vec<PackageNode>,
     pub tasks: Vec<Task<ScanResult>>,
+    /// Terminal lazy-scan diagnostics, cleared by source reconciliation or an explicit retry.
+    pub scan_errors: std::collections::HashMap<String, String>,
     pub in_memory_models: Vec<InMemoryEntry>,
     pub bundled_tree_indexed: bool,
     /// Whether the library roots have been reconciled against the provider
@@ -43,11 +45,9 @@ pub struct PackageTreeCache {
 
 impl PackageTreeCache {
     pub fn new() -> Self {
-        // Library roots come from the cfg-free provider: native discovers them
-        // on the filesystem at construction; web returns just "Modelica" here
-        // and the extras are filled in by `reconcile_library_roots` once the
-        // parsed bundle loads. `library_root_node` decorates "Modelica" with
-        // its display name / stable id.
+        // Native roots project the admitted source inventory; browser roots
+        // appear when the parsed bundle becomes resident. Reconciliation keeps
+        // the existing nodes and expansion state when those facts arrive.
         let mut roots: Vec<PackageNode> = super::library_tree::library_tree()
             .library_roots()
             .iter()
@@ -61,7 +61,6 @@ impl PackageTreeCache {
             id: "bundled_root".into(),
             name: "LunCo Examples".into(),
             package_path: "Bundled".into(),
-            fs_path: std::path::PathBuf::new(),
             children: Some(build_bundled_tree()),
             is_loading: false,
         });
@@ -72,6 +71,7 @@ impl PackageTreeCache {
         Self {
             roots,
             tasks: Vec::new(),
+            scan_errors: std::collections::HashMap::new(),
             in_memory_models: Vec::new(),
             bundled_tree_indexed,
             library_roots_synced: false,
@@ -91,6 +91,7 @@ impl PackageTreeCache {
 
         // Cancel any in-flight library scans that started before source library was ready.
         self.tasks.clear();
+        self.scan_errors.clear();
 
         // Reset library roots (e.g. Modelica) so they retry expanding with the now-available source library.
         for root in &mut self.roots {

@@ -497,7 +497,6 @@ fn apply_state(
             commands.trigger(DatasetInstalled {
                 id: entry.id.clone(),
                 scope: entry.scope.clone(),
-                artifact_path: entry.artifact_path(),
                 artifact_uri: entry.artifact_uri(),
             });
         }

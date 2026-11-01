@@ -111,6 +111,20 @@ pub enum StorageError {
 /// Result alias for storage operations.
 pub type StorageResult<T> = Result<T, StorageError>;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_literal_uri_components(path: &Path) -> StorageResult<()> {
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    }) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
+            "native dot-directory components require filesystem admission before file URI conversion").into());
+    }
+    Ok(())
+}
+
 /// Decode a standard `file:` URI into its native filesystem path.
 ///
 /// `Ok(None)` means the spelling has no `file:` scheme: callers may then
@@ -118,6 +132,8 @@ pub type StorageResult<T> = Result<T, StorageError>;
 /// file URI is an error, never a raw-path fallback. Decoding, drive letters,
 /// localhost, and Windows UNC authorities are owned by the `url` crate.
 /// Browser builds reject file URIs because they have no native filesystem.
+/// Windows results use verbatim drive/share paths so URI components retain
+/// literal filename semantics, including trailing dots and spaces.
 pub fn file_uri_to_path(reference: &str) -> StorageResult<Option<PathBuf>> {
     if !reference
         .split_once(':')
@@ -163,6 +179,36 @@ pub fn file_uri_to_path(reference: &str) -> StorageResult<Option<PathBuf>> {
         if path.as_os_str().as_encoded_bytes().contains(&0) {
             return Err(invalid("filesystem paths cannot contain NUL bytes".into()));
         }
+        #[cfg(windows)]
+        let path = {
+            use std::path::{Component, Prefix};
+            // URI components are literal filenames. Win32 normalization would
+            // trim trailing dots/spaces and can select a different file.
+            let mut components = path.components();
+            let mut root = std::ffi::OsString::from(r"\\?\");
+            match components.next() {
+                Some(Component::Prefix(prefix)) => match prefix.kind() {
+                    Prefix::Disk(_) => root.push(prefix.as_os_str()),
+                    Prefix::UNC(server, share) => {
+                        root.push(r"UNC\");
+                        root.push(server);
+                        root.push(r"\");
+                        root.push(share);
+                    }
+                    _ => return Err(invalid("unsupported native file namespace".into())),
+                },
+                _ => return Err(invalid("file URI has no native volume".into())),
+            }
+            if components.next() != Some(Component::RootDir) {
+                return Err(invalid("file URI is not fully qualified".into()));
+            }
+            root.push(r"\");
+            // Append the native suffix without reparsing individual components
+            // as paths: a name like `D:entry` must not replace this volume.
+            root.push(components.as_path().as_os_str());
+            PathBuf::from(root)
+        };
+        validate_literal_uri_components(&path)?;
         Ok(Some(path))
     }
     #[cfg(target_arch = "wasm32")]
@@ -216,14 +262,29 @@ pub fn file_path_to_uri(path: &Path) -> StorageResult<String> {
                 "filesystem paths cannot contain NUL bytes",
             )));
         }
-        url::Url::from_file_path(path)
-            .map(|uri| uri.into())
-            .map_err(|()| {
+        #[cfg(not(windows))]
+        validate_literal_uri_components(path)?;
+        let encode = |path: &Path| {
+            url::Url::from_file_path(path).map_err(|()| {
                 StorageError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!("cannot encode native path {} as a file URI", path.display()),
                 ))
             })
+        };
+        // Validate the original namespace before Windows can normalize it.
+        // A malformed `//?/` address must not be repaired into another address.
+        let uri = encode(path)?;
+        #[cfg(windows)]
+        let uri = {
+            drop(uri);
+            // The standard library applies Win32 semantics to ordinary paths
+            // while leaving explicit verbatim paths unchanged, without I/O.
+            let native = std::path::absolute(path)?;
+            validate_literal_uri_components(&native)?;
+            encode(&native)?
+        };
+        Ok(uri.into())
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -245,6 +306,7 @@ mod file_uri_tests {
             "C:/My Twin/part#%.usda",
             r"\\server\share\My Twin\part.usda",
             r"\\?\C:\My Twin\part.usda",
+            r"\\?\UNC\server\share\My Twin\part#%.usda",
         ] {
             #[cfg(windows)]
             {
@@ -256,6 +318,7 @@ mod file_uri_tests {
             assert!(windows_file_reference_uri(reference).is_err());
         }
         assert!(windows_file_reference_uri("C:part.usda").is_err());
+        assert!(windows_file_reference_uri("//?/C:/My Twin/part.usda").is_err());
         for reference in [
             "lunco://models/part.usda",
             "twin://root/part.usda",
@@ -268,7 +331,9 @@ mod file_uri_tests {
 
     #[test]
     fn file_uris_preserve_native_paths_and_reject_invalid_addresses() {
-        let path = std::env::temp_dir().join("провајдер with spaces.mo");
+        let path = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join("провајдер with spaces.mo");
         let uri = file_path_to_uri(&path).unwrap();
         assert!(uri.contains("%20"));
         assert_eq!(file_uri_to_path(&uri).unwrap(), Some(path.clone()));
@@ -301,16 +366,36 @@ mod file_uri_tests {
             );
         }
         assert!(file_path_to_uri(Path::new("relative.mo")).is_err());
+        #[cfg(unix)]
+        assert!(
+            file_path_to_uri(&std::env::temp_dir().join("link/../entry")).is_err(),
+            "native parent traversal must not acquire URI lexical normalization"
+        );
 
         #[cfg(windows)]
         {
+            for native in [r"\\?\C:\base\..\entry", r"\\?\C:\base\.\entry"] {
+                assert!(
+                    file_path_to_uri(Path::new(native)).is_err(),
+                    "literal verbatim dot components must not be silently normalized into a URI"
+                );
+            }
+            assert!(file_uri_to_path("file:///C:/base/%5C..%5Centry").is_err());
             assert_eq!(
                 file_uri_to_path("FILE:///C:/Projects/My%20Twin/scene.usda").unwrap(),
-                Some(PathBuf::from(r"C:\Projects\My Twin\scene.usda"))
+                Some(PathBuf::from(r"\\?\C:\Projects\My Twin\scene.usda"))
             );
             assert_eq!(
                 file_uri_to_path("file://server/share/My%20Twin/scene.usda").unwrap(),
-                Some(PathBuf::from(r"\\server\share\My Twin\scene.usda"))
+                Some(PathBuf::from(r"\\?\UNC\server\share\My Twin\scene.usda"))
+            );
+            assert_eq!(
+                file_uri_to_path("file:///C:/base/D:entry/child").unwrap(),
+                Some(PathBuf::from(r"\\?\C:\base\D:entry\child"))
+            );
+            assert_eq!(
+                file_uri_to_path("file://server/share/base/D:entry/child").unwrap(),
+                Some(PathBuf::from(r"\\?\UNC\server\share\base\D:entry\child"))
             );
         }
         #[cfg(unix)]

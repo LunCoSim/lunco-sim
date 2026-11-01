@@ -127,15 +127,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_references_are_library_relative() {
-        let reg = SchemeRegistry::default();
-        assert_eq!(
-            reg.local_path("shaders/wheel.wesl").unwrap(),
-            Some(crate::engine_shader_path("wheel").unwrap())
-        );
-    }
-
-    #[test]
     fn an_unregistered_scheme_resolves_to_nothing_rather_than_the_library() {
         let reg = SchemeRegistry::default();
         assert_eq!(reg.local_path("nope://a/b.usda").unwrap(), None);

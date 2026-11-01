@@ -710,9 +710,9 @@ fn render_dir(
             })
             .inner
             .interact(egui::Sense::click_and_drag());
-            r.dnd_set_drag_payload(lunco_workbench_core::source::SourceDragPayload {
-                source: abs.to_string_lossy().replace('\\', "/"),
-            });
+            r.dnd_set_drag_payload(lunco_workbench_core::source::SourceDragPayload::Native(
+                abs.clone(),
+            ));
             if r.double_clicked() {
                 state
                     .clicks

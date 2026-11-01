@@ -29,10 +29,10 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo; typed named diagram view documents store source bindings, scopes, and independent layouts without copying source topology. |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, document-identity command payloads such as `rename::RenameOpenDocument`, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed, and prepared file opens that retain registry path identity and dirty-document policy. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait, native filesystem, memory and browser backends), regular-file admission, bounded native reads and demand-driven OPFS streams, lexical direct-file listing, and worker-prepared native destination identities. The single write path; raw `std::fs` is disallowed. |
-| **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, traversal checks, and portable materialization tree validation. It has no Bevy, filesystem, storage, or application dependency. |
-| **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, traversal-safe path/cache operations, worker-prepared native asset paths and OpenUSD search-path resolutions pinned to live Twin mounts, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
+| **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme constants/parsing, authority-preserving canonicalization, separator normalization, traversal checks, and portable materialization tree validation. It has no Bevy, filesystem, storage, or application dependency. |
+| **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, one authored/cache root order and first-entry selector, identity-checked Twin read scopes, traversal-safe path/cache operations, worker-prepared native asset paths and OpenUSD search-path resolutions pinned to live Twin mounts, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
 | **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, scene choices from admitted Twin inventories, canonical installed-source admission with language-neutral resident inventories, library/model/script/text loaders, typed persisted-result source facts for asset policies, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
-| **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
+| **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, logical artifact contracts and installation probes through the common resolver, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
 | **`lunco-assets-processing`** | Native offline image/DEM/map/albedo/normal-map/glTF processors, with shared staging/commit and an open `ProcessorRegistry` selected by `ProcessConfig.kind`. Heavy decode and raster math live here. |
@@ -189,7 +189,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance-tab identity and restoration contracts, tab/source-view commands, scene display state, pending close state, panel registration, runtime-owned perspective identities, layout admission/plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
+| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance-tab identity and restoration contracts, tab/source-view commands, typed registered/native source drag addresses, scene display state, pending close state, panel registration, runtime-owned perspective identities, layout admission/plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-viewport-core`** | Small renderer-independent measured viewport geometry contract. Owns the physical-pixel `PanelRect` value shared by scene, camera, editor, and shell adapters without coupling that value to egui or the Workbench implementation. |
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows styled by `Theme.typography.tree`. Recursive and header-only branches share disclosure state; virtualized trees allocate only a fixed-height header. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench-layout`** | Renderer-independent `egui_dock` layout state: perspective registration/activation, live and cached tab retirement, view-owned instance restoration, dock snapshots, panel placement, split sanitization, and scene-interaction synchronization. It consumes workbench contracts/state without the concrete Bevy/egui shell. |
@@ -421,6 +421,8 @@ source registration, discovery/catalogs, scene choices from admitted Twin invent
 policy-requested dataset artifact reads, web fetch integration, the optional
 shared egui byte loader, and the asset-manifest tool while consuming identity and storage contracts from
 `lunco-assets-core` and dataset declarations from `lunco-assets-datasets`.
+Native source and catalog discovery share one contained traversal; catalog and
+packaging consumers must propagate inventory errors.
 
 **`lunco-assets-datasets`**
 The lightweight dataset contract boundary. It owns `Assets.toml` declarations,
@@ -1412,6 +1414,11 @@ asset tooling, command-line hosts, and the compiler's own tests all call this
 same package directly.
 
 **`lunco-modelica-core`**
+
+Its package browser projects admitted source inventories and reads through the
+shared library store. Tree nodes contain logical class/package identities;
+native filesystem paths stay at the asset/storage boundary. Lazy scan results
+carry success or a terminal diagnostic to the UI cache.
 
 Owns Modelica `CloseDocument` in every host: linked execution entities and the
 document registry are retired together, including during workspace replacement.

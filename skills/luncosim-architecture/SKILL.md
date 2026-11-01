@@ -24,6 +24,8 @@ or compatibility shim because the first search was incomplete.
 | Continuous equations, state, control laws, filters, physical networks | Modelica | Rumoca compiles and steps the model |
 | Rigid-body collision, contacts, forces, torques, joints | Avian through USD-authored physics | Rust exposes the engine's generic mechanics and executes them |
 | Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
+| Asset URI algebra | `lunco-assets-path` | Logical addresses preserve scheme authority and reject root escape at admission |
+| Native asset resolution and bytes | `lunco-assets-core` and `lunco-storage` | One root order and first-entry selection; adapters supply source context, never another cache search |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
 For cross-domain execution, read

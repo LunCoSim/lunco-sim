@@ -22,6 +22,13 @@ the primary surface; only fall back to MCP if a human explicitly asks.
 
 ## 0. Launch an app in API mode
 
+For disk-source admission errors, keep native absolute paths unchanged through
+discovery, document facts and renames. In particular, `\\?\` Windows paths must
+not become `//?/`. The compiler strips the native root before converting the
+relative content identity to `/`; resource resolution still needs the native
+source address. Verify this seam with the compiler's
+`source_root_content_closure_preserves_native_discovery_paths` test.
+
 For loading checks, open a model while its canvas is hidden or in Text mode.
 Opening completes when the document is installed; diagram projection is separate
 demand-driven work. Verify source readiness and the disappearance of the opening

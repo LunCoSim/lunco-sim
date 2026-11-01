@@ -49,6 +49,12 @@ README defines the stable taxonomy.
 
 ## Architecture boundary
 
+Keep native filesystem paths in their platform spelling. Use the storage
+owner's `file_path_to_uri` for URI transport, and slash-normalize only logical
+asset paths after stripping their native root. See the
+[asset addressing boundary](../../docs/architecture/56-asset-resolution-and-cache.md#usd-references-stay-logical-through-loading)
+for Windows verbatim and UNC handling.
+
 - USD owns assembly, transforms, variants, references, and wiring.
 - Modelica owns continuous/domain math.
 - Rhai owns scenario orchestration, rules, scoring, and assertions.
@@ -75,9 +81,19 @@ its bodies and joints; scenes own target selection.
 
 The engine catalog and web manifest share `discovery::scan_library`; its
 registered extensions live in `MANIFEST_EXTS`, not in a second packaging list.
+Its `Result` must be propagated: an invalid inventory must not become an empty
+catalog. Native catalog filters and complete source inventories share the same
+contained traversal; never add another directory walker for a picker or browser.
 Domain discovery, such as Modelica's model catalog or a Twin's SysML source
 index, is distinct from that engine catalog. Installed source stores use the
 complete `inventory_files` traversal and let their language owner select sources.
+Structured Modelica packages use `models::package_files`, which reads through
+`discovery::read_files_with_extension`; do not add a separate package walker.
+Package-root admission is owned by `models_package_root_path`; propagate its
+errors and inventory/read failures rather than selecting another source bundle.
+Package-browser nodes use the admitted `LibrarySource` inventory and reader,
+with Modelica layout supplied by `package_paths`. Lazy failures stay visible
+until an explicit retry or source reconciliation.
 Catalog membership never restricts loading an explicitly addressed data asset.
 
 ## The `lunco://` scheme
@@ -89,7 +105,7 @@ set, otherwise executable/package ancestry before current-directory ancestry.
 An invalid override or unresolved library stops admission with an error;
 callers propagate that error instead of inventing a root. The asset owner
 provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
-The complete read order comes from `lunco_assets_core::library_roots()` in
+The complete read order comes from `lunco_assets_core::asset_read_roots()` in
 `crates/lunco-assets-core/src/lib.rs`.
 `twin://<assigned-mount>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
@@ -414,3 +430,20 @@ its current valid parse at that owner; an invalid/pending parse reports an
 error. Save commits facts, close removes only the unsaved overlay, and Twin
 retirement removes the owner. Verify edits, sibling-file membership, save/close,
 and invalid-parse recovery with `scripts/api/test_asset_resources.py`.
+
+Native readers and dataset probes share `lunco-assets-core::asset_read_roots`
+and `resolve_native_asset`: the first existing entry wins, including its kind.
+Only absence advances to a cache; invalid authored artifacts and I/O errors
+must not expose cached replacements. Use `resolve_asset_input` at native
+CLI/validation boundaries. Synchronous Twin bytes require `TwinReadScope`
+captured from `TwinRoots`, never a directory without source identity.
+
+`file_uri_to_path` returns verbatim native paths on Windows so URI filenames
+retain literal trailing dots/spaces. Keep those `PathBuf` values intact; compare
+native identities through storage instead of prefix/string rewriting. Scoped
+native file references must stay inside the captured Twin root. Registered native
+readers use the same relative-address grammar as typed load requests.
+
+Admit native paths containing parent traversal through storage before converting
+them to file URIs. URI lexical normalization cannot establish filesystem identity;
+unrepresentable literal dot components produce an explicit conversion error.

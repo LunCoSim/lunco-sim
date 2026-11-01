@@ -99,12 +99,10 @@ impl DatasetScope {
     /// Roots searched for a delivered artifact, in precedence order.
     pub fn read_roots(&self) -> std::io::Result<Vec<PathBuf>> {
         Ok(match self {
-            Self::Engine => lunco_assets_core::library_roots(&lunco_assets_core::assets_dir_abs()?),
-            Self::Twin { root, .. } => vec![
-                root.clone(),
-                lunco_assets_core::twin_cache_dir(root),
-                lunco_assets_core::cache_dir(),
-            ],
+            Self::Engine => {
+                lunco_assets_core::asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
+            }
+            Self::Twin { root, .. } => lunco_assets_core::asset_read_roots(root),
         })
     }
 
@@ -166,36 +164,24 @@ impl DatasetEntry {
         &self.read_roots
     }
 
-    /// Resolve the first readable copy of the delivered artifact.
-    pub fn artifact_path(&self) -> PathBuf {
-        for root in &self.read_roots {
-            let candidate = root.join(&self.artifact_rel);
-            if artifact_present(&self.spec, &candidate, None) {
-                return candidate;
-            }
-        }
-        self.scope
-            .cache_root(self.spec.shared)
-            .join(&self.artifact_rel)
-    }
-
-    fn source_path_for_root(&self, artifact_root: &Path) -> Option<PathBuf> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = artifact_root;
-            None
-        }
+    // Installation readiness validates the same first existing entry that
+    // runtime readers select; an invalid authored artifact cannot be replaced
+    // by a later cache copy. This runs on the source scan worker.
+    fn installed_artifact(&self) -> Result<Option<PathBuf>, String> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let source_rel = self
-                .read_roots
-                .iter()
-                .find_map(|root| self.path.strip_prefix(root).ok().map(Path::to_path_buf));
-            source_rel
-                .map(|relative| artifact_root.join(relative))
-                .filter(|path| path.is_file())
-                .or_else(|| self.path.is_file().then(|| self.path.clone()))
+            let relative = lunco_assets_path::relative_path(&self.artifact_rel)
+                .ok_or_else(|| format!("unsafe artifact path `{}`", self.artifact_rel))?;
+            let Some((_, path)) =
+                lunco_assets_core::resolve_native_asset(&self.read_roots, &relative, None)
+                    .map_err(|error| error.to_string())?
+            else {
+                return Ok(None);
+            };
+            Ok(artifact_present(&self.spec, &path, None).then_some(path))
         }
+        #[cfg(target_arch = "wasm32")]
+        Ok(None)
     }
 
     /// Resolve the consumer-facing asset URI.
@@ -424,15 +410,7 @@ impl DatasetRegistry {
                     continue;
                 }
             };
-            let state = if read_roots
-                .iter()
-                .any(|root| artifact_present(&spec, &root.join(&artifact_rel), None))
-            {
-                DatasetState::Installed
-            } else {
-                DatasetState::Missing
-            };
-            self.entries.push(DatasetEntry {
+            let mut entry = DatasetEntry {
                 id,
                 key: key.clone(),
                 group: group.to_owned(),
@@ -441,12 +419,18 @@ impl DatasetRegistry {
                 recommended: spec.recommended,
                 path,
                 artifact_rel,
-                state,
+                state: DatasetState::Missing,
                 spec,
                 read_roots,
                 source_identity,
                 output,
-            });
+            };
+            entry.state = match entry.installed_artifact() {
+                Ok(Some(_)) => DatasetState::Installed,
+                Ok(None) => DatasetState::Missing,
+                Err(error) => DatasetState::Failed(error),
+            };
+            self.entries.push(entry);
             added += 1;
         }
         added
@@ -602,35 +586,6 @@ impl DatasetRegistry {
         scopes
     }
 
-    /// Recheck all entries against the on-disk artifact contract.
-    pub fn refresh_installed_state(&mut self) {
-        for entry in &mut self.entries {
-            if matches!(
-                entry.state,
-                DatasetState::Downloading { .. }
-                    | DatasetState::Processing { .. }
-                    | DatasetState::Cancelling
-            ) {
-                continue;
-            }
-            let installed = entry.read_roots.iter().any(|root| {
-                let artifact = root.join(&entry.artifact_rel);
-                artifact_present(
-                    &entry.spec,
-                    &artifact,
-                    entry.source_path_for_root(root).as_deref(),
-                )
-            });
-            entry.state = if installed {
-                DatasetState::Installed
-            } else if let DatasetState::Failed(error) = &entry.state {
-                DatasetState::Failed(error.clone())
-            } else {
-                DatasetState::Missing
-            };
-        }
-    }
-
     /// Every declared dataset, in registration order.
     pub fn entries(&self) -> &[DatasetEntry] {
         &self.entries
@@ -666,14 +621,6 @@ impl DatasetRegistry {
             .iter()
             .find(|entry| entry.id == id)
             .map(|entry| &entry.state)
-    }
-
-    /// Resolve one dataset's delivered artifact path.
-    pub fn path(&self, id: &str) -> Option<PathBuf> {
-        self.entries
-            .iter()
-            .find(|entry| entry.id == id)
-            .map(DatasetEntry::artifact_path)
     }
 
     /// Find an installed dataset by id.
@@ -836,8 +783,6 @@ pub struct DatasetInstalled {
     pub id: String,
     /// Owning scope.
     pub scope: DatasetScope,
-    /// Resolved delivered artifact path.
-    pub artifact_path: PathBuf,
     /// Consumer-facing asset URI.
     pub artifact_uri: String,
 }
@@ -853,6 +798,40 @@ name = "Demo vectors"
 url = "https://example.invalid/vectors.csv"
 dest = "data/demo.csv"
 "#;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_resolution_contract_keeps_dataset_and_reader_precedence_equal() {
+        let root = tempfile::tempdir().unwrap();
+        let authored = root.path().join("data/demo.csv");
+        let cached = lunco_assets_core::twin_cache_dir(root.path()).join("data/demo.csv");
+        std::fs::create_dir_all(authored.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&authored, b"").unwrap();
+        std::fs::write(&cached, b"valid cached artifact").unwrap();
+        let scope = DatasetScope::Twin {
+            name: "fixture".into(),
+            root: root.path().to_path_buf(),
+        };
+        let mut invalid = DatasetRegistry::default();
+        assert_eq!(
+            invalid.register_scoped(MANIFEST, "fixture", scope.clone()),
+            1
+        );
+        assert_eq!(
+            invalid.entries()[0].state,
+            DatasetState::Missing,
+            "an invalid authored artifact must not select a different cache copy"
+        );
+        std::fs::write(&authored, b"valid authored artifact").unwrap();
+        let mut valid = DatasetRegistry::default();
+        assert_eq!(valid.register_scoped(MANIFEST, "fixture", scope), 1);
+        assert_eq!(valid.entries()[0].state, DatasetState::Installed);
+        assert_eq!(
+            valid.entries()[0].installed_artifact().unwrap(),
+            Some(std::fs::canonicalize(authored).unwrap())
+        );
+    }
 
     #[test]
     fn registration_is_local_and_scoped() {

@@ -143,6 +143,7 @@ def main():
         schema = session.post({"type": "DiscoverSchema"})
         (area / "api-schema.json").write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
         print(f"Runtime schema={area / 'api-schema.json'}")
+        verdict("verify_source_catalog", "LunCo/Actuation/SignedTorqueAllocator.mo")
         execute(session, "OpenTwin", path=str(root))
         wait_for(session, lambda: execute(session, "ListTwin").get("open") is True, "Twin admission")
         execute(session, "OpenFile", path=str(root / original))

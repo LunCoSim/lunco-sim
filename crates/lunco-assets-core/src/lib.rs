@@ -68,18 +68,16 @@ pub mod web_fetch;
 pub use closure::{
     FileClosureError, FileClosureLimits, transitive_file_closure, transitive_file_closure_with,
 };
-pub use lunco_source::{
-    ASSETS_DIR_NAME, LUNCO_SCHEME, id_to_disk_path, parse_lunco_uri, shipped_asset_root,
-};
+pub use lunco_source::{ASSETS_DIR_NAME, LUNCO_SCHEME, parse_lunco_uri, shipped_asset_root};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lunco_source::{
-    existing_path_within_root, read_asset_bytes, read_asset_bytes_bounded_with_twin_root,
-    read_asset_bytes_with_twin_root, read_asset_file_bytes, read_asset_file_string,
+    existing_path_within_root, read_asset_bytes, read_asset_bytes_in_scope, read_asset_file_bytes,
+    read_asset_file_string, resolve_native_asset,
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
-    TWIN_SCHEME, TwinRoots, TwinRootsError, TwinRootsSnapshot, parse_twin_uri, split_twin_rel,
-    stable_source_path, twin_uri,
+    TWIN_SCHEME, TwinReadScope, TwinRoots, TwinRootsError, TwinRootsSnapshot, parse_twin_root_uri,
+    parse_twin_uri, split_twin_rel, stable_source_path, twin_uri,
 };
 
 /// Explicit native asset-library root override.
@@ -248,24 +246,28 @@ pub fn engine_manifest_text(group: &str) -> std::io::Result<Option<String>> {
 /// bytes all ask here, so a file found by the loader is a file found by the
 /// validator.
 pub fn cache_roots() -> std::io::Result<Vec<PathBuf>> {
-    Ok(library_roots(&assets_dir_abs()?)
+    Ok(asset_read_roots(&assets_dir_abs()?)
         .into_iter()
         .skip(1)
         .collect())
 }
 
-/// The complete search order for the engine asset library rooted at `assets`.
+/// The complete authored/local-cache/shared-cache order for an engine or Twin root.
 ///
 /// The root is an argument because a packaged or externally composed document
 /// can name a different asset tree than the process working directory. Every
 /// reader uses this function so the authored tree, its packed cache, and the
 /// shared cache cannot drift into different path interpretations.
-pub fn library_roots(assets_root: &Path) -> Vec<PathBuf> {
+pub fn asset_read_roots(root: &Path) -> Vec<PathBuf> {
+    asset_read_roots_with_shared(root, &cache_dir())
+}
+
+pub(crate) fn asset_read_roots_with_shared(root: &Path, shared: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::with_capacity(3);
     for root in [
-        assets_root.to_path_buf(),
-        assets_root.join(".cache"),
-        cache_dir(),
+        root.to_path_buf(),
+        twin_cache_dir(root),
+        shared.to_path_buf(),
     ] {
         if !roots.contains(&root) {
             roots.push(root);
@@ -585,17 +587,37 @@ fn find_assets_dir(base: &Path) -> Option<PathBuf> {
 /// `package.mo` is the existence marker because that is what makes a directory a
 /// STRUCTURED entity in Modelica's file-system mapping, rather than merely a
 /// folder that happens to hold `.mo` files.
+/// Package names and marker entries use the shared relative grammar and native
+/// entry selector. Invalid names, escaped links and storage/kind errors are
+/// terminal; only an absent package directory or marker returns `None`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn models_package_root_path(package: &str) -> std::io::Result<Option<PathBuf>> {
-    let root = engine_models_root()?.join(package);
-    if !root.join("package.mo").is_file() {
+    if !asset_path::is_safe_relative_path(package) || package.contains('/') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe Modelica package name `{package}`"),
+        ));
+    }
+    let roots = [engine_models_root()?];
+    let relative = Path::new(package);
+    let Some((_, root)) = resolve_native_asset(
+        &roots,
+        relative,
+        Some(lunco_storage::StorageEntryKind::Directory),
+    )?
+    else {
+        return Ok(None);
+    };
+    if resolve_native_asset(
+        &roots,
+        &relative.join("package.mo"),
+        Some(lunco_storage::StorageEntryKind::File),
+    )?
+    .is_none()
+    {
         return Ok(None);
     }
-    // Canonicalize for the same reason `source_library_root_path` does: the
-    // parser keys
-    // its source-root cache on the exact path it is handed, so a CWD-dependent
-    // form would produce a different key per caller and force full reparses.
-    std::fs::canonicalize(&root).map(Some)
+    Ok(Some(root))
 }
 
 /// wasm has no filesystem to put a library on, so there is no MODELICAPATH entry;
@@ -689,9 +711,8 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 ///
 /// It probes the SAME chain the source reads — `assets/`, then the packed
 /// cache, then the shared pool ([`cache_roots`]) — and returns the first root
-/// that actually holds the file. When none does, it returns the `assets/` path
-/// anyway, so an error message names where the file was EXPECTED rather than
-/// where it was last looked for.
+/// that holds the entry. Absence returns `None`; a wrong entry kind or
+/// containment/storage failure is terminal.
 pub fn engine_asset_local_path(reference: &str) -> std::io::Result<Option<PathBuf>> {
     let rel = engine_asset_rel(reference);
     if has_scheme(rel) {
@@ -703,14 +724,94 @@ pub fn engine_asset_local_path(reference: &str) -> std::io::Result<Option<PathBu
             format!("unsafe library asset `{reference}`"),
         )
     })?;
-    let roots = library_roots(&assets_dir_abs()?);
     #[cfg(not(target_arch = "wasm32"))]
-    for root in &roots {
-        if let Some(path) = existing_path_within_root(root, &relative)? {
-            return Ok(Some(path).filter(|path| path.is_file()));
-        }
+    return lunco_source::resolve_native_asset(
+        &asset_read_roots(&assets_dir_abs()?),
+        &relative,
+        Some(lunco_storage::StorageEntryKind::File),
+    )
+    .map(|resolved| resolved.map(|(_, path)| path));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = relative;
+        Ok(None)
     }
-    Ok(Some(roots[0].join(relative)))
+}
+
+/// Admit a file from a CLI/validation input on its existing I/O worker.
+/// Explicit native and file-URI inputs never fall through to another source.
+/// An unanchored relative input searches CWD, then the engine asset namespace;
+/// only an actual absence advances that documented input search.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve_asset_input(
+    reference: &str,
+    expected: lunco_storage::StorageEntryKind,
+) -> std::io::Result<PathBuf> {
+    let storage_error = |error: lunco_storage::StorageError| match error {
+        lunco_storage::StorageError::Io(error) => error,
+        lunco_storage::StorageError::NotFound => std::io::Error::from(std::io::ErrorKind::NotFound),
+        error => std::io::Error::other(error.to_string()),
+    };
+    let file_uri = lunco_storage::file_uri_to_path(reference).map_err(storage_error)?;
+    let native_absolute = Path::new(reference).is_absolute();
+    let native = match file_uri {
+        Some(path) => Some(path),
+        None if native_absolute => Some(PathBuf::from(reference)),
+        None => {
+            // Reject foreign Windows addresses and per-drive relative paths.
+            lunco_storage::windows_file_reference_uri(reference).map_err(storage_error)?;
+            None
+        }
+    };
+    let logical = |reference: &str| {
+        let relative = parse_lunco_uri(reference)
+            .and_then(asset_path::relative_path)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unsupported or unsafe asset input `{reference}`"),
+                )
+            })?;
+        resolve_native_asset(
+            &asset_read_roots(&assets_dir_abs()?),
+            &relative,
+            Some(expected),
+        )?
+        .map(|(_, path)| path)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("asset input `{reference}` was not found in its source"),
+            )
+        })
+    };
+    if native.is_none() && asset_path::has_scheme(reference) {
+        return logical(reference);
+    }
+    let explicit = native.is_some()
+        || Path::new(reference).is_absolute()
+        || reference.starts_with(['.', '\\']);
+    let path = native.unwrap_or_else(|| PathBuf::from(reference));
+    match lunco_storage::entry_kind_no_follow_file_sync(&path) {
+        Ok(_) => {
+            let path = lunco_storage::canonicalize_file_path(&path).map_err(storage_error)?;
+            let kind = lunco_storage::entry_kind_file_sync(&path).map_err(storage_error)?;
+            if kind != expected {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("{} is {kind:?}, expected {expected:?}", path.display()),
+                ));
+            }
+            Ok(path)
+        }
+        Err(lunco_storage::StorageError::NotFound) if !explicit => {
+            // Windows also reports NotFound beneath a file or broken link.
+            // Reuse storage's ancestor admission before advancing namespaces.
+            lunco_storage::FilePathIdentity::prepare(&path).map_err(storage_error)?;
+            logical(&engine_asset_uri(reference))
+        }
+        Err(error) => Err(storage_error(error)),
+    }
 }
 
 /// Directory transport selected by the asset owner on the existing I/O worker.
@@ -735,15 +836,19 @@ impl AssetDirectory {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            existing_path_within_root(self.path(), relative)
-                .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()))?
-                .filter(|path| path.is_file())
-                .ok_or_else(|| {
-                    TwinRootsError::AssetResolution(
-                        std::io::ErrorKind::NotFound,
-                        format!("directory payload `{}` was not found", relative.display()),
-                    )
-                })
+            resolve_native_asset(
+                &[self.path().to_path_buf()],
+                relative,
+                Some(lunco_storage::StorageEntryKind::File),
+            )
+            .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()))?
+            .map(|(_, path)| path)
+            .ok_or_else(|| {
+                TwinRootsError::AssetResolution(
+                    std::io::ErrorKind::NotFound,
+                    format!("directory payload `{}` was not found", relative.display()),
+                )
+            })
         }
         #[cfg(target_arch = "wasm32")]
         Ok(self.path().join(relative))
@@ -794,7 +899,7 @@ pub async fn resolve_asset_directory_on_worker(
         #[cfg(target_arch = "wasm32")]
         {
             let storage = lunco_storage::OpfsStorage::new();
-            for base in [root.clone(), twin_cache_dir(&root), cache_dir()] {
+            for base in asset_read_roots(&root) {
                 let path = lunco_storage::canonicalize_file_path(&base.join(&relative))
                     .map_err(|error| invalid(error.to_string()))?;
                 match storage
@@ -819,19 +924,17 @@ pub async fn resolve_asset_directory_on_worker(
             .ok_or_else(|| invalid(format!("unsafe engine directory `{reference}`")))?;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            for root in
-                library_roots(&assets_dir_abs().map_err(|error| invalid(error.to_string()))?)
-            {
-                let path = existing_path_within_root(&root, &relative).map_err(|error| {
-                    TwinRootsError::AssetResolution(error.kind(), error.to_string())
-                })?;
-                if let Some(path) = path
-                    && path.is_dir()
-                {
-                    return Ok(AssetDirectory::File(path));
-                }
-            }
-            return Err(missing());
+            let roots =
+                asset_read_roots(&assets_dir_abs().map_err(|error| invalid(error.to_string()))?);
+            let path = lunco_source::resolve_native_asset(
+                &roots,
+                &relative,
+                Some(lunco_storage::StorageEntryKind::Directory),
+            )
+            .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()))?
+            .map(|(_, path)| path)
+            .ok_or_else(missing)?;
+            return Ok(AssetDirectory::File(path));
         }
         #[cfg(target_arch = "wasm32")]
         return Ok(AssetDirectory::Web(relative));
@@ -864,30 +967,6 @@ pub async fn resolve_asset_directory_on_worker(
             .ok_or_else(|| invalid(format!("unsafe web directory `{reference}`")))?;
         Ok(AssetDirectory::Web(path))
     }
-}
-
-/// The local filesystem path ANY reference resolves to, whichever root owns it —
-/// a `twin://<name>/<rel>` against the open Twin's root, anything else against
-/// the shipped engine library. `None` when the Twin is not open or the reference
-/// belongs to a scheme with no local path (`http…`).
-///
-/// This is the single read-side resolution entry point for code that must reach
-/// bytes WITHOUT the `AssetServer` (scenario sync, shader pre-validation, file
-/// dialogs). Callers previously re-implemented the `twin://` split-and-join next
-/// to a hardcoded `"assets"` literal, which drifted from the readers this crate
-/// registers — same URI, two different answers depending on who asked.
-/// The library-relative form of an ABSOLUTE filesystem path that lives under the
-/// shipped `assets/` root, or `None` when it lives elsewhere. The inverse of
-/// [`engine_asset_local_path`].
-///
-/// Callers hand an absolute path to the `AssetServer`, which prepends its own
-/// configured root to every load string — so a path under the library has to be
-/// reduced to its relative form or the load resolves to `<assets>/<assets>/…`.
-pub fn library_rel(path: &Path) -> std::io::Result<Option<String>> {
-    Ok(path
-        .strip_prefix(assets_dir_abs()?)
-        .ok()
-        .map(asset_path::slashed))
 }
 
 /// Cache `fonts/` directory — where `lunco-assets -- download`
@@ -1020,10 +1099,10 @@ mod tests {
     }
 
     #[test]
-    fn library_roots_keep_an_explicit_package_root_self_contained() {
+    fn asset_read_roots_preserve_owner_precedence() {
         let package_assets = Path::new("/package/assets");
         assert_eq!(
-            library_roots(package_assets),
+            asset_read_roots(package_assets),
             vec![
                 PathBuf::from("/package/assets"),
                 PathBuf::from("/package/assets/.cache"),

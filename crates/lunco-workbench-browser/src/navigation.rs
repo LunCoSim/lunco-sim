@@ -100,7 +100,7 @@ fn reveal(
     {
         view.section = crate::twin_browser::files_section::FILES_SECTION_ID.into();
         query.text = relative.display().to_string();
-    } else if let Some(relative) = uri.strip_prefix("lunco://") {
+    } else if let Some(relative) = lunco_assets_core::parse_lunco_uri(uri) {
         view.section = crate::twin_browser::library_section::LIBRARY_SECTION_ID.into();
         query.text = relative.to_owned();
     } else {

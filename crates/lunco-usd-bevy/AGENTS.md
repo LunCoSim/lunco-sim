@@ -83,7 +83,9 @@ asset-source boundary belongs to `lunco-assets-runtime`; `lunco-usd-compose` own
 and `LuncoUsdResolver` — anchoring a *relative* reference to its referencing
 layer, which is USD composition semantics. It must not re-derive where a scheme
 points: ask `lunco_assets_core` (`has_scheme`, `local_path`, `shipped_asset_root`,
-`id_to_disk_path`, `engine_asset_uri`/`_rel`).
+`read_asset_bytes_in_scope`, `engine_asset_uri`/`_rel`). Native entry lookup uses
+`resolve_native_asset` with `asset_read_roots`; synchronous Twin reads capture
+identity and root together through `TwinRoots::read_scope`.
 
 ## When the asset is missing
 

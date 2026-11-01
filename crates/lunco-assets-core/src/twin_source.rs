@@ -38,7 +38,37 @@ use bevy::prelude::*;
 /// The asset-source scheme for Twin-root-relative assets — the name it is
 /// registered under, both as a Bevy `AssetSource` and in the
 /// [`SchemeRegistry`](crate::scheme_registry::SchemeRegistry).
-pub const TWIN_SCHEME: &str = "twin";
+pub use lunco_assets_path::TWIN_SCHEME;
+
+/// Immutable native-read scope captured from one admitted Twin. Publication
+/// still validates the caller's source lease; an authority from another Twin
+/// can never be interpreted relative to this scope's directory.
+#[derive(Clone, Debug)]
+pub struct TwinReadScope {
+    authority: String,
+    logical_name: String,
+    root: PathBuf,
+}
+
+impl TwinReadScope {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+    pub(crate) fn accepts(&self, authority: &str) -> bool {
+        authority == self.authority || authority == self.logical_name
+    }
+    /// Admit a standalone source through the same registry used by the app.
+    pub fn declared(name: &str, root: &Path) -> Result<Self, TwinRootsError> {
+        let roots = TwinRoots::default();
+        let authority = roots.register(name, root)?;
+        roots.read_scope(&authority)
+    }
+    pub fn for_twin(twin: &lunco_twin::Twin) -> Result<Self, TwinRootsError> {
+        let roots = TwinRoots::default();
+        let authority = roots.register_twin(twin)?;
+        roots.read_scope(&authority)
+    }
+}
 
 // A display name becomes one URI component. Unreserved ASCII stays readable;
 // percent and delimiters are encoded so distinct authored names stay distinct.
@@ -74,6 +104,27 @@ pub enum TwinRootsError {
     RootResolution(std::io::ErrorKind, String),
 }
 
+/// Stable logical source component derived from the Twin's authored identity.
+pub fn logical_twin_name(twin: &lunco_twin::Twin) -> String {
+    let name = twin
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.name.clone())
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            twin.root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "twin".to_string());
+    let encode = if name == "." || name == ".." {
+        TWIN_DOT_NAME_COMPONENT
+    } else {
+        TWIN_NAME_COMPONENT
+    };
+    percent_encoding::utf8_percent_encode(&name, encode).to_string()
+}
+
 /// The `twin://<name>/<rel>` URI naming `rel` inside the Twin `name` — the ONE
 /// place the scheme string is spelled into an address. Callers that hand-rolled
 /// `format!("twin://{name}/{rel}")` duplicated resolution knowledge this crate
@@ -95,6 +146,15 @@ pub fn twin_uri(name: impl AsRef<str>, rel: impl AsRef<Path>) -> String {
 pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
     let (scheme, rest) = crate::asset_path::split_scheme(uri)?;
     split_twin_rel((scheme.eq_ignore_ascii_case(TWIN_SCHEME)).then_some(rest)?)
+}
+
+/// Parse a Twin-root address used by root-scoped commands, without a file path.
+pub fn parse_twin_root_uri(uri: &str) -> Option<&str> {
+    let (scheme, authority) = crate::asset_path::split_scheme(uri)?;
+    (scheme.eq_ignore_ascii_case(TWIN_SCHEME)
+        && !authority.is_empty()
+        && !authority.contains(['/', '\\']))
+    .then_some(authority)
 }
 
 /// Split the scheme-stripped remainder of a `twin://` address — the
@@ -218,70 +278,42 @@ fn resolve_twin_relative_path_with_cache(
     relative: &Path,
     shared: &Path,
 ) -> Result<Option<PathBuf>, TwinRootsError> {
-    if !crate::asset_path::is_safe_relative_components(relative) {
-        return Err(TwinRootsError::AssetResolution(
-            std::io::ErrorKind::InvalidInput,
-            format!("unsafe relative path `{}`", relative.display()),
-        ));
-    }
-    let authored = root.join(relative);
+    let roots = crate::asset_read_roots_with_shared(root, shared);
     #[cfg(not(target_arch = "wasm32"))]
-    match crate::existing_path_within_root(root, relative) {
-        Ok(Some(path)) => return Ok(Some(path)),
-        Ok(None) => {}
-        Err(error) => {
+    return crate::lunco_source::resolve_native_asset(&roots, relative, None)
+        .map(|resolved| resolved.map(|(_, path)| path))
+        .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
+    #[cfg(target_arch = "wasm32")]
+    {
+        if !crate::asset_path::is_safe_relative_components(relative) {
             return Err(TwinRootsError::AssetResolution(
-                error.kind(),
-                format!("{}: {error}", authored.display()),
+                std::io::ErrorKind::InvalidInput,
+                format!("unsafe relative path `{}`", relative.display()),
             ));
         }
-    }
-    #[cfg(target_arch = "wasm32")]
-    if authored.exists() {
-        return Ok(Some(authored.clone()));
-    }
-
-    let cache_root = crate::twin_cache_dir(root);
-    let cached = cache_root.join(relative);
-    #[cfg(not(target_arch = "wasm32"))]
-    match crate::existing_path_within_root(&cache_root, relative) {
-        Ok(Some(path)) => return Ok(Some(path)),
-        Ok(None) => {}
-        Err(error) => {
-            return Err(TwinRootsError::AssetResolution(
-                error.kind(),
-                format!("{}: {error}", cached.display()),
-            ));
+        for root in roots {
+            let path = root.join(relative);
+            if path.exists() {
+                return Ok(Some(path));
+            }
         }
+        Ok(None)
     }
-    #[cfg(target_arch = "wasm32")]
-    if cached.exists() {
-        return Ok(Some(cached.clone()));
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    match crate::existing_path_within_root(shared, relative) {
-        Ok(Some(path)) => return Ok(Some(path)),
-        Ok(None) => {}
-        Err(error) => {
-            return Err(TwinRootsError::AssetResolution(
-                error.kind(),
-                format!("{}: {error}", shared.join(relative).display()),
-            ));
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    if shared.join(relative).exists() {
-        return Ok(Some(shared.join(relative)));
-    }
-    // Preserve the reader's useful missing-file diagnostic: authored is the
-    // logical location a Twin-relative reference names.
-    Ok(Some(authored))
 }
 
 pub(crate) fn resolve_twin_relative_file(
     root: &Path,
     relative: &Path,
 ) -> Result<Option<PathBuf>, TwinRootsError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::lunco_source::resolve_native_asset(
+        &crate::asset_read_roots(root),
+        relative,
+        Some(lunco_storage::StorageEntryKind::File),
+    )
+    .map(|resolved| resolved.map(|(_, path)| path))
+    .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
+    #[cfg(target_arch = "wasm32")]
     Ok(resolve_twin_relative_path(root, relative)?.filter(|path| path.is_file()))
 }
 
@@ -292,21 +324,50 @@ pub(crate) fn resolve_twin_relative_directory(
     // Domain manifests designate the admitted Twin directory itself with `.`.
     if relative == Path::new(".") {
         #[cfg(not(target_arch = "wasm32"))]
-        return match lunco_storage::entry_kind_file_sync(root) {
-            Ok(lunco_storage::StorageEntryKind::Directory) => Ok(Some(root.to_path_buf())),
-            Ok(_) | Err(lunco_storage::StorageError::NotFound) => Ok(None),
-            Err(error) => Err(TwinRootsError::AssetResolution(
-                std::io::ErrorKind::Other,
-                format!("{}: {error}", root.display()),
-            )),
-        };
+        return crate::resolve_native_asset(
+            &[root.to_path_buf()],
+            Path::new(""),
+            Some(lunco_storage::StorageEntryKind::Directory),
+        )
+        .map(|resolved| resolved.map(|(_, path)| path))
+        .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
         #[cfg(target_arch = "wasm32")]
         return Ok(Some(root.to_path_buf()));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::lunco_source::resolve_native_asset(
+        &crate::asset_read_roots(root),
+        relative,
+        Some(lunco_storage::StorageEntryKind::Directory),
+    )
+    .map(|resolved| resolved.map(|(_, path)| path))
+    .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
+    #[cfg(target_arch = "wasm32")]
     Ok(resolve_twin_relative_path(root, relative)?.filter(|path| path.is_dir()))
 }
 
 impl TwinRoots {
+    /// Capture the exact current authority, logical identity and canonical root
+    /// under one registry read. A retired authority cannot produce a read scope.
+    pub fn read_scope(&self, authority: &str) -> Result<TwinReadScope, TwinRootsError> {
+        let registry = self
+            .registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        let root = registry
+            .roots
+            .get(authority)
+            .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+        let logical_name = registry
+            .identities
+            .get(authority)
+            .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+        Ok(TwinReadScope {
+            authority: authority.to_owned(),
+            logical_name: logical_name.clone(),
+            root: root.root.clone(),
+        })
+    }
     /// Capture current live logical sources without reading filesystem metadata.
     pub fn snapshot(&self) -> Result<TwinRootsSnapshot, TwinRootsError> {
         let registry = self
@@ -356,24 +417,7 @@ impl TwinRoots {
     /// is percent-encoded as one logical-source URI component; metadata is not
     /// changed. Low-level `register` accepts already-encoded source components.
     pub fn register_twin(&self, twin: &lunco_twin::Twin) -> Result<String, TwinRootsError> {
-        let name = twin
-            .manifest
-            .as_ref()
-            .map(|manifest| manifest.name.clone())
-            .filter(|name| !name.is_empty())
-            .or_else(|| {
-                twin.root
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| "twin".to_string());
-        let encode = if name == "." || name == ".." {
-            TWIN_DOT_NAME_COMPONENT
-        } else {
-            TWIN_NAME_COMPONENT
-        };
-        let logical = percent_encoding::utf8_percent_encode(&name, encode).to_string();
-        self.register(logical, twin.root.clone())
+        self.register(logical_twin_name(twin), twin.root.clone())
     }
 
     /// Admit a Twin root and return its mount-local load authority.
@@ -669,8 +713,7 @@ impl TwinRoots {
             return Err(TwinRootsError::UnknownAuthority(name.to_owned()));
         };
         #[cfg(not(target_arch = "wasm32"))]
-        return Ok(resolve_twin_relative_path(&root, relative)?
-            .is_some_and(|path| path.is_file() || path.is_dir()));
+        return Ok(resolve_twin_relative_path(&root, relative)?.is_some());
         #[cfg(target_arch = "wasm32")]
         {
             let _ = root;
@@ -941,6 +984,27 @@ impl AssetReader for TwinReader {
         };
         let relative = crate::asset_path::relative_path(relative)
             .ok_or_else(|| AssetReaderError::NotFound(path.to_path_buf()))?;
+        if self
+            .roots
+            .overlay_for(path)
+            .map_err(asset_reader_error)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(root) = self.roots.root_for(name).map_err(asset_reader_error)? else {
+                return Ok(false);
+            };
+            return Ok(
+                match resolve_twin_relative_path(&root, &relative).map_err(asset_reader_error)? {
+                    Some(path) => std::fs::metadata(path)?.is_dir(),
+                    None => false,
+                },
+            );
+        }
+        #[cfg(target_arch = "wasm32")]
         Ok(self
             .roots
             .resolve_directory(name, &relative)
@@ -952,6 +1016,41 @@ impl AssetReader for TwinReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_resolution_edges_directory_probe_distinguishes_files_from_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("entry"), b"file").unwrap();
+        std::fs::create_dir_all(root.path().join(".cache/entry")).unwrap();
+        std::fs::create_dir(root.path().join("directory")).unwrap();
+        let roots = TwinRoots::default();
+        let authority = roots.register("probe", root.path()).unwrap();
+        let reader = TwinReader { roots };
+        bevy::tasks::futures_lite::future::block_on(async {
+            for name in ["entry", "missing"] {
+                assert!(
+                    !AssetReader::is_directory(&reader, &Path::new(&authority).join(name))
+                        .await
+                        .unwrap()
+                );
+            }
+            assert!(
+                AssetReader::is_directory(&reader, &Path::new(&authority).join("directory"))
+                    .await
+                    .unwrap()
+            );
+            reader
+                .roots
+                .set_overlay(&authority, "directory", Arc::new(b"overlay".to_vec()))
+                .unwrap();
+            assert!(
+                !AssetReader::is_directory(&reader, &Path::new(&authority).join("directory"))
+                    .await
+                    .unwrap()
+            );
+        });
+    }
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
@@ -1126,6 +1225,16 @@ mod tests {
     #[test]
     fn unsafe_overlay_paths_are_not_stored_or_read() {
         let roots = TwinRoots::default();
+        for invalid in ["folder/file:stream.usda", "folder/nul\0.usda"] {
+            assert!(matches!(
+                roots.set_overlay("moonbase", invalid, Arc::new(b"secret".to_vec())),
+                Err(TwinRootsError::InvalidOverlayPath(_))
+            ));
+            assert!(matches!(
+                roots.clear_overlay("moonbase", invalid),
+                Err(TwinRootsError::InvalidOverlayPath(_))
+            ));
+        }
         assert!(matches!(
             roots.set_overlay("moonbase", "../outside.usda", Arc::new(b"secret".to_vec())),
             Err(TwinRootsError::InvalidOverlayPath(_))
@@ -1174,12 +1283,16 @@ mod tests {
         assert_ne!(b, a, "second root must not take the first root's name");
         assert_eq!(
             roots.root_of(&a),
-            Ok(Some(first_root.path().to_path_buf())),
+            Ok(Some(
+                lunco_storage::canonicalize_file_path(first_root.path()).unwrap()
+            )),
             "first Twin still resolves to its own folder"
         );
         assert_eq!(
             roots.root_of(&b),
-            Ok(Some(second_root.path().to_path_buf())),
+            Ok(Some(
+                lunco_storage::canonicalize_file_path(second_root.path()).unwrap()
+            )),
             "second Twin resolves to its own folder under the assigned name"
         );
         assert_eq!(roots.logical_name(&a), Ok("scenes".to_string()));
@@ -1556,7 +1669,9 @@ mod tests {
 
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
-            Ok(Some(cached)),
+            Ok(Some(
+                lunco_storage::canonicalize_file_path(&cached).unwrap()
+            )),
             "logical Twin paths must resolve downloaded assets through the cache"
         );
 
@@ -1566,7 +1681,9 @@ mod tests {
         lunco_storage::write_file_sync(&authored, b"authored terrain").expect("authored asset");
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
-            Ok(Some(authored)),
+            Ok(Some(
+                lunco_storage::canonicalize_file_path(&authored).unwrap()
+            )),
             "authored Twin files take precedence over materialized cache files"
         );
     }
@@ -1587,7 +1704,9 @@ mod tests {
 
         assert_eq!(
             roots.resolve_directory(&name, Path::new("terrain/luna2")),
-            Ok(Some(cached)),
+            Ok(Some(
+                lunco_storage::canonicalize_file_path(&cached).unwrap()
+            )),
             "processed Twin directories must resolve through the asset boundary"
         );
     }
@@ -1629,7 +1748,7 @@ mod tests {
         assert_eq!(
             resolve_twin_relative_path_with_cache(twin.path(), relative, shared.path())
                 .expect("resolve shared Twin asset"),
-            Some(shared_file),
+            Some(lunco_storage::canonicalize_file_path(&shared_file).unwrap()),
             "a Twin must consume a shared logical asset without materialising a local copy"
         );
     }

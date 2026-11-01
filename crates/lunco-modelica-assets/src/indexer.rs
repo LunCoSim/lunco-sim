@@ -814,7 +814,6 @@ fn bundled_class_node(
             id,
             name: short_name.to_string(),
             package_path: qualified,
-            fs_path: std::path::PathBuf::new(),
             children: Some(children),
             is_loading: false,
         }

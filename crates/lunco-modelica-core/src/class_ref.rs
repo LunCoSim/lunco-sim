@@ -335,7 +335,9 @@ mod tests {
 
     #[test]
     fn file_url_user_file() {
-        let path = std::env::temp_dir().join("провајдер with spaces.mo");
+        let path = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join("провајдер with spaces.mo");
         let uri = lunco_storage::file_path_to_uri(&path).unwrap();
         let c = ClassRef::parse_tree_id(&uri).unwrap();
         assert_eq!(c.library, Library::UserFile { path });

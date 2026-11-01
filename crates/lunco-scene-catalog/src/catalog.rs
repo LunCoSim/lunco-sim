@@ -967,16 +967,7 @@ pub async fn read_asset_meta(
                 let twin_root = asset
                     .twin
                     .as_deref()
-                    .map(|name| {
-                        roots
-                            .root_for(name)
-                            .map_err(|error| error.to_string())
-                            .and_then(|root| {
-                                root.ok_or_else(|| {
-                                    format!("catalog source `{name}` has no live Twin mount")
-                                })
-                            })
-                    })
+                    .map(|name| roots.read_scope(name).map_err(|error| error.to_string()))
                     .transpose();
                 let twin_root = match twin_root {
                     Ok(root) => root,
@@ -995,7 +986,7 @@ pub async fn read_asset_meta(
                 // requests.
                 let report = lunco_scene_validation::validate::validate_asset_loadability(
                     &asset.abs_path.to_string_lossy(),
-                    twin_root.as_deref(),
+                    twin_root.as_ref(),
                 );
                 if !report.ok {
                     warn!(

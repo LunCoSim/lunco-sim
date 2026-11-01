@@ -85,6 +85,7 @@ pub fn policy_name(policy: &str) -> Result<&'static str, String> {
 pub(crate) struct TwinInspectionInput {
     pub root: PathBuf,
     pub name: String,
+    pub source_name: String,
     pub files: Vec<PathBuf>,
     modelica_roots: Vec<PathBuf>,
     engine_tools: Vec<NamespaceEntry>,
@@ -132,6 +133,7 @@ impl TwinInspectionInput {
                 .map(|error| format!("Twin component registry: {error}")),
         );
         Self {
+            source_name: lunco_assets_core::twin_source::logical_twin_name(twin),
             root: twin.root.clone(),
             name: twin_name(twin),
             files: twin
@@ -373,7 +375,13 @@ fn inspect_usd_file(
     let stage = match lunco_usd_compose::compose_file_to_stage_with_roots(
         &path,
         Some(engine_root.as_path()),
-        Some(twin.root.as_path()),
+        Some(&match lunco_assets_core::TwinReadScope::for_twin(twin) {
+            Ok(scope) => scope,
+            Err(error) => {
+                read_errors.push(error.to_string());
+                return;
+            }
+        }),
         lunco_usd_authoring::schema::native_registry(),
     ) {
         Ok(stage) => stage,
@@ -511,10 +519,13 @@ fn read_twin_text(twin: &lunco_workspace::Twin, rel: &Path) -> Result<String, St
     #[cfg(not(target_arch = "wasm32"))]
     {
         let id = format!("twin://namespace-lint/{}", slashed(rel));
-        let bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+        let bytes = lunco_assets_core::read_asset_bytes_in_scope(
             &id,
             None,
-            Some(twin.root.as_path()),
+            Some(
+                &lunco_assets_core::TwinReadScope::declared("namespace-lint", &twin.root)
+                    .map_err(|error| error.to_string())?,
+            ),
             lunco_usd_compose::recipe::StageClosureLimits::default().max_bytes,
         )
         .map_err(|error| error.to_string())?;

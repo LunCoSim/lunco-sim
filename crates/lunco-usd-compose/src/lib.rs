@@ -202,9 +202,10 @@ pub fn compose_file_to_stage_with_assets(
 }
 
 /// Compose a document with the asset roots that belong to its provenance.
-/// `twin_root` is used only for `twin://` arcs; the engine library remains
-/// resolved through `assets_root`. Keeping both roots explicit prevents a
-/// custom Twin from silently falling back to the process working directory.
+/// `twin_root` captures the admitted root and identity for `twin://` arcs; the
+/// engine library remains resolved through `assets_root`. Foreign Twin
+/// authorities fail before byte lookup. Neither source searches the working
+/// directory.
 ///
 /// This synchronous byte-assembly API is native-only. Browser USD loading
 /// goes through `lunco-usd-bevy`'s `LoadContext`, which is the async asset
@@ -215,7 +216,7 @@ pub fn compose_file_to_stage_with_assets(
 pub fn compose_file_to_stage_with_roots(
     path: &Path,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
     registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<Stage> {
     let absolute = lunco_storage::canonicalize_file_path(path)
@@ -227,7 +228,7 @@ pub fn compose_file_to_stage_with_roots(
         None => source_uri.clone(),
     };
     let limits = StageClosureLimits::default();
-    let root_bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+    let root_bytes = lunco_assets_core::read_asset_bytes_in_scope(
         &source_uri,
         assets_root,
         twin_root,
@@ -248,7 +249,7 @@ pub fn compose_source_to_stage_with_roots(
     root_id: &str,
     source: &str,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
     registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
     let recipe = recipe_from_source_with_roots(root_id, source, assets_root, twin_root)?;
@@ -306,7 +307,7 @@ pub fn recipe_from_source_with_roots(
     root_id: &str,
     source: &str,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
 ) -> Result<recipe::StageRecipe> {
     recipe_from_bytes_with_roots(
         root_id,
@@ -324,7 +325,7 @@ pub fn recipe_from_bytes_with_roots(
     root_id: &str,
     root_bytes: Vec<u8>,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
     limits: StageClosureLimits,
 ) -> Result<recipe::StageRecipe> {
     let root_id = canonicalize_at(root_id, None)?;
@@ -339,7 +340,7 @@ pub fn recipe_from_bytes_with_roots(
 pub fn fetch_recipe_with_roots(
     mut recipe: recipe::StageRecipe,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
     limits: StageClosureLimits,
 ) -> Result<recipe::StageRecipe> {
     anyhow::ensure!(
@@ -381,7 +382,7 @@ pub fn fetch_recipe_with_roots(
             }
             let child_depth = depth + 1;
             check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
-            let child = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+            let child = lunco_assets_core::read_asset_bytes_in_scope(
                 &child_id,
                 assets_root,
                 twin_root,
@@ -419,7 +420,7 @@ pub fn fetch_recipe_with_roots(
 pub fn compose_file_to_stage_with_roots(
     path: &Path,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
     registry: std::sync::Arc<openusd::usd::SchemaRegistry>,
 ) -> Result<Stage> {
     let _ = (path, assets_root, twin_root, registry);
@@ -654,7 +655,7 @@ mod tests {
         compose_file_to_stage_with_roots(
             &scene,
             None,
-            Some(temp.path()),
+            Some(&lunco_assets_core::TwinReadScope::declared("fixture", temp.path()).unwrap()),
             openusd_schemas::schema_registry(),
         )
         .expect("a Windows-authored Twin URI composes on this OS");
@@ -682,7 +683,7 @@ mod tests {
         compose_file_to_stage_with_roots(
             &scene,
             None,
-            Some(temp.path()),
+            Some(&lunco_assets_core::TwinReadScope::declared("fixture", temp.path()).unwrap()),
             openusd_schemas::schema_registry(),
         )
         .expect("external Twin can resolve authored engine layers");

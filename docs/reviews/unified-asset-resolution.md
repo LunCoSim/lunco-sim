@@ -44,6 +44,229 @@ sibling convention once; language consumers never interpret sidecars. The
 filesystem containment check is not an atomic guarantee against concurrent
 hostile filesystem replacement.
 
+## Native resolver conformance
+
+The native entry selector is `lunco-assets-core::resolve_native_asset`, with
+root order supplied by `asset_read_roots`. Engine/Twin Bevy readers, synchronous
+reads, directory consumers and dataset scans use that owner. Entry kind is
+checked after the first existing entry is selected. Cache lookup advances only
+on absence; a file cannot become a cached directory, and an invalid authored
+dataset cannot reveal a cached product. Dataset installed state retains its
+logical URI rather than an unconsumed filesystem path.
+
+`lunco-assets-path` owns the scheme constants and preserves Twin/store authority
+when anchoring relative references. Escaping `..` remains visible for admission
+to reject. `TwinReadScope` captures an admitted root and namespace together;
+synchronous USD/validation consumers reject foreign authorities before reading.
+Native CLI input admission is owned by `resolve_asset_input`; its bare-input
+search validates missing ancestors through storage before changing namespaces.
+
+Native Windows paths remain `PathBuf` values through filesystem operations and
+retain verbatim drive/UNC prefixes. Source discovery exports native UTF-8
+spelling. Portable source identity is formed only after native root stripping;
+standard file URIs are encoded and decoded by `lunco-storage`. Native browser
+drags carry `PathBuf`, while registered-source drags carry logical addresses.
+These are storage and identity invariants, so no Rhai policy hook is needed.
+
+The edge-case audit reproduced a verbatim trailing-dot path selecting its
+ordinary sibling, a scoped file URI reading foreign bytes, a Twin directory
+predicate rejecting a regular file, and direct registered reads accepting invalid
+relative syntax. An isolated-CWD test also reproduced an invalid native ancestor
+selecting engine-library bytes; CLI admission now reuses storage ancestor checks
+before advancing on an apparent absence. Storage decodes Windows file URIs to verbatim native roots;
+`url` owns URI parsing and `std::path::Prefix` owns drive/share parsing. The
+adapter supplies literal native filename semantics without another URI parser.
+Encoding validates the original namespace before standard-library Win32
+normalization, preserving rejection of malformed `//?/` addresses. URI decoding
+preserves the original drive/share root even when a suffix looks like another
+drive; native suffixes are copied without reparsing them as separate paths. Native CLI
+inputs keep their host semantics; POSIX double-root input has a Unix CI case.
+Scoped native reads enforce canonical Twin containment. Native/Twin directory
+predicates distinguish files from lookup errors and honor file overlays. The
+registered reader applies the shared relative grammar to payloads, metadata and
+directory enumeration. These remain generic asset/storage invariants; no new
+Rhai policy hook or dependency patch is needed.
+
+Native conformance on Windows (2026-11-01): all 61 asset-core tests passed,
+along with 11 URI-algebra tests, the dataset precedence regression, all 14 native
+USD composition cases, four source-content closure cases and two storage
+file-URI cases. The shared native CI gate runs on Windows, macOS and Linux;
+macOS/Linux execution is not established by this local Windows run.
+
+Production Windows verification used `target/debug/luncosim.exe` built with
+`cargo build -p lunco-luncosim --bin luncosim -j 4`:
+
+- `luncosim test --scene scenes/tests/twin_search_paths/sim/scenes/search_paths.usda --api 4197 --threads 4 --readiness-timeout 180 --max-ticks 20000`: PASS, six authored assertions.
+- The same bounded command for `scenes/tests/sandbox_smoke.usda`: PASS.
+- `LUNCOSIM_API_PORT=4198 python scripts/api/test_path_interoperability.py`: PASS, 41 authored assertions on Windows, including negative rename cases and literal-path USD/Modelica persistence. The shared fixture wait compares native files with `Path.samefile`, including verbatim aliases.
+- Rover Lab at `tutorials/sandbox/rover_lab.usda`, owned PID 4772/port 4197: readiness clear, `RoverLab_x2f_Rover_System` Running, no Modelica error. API Exit released the process and port.
+
+Runtime logs are under `target/path-resolution-final-{twin,sandbox,api,demo}.log`
+(the demo API snapshot is `target/path-resolution-final-demo-api.log`).
+This checkout reports missing optional DejaVu font data and an empty installed
+library index; neither prevented these source/runtime gates from passing.
+
+Windows UX verification used the same production binary at 150% display scale.
+`test_resource_preview_layout.py --uri-point 640 202 --text-point 640 360`
+and `--compact --uri-point 480 112 --text-point 480 270` both exited 0.
+Their 24 captures were inspected at 1920x1080 and 1440x810 physical pixels
+(1280x720 and 960x540 logical window sizes). Missing-file diagnostics, four image
+corners, title/close controls, full long-URI hover text, Copy URI, bounded text,
+scroll/reload and image-after-text remained within the viewport. The long native
+filename contains Unicode, spaces, `#`, `%` and `+` and exceeds 260 characters.
+The driver takes measured logical hit positions and records them; screenshot
+dimensions alone do not identify a widget or its input coordinates.
+
+An additional owned compact session (PID 25760, port 4198, native window DPI 144)
+clicked Copy URI and read back the Windows Unicode clipboard: the complete
+402-character encoded URI matched exactly. Evidence is in
+`target/path-ux-measured-{standard,compact}/` and `target/path-ux-clipboard/`.
+All sessions exited through the API and released their ports, with clean render
+logs. These input gestures exercise application events and clipboard output;
+physical Explorer drag delivery, a fresh installer, macOS/Linux desktop UX and
+browser acceptance were not exercised by this run.
+
+### DRY recheck
+
+Strict authored relative-path admission composes `relative_path` rather than
+implementing a second volume/component parser. Colon and NUL components reject
+at overlay admission as well as at the reader. Structured package reads and
+compiler source discovery share `discovery::read_files_with_extension`; the
+Modelica adapter only derives package-relative source identities. The engine,
+Twin and installed-library reader adapters retain their distinct source/overlay
+contexts while sharing native selection and storage admission. Browser HTTP
+transport is target-specific and does not provide another Windows reader.
+
+`models::tests::package_inventory_contract` creates a generic temporary package
+and an escaped directory junction on Windows (symlink on Unix). The previous
+package reader returned the outside source; the shared inventory rejects the
+entire package with a diagnostic. The positive package retains its exact
+relative file identities. The named test passed after the cutover; all 11
+`lunco-assets-path` tests and the named asset-core
+`unsafe_overlay_paths_are_not_stored_or_read` test also passed. These checks
+are included in the desktop native-contract CI gate.
+
+The separate final review also traced namespace selection through the compiler
+and async engine. Both retain package read/inventory failures as terminal owner
+diagnostics. Only an absent structured package permits namespace lookup in a
+different source. Top-level model reads, package-marker probes and catalog
+membership use the shared native selector, including the package root itself.
+The junction contract also rejects an escaped top-level package/file entry and
+root traversal. The compiler's malformed-UTF-8 package regression failed before
+the terminal diagnostic was retained and passed afterward. The bounded final
+unit command ran the package inventory contract plus all four named
+`source_root_smoke::source_root_content_closure_*` cases successfully; logs are
+in `target/path-rereview-deep-contracts.log`.
+The same built package test also passed with its temporary directory beneath a
+path containing spaces, Unicode, `#`, `%`, apostrophe and `&`; native junction
+creation receives paths as environment values rather than shell command text.
+That evidence is in `target/path-rereview-special-temp.log`.
+
+The production binary rebuilt with
+`cargo build -p lunco-luncosim --bin luncosim -j 4`. A separate runtime check set
+`LUNCO_ASSET_ROOT=C:\Users\BELLATOR\AppData\Local\luncosim\current\assets`,
+the installed source tree from the reported failure. Rover Lab (PID 26772,
+port 4199) became ready with its rover system running. The installed sandbox
+(PID 17092, port 4199) compiled and advanced all seven generated vehicle/thermal
+systems without Modelica errors. Its full-scene readiness remains blocked by
+two optional Python programs unavailable in this source binary; this is a
+Modelica path gate, not full sandbox acceptance. Both owned sessions exited
+and released their port. Snapshots and logs are under
+`target/path-rereview-installed/`; build output is
+`target/path-rereview-production-build.log`.
+
+The final `LUNCOSIM_API_PORT=4198 python scripts/api/test_path_interoperability.py`
+run passed 43 authored assertions (owned PID 27268). The catalog assertion requires
+`LunCo/Actuation/SignedTorqueAllocator.mo` with its logical engine URI, exercising
+the production package reader. Native rename, rejected targets, persistence and
+USD-bound Modelica execution also passed. Evidence is in
+`target/path-rereview-api.log`; the owned session exited and released port 4198.
+
+The local installed executable is dated 2026-10-31 and predates these fixes.
+Source commits and a checkout rebuild do not update that executable. Testing
+the new binary against installed assets does not establish installer/update
+acceptance.
+
+## Catalog and package-browser boundary review (2026-11-01)
+
+The catalog regression reproduced an outside directory link being published as
+`twin://probe/escape/outside.rhai` (`target/path-catalog-before.log`). Native
+catalog discovery now projects the same contained traversal used by complete
+source inventories. Extension and private-directory filters are explicit inputs;
+escape, repeated identity and I/O diagnostics reject publication. Startup,
+packaging and scene-test discovery consume the scanner's `Result`. Both live
+and indexed catalogs reject filenames that cannot become logical identities;
+native separators convert without aliasing literal Unix backslashes.
+
+The package browser now projects admitted `LibrarySource` membership and reads
+through its existing reader. Modelica's `package_paths` remains the file-layout
+owner. Parsing validates the requested declaration, including its `within`
+namespace; corrupt bytes and missing members remain terminal diagnostics.
+The UI shows a wrapped error and explicit Retry. Scan requests carry only a node
+identity and resolve its authoritative package path through the current tree.
+Package nodes no longer carry an unused native filesystem field. The browser's
+parsed-bundle adapter implements the same success/error interface.
+
+DRY discovery found the existing contained inventory, library byte reader and
+Modelica file mapper; these were extended or composed without another resolver,
+dependency, fork or policy hook. Containment and storage identity are generic
+owner invariants. Native paths remain `PathBuf` at the filesystem boundary;
+logical source/class identities cross UI and compiler boundaries.
+
+Windows verification:
+
+- Four focused contracts passed: catalog traversal, structured package inventory,
+  native/in-memory store resolution and package-tree parsing. Logs are
+  `target/path-catalog-contracts.log` and `target/path-catalog-final-tests.log`.
+  Store membership fixtures use the admitted source base, preserving Windows
+  canonical native namespace semantics.
+- `cargo build -p lunco-luncosim -p lunco-assets-runtime --bin luncosim --bin build_asset_manifest -j 4`
+  passed without warnings (`target/path-catalog-production-build.log`). The
+  packager accepted a Unicode/space/`#`/`%` fixture and rejected an outside
+  junction with exit 1 while preserving the existing manifest
+  (`target/path-catalog-packager.log`).
+- Owned production PID 27108, port 4212: seven reviewed captures show the narrow
+  package browser, a corrupt-byte diagnostic, retained failure after file repair,
+  explicit Retry recovery and opening the correct read-only class. Native DPI was
+  measured at 144 before converting captured coordinates to logical input.
+  Three authored Rhai assertions passed (`target/path-package-browser-verdict.log`).
+  Captures and runtime logs are under `target/package-browser-review/500f1e5a-c647-4ed6-87ec-408ec22456e0/`.
+- `LUNCOSIM_API_PORT=4213 python scripts/api/test_path_interoperability.py`
+  passed 43 authored assertions with owned PID 20912, including the reported
+  allocator's logical catalog address and USD-bound Modelica execution
+  (`target/path-catalog-interoperability.log`). Both owned runtimes exited through
+  the API and released their ports. The skill validator passed all 43 entries.
+
+Local Windows evidence does not establish macOS/Linux or browser execution;
+the native CI gate includes these mechanism contracts on all three desktop hosts.
+The installed 2026-10-31 executable still requires a new packaged release.
+
+## External conformance review
+
+Microsoft's namespace rules and Rust's pinned standard-library implementation
+confirm that verbatim native paths must retain their semantics. RFC 8089 and the
+maintained `url` API supply file-URI syntax and encoding. `dunce` simplifies only
+when conversion is unambiguous; `normpath` distinguishes normalization from
+filesystem canonicalization. LunCoSim retains native paths and requires canonical
+containment at source admission, so a second normalization dependency would not
+replace the existing resolver or its ownership checks.
+
+The URI codec rejects native dot-directory components when their filesystem
+meaning cannot be preserved by URI lexical normalization. Ordinary Windows input
+first uses the standard library's Win32 normalization; verbatim paths are never
+silently rewritten. Decoded separators cannot introduce hidden dot traversal.
+Unix native parent traversal must be admitted through the filesystem owner
+before URI encoding. The corresponding Unix cases run in the native CI gate.
+
+Sources: [Microsoft namespaces](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+[Rust absolute paths](https://doc.rust-lang.org/std/path/fn.absolute.html),
+[RFC 8089](https://www.rfc-editor.org/rfc/rfc8089),
+[url file conversion](https://docs.rs/url/2.5.8/url/struct.Url.html#method.to_file_path),
+[dunce](https://docs.rs/dunce/latest/dunce/), and
+[normpath](https://docs.rs/normpath/latest/normpath/trait.PathExt.html).
+RFC 9844 updates scoped IPv6 UI entry and does not change this native drive/share
+conversion contract.
+
 ## Verification
 
 The original source-store traversal failure was reproduced before changing the
@@ -81,8 +304,8 @@ production driver is `scripts/api/test_asset_resource_renames.py`; its authored
 checks live in `asset_resolution.rhai`, and its captures cover open/closed folder
 moves, file rename/save/close/reopen, retired declarations and missing resources.
 
-Native Windows and browser runtime acceptance remain separate from Linux
-compile/runtime evidence. Application source-store identity changes require an
+Platform runtime evidence is recorded separately; native Windows conformance
+does not establish macOS, Linux or browser application acceptance. Application source-store identity changes require an
 application restart. Full class-document anchor scrolling is outside this asset
 resolution cutover; resource fragments are parsed separately from filenames.
 
@@ -94,13 +317,16 @@ permission or scenario policy was added to Rust, and no new policy hook was need
 The workbench owns viewport containment and transient scroll reset through egui's
 public widget/state APIs.
 
-Standards checked: [OpenUSD Ar](https://openusd.org/dev/api/ar_page_front.html),
+Standards checked: [Windows native namespaces](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+[Rust native absolute paths](https://doc.rust-lang.org/std/path/fn.absolute.html),
+[OpenUSD Ar](https://openusd.org/dev/api/ar_page_front.html),
 the pinned Rust OpenUSD resolver/composition APIs,
 [Rhai custom resolvers](https://rhai.rs/book/rust/modules/resolvers/custom.html),
 [RFC 8089](https://www.rfc-editor.org/rfc/rfc8089.html),
 and [Modelica 3.6 section 13.5](https://specification.modelica.org/maint/3.6/packages.html#external-resources).
-LunCoSim supplies its own explicit resolver context; it deliberately does not
-admit ambient working-directory lookup as Pixar's default filesystem policy does.
+LunCoSim supplies its own explicit context for logical asset reads. Native CLI
+input admission has the working-directory search defined by the shared asset
+contract; language adapters do not add ambient filesystem searches.
 
 ## Accepted checks (2026-10-16)
 
@@ -115,11 +341,6 @@ admit ambient working-directory lookup as Pixar's default filesystem policy does
 - Rename follow-up: `cargo test -p lunco-modelica-source-roots --lib asset_resolution_contract -j 4` passed three cases, including relocation, saved facts and stale-operation rejection. The production binary rebuilt successfully. `scripts/api/test_asset_resource_renames.py` passed 20 authored assertions and exited 0; ten reviewed captures show resource recovery and the expected retired/missing diagnostics. The owned session released port 4286. Evidence is in `.lunco/asset-resolution-rereview/fixed/` and its adjacent `rename-*` logs. This verifies resource loading; preview layout is covered separately below.
 - Preview layout: the production build passed, and `scripts/api/test_resource_preview_layout.py` completed both standard 1280x720 and compact 960x540 runs with exit 0. All 24 directed captures were reviewed: image corner markers, title/close controls, long-URI tooltip and copy menu, bounded text notice, scroll/reload and image-after-text stayed within the viewport. The copy menu was inspected; OS clipboard delivery was not exercised. Both owned API sessions on port 4286 exited with clean render logs. Evidence is in `.lunco/resource-preview-layout/complete-standard/` and `complete-compact/`. The driver records captures and lifecycle; visual review supplies the layout verdict.
 - Local-main integration: the merged production build and ten focused discovery tests passed. The path driver passed 43 authored assertions; resource renames passed 20 assertions with all ten captures reviewed. The sunrise gate passed nine checks and the sun-disc occlusion gate passed three GPU frames. Owned API sessions used port 4286 and exited cleanly. Evidence is in `.lunco/usd-main-integration/` and the corresponding `target/scene-tests/` logs.
-
-Current evidence is under `.lunco/asset-resolution-fix/` and the `fix-*` logs in
-`.lunco/asset-resolution-audit/`. These runs do not establish native Windows or
-full browser-application acceptance, nor full Modelica external-function/resource
-compatibility.
 
 ## Shared boundary regression coverage
 

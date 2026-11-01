@@ -300,12 +300,17 @@ pub(super) fn drop_ui(
     };
     let source = program
         .as_ref()
-        .map(|spec| spec.source_asset.clone())
+        .map(|spec| Ok(spec.source_asset.clone()))
         .or_else(|| {
             if hovered.is_some() {
                 response
                     .dnd_release_payload::<SourceDragPayload>()
-                    .map(|payload| payload.source.clone())
+                    .map(|payload| match payload.as_ref() {
+                        SourceDragPayload::Registered(source) => Ok(source.clone()),
+                        SourceDragPayload::Native(path) => {
+                            lunco_storage::file_path_to_uri(path).map_err(|error| error.to_string())
+                        }
+                    })
             } else {
                 None
             }
@@ -318,14 +323,23 @@ pub(super) fn drop_ui(
                         .dropped_files
                         .first()
                         .map(|file| file.path())
-                        .map(|path| path.to_string_lossy().replace('\\', "/"))
+                        .map(|path| {
+                            lunco_storage::file_path_to_uri(&path)
+                                .map_err(|error| error.to_string())
+                        })
                 })
             } else {
                 None
             }
         });
-    let Some(source) = source else {
-        return;
+    let source = match source {
+        Some(Ok(source)) => source,
+        Some(Err(error)) => {
+            warn!("[connection-drop] {error}");
+            state.last_error = Some(error);
+            return;
+        }
+        None => return,
     };
     let Some(pointer) = ui.input(|input| input.pointer.latest_pos()) else {
         return;

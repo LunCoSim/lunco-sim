@@ -2440,7 +2440,14 @@ fn document_composition_context(
     world: &World,
     doc: DocumentId,
     path: &Path,
-) -> Result<(String, Option<PathBuf>, Option<PathBuf>), String> {
+) -> Result<
+    (
+        String,
+        Option<PathBuf>,
+        Option<lunco_assets_core::TwinReadScope>,
+    ),
+    String,
+> {
     let absolute_path = lunco_storage::canonicalize_file_path(path).map_err(|error| {
         format!(
             "cannot resolve USD document path {}: {error}",
@@ -2478,7 +2485,7 @@ fn document_composition_context(
         return Ok((
             lunco_assets_core::twin_uri(&name, relative),
             assets_root,
-            Some(twin_root),
+            Some(roots.read_scope(&name).map_err(|error| error.to_string())?),
         ));
     }
 

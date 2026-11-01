@@ -1,20 +1,11 @@
 //! Backend scanning logic for the Package Browser.
 
-use bevy::prelude::*;
 use lunco_modelica_index::package_tree::types::{ModelSource, PackageNode};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
-/// Canonical tree-node id for a source-library / third-party class, keyed by its dotted
-/// qualified name (`Modelica.Blocks.Examples.PID_Controller`).
-///
-/// SINGLE SOURCE OF TRUTH — every scanner site (native fs walk + web in-memory
-/// walk) mints ids through here, and it MUST stay in sync with
-/// [`crate::class_ref::ClassRef::parse_tree_id`] (the `library_path:` scheme it
-/// reverses on click). The id is built straight from the dotted name; we never
-/// substitute `.`→`_`. The lossy `library_<dots→underscores>` form
-/// (`PID_Controller` ⇄ `PID.Controller`) is not emitted or parsed. Routing
-/// both backends through one helper keeps them from diverging.
+/// Canonical source-library node identity, shared by inventory and parsed-bundle
+/// projections and consumed by [`crate::class_ref::ClassRef::parse_tree_id`].
 pub(crate) fn library_tree_id(qualified: &str) -> String {
     format!("library_path:{qualified}")
 }
@@ -22,14 +13,14 @@ pub(crate) fn library_tree_id(qualified: &str) -> String {
 // ─── source library Scanning ────────────────────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn scan_library_inmem(package_path: &str) -> Vec<PackageNode> {
+pub(crate) fn scan_library_inmem(package_path: &str) -> Result<Vec<PackageNode>, String> {
     if lunco_modelica_library::source_library::global_parsed_source_bundle().is_none() {
-        return Vec::new();
+        return Err("source library is not ready".into());
     }
     let tree = library_inmem_index();
-    let Some(children) = tree.get(package_path) else {
-        return Vec::new();
-    };
+    let children = tree
+        .get(package_path)
+        .ok_or_else(|| format!("unknown source package `{package_path}`"))?;
     let mut out: Vec<PackageNode> = Vec::with_capacity(children.len());
     for (short, kind) in children {
         let qname = if package_path.is_empty() {
@@ -44,7 +35,6 @@ pub(crate) fn scan_library_inmem(package_path: &str) -> Vec<PackageNode> {
                 id,
                 name: short.clone(),
                 package_path: qname,
-                fs_path: std::path::PathBuf::new(),
                 children: None,
                 is_loading: false,
             });
@@ -58,7 +48,7 @@ pub(crate) fn scan_library_inmem(package_path: &str) -> Vec<PackageNode> {
         }
     }
     out.sort_by_key(omedit_sort_key);
-    out
+    Ok(out)
 }
 
 /// Top-level source roots present in the in-memory parsed bundle.
@@ -119,6 +109,7 @@ fn build_library_inmem_index()
             format!("{parent_qname}.{short_name}")
         };
         let kind = lunco_modelica_index::index::map_class_type(&def.class_type);
+        tree.entry(qname.clone()).or_default();
         tree.entry(parent_qname.to_string())
             .or_default()
             .push((short_name.to_string(), kind));
@@ -147,65 +138,114 @@ fn build_library_inmem_index()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn scan_library_dir_native(dir: &Path, package_path: String) -> Vec<PackageNode> {
+pub(crate) fn scan_library_source(
+    source: &lunco_assets_runtime::library::LibrarySource,
+    directory: &Path,
+    package_path: &str,
+) -> Result<Vec<PackageNode>, String> {
     let mut results = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            if path.is_dir() {
-                if name.starts_with('.') || name == "__MACOSX" {
-                    continue;
-                }
-                let sub_path = format!("{}.{}", package_path, name);
-                let id = library_tree_id(&sub_path);
-                results.push(PackageNode::Category {
-                    id,
-                    name,
-                    package_path: sub_path,
-                    fs_path: path,
-                    children: None, // Lazy load
-                    is_loading: false,
-                });
-            } else if path.extension().map(|e| e == "mo").unwrap_or(false) {
-                if name == "package.mo" {
-                    continue;
-                }
-                let display_name = name.strip_suffix(".mo").unwrap_or(&name).to_string();
-                let qualified = format!("{}.{}", package_path, display_name);
-                results.push(node_from_modelica_file(&path, &qualified, &display_name));
+    let mut directories = std::collections::BTreeSet::new();
+    let mut members: Vec<_> = source.files().collect();
+    members.sort();
+    for file in members {
+        let Ok(relative) = file.strip_prefix(directory) else {
+            continue;
+        };
+        let Some(first) = relative.components().next() else {
+            continue;
+        };
+        let name = first
+            .as_os_str()
+            .to_str()
+            .ok_or("source identity is not UTF-8")?;
+        if relative.components().count() > 1 {
+            if name.starts_with('.') || name == "__MACOSX" {
+                continue;
             }
+            let child = directory.join(name);
+            if source.contains(&source.base().join(&child).join("package.mo")) {
+                directories.insert(name.to_owned());
+            }
+        } else if file.extension().is_some_and(|extension| extension == "mo")
+            && name != "package.mo"
+        {
+            let display_name = file
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .ok_or("source filename is not UTF-8")?;
+            let qualified = lunco_modelica_ast::ast_extract::qualify(package_path, display_name);
+            results.push(node_from_source_file(
+                source,
+                file,
+                &qualified,
+                display_name,
+            )?);
         }
     }
-
-    let pkg_mo = dir.join("package.mo");
-    if pkg_mo.is_file() {
-        if let Ok(source) = std::fs::read_to_string(&pkg_mo) {
-            let ast =
-                rumoca_phase_parse::parse_to_recovered_ast(&source, &pkg_mo.display().to_string());
-            if let Some((_, top_class)) = ast.classes.iter().next() {
-                let existing_names: std::collections::HashSet<String> =
-                    results.iter().map(|n| n.name().to_string()).collect();
-                for (child_short, child_def) in &top_class.classes {
-                    if existing_names.contains(child_short) {
-                        continue;
-                    }
-                    let child_qualified = format!("{}.{}", package_path, child_short);
-                    results.push(class_def_to_node(
-                        &pkg_mo,
-                        &child_qualified,
-                        child_short,
-                        child_def,
-                    ));
-                }
-            }
+    for name in directories {
+        let qualified = lunco_modelica_ast::ast_extract::qualify(package_path, &name);
+        results.push(PackageNode::Category {
+            id: library_tree_id(&qualified),
+            name: name.clone(),
+            package_path: qualified,
+            children: None,
+            is_loading: false,
+        });
+    }
+    let package_file = directory.join("package.mo");
+    let parsed = parse_source_file(source, &package_file)?;
+    let top = source_class(&parsed, package_path)?;
+    let existing: std::collections::HashSet<String> =
+        results.iter().map(|node| node.name().to_owned()).collect();
+    for (name, definition) in &top.classes {
+        if !existing.contains(name) {
+            results.push(class_def_to_node(
+                &lunco_modelica_ast::ast_extract::qualify(package_path, name),
+                name,
+                definition,
+            ));
         }
     }
-
     results.sort_by_key(omedit_sort_key);
-    results
+    Ok(results)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_source_file(
+    source: &lunco_assets_runtime::library::LibrarySource,
+    relative: &Path,
+) -> Result<rumoca_compile::compile::ParsedSourceDocument, String> {
+    let bytes = source
+        .read(relative)
+        .map_err(|error| format!("{}: {error}", relative.display()))?
+        .ok_or_else(|| format!("source member disappeared: {}", relative.display()))?;
+    let text =
+        String::from_utf8(bytes).map_err(|error| format!("{}: {error}", relative.display()))?;
+    let uri = relative.to_str().ok_or("source identity is not UTF-8")?;
+    rumoca_compile::compile::ParsedSourceDocument::parse(uri.to_owned(), text)
+        .map_err(|error| format!("{uri}: {error:?}"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn source_class<'a>(
+    parsed: &'a rumoca_compile::compile::ParsedSourceDocument,
+    qualified: &str,
+) -> Result<&'a rumoca_compile::parsing::ast::ClassDef, String> {
+    let definition = parsed.definition();
+    if !definition
+        .declared_class_names()
+        .iter()
+        .any(|name| name == qualified)
+    {
+        return Err(format!("source does not declare `{qualified}`"));
+    }
+    let short = rumoca_core::qualified_name_segments(qualified)
+        .last()
+        .ok_or("empty class identity")?;
+    definition
+        .classes
+        .get(short)
+        .ok_or_else(|| format!("source does not contain top-level `{qualified}`"))
 }
 
 fn omedit_sort_key(n: &PackageNode) -> (SortGroup, String) {
@@ -256,34 +296,17 @@ impl LeafKind {
     }
 }
 
-/// Build a tree node from a single `.mo` file using rumoca's AST —
-/// no line-scanning heuristics. Single-class files become a
-/// [`PackageNode::Model`] leaf with the parsed kind on the badge;
-/// inline-package files (`package Foo … model X … end Foo;`) become
-/// a [`PackageNode::Category`] whose children mirror the nested
-/// classes, so the user can drill into individual entries (the
-/// source library `Modelica.Blocks.Continuous` case).
-///
-/// Native-only, like its single caller [`scan_library_dir_native`]: it reads a `.mo`
-/// off the on-disk source library tree. The web has no such tree — the Package Browser
-/// there is built by [`scan_library_inmem`] from the parsed bundle
-/// (`InMemoryLibraryTree`), which needs no file reads at all.
+/// Project an admitted source member into its package-tree node.
 #[cfg(not(target_arch = "wasm32"))]
-fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> PackageNode {
-    let leaf_unknown = || PackageNode::Model {
-        id: library_tree_id(qualified),
-        name: display_name.to_string(),
-        library: ModelSource::Source,
-        class_kind: None,
-    };
-    let Ok(source) = std::fs::read_to_string(path) else {
-        return leaf_unknown();
-    };
-    let ast = rumoca_phase_parse::parse_to_recovered_ast(&source, &path.display().to_string());
-    let Some((_, top_class)) = ast.classes.iter().next() else {
-        return leaf_unknown();
-    };
-    class_def_to_node(path, qualified, display_name, top_class)
+fn node_from_source_file(
+    source: &lunco_assets_runtime::library::LibrarySource,
+    path: &Path,
+    qualified: &str,
+    display_name: &str,
+) -> Result<PackageNode, String> {
+    let parsed = parse_source_file(source, path)?;
+    let class = source_class(&parsed, qualified)?;
+    Ok(class_def_to_node(qualified, display_name, class))
 }
 
 pub fn peek_class_kind_from_source(src: &str) -> Option<lunco_modelica_index::index::ClassKind> {
@@ -294,11 +317,9 @@ pub fn peek_class_kind_from_source(src: &str) -> Option<lunco_modelica_index::in
         .map(|(_, def)| lunco_modelica_index::index::map_class_type(&def.class_type))
 }
 
-/// Native-only: both callers ([`scan_library_dir_native`], [`node_from_modelica_file`])
-/// are. The web builds its nodes from the parsed bundle in [`scan_library_inmem`].
+/// Native source-store projection; browser nodes come from the admitted parsed bundle.
 #[cfg(not(target_arch = "wasm32"))]
 fn class_def_to_node(
-    path: &Path,
     qualified: &str,
     short_name: &str,
     def: &rumoca_compile::parsing::ast::ClassDef,
@@ -311,7 +332,6 @@ fn class_def_to_node(
             .iter()
             .map(|(n, c)| {
                 class_def_to_node(
-                    path,
                     &lunco_modelica_ast::ast_extract::qualify(qualified, n),
                     n,
                     c,
@@ -323,7 +343,6 @@ fn class_def_to_node(
             id: library_tree_id(qualified),
             name: short_name.to_string(),
             package_path: qualified.to_string(),
-            fs_path: path.to_path_buf(),
             children: Some(children),
             is_loading: false,
         }
@@ -334,5 +353,60 @@ fn class_def_to_node(
             library: ModelSource::Source,
             class_kind: Some(lunco_modelica_index::index::map_class_type(&def.class_type)),
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use lunco_assets_runtime::library::{InMemoryLibrary, LibrarySource};
+    use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
+    #[test]
+    fn source_tree_reads_admitted_members_and_rejects_invalid_source() {
+        let mut files: HashMap<PathBuf, Vec<u8>> = [
+            (
+                "Probe/package.mo",
+                "package Probe model Inline end Inline; end Probe;",
+            ),
+            ("Probe/A.mo", "within Probe; model A end A;"),
+            (
+                "Probe/Child/package.mo",
+                "within Probe; package Child end Child;",
+            ),
+            ("Probe/Resources/notes.txt", "resource"),
+        ]
+        .into_iter()
+        .map(|(path, source)| (PathBuf::from(path), source.as_bytes().to_vec()))
+        .collect();
+        let store = |files| LibrarySource::InMemory(Arc::new(InMemoryLibrary { files }));
+        let nodes =
+            scan_library_source(&store(files.clone()), Path::new("Probe"), "Probe").unwrap();
+        let names: std::collections::BTreeSet<_> = nodes.iter().map(|node| node.name()).collect();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from(["A", "Child", "Inline"])
+        );
+        files.insert(PathBuf::from("Probe/A.mo"), vec![0xff]);
+        let error = scan_library_source(&store(files.clone()), Path::new("Probe"), "Probe")
+            .err()
+            .expect("invalid UTF-8 must remain a diagnostic");
+        assert!(error.contains("A.mo"), "{error}");
+        files.insert(PathBuf::from("Probe/A.mo"), b"model A".to_vec());
+        assert!(scan_library_source(&store(files.clone()), Path::new("Probe"), "Probe").is_err());
+        files.insert(
+            PathBuf::from("Probe/A.mo"),
+            b"within Other; model A end A;".to_vec(),
+        );
+        assert!(scan_library_source(&store(files.clone()), Path::new("Probe"), "Probe").is_err());
+        files.insert(
+            PathBuf::from("Probe/A.mo"),
+            b"within Probe; model A end A;".to_vec(),
+        );
+        files.remove(Path::new("Probe/package.mo"));
+        let error = scan_library_source(&store(files), Path::new("Probe"), "Probe")
+            .err()
+            .expect("missing package marker must fail");
+        assert!(error.contains("package.mo"), "{error}");
     }
 }

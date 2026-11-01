@@ -563,12 +563,7 @@ fn submit(
                 let recipe = worker_document
                     .stage_recipe(&root_id, true)
                     .map_err(|error| error.to_string())?;
-                prepare(
-                    recipe,
-                    missing,
-                    assets_root.as_deref(),
-                    twin_root.as_deref(),
-                )
+                prepare(recipe, missing, assets_root.as_deref(), twin_root.as_ref())
             }))
             .unwrap_or_else(|_| {
                 Err("USD edit dependency preparation panicked; the document was not changed".into())
@@ -627,7 +622,7 @@ fn prepare(
     mut recipe: StageRecipe,
     missing: BTreeSet<String>,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
 ) -> Result<StageRecipe, String> {
     let limits = lunco_usd_compose::recipe::StageClosureLimits::default();
     if missing.len() > limits.max_dependencies_per_layer {
@@ -642,7 +637,7 @@ fn prepare(
         if recipe.bytes.len() >= limits.max_layers {
             return Err("USD edit dependency layer budget exceeded".into());
         }
-        let bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+        let bytes = lunco_assets_core::read_asset_bytes_in_scope(
             &id,
             assets_root,
             twin_root,

@@ -45,7 +45,7 @@ def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> No
                     if (
                         document.get("kind") != "usd"
                         or origin.get("kind") != "file"
-                        or Path(origin.get("path", "")).resolve() != expected_path
+                        or not Path(origin.get("path", "")).samefile(expected_path)
                     ):
                         continue
                     fixture_doc_id = int(document["doc_id"])
@@ -81,7 +81,7 @@ def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> No
                         ):
                             return
                         last_error = f"unexpected live QueryUsdPrim result: {data!r}"
-        except (KeyError, TypeError, ValueError, RuntimeError) as error:
+        except (KeyError, TypeError, ValueError, RuntimeError, OSError) as error:
             last_error = str(error)
         if session.process is None or session.process.poll() is not None:
             raise RuntimeError(f"production editor exited before mounting {path}: {last_error}")
