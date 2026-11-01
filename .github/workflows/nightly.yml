@@ -241,13 +241,14 @@ jobs:
       - name: Verify native path contracts
         run: |
           cargo test --release --locked -j 4 --lib \
-            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path -p lunco-workspace -p lunco-networking-scenario -p lunco-assets-datasets -p lunco-assets-download -p lunco-scripting-rhai-core -p lunco-modelica-compiler \
+            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-runtime -p lunco-assets-path -p lunco-workspace -p lunco-networking-scenario -p lunco-assets-datasets -p lunco-assets-download -p lunco-scripting-rhai-core -p lunco-modelica-compiler \
             -- --exact \
             file_uri_tests::file_uris_preserve_native_paths_and_reject_invalid_addresses \
             file_uri_tests::authored_windows_references_use_native_identity_or_explicit_host_rejection \
             source_root_smoke::source_root_content_closure_preserves_native_discovery_paths \
             source_root_smoke::source_root_content_closure_is_stable_exact_and_portable \
             source_root_smoke::source_root_content_closure_rejects_incomplete_or_nonportable_sources \
+            source_root_smoke::source_root_content_closure_keeps_package_read_failures_terminal \
             path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases \
             tests::asset_root_admission_reports_invalid_overrides_and_discovers_canonical_library \
             twin_source::tests::directory_root_designator_retains_mount_ownership_and_rejects_parent_escape \
@@ -271,6 +272,10 @@ jobs:
             lunco_source::native_resolution_contract_tests::native_resolution_contract_preserves_first_entry_kind \
             registry::tests::native_resolution_contract_keeps_dataset_and_reader_precedence_equal \
             tests::relative_keeps_the_anchors_scheme \
+            tests::root_relative_paths_reject_traversal_and_absolute_spellings \
+            twin_source::tests::unsafe_overlay_paths_are_not_stored_or_read \
+            models::tests::package_inventory_contract \
+            discovery::source_root_contract_tests::asset_resolution_contract \
             asset_path::tests::native_load_paths_keep_filesystem_characters_and_separate_labels \
             asset_path::tests::native_load_paths_reject_missing_retired_and_foreign_ownership \
             asset_path::tests::windows_native_load_paths_normalize_verbatim_mount_roots \

@@ -126,6 +126,67 @@ logs. These input gestures exercise application events and clipboard output;
 physical Explorer drag delivery, a fresh installer, macOS/Linux desktop UX and
 browser acceptance were not exercised by this run.
 
+### DRY recheck
+
+Strict authored relative-path admission composes `relative_path` rather than
+implementing a second volume/component parser. Colon and NUL components reject
+at overlay admission as well as at the reader. Structured package reads and
+compiler source discovery share `discovery::read_files_with_extension`; the
+Modelica adapter only derives package-relative source identities. The engine,
+Twin and installed-library reader adapters retain their distinct source/overlay
+contexts while sharing native selection and storage admission. Browser HTTP
+transport is target-specific and does not provide another Windows reader.
+
+`models::tests::package_inventory_contract` creates a generic temporary package
+and an escaped directory junction on Windows (symlink on Unix). The previous
+package reader returned the outside source; the shared inventory rejects the
+entire package with a diagnostic. The positive package retains its exact
+relative file identities. The named test passed after the cutover; all 11
+`lunco-assets-path` tests and the named asset-core
+`unsafe_overlay_paths_are_not_stored_or_read` test also passed. These checks
+are included in the desktop native-contract CI gate.
+
+The separate final review also traced namespace selection through the compiler
+and async engine. Both retain package read/inventory failures as terminal owner
+diagnostics. Only an absent structured package permits namespace lookup in a
+different source. Top-level model reads, package-marker probes and catalog
+membership use the shared native selector, including the package root itself.
+The junction contract also rejects an escaped top-level package/file entry and
+root traversal. The compiler's malformed-UTF-8 package regression failed before
+the terminal diagnostic was retained and passed afterward. The bounded final
+unit command ran the package inventory contract plus all four named
+`source_root_smoke::source_root_content_closure_*` cases successfully; logs are
+in `target/path-rereview-deep-contracts.log`.
+The same built package test also passed with its temporary directory beneath a
+path containing spaces, Unicode, `#`, `%`, apostrophe and `&`; native junction
+creation receives paths as environment values rather than shell command text.
+That evidence is in `target/path-rereview-special-temp.log`.
+
+The production binary rebuilt with
+`cargo build -p lunco-luncosim --bin luncosim -j 4`. A separate runtime check set
+`LUNCO_ASSET_ROOT=C:\Users\BELLATOR\AppData\Local\luncosim\current\assets`,
+the installed source tree from the reported failure. Rover Lab (PID 26772,
+port 4199) became ready with its rover system running. The installed sandbox
+(PID 17092, port 4199) compiled and advanced all seven generated vehicle/thermal
+systems without Modelica errors. Its full-scene readiness remains blocked by
+two optional Python programs unavailable in this source binary; this is a
+Modelica path gate, not full sandbox acceptance. Both owned sessions exited
+and released their port. Snapshots and logs are under
+`target/path-rereview-installed/`; build output is
+`target/path-rereview-production-build.log`.
+
+The final `LUNCOSIM_API_PORT=4198 python scripts/api/test_path_interoperability.py`
+run passed 43 authored assertions (owned PID 27268). The catalog assertion requires
+`LunCo/Actuation/SignedTorqueAllocator.mo` with its logical engine URI, exercising
+the production package reader. Native rename, rejected targets, persistence and
+USD-bound Modelica execution also passed. Evidence is in
+`target/path-rereview-api.log`; the owned session exited and released port 4198.
+
+The local installed executable is dated 2026-10-31 and predates these fixes.
+Source commits and a checkout rebuild do not update that executable. Testing
+the new binary against installed assets does not establish installer/update
+acceptance.
+
 ## External conformance review
 
 Microsoft's namespace rules and Rust's pinned standard-library implementation

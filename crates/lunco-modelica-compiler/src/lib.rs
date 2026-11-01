@@ -529,17 +529,22 @@ impl ModelicaCompiler {
                 return false;
             }
         };
-        let files = lunco_assets_runtime::models::package_files_live(root);
-        if let Ok(files) = files {
-            if files.is_empty() {
-                return false;
-            }
-            let (label, source) = match live_dir {
-                Some(dir) => (dir.display().to_string(), "the live asset tree"),
-                None => (root.to_owned(), "the configured Modelica asset library"),
+        if let Some(dir) = live_dir {
+            let files = match lunco_assets_runtime::models::package_files(root) {
+                Ok(files) if !files.is_empty() => files,
+                result => {
+                    let error = match result {
+                        Ok(_) => "package has no Modelica source files".into(),
+                        Err(error) => error,
+                    };
+                    log::error!("[ModelicaCompiler] source root `{root}` failed: {error}");
+                    self.failed_source_roots.insert(root.to_owned(), error);
+                    return false;
+                }
             };
+            let label = dir.display().to_string();
             log::info!(
-                "[ModelicaCompiler] seated library `{root}` from {source} ({})",
+                "[ModelicaCompiler] seated library `{root}` from the live asset tree ({})",
                 files.len(),
             );
             let report = self.seat_library_files(root, &label, files);
@@ -1369,6 +1374,38 @@ fn diagnostics_from_strict_report(
 #[cfg(test)]
 mod source_root_smoke {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn source_root_content_closure_keeps_package_read_failures_terminal() {
+        const CHILD: &str = "LUNCO_PACKAGE_FAILURE_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let mut compiler = ModelicaCompiler::new();
+            assert!(!compiler.ensure_source_root_installed("Probe"));
+            let failure = compiler
+                .failed_source_roots
+                .get("Probe")
+                .expect("present invalid package must retain its owning read failure");
+            assert!(failure.contains("Bad.mo"), "{failure}");
+            return;
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let package = folder.path().join("models").join("Probe");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("package.mo"), "package Probe end Probe;").unwrap();
+        std::fs::write(package.join("Bad.mo"), [0xff]).unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "source_root_smoke::source_root_content_closure_keeps_package_read_failures_terminal", "--nocapture"])
+            .env(CHILD, "1")
+            .env(lunco_assets_core::ASSET_ROOT_ENV, folder.path())
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]

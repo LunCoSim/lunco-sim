@@ -1,5 +1,21 @@
 // One-shot production API driver assertions. The driver owns a temporary Twin
 // and supplies its exact document IDs, filenames and rejection diagnostics.
+fn verify_source_catalog(expected_path) {
+    let catalog = query("ListBundled", #{});
+    let found = false;
+    let logical_uri = false;
+    for source in catalog.sources {
+        if source.path == expected_path {
+            found = true;
+            logical_uri = source.uri == "lunco://models/" + expected_path;
+        }
+    }
+    report_verdict([
+        t_true(found, "source inventory exposes the packaged Modelica member"),
+        t_true(logical_uri, "catalog publishes a logical URI without a native root"),
+    ], "Engine source inventory", "PATH_SOURCE_CATALOG")
+}
+
 fn normalized_path(path) {
     path.replace("\\", "/");
     path

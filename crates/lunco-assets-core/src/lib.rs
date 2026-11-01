@@ -587,17 +587,37 @@ fn find_assets_dir(base: &Path) -> Option<PathBuf> {
 /// `package.mo` is the existence marker because that is what makes a directory a
 /// STRUCTURED entity in Modelica's file-system mapping, rather than merely a
 /// folder that happens to hold `.mo` files.
+/// Package names and marker entries use the shared relative grammar and native
+/// entry selector. Invalid names, escaped links and storage/kind errors are
+/// terminal; only an absent package directory or marker returns `None`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn models_package_root_path(package: &str) -> std::io::Result<Option<PathBuf>> {
-    let root = engine_models_root()?.join(package);
-    if !root.join("package.mo").is_file() {
+    if !asset_path::is_safe_relative_path(package) || package.contains('/') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe Modelica package name `{package}`"),
+        ));
+    }
+    let roots = [engine_models_root()?];
+    let relative = Path::new(package);
+    let Some((_, root)) = resolve_native_asset(
+        &roots,
+        relative,
+        Some(lunco_storage::StorageEntryKind::Directory),
+    )?
+    else {
+        return Ok(None);
+    };
+    if resolve_native_asset(
+        &roots,
+        &relative.join("package.mo"),
+        Some(lunco_storage::StorageEntryKind::File),
+    )?
+    .is_none()
+    {
         return Ok(None);
     }
-    // Canonicalize for the same reason `source_library_root_path` does: the
-    // parser keys
-    // its source-root cache on the exact path it is handed, so a CWD-dependent
-    // form would produce a different key per caller and force full reparses.
-    std::fs::canonicalize(&root).map(Some)
+    Ok(Some(root))
 }
 
 /// wasm has no filesystem to put a library on, so there is no MODELICAPATH entry;

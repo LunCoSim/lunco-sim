@@ -84,6 +84,10 @@ registered extensions live in `MANIFEST_EXTS`, not in a second packaging list.
 Domain discovery, such as Modelica's model catalog or a Twin's SysML source
 index, is distinct from that engine catalog. Installed source stores use the
 complete `inventory_files` traversal and let their language owner select sources.
+Structured Modelica packages use `models::package_files`, which reads through
+`discovery::read_files_with_extension`; do not add a separate package walker.
+Package-root admission is owned by `models_package_root_path`; propagate its
+errors and inventory/read failures rather than selecting another source bundle.
 Catalog membership never restricts loading an explicitly addressed data asset.
 
 ## The `lunco://` scheme

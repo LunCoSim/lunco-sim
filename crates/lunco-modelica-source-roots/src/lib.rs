@@ -254,7 +254,7 @@ pub enum SourceRootOwner {
 /// Process-wide registry of every named source root. Owned by the
 /// Modelica host/application; populated at host start by inventorying:
 ///  - Bundled examples via [`lunco_assets_runtime::models::model_filenames`].
-///  - Structured packages via [`lunco_assets_runtime::models::package_roots_live`].
+///  - Structured packages via [`lunco_assets_runtime::models::package_roots`].
 ///
 /// Loading remains demand-driven: inventory is cheap, and a root is installed
 /// only when a compile or class lookup actually references it.
@@ -324,7 +324,7 @@ impl SourceRootRegistry {
         // visible without rebuilding; browser consumers use the Bevy asset path.
         // This is the standard root-segment search-path inventory, not a
         // library-specific registration.
-        let package_roots = match lunco_assets_runtime::models::package_roots_live() {
+        let package_roots = match lunco_assets_runtime::models::package_roots() {
             Ok(roots) => roots,
             Err(error) => {
                 bevy::log::error!("[source-roots] Modelica package inventory failed: {error}");
@@ -1264,7 +1264,7 @@ pub fn ensure_loaded(
             }
             #[cfg(target_arch = "wasm32")]
             {
-                let files = match lunco_assets_runtime::models::package_files_live(root) {
+                let files = match lunco_assets_runtime::models::package_files(root) {
                     Ok(files) if !files.is_empty() => files,
                     Ok(_) => {
                         let error = format!("Modelica package `{root}` has no source files");

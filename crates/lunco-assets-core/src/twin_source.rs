@@ -1225,6 +1225,16 @@ mod tests {
     #[test]
     fn unsafe_overlay_paths_are_not_stored_or_read() {
         let roots = TwinRoots::default();
+        for invalid in ["folder/file:stream.usda", "folder/nul\0.usda"] {
+            assert!(matches!(
+                roots.set_overlay("moonbase", invalid, Arc::new(b"secret".to_vec())),
+                Err(TwinRootsError::InvalidOverlayPath(_))
+            ));
+            assert!(matches!(
+                roots.clear_overlay("moonbase", invalid),
+                Err(TwinRootsError::InvalidOverlayPath(_))
+            ));
+        }
         assert!(matches!(
             roots.set_overlay("moonbase", "../outside.usda", Arc::new(b"secret".to_vec())),
             Err(TwinRootsError::InvalidOverlayPath(_))

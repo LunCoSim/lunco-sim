@@ -114,8 +114,20 @@ Registered native readers apply the shared relative-address grammar before
 lookup, including directory enumeration. Empty reader paths designate the source
 root; other paths require exact UTF-8 and normalize authored separators. Invalid
 components, including Windows stream syntax, fail before filesystem access.
+Strict authored relative paths reuse that grammar and additionally reject
+empty/dot segments and backslashes; overlays cannot admit an address that the
+registered reader rejects.
 Directory predicates return false for files and document overlays while retaining
 containment and I/O errors.
+
+Structured Modelica package reads and source-root admission use the same
+`discovery::read_files_with_extension` inventory and containment checks.
+`models::package_files` only projects native source paths to package-relative
+identities; it does not walk directories independently.
+Top-level Modelica reads and catalog probes also use the native entry selector.
+`models_package_root_path` owns package-name and `package.mo` admission. A present
+package's read/inventory failure is terminal in both synchronous and asynchronous
+compiler admission; it cannot select another source bundle.
 
 Synchronous USD composition captures a `TwinReadScope` through
 `TwinRoots::read_scope`, or admits an explicit standalone source through the

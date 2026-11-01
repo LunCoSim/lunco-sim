@@ -219,8 +219,17 @@ impl ModelicaEngineHandle {
                     }
                 }
                 bevy::log::info!("[ModelicaLibrary] loading source root `{root}` asynchronously");
-                let is_bundled = lunco_assets_runtime::models::package_roots_live()
-                    .is_ok_and(|roots| roots.iter().any(|candidate| candidate == &root));
+                let is_bundled = match lunco_assets_runtime::models::package_roots() {
+                    Ok(roots) => roots.iter().any(|candidate| candidate == &root),
+                    Err(error) => {
+                        bevy::log::error!("[ModelicaLibrary] package inventory failed: {error}");
+                        handle
+                            .lock()
+                            .finish_source_root_load(&root, Vec::new(), vec![error]);
+                        handle.wake_sync();
+                        return;
+                    }
+                };
                 if !is_bundled {
                     // The source-library owner decodes its retained source/AST
                     // bundle outside the engine lock. Install that complete set
@@ -249,24 +258,24 @@ impl ModelicaEngineHandle {
                     handle.wake_sync();
                     return;
                 }
-                let (parsed, diagnostics) =
-                    match lunco_assets_runtime::models::package_files_live(&root) {
-                        Ok(files) => {
-                            let mut parsed = Vec::with_capacity(files.len());
-                            let mut diagnostics = Vec::new();
-                            for (uri, source) in files {
-                                match rumoca_compile::compile::ParsedSourceDocument::parse(
-                                    uri.clone(),
-                                    source,
-                                ) {
-                                    Ok(document) => parsed.push(document),
-                                    Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
-                                }
+                let (parsed, diagnostics) = match lunco_assets_runtime::models::package_files(&root)
+                {
+                    Ok(files) => {
+                        let mut parsed = Vec::with_capacity(files.len());
+                        let mut diagnostics = Vec::new();
+                        for (uri, source) in files {
+                            match rumoca_compile::compile::ParsedSourceDocument::parse(
+                                uri.clone(),
+                                source,
+                            ) {
+                                Ok(document) => parsed.push(document),
+                                Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
                             }
-                            (parsed, diagnostics)
                         }
-                        Err(error) => (Vec::new(), vec![error]),
-                    };
+                        (parsed, diagnostics)
+                    }
+                    Err(error) => (Vec::new(), vec![error]),
+                };
                 let mut engine = handle.lock();
                 let count = engine.finish_source_root_load(&root, parsed, diagnostics);
                 handle.wake_sync();

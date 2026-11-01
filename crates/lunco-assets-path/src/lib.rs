@@ -167,7 +167,7 @@ pub fn relative_path(reference: &str) -> Option<PathBuf> {
 /// check at the asset boundary so Twin readers, downloads, and tutorial
 /// sources cannot disagree about traversal.
 pub fn is_safe_relative_path(rel: &str) -> bool {
-    if rel.is_empty() || rel.contains('\\') {
+    if rel.contains('\\') || relative_path(rel).is_none() {
         return false;
     }
     // Inspect the spelling directly: Path::components can hide the `..` that
@@ -178,13 +178,7 @@ pub fn is_safe_relative_path(rel: &str) -> bool {
     {
         return false;
     }
-    // Reject absolute paths on the host and Windows drive paths even when the
-    // current host is Unix, where `C:/...` is not considered absolute.
-    if Path::new(rel).is_absolute() {
-        return false;
-    }
-    let bytes = rel.as_bytes();
-    !(bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    true
 }
 
 /// Whether a declared output can be materialized unchanged on every host.
@@ -593,6 +587,8 @@ mod tests {
             "C:/Users/user/secret.rhai",
             r"tutorials\\..\\outside.rhai",
             "tutorials//lesson.rhai",
+            "tutorials/file:stream.rhai",
+            "tutorials/nul\0.rhai",
         ] {
             assert!(!is_safe_relative_path(path));
         }

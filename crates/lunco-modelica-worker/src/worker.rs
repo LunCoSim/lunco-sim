@@ -440,7 +440,7 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
         }
         LoadSourceRootPayload::BundledPackage { root } => {
             let label = format!("bundled:{root}");
-            match lunco_assets_runtime::models::package_files_live(&root) {
+            match lunco_assets_runtime::models::package_files(&root) {
                 Ok(files) if !files.is_empty() => (label, files, Vec::new()),
                 Ok(_) => (
                     label,
