@@ -49,6 +49,12 @@ README defines the stable taxonomy.
 
 ## Architecture boundary
 
+Keep native filesystem paths in their platform spelling. Use the storage
+owner's `file_path_to_uri` for URI transport, and slash-normalize only logical
+asset paths after stripping their native root. See the
+[asset addressing boundary](../../docs/architecture/56-asset-resolution-and-cache.md#usd-references-stay-logical-through-loading)
+for Windows verbatim and UNC handling.
+
 - USD owns assembly, transforms, variants, references, and wiring.
 - Modelica owns continuous/domain math.
 - Rhai owns scenario orchestration, rules, scoring, and assertions.
@@ -89,7 +95,7 @@ set, otherwise executable/package ancestry before current-directory ancestry.
 An invalid override or unresolved library stops admission with an error;
 callers propagate that error instead of inventing a root. The asset owner
 provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
-The complete read order comes from `lunco_assets_core::library_roots()` in
+The complete read order comes from `lunco_assets_core::asset_read_roots()` in
 `crates/lunco-assets-core/src/lib.rs`.
 `twin://<assigned-mount>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
@@ -414,3 +420,20 @@ its current valid parse at that owner; an invalid/pending parse reports an
 error. Save commits facts, close removes only the unsaved overlay, and Twin
 retirement removes the owner. Verify edits, sibling-file membership, save/close,
 and invalid-parse recovery with `scripts/api/test_asset_resources.py`.
+
+Native readers and dataset probes share `lunco-assets-core::asset_read_roots`
+and `resolve_native_asset`: the first existing entry wins, including its kind.
+Only absence advances to a cache; invalid authored artifacts and I/O errors
+must not expose cached replacements. Use `resolve_asset_input` at native
+CLI/validation boundaries. Synchronous Twin bytes require `TwinReadScope`
+captured from `TwinRoots`, never a directory without source identity.
+
+`file_uri_to_path` returns verbatim native paths on Windows so URI filenames
+retain literal trailing dots/spaces. Keep those `PathBuf` values intact; compare
+native identities through storage instead of prefix/string rewriting. Scoped
+native file references must stay inside the captured Twin root. Registered native
+readers use the same relative-address grammar as typed load requests.
+
+Admit native paths containing parent traversal through storage before converting
+them to file URIs. URI lexical normalization cannot establish filesystem identity;
+unrepresentable literal dot components produce an explicit conversion error.

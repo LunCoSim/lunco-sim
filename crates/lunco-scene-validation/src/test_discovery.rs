@@ -195,17 +195,17 @@ fn discover_scene_test(
         let assets_root = lunco_assets_core::shipped_asset_root(&absolute).map(Path::to_path_buf);
         let root_id = lunco_assets_core::asset_path::anchor_of(&origin);
         let limits = lunco_usd_compose::recipe::StageClosureLimits::default();
-        let bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+        let bytes = lunco_assets_core::read_asset_bytes_in_scope(
             &root_id,
             assets_root.as_deref(),
-            Some(&twin_root),
+            Some(&roots.read_scope(&authority)?),
             limits.max_bytes,
         )?;
         let recipe = lunco_usd_compose::recipe_from_bytes_with_roots(
             &root_id,
             bytes,
             assets_root.as_deref(),
-            Some(&twin_root),
+            Some(&roots.read_scope(&authority)?),
             limits,
         )?;
         let mut view = UsdStageProjectionPlan::from_recipe(&recipe)?;
@@ -278,7 +278,7 @@ fn classify_scene_programs(
         let classification_path =
             match (&source_root, lunco_assets_core::parse_twin_uri(&source_id)) {
                 (Some(root), Some((_, relative))) => {
-                    lunco_assets_path::slashed(&root.join(relative))
+                    root.join(relative).to_string_lossy().into_owned()
                 }
                 _ => lunco_assets_core::engine_asset_rel(&source_id).to_owned(),
             };
@@ -288,10 +288,14 @@ fn classify_scene_programs(
         {
             continue;
         }
-        let bytes = lunco_assets_core::read_asset_bytes_bounded_with_twin_root(
+        let bytes = lunco_assets_core::read_asset_bytes_in_scope(
             &source_id,
             assets_root,
-            source_root.as_deref(),
+            lunco_assets_core::parse_twin_uri(&source_id)
+                .map(|(authority, _)| roots.read_scope(authority))
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .as_ref(),
             lunco_usd_compose::recipe::StageClosureLimits::default().max_bytes,
         )
         .map_err(|error| {

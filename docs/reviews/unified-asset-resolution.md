@@ -44,6 +44,94 @@ sibling convention once; language consumers never interpret sidecars. The
 filesystem containment check is not an atomic guarantee against concurrent
 hostile filesystem replacement.
 
+## Native resolver conformance
+
+The native entry selector is `lunco-assets-core::resolve_native_asset`, with
+root order supplied by `asset_read_roots`. Engine/Twin Bevy readers, synchronous
+reads, directory consumers and dataset scans use that owner. Entry kind is
+checked after the first existing entry is selected. Cache lookup advances only
+on absence; a file cannot become a cached directory, and an invalid authored
+dataset cannot reveal a cached product. Dataset installed state retains its
+logical URI rather than an unconsumed filesystem path.
+
+`lunco-assets-path` owns the scheme constants and preserves Twin/store authority
+when anchoring relative references. Escaping `..` remains visible for admission
+to reject. `TwinReadScope` captures an admitted root and namespace together;
+synchronous USD/validation consumers reject foreign authorities before reading.
+Native CLI input admission is owned by `resolve_asset_input`; its bare-input
+search validates missing ancestors through storage before changing namespaces.
+
+Native Windows paths remain `PathBuf` values through filesystem operations and
+retain verbatim drive/UNC prefixes. Source discovery exports native UTF-8
+spelling. Portable source identity is formed only after native root stripping;
+standard file URIs are encoded and decoded by `lunco-storage`. Native browser
+drags carry `PathBuf`, while registered-source drags carry logical addresses.
+These are storage and identity invariants, so no Rhai policy hook is needed.
+
+The edge-case audit reproduced a verbatim trailing-dot path selecting its
+ordinary sibling, a scoped file URI reading foreign bytes, a Twin directory
+predicate rejecting a regular file, and direct registered reads accepting invalid
+relative syntax. An isolated-CWD test also reproduced an invalid native ancestor
+selecting engine-library bytes; CLI admission now reuses storage ancestor checks
+before advancing on an apparent absence. Storage decodes Windows file URIs to verbatim native roots;
+`url` owns URI parsing and `std::path::Prefix` owns drive/share parsing. The
+adapter supplies literal native filename semantics without another URI parser.
+Encoding validates the original namespace before standard-library Win32
+normalization, preserving rejection of malformed `//?/` addresses. URI decoding
+preserves the original drive/share root even when a suffix looks like another
+drive; native suffixes are copied without reparsing them as separate paths. Native CLI
+inputs keep their host semantics; POSIX double-root input has a Unix CI case.
+Scoped native reads enforce canonical Twin containment. Native/Twin directory
+predicates distinguish files from lookup errors and honor file overlays. The
+registered reader applies the shared relative grammar to payloads, metadata and
+directory enumeration. These remain generic asset/storage invariants; no new
+Rhai policy hook or dependency patch is needed.
+
+Native conformance on Windows (2026-11-01): all 61 asset-core tests passed,
+along with 11 URI-algebra tests, the dataset precedence regression, all 14 native
+USD composition cases, four source-content closure cases and two storage
+file-URI cases. The shared native CI gate runs on Windows, macOS and Linux;
+macOS/Linux execution is not established by this local Windows run.
+
+Production Windows verification used `target/debug/luncosim.exe` built with
+`cargo build -p lunco-luncosim --bin luncosim -j 4`:
+
+- `luncosim test --scene scenes/tests/twin_search_paths/sim/scenes/search_paths.usda --api 4197 --threads 4 --readiness-timeout 180 --max-ticks 20000`: PASS, six authored assertions.
+- The same bounded command for `scenes/tests/sandbox_smoke.usda`: PASS.
+- `LUNCOSIM_API_PORT=4198 python scripts/api/test_path_interoperability.py`: PASS, 41 authored assertions on Windows, including negative rename cases and literal-path USD/Modelica persistence. The shared fixture wait compares native files with `Path.samefile`, including verbatim aliases.
+- Rover Lab at `tutorials/sandbox/rover_lab.usda`, owned PID 4772/port 4197: readiness clear, `RoverLab_x2f_Rover_System` Running, no Modelica error. API Exit released the process and port.
+
+Runtime logs are under `target/path-resolution-final-{twin,sandbox,api,demo}.log`
+(the demo API snapshot is `target/path-resolution-final-demo-api.log`).
+This checkout reports missing optional DejaVu font data and an empty installed
+library index; neither prevented these source/runtime gates from passing.
+
+## External conformance review
+
+Microsoft's namespace rules and Rust's pinned standard-library implementation
+confirm that verbatim native paths must retain their semantics. RFC 8089 and the
+maintained `url` API supply file-URI syntax and encoding. `dunce` simplifies only
+when conversion is unambiguous; `normpath` distinguishes normalization from
+filesystem canonicalization. LunCoSim retains native paths and requires canonical
+containment at source admission, so a second normalization dependency would not
+replace the existing resolver or its ownership checks.
+
+The URI codec rejects native dot-directory components when their filesystem
+meaning cannot be preserved by URI lexical normalization. Ordinary Windows input
+first uses the standard library's Win32 normalization; verbatim paths are never
+silently rewritten. Decoded separators cannot introduce hidden dot traversal.
+Unix native parent traversal must be admitted through the filesystem owner
+before URI encoding. The corresponding Unix cases run in the native CI gate.
+
+Sources: [Microsoft namespaces](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+[Rust absolute paths](https://doc.rust-lang.org/std/path/fn.absolute.html),
+[RFC 8089](https://www.rfc-editor.org/rfc/rfc8089),
+[url file conversion](https://docs.rs/url/2.5.8/url/struct.Url.html#method.to_file_path),
+[dunce](https://docs.rs/dunce/latest/dunce/), and
+[normpath](https://docs.rs/normpath/latest/normpath/trait.PathExt.html).
+RFC 9844 updates scoped IPv6 UI entry and does not change this native drive/share
+conversion contract.
+
 ## Verification
 
 The original source-store traversal failure was reproduced before changing the
@@ -81,8 +169,8 @@ production driver is `scripts/api/test_asset_resource_renames.py`; its authored
 checks live in `asset_resolution.rhai`, and its captures cover open/closed folder
 moves, file rename/save/close/reopen, retired declarations and missing resources.
 
-Native Windows and browser runtime acceptance remain separate from Linux
-compile/runtime evidence. Application source-store identity changes require an
+Platform runtime evidence is recorded separately; native Windows conformance
+does not establish macOS, Linux or browser application acceptance. Application source-store identity changes require an
 application restart. Full class-document anchor scrolling is outside this asset
 resolution cutover; resource fragments are parsed separately from filenames.
 
@@ -94,13 +182,16 @@ permission or scenario policy was added to Rust, and no new policy hook was need
 The workbench owns viewport containment and transient scroll reset through egui's
 public widget/state APIs.
 
-Standards checked: [OpenUSD Ar](https://openusd.org/dev/api/ar_page_front.html),
+Standards checked: [Windows native namespaces](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+[Rust native absolute paths](https://doc.rust-lang.org/std/path/fn.absolute.html),
+[OpenUSD Ar](https://openusd.org/dev/api/ar_page_front.html),
 the pinned Rust OpenUSD resolver/composition APIs,
 [Rhai custom resolvers](https://rhai.rs/book/rust/modules/resolvers/custom.html),
 [RFC 8089](https://www.rfc-editor.org/rfc/rfc8089.html),
 and [Modelica 3.6 section 13.5](https://specification.modelica.org/maint/3.6/packages.html#external-resources).
-LunCoSim supplies its own explicit resolver context; it deliberately does not
-admit ambient working-directory lookup as Pixar's default filesystem policy does.
+LunCoSim supplies its own explicit context for logical asset reads. Native CLI
+input admission has the working-directory search defined by the shared asset
+contract; language adapters do not add ambient filesystem searches.
 
 ## Accepted checks (2026-10-16)
 

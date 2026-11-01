@@ -311,7 +311,8 @@ mod tests {
 
     #[test]
     fn native_file_anchors_preserve_roots_and_encode_relative_filenames() {
-        let root = std::env::temp_dir()
+        let root = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
             .join("composition café")
             .join("scene.usda");
         let anchor = ResolvedPath::new(lunco_storage::file_path_to_uri(&root).unwrap());

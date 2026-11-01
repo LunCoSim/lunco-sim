@@ -88,11 +88,7 @@ impl ProgramChoice {
     }
 
     fn source_asset(&self) -> String {
-        if self.asset_path.starts_with("lunco://") || self.asset_path.starts_with("twin://") {
-            self.asset_path.clone()
-        } else {
-            lunco_assets_core::engine_asset_uri(&self.asset_path)
-        }
+        lunco_assets_core::engine_asset_uri(&self.asset_path)
     }
 
     fn program_name(&self) -> String {

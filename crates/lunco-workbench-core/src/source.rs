@@ -4,10 +4,15 @@ use bevy::ecs::reflect::ReflectEvent;
 use bevy::reflect::std_traits::ReflectDefault;
 use lunco_core::Command;
 
-/// Registered or native source identity carried between browser and authoring panels.
+/// Source address carried between browser and authoring panels.
+/// Native addresses remain typed until the consumer uses the storage owner's
+/// file-URI encoder; logical asset identities already use URI syntax.
 #[derive(Clone, Debug)]
-pub struct SourceDragPayload {
-    pub source: String,
+pub enum SourceDragPayload {
+    /// An address in a registered asset namespace.
+    Registered(String),
+    /// A native file supplied by a Twin browser or the operating system.
+    Native(std::path::PathBuf),
 }
 
 /// Open a registered asset as read-only text in the source viewer.

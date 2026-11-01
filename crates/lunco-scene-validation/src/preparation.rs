@@ -167,9 +167,9 @@ pub(crate) fn failed(id: u64, diagnostic: impl Into<String>) -> ApiValue {
     api_value!({"operation_id": id, "state": "failed", "diagnostic": diagnostic.into()})
 }
 fn twin_authority(reference: &str) -> Option<&str> {
-    reference
-        .strip_prefix("twin://")
-        .map(|rest| rest.split('/').next().unwrap_or(rest))
+    lunco_assets_core::parse_twin_uri(reference)
+        .map(|(authority, _)| authority)
+        .or_else(|| lunco_assets_core::parse_twin_root_uri(reference))
 }
 fn capture_fence(
     world: &World,
@@ -545,10 +545,7 @@ fn admit_source(
     fence: &mut OwnerFence,
 ) -> Result<Source, ApiQueryError> {
     if matches!(kind, QueryKind::Twin | QueryKind::TwinLint) {
-        if let Some(authority) = reference
-            .strip_prefix("twin://")
-            .filter(|name| !name.is_empty() && !name.contains('/'))
-        {
+        if let Some(authority) = lunco_assets_core::parse_twin_root_uri(reference) {
             let root = fence.mount.as_ref().expect("Twin fence captured").1.clone();
             let workspace = world
                 .get_resource::<WorkspaceResource>()
@@ -741,13 +738,14 @@ async fn prepare(
         }
         Source::Native { path, admission } => {
             #[cfg(not(target_arch = "wasm32"))]
-            let path = if path.is_file() {
+            let path = if path.is_absolute() {
                 path
             } else {
-                lunco_assets_core::engine_asset_local_path(&path.to_string_lossy())
-                    .map_err(|error| error.to_string())?
-                    .filter(|path| path.is_file())
-                    .unwrap_or(path)
+                lunco_assets_core::resolve_asset_input(
+                    &reference,
+                    lunco_storage::StorageEntryKind::File,
+                )
+                .map_err(|error| error.to_string())?
             };
             let (resolved, mut bytes) = admission.read_bounded(&path, limit).await?;
             let id = lunco_storage::file_path_to_uri(&resolved.path)
@@ -954,7 +952,13 @@ async fn prepare_twin_sources(
                                         .map_err(|error| error.to_string())?
                                         .as_path(),
                                 ),
-                                Some(&input.root),
+                                Some(
+                                    &lunco_assets_core::TwinReadScope::declared(
+                                        &input.source_name,
+                                        &input.root,
+                                    )
+                                    .map_err(|error| error.to_string())?,
+                                ),
                                 lunco_usd_compose::recipe::StageClosureLimits {
                                     max_bytes: limits.max_bytes.saturating_sub(retained_bytes),
                                     ..limits

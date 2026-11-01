@@ -46,8 +46,9 @@ Native synchronous USD composition encodes its resolved root through
 `file_path_to_uri`. `lunco-usd-compose::canonicalize_at` returns `Result` and
 anchors relative filenames with URL path segments, preserving Windows drive,
 UNC and verbatim roots while encoding spaces, Unicode and reserved characters.
-`lunco-assets-core::id_to_disk_path` decodes that identity at the native byte
-reader and returns malformed file-URI errors rather than a missing-source result.
+`lunco-assets-core::read_asset_bytes_in_scope` uses the storage-owned file-URI
+decoder at the native byte boundary and reports malformed URI errors. Twin arcs
+require a captured `TwinReadScope`, which checks namespace identity before lookup.
 Authored `/…` references retain their asset-root meaning; logical source
 identities always use `/` separators. Layer admission validates every authored
 composition arc before OpenUSD's infallible identifier callback. That callback

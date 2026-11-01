@@ -1371,6 +1371,80 @@ mod source_root_smoke {
     use super::*;
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn source_root_content_closure_preserves_native_discovery_paths() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut root = folder.path().join("source # % 日本語");
+        // Exercise native long-path I/O as well as verbatim prefix parsing.
+        for _ in 0..4 {
+            root = root.join("directory".repeat(8));
+        }
+        let child = root.join("nested");
+        std::fs::create_dir_all(&child).unwrap();
+        let source = "within Probe; model Demo Real x; equation x = 1; end Demo;";
+        std::fs::write(child.join("Demo.mo"), source).unwrap();
+        // Canonicalization returns a verbatim path on Windows. Discovery must
+        // preserve that native spelling until the compiler removes the root.
+        let canonical = lunco_storage::canonicalize_file_path(&root).unwrap();
+        let mut compiler = ModelicaCompiler::new();
+        let mut expected = None;
+        for root in [&root, &canonical] {
+            let (files, diagnostics) =
+                lunco_assets_runtime::discovery::read_files_with_extension(root, "mo");
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(files.len(), 1);
+            assert_eq!(
+                std::path::Path::new(&files[0].0),
+                root.join("nested/Demo.mo")
+            );
+            let prepared = PreparedSourceRoot::prepare(
+                "Probe",
+                root.display().to_string(),
+                files,
+                diagnostics,
+            );
+            let closure = prepared
+                .content_closure()
+                .expect("portable discovered content");
+            assert_eq!(closure.files[0].source_uri, "nested/Demo.mo");
+            assert_eq!(
+                closure.files[0].cid,
+                lunco_hash::content::cid(source.as_bytes())
+            );
+            if let Some(expected) = &expected {
+                assert_eq!(&closure, expected);
+            }
+            expected = Some(closure);
+            let report = compiler.install_source_root(prepared);
+            assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+            compiler
+                .compile_str(
+                    "Consumer",
+                    "model Consumer Probe.Demo demo; end Consumer;",
+                    "Consumer.mo",
+                )
+                .unwrap();
+        }
+        #[cfg(windows)]
+        for root in [
+            r"C:\models",
+            r"\\?\C:\models",
+            r"\\server\share\models",
+            r"\\?\UNC\server\share\models",
+        ] {
+            let path = std::path::Path::new(root).join("nested/Demo.mo");
+            let closure = source_root_content_closure(
+                "Probe",
+                root,
+                &[(path.to_str().unwrap().to_owned(), source.to_owned())],
+                &[],
+            )
+            .unwrap();
+            assert_eq!(Some(closure), expected);
+        }
+    }
+
+    #[test]
     fn source_root_content_closure_is_stable_exact_and_portable() {
         let first_root = std::env::temp_dir().join("luncosim-modelica-root-one");
         let second_root = std::env::temp_dir().join("luncosim-modelica-root-two");

@@ -566,16 +566,14 @@ fn require_non_empty(label: &str, value: &str) -> Result<(), String> {
 
 fn require_asset_path(label: &str, value: &str) -> Result<(), String> {
     require_non_empty(label, value)?;
-    if value.starts_with("lunco://") || value.starts_with("twin://") {
+    if lunco_assets_core::parse_lunco_uri(value).is_some()
+        || lunco_assets_core::parse_twin_uri(value).is_some()
+    {
         lunco_assets_core::asset_path::load_asset_path(value, None, None, None)
             .map_err(|error| format!("{label}: {error}"))?;
         return Ok(());
     }
-    if value.contains('\\')
-        || value.contains(':')
-        || value.starts_with('/')
-        || value.split('/').any(|part| part.is_empty() || part == "..")
-    {
+    if lunco_assets_path::relative_path(value).is_none() {
         return Err(format!("{label} must be a relative asset path: `{value}`"));
     }
     Ok(())

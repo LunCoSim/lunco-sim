@@ -334,6 +334,14 @@ pub fn load_asset_path(
             ))
         })?;
     }
+    if lunco_storage::windows_file_reference_uri(reference)
+        .map_err(|error| invalid_asset(error.to_string()))?
+        .is_some()
+    {
+        return Err(invalid_asset(format!(
+            "native asset `{reference}` must enter loading as a standard file URI"
+        )));
+    }
     let mut canonical = match origin {
         Some(origin) => lunco_assets_path::canonicalize(reference, &anchor_of(origin)),
         None => lunco_assets_path::canonicalize_root(reference),
@@ -359,9 +367,9 @@ pub fn load_asset_path(
         Some((source, path)) => (AssetSourceId::Name(source.to_owned().into()), path),
         None => (AssetSourceId::Default, canonical.as_str()),
     };
-    if path.is_empty() {
+    if relative_path(path).is_none() {
         return Err(invalid_asset(format!(
-            "asset `{canonical}` has no filesystem path"
+            "asset `{canonical}` has an empty, absolute or escaping source-relative path"
         )));
     }
     Ok(AssetPath::from_path_buf(std::path::PathBuf::from(path)).with_source(source))
@@ -475,7 +483,7 @@ mod tests {
                 .unwrap()
                 .resolve_authored_file("fixture", std::path::Path::new("part.node"))
                 .unwrap(),
-            Some(folder.path().join("part.node"))
+            Some(lunco_storage::canonicalize_file_path(&folder.path().join("part.node")).unwrap())
         );
         assert!(prepared.validate_owner(Some(&roots)).is_ok());
         roots.unregister_name(&second).unwrap();
@@ -682,6 +690,15 @@ mod tests {
         lunco_storage::write_file_sync(&root.join("buffers/mesh.bin"), b"mesh payload")
             .expect("sibling fixture");
         let uri = lunco_storage::file_path_to_uri(&root.join(&relative)).expect("native URI");
+        let decoded = lunco_storage::file_uri_to_path(&uri).unwrap().unwrap();
+        assert_eq!(
+            lunco_storage::canonicalize_file_path(&decoded).unwrap(),
+            root.join(&relative),
+        );
+        assert_eq!(
+            crate::read_asset_bytes(&uri, None).unwrap(),
+            b"texture payload"
+        );
         let path = prepared_load_asset_path(&uri, Some(&origin), Some(&roots))
             .expect("admitted native asset");
         assert_eq!(path.source(), origin.source());
@@ -690,6 +707,12 @@ mod tests {
             std::path::Path::new(&authority).join(&relative)
         );
         assert_eq!(path.label(), None);
+        let resolved = roots.resolve_file(&authority, &relative).unwrap().unwrap();
+        assert_eq!(resolved, root.join(&relative));
+        assert_eq!(
+            crate::read_asset_file_string(&resolved).unwrap(),
+            "texture payload"
+        );
         let labeled = path.clone().with_label("Mesh0/Primitive0");
         assert_eq!(labeled.path(), path.path());
         assert_eq!(labeled.label(), Some("Mesh0/Primitive0"));

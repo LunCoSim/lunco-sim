@@ -394,6 +394,10 @@ pub fn inventory_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
 }
 
 /// Read selected UTF-8 sources from the common containment-checked inventory.
+/// Returned source addresses retain native absolute path syntax, including
+/// Windows verbatim prefixes. Consumers derive portable identities only after
+/// stripping the native root; slash conversion of an absolute verbatim path
+/// changes how Windows parses its prefix.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_files_with_extension(
     root: &Path,
@@ -417,7 +421,12 @@ pub fn read_files_with_extension(
             })
             .and_then(|resolved| lunco_assets_core::read_asset_file_string(&resolved));
         match source {
-            Ok(source) => files.push((lunco_assets_path::slashed(&path), source)),
+            Ok(source) => files.push((
+                path.to_str()
+                    .expect("inventory validated UTF-8 paths")
+                    .to_owned(),
+                source,
+            )),
             Err(error) => diagnostics.push(format!("cannot read {}: {error}", path.display())),
         }
     }

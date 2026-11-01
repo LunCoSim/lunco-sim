@@ -7,6 +7,13 @@
 
 use std::path::{Component, Path, PathBuf};
 
+/// Engine-library namespace. Its URI remainder is relative to one shared root.
+pub const LUNCO_SCHEME: &str = "lunco";
+/// Twin namespace; the first URI component identifies the owning mount.
+pub const TWIN_SCHEME: &str = "twin";
+/// Installed-source namespace; the first component identifies the source store.
+pub const LIBRARY_SCHEME: &str = "library";
+
 /// Why a filename cannot be used unchanged on the supported platforms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PortableFileNameError {
@@ -109,11 +116,12 @@ pub fn normalize(p: &Path) -> PathBuf {
     out
 }
 
-/// A path's string form with `\` normalized to `/`.
+/// A logical path's string form with `\` normalized to `/`.
 ///
-/// Asset identities and URIs are forward-slash strings on every peer; a
-/// Windows-built `Path` renders with `\`, so any path that becomes an identity
-/// must pass through here.
+/// Logical asset identities and URI-relative paths use forward slashes on every
+/// peer. Native absolute filesystem paths must retain their platform spelling:
+/// converting a Windows verbatim prefix to `//?/` changes its parsing. Strip
+/// the native root before using this function to form a portable identity.
 pub fn slashed(p: impl AsRef<Path>) -> String {
     p.as_ref().to_string_lossy().replace('\\', "/")
 }
@@ -283,11 +291,26 @@ pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
         Some((s, rest)) => (Some(s), rest),
         None => (None, anchor),
     };
-    let base = Path::new(&slashed(anchor_path))
+    let anchor_path = slashed(anchor_path);
+    let (authority, anchor_path) = match scheme {
+        Some(scheme)
+            if scheme.eq_ignore_ascii_case(TWIN_SCHEME)
+                || scheme.eq_ignore_ascii_case(LIBRARY_SCHEME) =>
+        {
+            let (authority, path) = anchor_path.split_once('/').unwrap_or((&anchor_path, ""));
+            (Some(authority), path.trim_start_matches('/'))
+        }
+        _ => (None, anchor_path.as_str()),
+    };
+    let base = Path::new(anchor_path)
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
     let resolved = slashed(normalize(&base.join(&asset_path)));
+    let resolved = match authority {
+        Some(authority) => format!("{authority}/{resolved}"),
+        None => resolved,
+    };
     match scheme {
         Some(s) => uri(s, &resolved),
         None => resolved,
@@ -459,6 +482,14 @@ mod tests {
 
     #[test]
     fn relative_keeps_the_anchors_scheme() {
+        assert_eq!(
+            canonicalize("../../other/secret.bin", "twin://owner/scenes/main.usda"),
+            "twin://owner/../other/secret.bin"
+        );
+        assert_eq!(
+            canonicalize("../../other/secret.bin", "library://source/scenes/main.mo"),
+            "library://source/../other/secret.bin"
+        );
         assert_eq!(
             canonicalize(
                 "../../components/wheel.usda",

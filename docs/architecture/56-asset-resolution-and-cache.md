@@ -98,14 +98,39 @@ we distribute:
 During native development, downloads and processed outputs go directly to the
 machine-global cache. The packer copies selected manifest artifacts from that
 cache into `assets/.cache`, so a package remains self-contained while source
-runs and packaged runs use the same logical identities. `lunco_assets_core::library_roots()`
-is the single place that constructs the order for a particular `assets/` root;
+runs and packaged runs use the same logical identities. `lunco_assets_core::asset_read_roots()`
+is the single place that constructs the order for an admitted engine or Twin root;
 the `AssetSource`, synchronous resolver (`engine_asset_local_path`), and byte
 reader all use it, so a file the loader finds is a file the validator finds.
 
-Both `twin://` readers implement that fallback — the `AssetReader` and the
-`SchemeRegistry` handler — because they must agree: a file the asset server can
-load but scenario-sync cannot see is worse than one neither can.
+Native engine and Twin readers, directory lookup, synchronous byte reads and
+dataset installation scans use `resolve_native_asset` over `asset_read_roots`.
+The first existing entry owns the address. A wrong entry kind, escaped link,
+permission failure or malformed path is terminal; only absence advances to the
+next root. Dataset validity is checked after selection, so an invalid authored
+artifact cannot expose a cached artifact at the same address.
+
+Registered native readers apply the shared relative-address grammar before
+lookup, including directory enumeration. Empty reader paths designate the source
+root; other paths require exact UTF-8 and normalize authored separators. Invalid
+components, including Windows stream syntax, fail before filesystem access.
+Directory predicates return false for files and document overlays while retaining
+containment and I/O errors.
+
+Synchronous USD composition captures a `TwinReadScope` through
+`TwinRoots::read_scope`, or admits an explicit standalone source through the
+same registry. `read_asset_bytes_in_scope` validates the requested mount or
+logical identity before resolving bytes. Native file references in that scope
+are canonicalized and confined to the same Twin root. A raw directory cannot stand in for a
+Twin's identity. Publication still checks the captured source lease/revision;
+a captured directory does not authorize publication into a replacement Twin.
+
+CLI and validation inputs use `resolve_asset_input`. Explicit native paths and
+file URIs select exactly that source. Bare relative CLI inputs search the
+working directory and then the engine namespace, advancing only on absence.
+Storage ancestor admission distinguishes a missing child from a broken link or
+a file used as a directory before that namespace transition.
+Logical runtime reads do not acquire an ambient working-directory search.
 
 A **downloaded scenario is a Twin root** over its cache directory. Its load
 authority is local to the mount, while content provenance uses the shared
@@ -203,10 +228,12 @@ re-derives that mapping:
 | "already addressable?" | `lunco-assets-path::has_scheme` / `is_anchored` |
 | Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
 | Document-root-relative asset URI | `asset_path::source_relative_uri` |
+| Native root precedence and entry selection | `asset_read_roots` / `resolve_native_asset` |
+| Bounded native bytes with Twin identity | `TwinRoots::read_scope` / `read_asset_bytes_in_scope` |
+| CLI/validation native input admission | `resolve_asset_input` |
 | Any URI → local path | `local_path(reference, twins)` |
 | Library root | `lunco-assets-core::assets_dir_abs` (`LUNCO_ASSET_ROOT` when set; otherwise executable/package ancestry, then current-directory ancestry) |
 | Library root (of a file) | `shipped_asset_root` |
-| Id → disk path | `id_to_disk_path` |
 | Scenario staging dir | `scenarios_dir` |
 
 The same document-relative operation is available to authored Rhai as
@@ -243,6 +270,33 @@ layer** and plug into `openusd`'s `ar::Resolver` — USD composition semantics t
 must sit next to the `Stage`, not asset-source knowledge.
 
 ### USD references stay logical through loading
+
+Native filesystem addresses retain their platform spelling through storage,
+source discovery, document facts, renames, and drag payloads. In particular,
+Windows canonicalization produces `\\?\` drive or UNC paths; replacing their
+backslashes with `/` changes their parsing. `lunco-assets-path::slashed` is
+for logical asset paths, not absolute native addresses. Strip an admitted native
+root before formatting a relative identity, or use
+`lunco-storage::file_path_to_uri` when crossing into a URI contract. That encoder
+handles drive/share roots and filename escaping through the maintained `url`
+crate. Do not remove verbatim prefixes or lowercase filesystem paths globally.
+Windows file-URI decoding returns verbatim native drive/share paths: URI
+components are literal names, so trailing dots and spaces must not select another
+file through Win32 normalization. Encoding validates the original namespace and
+uses `std::path::absolute` for ordinary Windows spelling; explicit verbatim
+spelling stays intact. Native CLI inputs retain native semantics and do not
+round-trip through URIs. POSIX absolute inputs, including a double leading slash,
+are classified as native before foreign Windows authored references.
+
+Native parent traversal must be resolved by filesystem admission before URI
+encoding on Unix. Literal verbatim dot-directory components and encoded separators
+that introduce dot traversal are rejected when URI conversion cannot preserve
+the native meaning. URI algebra never substitutes for filesystem containment.
+
+`SourceDragPayload` carries registered identifiers and native `PathBuf` values
+as separate enum variants. Connections encodes native browser/OS drops through
+that storage boundary before dispatching `DropConnectionAsset`; encoding errors
+remain visible in the canvas and never fall through to another source.
 
 USD asset literals are logical identifiers. They use forward slashes and either
 the authored layer's relative namespace or an explicit `lunco://`/`twin://`

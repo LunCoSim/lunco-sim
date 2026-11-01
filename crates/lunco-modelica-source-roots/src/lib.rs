@@ -143,12 +143,12 @@ impl SourceRoot {
         ) {
             let mut path = PathBuf::from(&facts.source_uri);
             if relocate(&mut path, rename) {
-                facts.source_uri = lunco_assets_path::slashed(&path);
+                facts.source_uri = path.to_string_lossy().into_owned();
             }
             for package in &mut facts.packages {
                 let mut path = PathBuf::from(&package.source_uri);
                 if relocate(&mut path, rename) {
-                    package.source_uri = lunco_assets_path::slashed(&path);
+                    package.source_uri = path.to_string_lossy().into_owned();
                 }
             }
         }
@@ -949,7 +949,7 @@ fn refresh_document_roots(
     }
     let source_uri = path
         .as_ref()
-        .map(|path| lunco_assets_path::slashed(path))
+        .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     let parsed = (!document.syntax_is_stale())
         .then(|| document.strict_ast())

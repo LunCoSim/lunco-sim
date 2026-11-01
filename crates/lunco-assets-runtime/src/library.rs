@@ -501,7 +501,7 @@ mod resolution_tests {
 
 /// Asset-source identity for the installed source-library store. Language URIs
 /// resolve to this identity; readers never expose the store's cache location.
-pub const LIBRARY_SCHEME: &str = "library";
+pub use lunco_assets_path::LIBRARY_SCHEME;
 
 #[derive(Default)]
 struct LibraryReader {
@@ -524,7 +524,9 @@ impl bevy::asset::io::AssetReader for LibraryReader {
                         .iter()
                         .map(|source| match source {
                             LibrarySource::Filesystem(root) => {
-                                Some(lunco_assets_core::NativeAssetReader::new(root.root()))
+                                Some(lunco_assets_core::NativeAssetReader::new(vec![
+                                    root.root().to_path_buf(),
+                                ]))
                             }
                             LibrarySource::InMemory(_) => None,
                         })

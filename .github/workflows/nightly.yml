@@ -238,14 +238,16 @@ jobs:
 
       # Reuse the desktop release profile and target cache. Only these native
       # storage/Twin/asset seams run; they need no GUI or Windows symlink privilege.
-      - name: Verify Windows native path contracts
-        if: matrix.platform == 'windows'
+      - name: Verify native path contracts
         run: |
           cargo test --release --locked -j 4 --lib \
-            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path -p lunco-workspace -p lunco-networking-scenario -p lunco-assets-datasets -p lunco-assets-download -p lunco-scripting-rhai-core \
+            -p lunco-storage -p lunco-twin -p lunco-assets-core -p lunco-assets-path -p lunco-workspace -p lunco-networking-scenario -p lunco-assets-datasets -p lunco-assets-download -p lunco-scripting-rhai-core -p lunco-modelica-compiler \
             -- --exact \
             file_uri_tests::file_uris_preserve_native_paths_and_reject_invalid_addresses \
             file_uri_tests::authored_windows_references_use_native_identity_or_explicit_host_rejection \
+            source_root_smoke::source_root_content_closure_preserves_native_discovery_paths \
+            source_root_smoke::source_root_content_closure_is_stable_exact_and_portable \
+            source_root_smoke::source_root_content_closure_rejects_incomplete_or_nonportable_sources \
             path_identity::tests::destination_identity_covers_missing_descendants_and_native_aliases \
             tests::asset_root_admission_reports_invalid_overrides_and_discovers_canonical_library \
             twin_source::tests::directory_root_designator_retains_mount_ownership_and_rejects_parent_escape \
@@ -260,6 +262,15 @@ jobs:
             manifest::tests::native_plugin_paths_are_twin_relative_and_enabled_by_default \
             tests::portable_file_names_reject_reserved_devices_and_nonportable_components \
             tests::portable_file_names_preserve_unicode_and_literal_filesystem_characters \
+            lunco_source::native_resolution_contract_tests::native_resolution_edges_cli_ancestor_is_terminal \
+            lunco_source::native_resolution_contract_tests::native_resolution_edges_scoped_file_uris_reject_foreign_files \
+            lunco_source::native_resolution_contract_tests::native_resolution_edges_keep_verbatim_filename_semantics \
+            lunco_source::native_resolution_contract_tests::native_resolution_edges_reader_uses_logical_relative_grammar \
+            lunco_source::native_resolution_contract_tests::native_resolution_edges_posix_double_root_is_native_input \
+            twin_source::tests::native_resolution_edges_directory_probe_distinguishes_files_from_errors \
+            lunco_source::native_resolution_contract_tests::native_resolution_contract_preserves_first_entry_kind \
+            registry::tests::native_resolution_contract_keeps_dataset_and_reader_precedence_equal \
+            tests::relative_keeps_the_anchors_scheme \
             asset_path::tests::native_load_paths_keep_filesystem_characters_and_separate_labels \
             asset_path::tests::native_load_paths_reject_missing_retired_and_foreign_ownership \
             asset_path::tests::windows_native_load_paths_normalize_verbatim_mount_roots \

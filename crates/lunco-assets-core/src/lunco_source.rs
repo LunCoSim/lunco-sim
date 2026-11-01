@@ -15,9 +15,8 @@
 //!
 //! See `docs/architecture/56-asset-resolution-and-cache.md`.
 //!
-//! **One resolver, every platform.** Every root is read through Bevy's own
-//! platform reader, with shared native containment and Bevy's maintained
-//! HTTP reader on wasm. HTTP requests encode literal filename components through
+//! **One root plan, every platform.** Native sources use the shared entry
+//! selector and storage opener; wasm uses Bevy's maintained HTTP reader. HTTP requests encode literal filename components through
 //! its request mapper. The browser resolves the same chain over HTTP as
 //! native resolves over directories — the fallback is not a native-only
 //! convenience that silently disappears on web.
@@ -25,15 +24,16 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use bevy::asset::io::{
-    AssetReader, AssetReaderError, AssetSource, AssetSourceBuilder, AssetWatcher,
-    ErasedAssetReader, PathStream, Reader,
-};
+#[cfg(target_arch = "wasm32")]
+use bevy::asset::io::PathStream;
+#[cfg(any(test, target_arch = "wasm32"))]
+use bevy::asset::io::{AssetReader, AssetReaderError, Reader};
+use bevy::asset::io::{AssetSource, AssetSourceBuilder, AssetWatcher, ErasedAssetReader};
 
 /// The asset-source scheme for the engine asset library — the name it is
 /// registered under, both as a Bevy `AssetSource` and in the
 /// [`SchemeRegistry`](crate::scheme_registry::SchemeRegistry).
-pub const LUNCO_SCHEME: &str = "lunco";
+pub use lunco_assets_path::LUNCO_SCHEME;
 
 /// The library-relative path of a `lunco://<rel>` reference, or `None` for a bare
 /// or differently-schemed one. Unlike [`crate::engine_asset_rel`] (which treats a
@@ -61,39 +61,12 @@ pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
         .find(|a| a.file_name() == Some(std::ffi::OsStr::new(ASSETS_DIR_NAME)))
 }
 
-/// Map a canonical asset id to its native byte source.
-///
-/// Standard file URIs decode through `lunco-storage`; malformed URIs return
-/// `InvalidInput`. Library identities require their explicit `assets_root`.
-/// Raw native absolute paths remain accepted. Source-relative identities have
-/// no implicit filesystem root and return `None`.
-pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> std::io::Result<Option<PathBuf>> {
-    if let Some(path) = lunco_storage::file_uri_to_path(id).map_err(|error| match error {
-        lunco_storage::StorageError::Io(error) => error,
-        error => std::io::Error::other(error.to_string()),
-    })? {
-        return Ok(Some(path));
-    }
-    match parse_lunco_uri(id) {
-        Some(rel) => Ok(assets_root
-            .zip(crate::asset_path::relative_path(rel))
-            .map(|(root, rel)| root.join(rel))),
-        None => {
-            let p = PathBuf::from(id);
-            // A scheme-less relative id has no owning root. Do not invent one
-            // from the Unix filesystem root: that is wrong on Windows and
-            // would make an unanchored reference depend on the host CWD.
-            Ok(p.is_absolute().then_some(p))
-        }
-    }
-}
-
 /// Read bytes for a canonical asset identity through the native asset-location
 /// policy. USD composition deliberately calls this instead of touching the
 /// filesystem: asset-root selection and diagnostic paths stay owned here.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result<Vec<u8>> {
-    read_asset_bytes_inner(id, assets_root, None)
+    read_asset_bytes_inner(id, assets_root, None, None)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -121,14 +94,40 @@ fn read_asset_bytes_inner(
     id: &str,
     assets_root: Option<&Path>,
     max_bytes: Option<usize>,
+    twin: Option<&crate::TwinReadScope>,
 ) -> std::io::Result<Vec<u8>> {
     let Some(rel) = parse_lunco_uri(id) else {
-        let path = id_to_disk_path(id, assets_root)?.ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("asset `{id}` has no resolvable native root"),
-            )
-        })?;
+        let path = lunco_storage::file_uri_to_path(id)
+            .map_err(|error| match error {
+                lunco_storage::StorageError::Io(error) => error,
+                error => std::io::Error::other(error.to_string()),
+            })?
+            .or_else(|| {
+                let path = PathBuf::from(id);
+                path.is_absolute().then_some(path)
+            })
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("asset `{id}` has no resolvable native root"),
+                )
+            })?;
+        let path = if let Some(scope) = twin {
+            let path =
+                lunco_storage::canonicalize_file_path(&path).map_err(|error| match error {
+                    lunco_storage::StorageError::Io(error) => error,
+                    error => std::io::Error::other(error.to_string()),
+                })?;
+            if !path.starts_with(scope.root()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("native asset `{id}` is outside the captured Twin root"),
+                ));
+            }
+            path
+        } else {
+            path
+        };
         return read_native_asset(path, max_bytes);
     };
     let default_root;
@@ -139,18 +138,18 @@ fn read_asset_bytes_inner(
             &default_root
         }
     };
-    let roots = crate::library_roots(root);
     let relative = crate::asset_path::relative_path(rel).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("unsafe library asset path `{rel}`"),
         )
     })?;
-    for root in roots {
-        match existing_path_within_root(&root, &relative)? {
-            Some(path) => return read_native_asset(path, max_bytes),
-            None => continue,
-        }
+    if let Some((_, path)) = resolve_native_asset(
+        &crate::asset_read_roots(root),
+        &relative,
+        Some(lunco_storage::StorageEntryKind::File),
+    )? {
+        return read_native_asset(path, max_bytes);
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
@@ -176,61 +175,113 @@ pub fn existing_path_within_root(root: &Path, relative: &Path) -> std::io::Resul
         ));
     }
     let candidate = root.join(relative);
-    match std::fs::symlink_metadata(&candidate) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
+    let mut probe = candidate.as_path();
+    loop {
+        match std::fs::symlink_metadata(probe) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if probe == root {
+                    return Ok(None);
+                }
+                probe = probe.parent().ok_or(error)?;
+            }
+            Err(error) => return Err(error),
+        }
     }
     let canonical_root = std::fs::canonicalize(root)?;
-    let canonical_candidate = std::fs::canonicalize(candidate)?;
+    let canonical_candidate = std::fs::canonicalize(probe)?;
     if !canonical_candidate.starts_with(canonical_root) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "asset path resolves outside its owning root",
         ));
     }
+    if probe != candidate {
+        // Windows can report a missing descendant when an existing parent is
+        // a file. That source error must not expose a cached replacement.
+        if !std::fs::metadata(canonical_candidate)?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "asset ancestor is not a directory",
+            ));
+        }
+        return Ok(None);
+    }
     Ok(Some(canonical_candidate))
 }
 
-/// Read a canonical asset identity when the composing document belongs to an
-/// open Twin.  The synchronous USD composer cannot call Bevy's async reader,
-/// so it uses this asset-owned equivalent of the registered `twin://` source.
-/// Library assets keep the ordinary `assets_root` policy; Twin assets are
-/// resolved inside the explicitly supplied Twin root and its cache.
+/// Select the first existing entry, never a later cache copy of another kind.
+/// Missing entries alone advance the search; containment, metadata and kind
+/// errors are terminal. The root index also anchors native directory readers.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_asset_bytes_with_twin_root(
-    id: &str,
-    assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
-) -> std::io::Result<Vec<u8>> {
-    read_asset_bytes_with_twin_root_inner(id, assets_root, twin_root, None)
+pub fn resolve_native_asset(
+    roots: &[PathBuf],
+    relative: &Path,
+    expected: Option<lunco_storage::StorageEntryKind>,
+) -> std::io::Result<Option<(usize, PathBuf)>> {
+    if roots.is_empty() || roots.iter().any(|root| !root.is_absolute()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native asset resolution requires absolute source roots",
+        ));
+    }
+    for (index, root) in roots.iter().enumerate() {
+        let Some(path) = existing_path_within_root(root, relative)? else {
+            continue;
+        };
+        if let Some(expected) = expected {
+            let actual =
+                lunco_storage::entry_kind_file_sync(&path).map_err(|error| match error {
+                    lunco_storage::StorageError::Io(error) => error,
+                    lunco_storage::StorageError::NotFound => {
+                        std::io::Error::from(std::io::ErrorKind::NotFound)
+                    }
+                    error => std::io::Error::other(error.to_string()),
+                })?;
+            if actual != expected {
+                let kind = if expected == lunco_storage::StorageEntryKind::Directory {
+                    std::io::ErrorKind::NotADirectory
+                } else {
+                    std::io::ErrorKind::InvalidInput
+                };
+                return Err(std::io::Error::new(
+                    kind,
+                    format!(
+                        "asset {} is {actual:?}, expected {expected:?}",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+        return Ok(Some((index, path)));
+    }
+    Ok(None)
 }
 
-/// Bounded native read through the same Twin/library source resolution.
+/// Bounded native bytes resolved within the exact captured source scope.
+/// Namespace identity is checked before any Twin filesystem lookup.
+/// Native file references in that scope must canonically belong to its root.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_asset_bytes_bounded_with_twin_root(
+pub fn read_asset_bytes_in_scope(
     id: &str,
     assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
+    twin: Option<&crate::TwinReadScope>,
     max_bytes: usize,
 ) -> std::io::Result<Vec<u8>> {
-    read_asset_bytes_with_twin_root_inner(id, assets_root, twin_root, Some(max_bytes))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_asset_bytes_with_twin_root_inner(
-    id: &str,
-    assets_root: Option<&Path>,
-    twin_root: Option<&Path>,
-    max_bytes: Option<usize>,
-) -> std::io::Result<Vec<u8>> {
-    if let Some((_name, rel)) = crate::parse_twin_uri(id) {
-        let root = twin_root.ok_or_else(|| {
+    if let Some((name, rel)) = crate::parse_twin_uri(id) {
+        let scope = twin.ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("Twin asset `{id}` has no composing Twin root"),
             )
         })?;
+        if !scope.accepts(name) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Twin asset `{id}` is outside the captured source scope"),
+            ));
+        }
+        let root = scope.root();
         let relative = crate::asset_path::relative_path(rel).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -254,9 +305,9 @@ fn read_asset_bytes_with_twin_root_inner(
                     format!("Twin asset `{id}` was not found in its authored tree or cache"),
                 )
             })?;
-        return read_native_asset(path, max_bytes);
+        return read_native_asset(path, Some(max_bytes));
     }
-    read_asset_bytes_inner(id, assets_root, max_bytes)
+    read_asset_bytes_inner(id, assets_root, Some(max_bytes), twin)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -275,14 +326,21 @@ mod tests {
 
         let id = "twin://example/lesson.rhai";
         assert_eq!(
-            read_asset_bytes_with_twin_root(id, None, Some(root.path())).expect("authored file"),
+            read_asset_bytes_in_scope(
+                id,
+                None,
+                Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
+                1024
+            )
+            .expect("authored file"),
             b"40 + 2"
         );
         assert_eq!(
-            read_asset_bytes_with_twin_root(
+            read_asset_bytes_in_scope(
                 "twin://example/downloaded.rhai",
                 None,
-                Some(root.path())
+                Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
+                1024
             )
             .expect("cached file"),
             b"20 + 22"
@@ -292,8 +350,13 @@ mod tests {
             "twin://example/a/../../outside.rhai",
             r"twin://example/..\outside.rhai",
         ] {
-            let error = read_asset_bytes_with_twin_root(id, None, Some(root.path()))
-                .expect_err("unsafe Twin path must be rejected");
+            let error = read_asset_bytes_in_scope(
+                id,
+                None,
+                Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
+                1024,
+            )
+            .expect_err("unsafe Twin path must be rejected");
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         }
     }
@@ -301,21 +364,13 @@ mod tests {
     #[test]
     fn library_ids_cannot_escape_the_asset_root() {
         let root = tempfile::tempdir().expect("temporary asset root");
-        assert_eq!(
-            id_to_disk_path("lunco://terrain/moon.usda", Some(root.path())).unwrap(),
-            Some(root.path().join("terrain/moon.usda"))
-        );
-        assert_eq!(
-            id_to_disk_path(r"lunco://terrain\moon.usda", Some(root.path())).unwrap(),
-            Some(root.path().join("terrain/moon.usda"))
-        );
         for id in [
             "lunco://../outside.usda",
             "lunco://terrain/../../outside.usda",
             r"lunco://terrain\..\outside.usda",
         ] {
             assert!(
-                id_to_disk_path(id, Some(root.path())).unwrap().is_none(),
+                read_asset_bytes(id, Some(root.path())).is_err(),
                 "unsafe library id must be rejected: {id}"
             );
         }
@@ -323,11 +378,11 @@ mod tests {
 
     #[test]
     fn unanchored_relative_ids_are_not_assigned_a_host_root() {
-        assert_eq!(id_to_disk_path("scenes/scene.usda", None).unwrap(), None);
-        let absolute = std::env::temp_dir().join("lunco-absolute-scene.usda");
         assert_eq!(
-            id_to_disk_path(&absolute.to_string_lossy(), None).unwrap(),
-            Some(absolute)
+            read_asset_bytes("scenes/scene.usda", None)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
         );
     }
 
@@ -337,7 +392,6 @@ mod tests {
         let source = root.path().join("провајдер with spaces.usda");
         lunco_storage::write_file_sync(&source, b"#usda 1.0\n").unwrap();
         let id = lunco_storage::file_path_to_uri(&source).unwrap();
-        assert_eq!(id_to_disk_path(&id, None).unwrap(), Some(source));
         assert_eq!(read_asset_bytes(&id, None).unwrap(), b"#usda 1.0\n");
         assert_eq!(
             read_asset_bytes("file:///invalid%00.usda", None)
@@ -403,9 +457,13 @@ mod tests {
                 .kind()
                 == std::io::ErrorKind::PermissionDenied
         );
-        let error =
-            read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
-                .expect_err("Twin symlink must not escape its root");
+        let error = read_asset_bytes_in_scope(
+            "twin://example/linked.txt",
+            None,
+            Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
+            1024,
+        )
+        .expect_err("Twin symlink must not escape its root");
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
@@ -424,9 +482,13 @@ mod tests {
         lunco_storage::write_file_sync(&cache.join("linked.txt"), b"cache shadow")
             .expect("cache file");
 
-        let error =
-            read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
-                .expect_err("an unsafe authored path must block cache fallback");
+        let error = read_asset_bytes_in_scope(
+            "twin://example/linked.txt",
+            None,
+            Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
+            1024,
+        )
+        .expect_err("an unsafe authored path must block cache fallback");
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }
@@ -446,7 +508,7 @@ pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
 }
 
 /// Build the `lunco://` [`AssetSourceBuilder`] from the authored library root,
-/// its packed cache, and the shared cache in [`crate::library_roots`] order.
+/// its packed cache, and the shared cache in [`crate::asset_read_roots`] order.
 ///
 /// Only the authored `assets/` tree is watched. Cache roots are read-only
 /// materialized artifacts and can contain tens of thousands of directories;
@@ -454,19 +516,25 @@ pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
 /// authoring and can exhaust the process' watch quota before the app starts.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
     let watch_root = assets_dir.to_string_lossy().into_owned();
-    let roots = crate::library_roots(assets_dir)
-        .into_iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    let reader_roots = roots;
+    let reader_roots = crate::asset_read_roots(assets_dir);
     AssetSourceBuilder::new(move || {
-        Box::new(FallbackReader {
-            readers: reader_roots
+        #[cfg(not(target_arch = "wasm32"))]
+        return Box::new(crate::NativeAssetReader::new(reader_roots.clone()))
+            as Box<dyn ErasedAssetReader>;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let roots = reader_roots
                 .iter()
-                .map(|r| library_asset_reader(r))
-                .collect(),
-            roots: reader_roots.clone(),
-        }) as Box<dyn ErasedAssetReader>
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            Box::new(FallbackReader {
+                readers: roots
+                    .iter()
+                    .map(|root| library_asset_reader(root))
+                    .collect(),
+                roots,
+            }) as Box<dyn ErasedAssetReader>
+        }
     })
     .with_watcher(move |sender| {
         if !Path::new(&watch_root).exists() {
@@ -482,7 +550,7 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
 fn library_asset_reader(root: &str) -> Box<dyn ErasedAssetReader> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Box::new(crate::NativeAssetReader::new(root))
+        Box::new(crate::NativeAssetReader::new(vec![PathBuf::from(root)]))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -592,10 +660,277 @@ mod browser_transport_tests {
 /// identity or user-facing error.
 ///
 /// [`read`]: AssetReader::read
+#[cfg(target_arch = "wasm32")]
 struct FallbackReader {
     readers: Vec<Box<dyn ErasedAssetReader>>,
     /// Parallel to `readers`, kept solely so a miss can say where it looked.
     roots: Vec<String>,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod native_resolution_contract_tests {
+    use super::*;
+
+    #[test]
+    fn native_resolution_edges_cli_ancestor_is_terminal() {
+        const CHILD: &str = "LUNCO_RESOLUTION_ANCESTOR_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let error =
+                crate::resolve_asset_input("blocked/entry", lunco_storage::StorageEntryKind::File)
+                    .expect_err("an invalid native ancestor must not select library bytes");
+            assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("cwd");
+        let library = root.path().join("library");
+        std::fs::create_dir(&cwd).unwrap();
+        std::fs::create_dir_all(library.join("blocked")).unwrap();
+        std::fs::write(cwd.join("blocked"), b"file").unwrap();
+        std::fs::write(library.join("blocked/entry"), b"wrong source").unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "lunco_source::native_resolution_contract_tests::native_resolution_edges_cli_ancestor_is_terminal"])
+            .env(CHILD, "1").env(crate::ASSET_ROOT_ENV, &library).current_dir(cwd).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn native_resolution_edges_posix_double_root_is_native_input() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("entry");
+        std::fs::write(&file, b"native").unwrap();
+        let double_root = format!("/{}", file.display());
+        assert_eq!(
+            crate::resolve_asset_input(&double_root, lunco_storage::StorageEntryKind::File)
+                .unwrap(),
+            std::fs::canonicalize(file).unwrap()
+        );
+    }
+
+    #[test]
+    fn native_resolution_edges_scoped_file_uris_reject_foreign_files() {
+        let root = tempfile::tempdir().unwrap();
+        let foreign = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("entry"), b"owned").unwrap();
+        std::fs::write(foreign.path().join("entry"), b"foreign").unwrap();
+        let scope = crate::TwinReadScope::declared("owner", root.path()).unwrap();
+        let owned_uri = lunco_storage::file_path_to_uri(&root.path().join("entry")).unwrap();
+        assert_eq!(
+            read_asset_bytes_in_scope(&owned_uri, None, Some(&scope), 1024).unwrap(),
+            b"owned"
+        );
+        let foreign_uri = lunco_storage::file_path_to_uri(&foreign.path().join("entry")).unwrap();
+        assert_eq!(
+            read_asset_bytes_in_scope(&foreign_uri, None, Some(&scope), 1024)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn native_resolution_edges_reader_uses_logical_relative_grammar() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("folder")).unwrap();
+        std::fs::write(root.path().join("folder/entry"), b"payload").unwrap();
+        std::fs::create_dir(root.path().join("folder/directory")).unwrap();
+        std::fs::write(root.path().join("folder/directory/child"), b"child").unwrap();
+        let reader = crate::NativeAssetReader::new(vec![root.path().to_path_buf()]);
+        bevy::tasks::futures_lite::future::block_on(async {
+            for invalid in ["entry:stream", "entry\0suffix"] {
+                assert!(
+                    matches!(AssetReader::read(&reader, Path::new(invalid)).await,
+                    Err(AssetReaderError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput)
+                );
+            }
+            let mut source = AssetReader::read(&reader, Path::new(r"folder\entry"))
+                .await
+                .unwrap();
+            let mut bytes = Vec::new();
+            Reader::read_to_end(&mut source, &mut bytes).await.unwrap();
+            assert_eq!(bytes, b"payload");
+            assert!(
+                AssetReader::is_directory(&reader, Path::new(""))
+                    .await
+                    .unwrap()
+            );
+            let mut entries = AssetReader::read_directory(&reader, Path::new(r"folder\directory"))
+                .await
+                .unwrap();
+            use bevy::tasks::futures_lite::StreamExt;
+            assert_eq!(
+                entries.next().await,
+                Some(PathBuf::from("folder/directory/child"))
+            );
+        });
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn native_resolution_edges_keep_verbatim_filename_semantics() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        let verbatim = root.join("native.");
+        let ordinary = root.join("native");
+        std::fs::create_dir(&verbatim).unwrap();
+        std::fs::create_dir(&ordinary).unwrap();
+        let file = verbatim.join("entry");
+        std::fs::write(&file, b"verbatim").unwrap();
+        std::fs::write(ordinary.join("entry"), b"ordinary").unwrap();
+        assert_eq!(
+            crate::resolve_asset_input(
+                file.to_str().unwrap(),
+                lunco_storage::StorageEntryKind::File
+            )
+            .unwrap(),
+            file
+        );
+        let uri = lunco_storage::file_path_to_uri(&file).unwrap();
+        assert_eq!(read_asset_bytes(&uri, None).unwrap(), b"verbatim");
+        let ordinary_spelling = folder.path().join("native./entry");
+        assert_eq!(std::fs::read(&ordinary_spelling).unwrap(), b"ordinary");
+        let ordinary_uri = lunco_storage::file_path_to_uri(&ordinary_spelling).unwrap();
+        assert_eq!(read_asset_bytes(&ordinary_uri, None).unwrap(), b"ordinary");
+    }
+
+    #[test]
+    fn native_resolution_contract_preserves_first_entry_kind() {
+        let folder = tempfile::tempdir().unwrap();
+        let authored = folder.path().join("authored # % 月");
+        let cached = folder.path().join("cached");
+        std::fs::create_dir_all(&authored).unwrap();
+        std::fs::create_dir_all(cached.join("entry")).unwrap();
+        std::fs::write(authored.join("entry"), b"authored file").unwrap();
+        std::fs::write(cached.join("entry/child"), b"cached directory").unwrap();
+        let roots = vec![authored, cached];
+        let reader = crate::NativeAssetReader::new(roots.clone());
+        let mounts = crate::TwinRoots::default();
+        let authority = mounts.register("owner", &roots[0]).unwrap();
+        let scope = mounts.read_scope(&authority).unwrap();
+        for name in [&authority, "owner"] {
+            assert_eq!(
+                read_asset_bytes_in_scope(
+                    &crate::twin_uri(name, "entry"),
+                    None,
+                    Some(&scope),
+                    1024
+                )
+                .unwrap(),
+                b"authored file"
+            );
+        }
+        assert_eq!(
+            read_asset_bytes_in_scope("twin://foreign/entry", None, Some(&scope), 1024)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        mounts.unregister_name(&authority).unwrap();
+        assert!(mounts.read_scope(&authority).is_err());
+
+        let selected = resolve_native_asset(
+            &roots,
+            Path::new("entry"),
+            Some(lunco_storage::StorageEntryKind::File),
+        )
+        .unwrap()
+        .unwrap()
+        .1;
+        assert_eq!(
+            selected,
+            std::fs::canonicalize(roots[0].join("entry")).unwrap()
+        );
+        assert_eq!(
+            resolve_native_asset(
+                &roots,
+                Path::new("entry"),
+                Some(lunco_storage::StorageEntryKind::Directory)
+            )
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::NotADirectory
+        );
+        assert!(
+            resolve_native_asset(&roots, Path::new("missing"), None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(resolve_native_asset(&roots, Path::new("entry/child"), None).is_err());
+        assert!(resolve_native_asset(&roots, Path::new("../escape"), None).is_err());
+        assert!(
+            crate::resolve_asset_input(
+                roots[0].to_str().unwrap(),
+                lunco_storage::StorageEntryKind::File
+            )
+            .is_err()
+        );
+        assert!(
+            crate::resolve_asset_input(
+                roots[0].join("missing").to_str().unwrap(),
+                lunco_storage::StorageEntryKind::File
+            )
+            .is_err()
+        );
+        for input in [
+            selected.to_str().unwrap().to_owned(),
+            lunco_storage::file_path_to_uri(&selected).unwrap(),
+        ] {
+            assert_eq!(
+                crate::resolve_asset_input(&input, lunco_storage::StorageEntryKind::File).unwrap(),
+                selected
+            );
+        }
+        for input in [
+            r"C:\native\source.bin",
+            r"\\?\C:\native\source.bin",
+            r"\\server\share\source.bin",
+        ] {
+            assert!(crate::asset_path::load_asset_path(input, None, None, None).is_err());
+        }
+        let origin = bevy::asset::AssetPath::parse("twin://owner/scenes/main.usda");
+        assert!(
+            crate::asset_path::load_asset_path("../../other/secret.bin", Some(&origin), None, None)
+                .is_err()
+        );
+        assert!(
+            crate::asset_path::load_asset_path("twin://other/../secret.bin", None, None, None)
+                .is_err()
+        );
+        bevy::tasks::futures_lite::future::block_on(async {
+            assert!(
+                !AssetReader::is_directory(&reader, Path::new("entry"))
+                    .await
+                    .unwrap(),
+                "a cached directory must not replace an authored file"
+            );
+            assert!(
+                AssetReader::read_directory(&reader, Path::new("entry"))
+                    .await
+                    .is_err()
+            );
+            let mut source = AssetReader::read(&reader, Path::new("entry"))
+                .await
+                .unwrap();
+            let mut bytes = Vec::new();
+            Reader::read_to_end(&mut source, &mut bytes).await.unwrap();
+            assert_eq!(bytes, b"authored file");
+            assert!(
+                !AssetReader::is_directory(&reader, Path::new("missing"))
+                    .await
+                    .unwrap()
+            );
+            assert!(matches!(
+                AssetReader::read(&reader, Path::new("missing")).await,
+                Err(AssetReaderError::NotFound(_))
+            ));
+        });
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -620,18 +955,10 @@ mod native_reader_contract_tests {
         std::os::unix::fs::symlink(outside.join("payload"), root.join("literal # %.bin.meta"))
             .unwrap();
         std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
-        let roots = [root, later]
-            .map(|root| root.to_str().unwrap().to_owned())
-            .to_vec();
-        let reader = FallbackReader {
-            readers: roots
-                .iter()
-                .map(|root| library_asset_reader(root))
-                .collect(),
-            roots,
-        };
+        let root_for_default = root.clone();
+        let reader = crate::NativeAssetReader::new(vec![root, later]);
         bevy::tasks::futures_lite::future::block_on(async {
-            let mut source = directory_asset_source(Path::new(&reader.roots[0]));
+            let mut source = directory_asset_source(&root_for_default);
             let default = (source.reader)();
             assert!(
                 ErasedAssetReader::is_directory(default.as_ref(), Path::new(""))
@@ -647,7 +974,7 @@ mod native_reader_contract_tests {
                 matches!(ErasedAssetReader::read_meta(default.as_ref(), Path::new("literal # %.bin")).await,
                 Err(AssetReaderError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied)
             );
-            let relative_root = crate::NativeAssetReader::new("relative");
+            let relative_root = crate::NativeAssetReader::new(vec![PathBuf::from("relative")]);
             assert!(
                 AssetReader::read(&relative_root, Path::new("payload"))
                     .await
@@ -687,6 +1014,7 @@ mod native_reader_contract_tests {
 }
 
 /// Try each root in order; the first non-`NotFound` answer wins.
+#[cfg(target_arch = "wasm32")]
 macro_rules! try_both {
     ($self:ident, $method:ident, $path:expr_2021) => {{
         // `readers` is non-empty by construction (`assets/` is always first),
@@ -704,6 +1032,7 @@ macro_rules! try_both {
     }};
 }
 
+#[cfg(target_arch = "wasm32")]
 impl AssetReader for FallbackReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
         if !crate::asset_path::is_safe_relative_components(path) {
@@ -777,10 +1106,11 @@ mod windows_uri_tests {
         lunco_storage::write_file_sync(&scene, b"#usda 1.0\n").expect("write scene");
 
         assert_eq!(
-            read_asset_bytes_with_twin_root(
+            read_asset_bytes_in_scope(
                 r"twin://fixture\sim\scenes\traverse.usda",
                 None,
-                Some(root.path())
+                Some(&crate::TwinReadScope::declared("fixture", root.path()).unwrap()),
+                1024
             )
             .expect("Windows-authored Twin URI resolves through the Twin root"),
             b"#usda 1.0\n"
@@ -792,17 +1122,7 @@ mod windows_uri_tests {
     fn missing_library_asset_reports_the_logical_path() {
         let root = tempfile::tempdir().expect("temporary asset root");
         let roots = [root.path().join("authored"), root.path().join("cache")];
-        let readers = roots
-            .iter()
-            .map(|root| AssetSource::get_default_reader(root.to_string_lossy().into_owned())())
-            .collect();
-        let reader = FallbackReader {
-            readers,
-            roots: roots
-                .iter()
-                .map(|root| root.to_string_lossy().into_owned())
-                .collect(),
-        };
+        let reader = crate::NativeAssetReader::new(roots.to_vec());
 
         let error = match futures_lite::future::block_on(AssetReader::read(
             &reader,

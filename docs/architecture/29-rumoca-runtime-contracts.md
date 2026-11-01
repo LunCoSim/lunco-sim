@@ -13,6 +13,14 @@ carries the exact reachable file closure and source-set keys used for content
 identity. Invalid or unbalanced models stop at the compiler's phase diagnostic;
 unchecked DAE construction is not a diagnostic or runtime entry point.
 
+Disk source discovery and source-root document/rename facts retain native
+absolute paths, including Windows verbatim drive and UNC prefixes. The compiler
+strips the native root before converting relative components to `/` for the
+portable content closure. Native addresses remain available to diagnostics and
+Modelica resource resolution; logical identities never include a machine root.
+`source_root_content_closure_preserves_native_discovery_paths` exercises this
+boundary with discovered disk sources and Windows drive/UNC spellings.
+
 External input declaration defaults retain their qualified identity. Internal
 and connected bindings retain equation ownership. The production
 `modelica_scoped_input_defaults.rhai` scenario covers live values, overrides,

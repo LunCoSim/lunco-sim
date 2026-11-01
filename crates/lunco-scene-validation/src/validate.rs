@@ -95,24 +95,8 @@ pub struct ValidationFinding {
 /// Native-only by construction — there is no local filesystem on wasm.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve(reference: &str) -> Result<PathBuf, String> {
-    let as_given = Path::new(reference);
-    if as_given.is_file() {
-        return Ok(as_given.to_path_buf());
-    }
-    match lunco_assets_core::engine_asset_local_path(reference)
-        .map_err(|error| error.to_string())?
-    {
-        Some(p) if p.is_file() => Ok(p),
-        Some(p) => Err(format!(
-            "file not found: `{reference}` (tried as given, then {})",
-            p.display()
-        )),
-        None => Err(format!(
-            "`{reference}` carries a scheme this pre-flight check cannot resolve \
-             without a running instance (twin://, http…) — pass a lunco:// or \
-             filesystem path"
-        )),
-    }
+    lunco_assets_core::resolve_asset_input(reference, lunco_storage::StorageEntryKind::File)
+        .map_err(|error| error.to_string())
 }
 
 /// Validate one asset file, dispatching on its extension. Pure: reads the
@@ -131,7 +115,10 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
 /// A Twin source owner supplies its admitted root so authored Twin-qualified
 /// composition dependencies use the same context as scene loading.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn validate_asset_loadability(reference: &str, twin_root: Option<&Path>) -> ValidationReport {
+pub fn validate_asset_loadability(
+    reference: &str,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
+) -> ValidationReport {
     validate_asset_with_policy(reference, false, twin_root)
 }
 
@@ -139,7 +126,7 @@ pub fn validate_asset_loadability(reference: &str, twin_root: Option<&Path>) -> 
 fn validate_asset_with_policy(
     reference: &str,
     apply_authored_policy: bool,
-    twin_root: Option<&Path>,
+    twin_root: Option<&lunco_assets_core::TwinReadScope>,
 ) -> ValidationReport {
     let path = match resolve(reference) {
         Ok(p) => p,
@@ -369,22 +356,8 @@ fn twin_validation_error(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_twin_root(reference: &str) -> Result<PathBuf, String> {
-    let as_given = Path::new(reference);
-    if as_given.is_dir() {
-        return Ok(as_given.to_path_buf());
-    }
-    match lunco_assets_core::engine_asset_local_path(reference)
-        .map_err(|error| error.to_string())?
-    {
-        Some(path) if path.is_dir() => Ok(path),
-        Some(path) => Err(format!(
-            "Twin folder not found: `{reference}` (resolved `{}` is not a directory)",
-            path.display()
-        )),
-        None => Err(format!(
-            "`{reference}` is not a local Twin folder; pass a filesystem path or a lunco:// asset directory"
-        )),
-    }
+    lunco_assets_core::resolve_asset_input(reference, lunco_storage::StorageEntryKind::Directory)
+        .map_err(|error| error.to_string())
 }
 
 /// Validate all resolver namespaces visible from one Twin folder.
@@ -874,9 +847,7 @@ impl ApiQueryProvider for ValidateSysmlProvider {
 }
 
 pub(crate) fn is_twin_source_set(reference: &str) -> bool {
-    reference
-        .strip_prefix("twin://")
-        .is_some_and(|name| !name.is_empty() && !name.contains(['/', '\\']))
+    lunco_assets_core::parse_twin_root_uri(reference).is_some()
 }
 
 pub fn analyze_sysml_reference(world: &World, reference: &str) -> ValidationReport {
@@ -888,10 +859,8 @@ pub(crate) fn validate_sysml_reference(
     reference: &str,
     apply_structural_policy: bool,
 ) -> ValidationReport {
-    if let Some(name) = reference.strip_prefix("twin://") {
-        if !name.is_empty() && !name.contains('/') && !name.contains('\\') {
-            return validate_sysml_twin(world, name, reference, apply_structural_policy);
-        }
+    if let Some(name) = lunco_assets_core::parse_twin_root_uri(reference) {
+        return validate_sysml_twin(world, name, reference, apply_structural_policy);
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1021,9 +990,7 @@ pub fn sysml_model_analysis(
     reference: &str,
 ) -> Result<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>, Vec<String>> {
     #[cfg(feature = "sysml-runtime")]
-    if let Some(name) = reference
-        .strip_prefix("twin://")
-        .filter(|name| !name.is_empty() && !name.contains('/') && !name.contains('\\'))
+    if let Some(name) = lunco_assets_core::parse_twin_root_uri(reference)
         && let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>()
     {
         let (twin_id, twin, _) =
