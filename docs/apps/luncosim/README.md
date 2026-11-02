@@ -134,7 +134,19 @@ Enable **Settings → Debug → Show console on next start**, then restart, to
 see startup logs. The preference stays enabled until unchecked; it does not
 open or close a console in the current session. It is stored as
 `debug_console.show_on_startup` in the shared `lunco/settings.json` document.
-Use `luncosim.exe --console` for a single diagnostic launch.
+To return to startup without a console, uncheck the same setting and restart.
+On Windows the settings file normally lives at
+`%APPDATA%\lunco\settings.json`; when `LUNCOSIM_CONFIG` is set, it lives in
+that directory instead. Other user preferences share this file.
+
+If startup fails before you can open Settings, open PowerShell in the directory
+containing `luncosim.exe` and launch it with:
+
+```powershell
+.\luncosim.exe --console
+```
+
+This enables the console for one launch without changing the saved preference.
 
 Launching from a terminal attaches to that terminal, and inherited redirected
 streams remain usable for CLI commands and captured logs. Builds without the
