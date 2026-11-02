@@ -99,6 +99,45 @@ Pause and time scaling therefore apply to advection through the shared clock. Th
 raster illumination proxy; it is not an additional propulsive energy source or
 a volumetric lighting solver. Fuel colour remains a documented heuristic.
 
+The reusable rocket visual anchors this point-light proxy at the nozzle exit
+(the unscaled Exhaust frame), independently of the observation volume. Its world position therefore stays at the nozzle as the
+envelope length changes or intersects terrain during landing. Luminous power
+still comes from photometry, including extinction at zero delivered energy.
+The ground illumination is an approximation, not resolved plume-surface radiation.
+
+## Exit filling and hot nozzle walls
+
+Both optical layers start across the physical exit disk. The near-exit radial
+distribution is `(45/32)*(1-r^8)^2`, with unit disk mean. Over four exit radii
+it blends into the existing normalized downstream core distribution and its
+authored width. Advected intermittency develops over that same distance rather
+than cutting holes into the exit plane. This changes optical distribution, not
+the gas density, mass flow, or available radiant power. Increasing apparent
+density by inventing extra propellant is not an optical fix.
+
+`NozzleWallThermal` estimates a separate wall temperature using the existing
+`ThermalMass` and a connected signed heat-exchange boundary. Gas recovery
+temperature, flow-dependent film transfer, grey-body radiation and conduction
+to the mount determine heating and cooling. Heating is capped by an authored
+fraction of jet power. The observer is passive: it does not yet feed wall heat
+loss back into the chamber solution. Its heat capacity, areas, recovery factor,
+film coefficient and mounting conductance require hardware calibration; the
+defaults are explicitly study assumptions, not measured Griffin properties.
+
+The opaque `thermal_metal.wesl` material converts that temperature to visible
+emission with Planck's law and coarse CIE 1931 quadrature (400–700 nm, 20 nm
+spacing, [CIE 2019 data](https://doi.org/10.25039/CIE.DS.xvudnb9b)),
+then uses the shared PBR lighting path. Temperature and emissivity
+have explicit float GPU projection outputs; the thermal state and diagnostics
+remain double precision. Cold metal stays dark. Hot metal can remain luminous
+after delivered thrust and plume light have reached zero. This is a surface
+emission model, not ray-traced indirect lighting or a combustion spectrum.
+
+Run `scenes/tests/nozzle_wall_thermal.usda` for native warm-up, shutdown,
+cooling, power bounds, independent stored-energy integration and the real GPU
+temperature/emissivity wires. Inspect a powered and cooling vehicle view as
+well: this mathematical fixture alone does not establish a convincing nozzle.
+
 ## Opaque occlusion
 
 The cylinder is a rasterization bound, not a gas surface. Testing its front face

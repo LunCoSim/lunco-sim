@@ -1,8 +1,9 @@
 // Production Modelica conservation and optical-budget acceptance. Rhai supplies
 // boundary conditions and observes laws; it never computes a vehicle's plume.
 fn simulation_dependencies(me,ctx) {
-    #{modelica_entities:[find_path("/World/Engine")],entity_reads:[find_path("/World/Engine/Exhaust/Flame")],entity_writes:[],
-      query_reads:["QueryUsdPrim","GetPort"],required_inputs:[]}
+    #{modelica_entities:[find_path("/World/Engine")],entity_reads:[find_path("/World/Engine/Exhaust/Flame"),
+      find_path("/World/Engine/Exhaust"),find_path("/World/Engine/Exhaust/PlumeLight")],entity_writes:[],
+      query_reads:["QueryUsdPrim","GetPort","ListOpenDocuments"],required_inputs:[]}
 }
 fn write(engine,writes) {
     let result=cmd("SetPorts",#{target:engine,writes:writes});
@@ -10,8 +11,17 @@ fn write(engine,writes) {
 }
 fn value(engine,name) {get(engine,name)}
 fn station(engine,kind,i) {value(engine,"profile_"+kind+"_"+i)}
-fn conservation(engine,mdot) {
+fn conservation(engine,mdot,doc) {
     let checks=[];
+    let light_prim=query("QueryUsdPrim",#{doc_id:doc,path:"/World/Engine/Exhaust/PlumeLight",attrs:[]});
+    if light_prim.contains("ok") && !light_prim.ok {throw "Nozzle light inspection failed: "+light_prim;}
+    checks.push(t_true(light_prim.type_name=="SphereLight",
+        "nozzle illumination retains its composed SphereLight schema"));
+    let exhaust=world_pos(find_path("/World/Engine/Exhaust"));
+    let light=world_pos(find_path("/World/Engine/Exhaust/PlumeLight"));
+    checks.push(t_true(abs(light[0]-exhaust[0])<1.0e-5
+        && abs(light[1]-exhaust[1])<1.0e-5 && abs(light[2]-exhaust[2])<1.0e-5,
+        "plume local-light proxy stays at the nozzle exit as the envelope changes"));
     let h=value(engine,"total_specific_energy_j_kg");
     let gamma=value(engine,"gas_gamma");let gas_r=value(engine,"gas_constant_j_kg_k");
     for i in 0..5 {
@@ -55,6 +65,13 @@ fn conservation(engine,mdot) {
 fn on_start(me,ctx) {
     this.engine=find_path("/World/Engine");this.phase=0;this.elapsed=0.0;
     this.checks=[];this.done=false;
+    let matches=[];
+    for doc in query("ListOpenDocuments",#{}).open_documents {
+        if doc.kind=="usd" && doc.origin.path!=()
+            && doc.origin.path.ends_with("/scenes/tests/rocket_engine_plume_defaults.usda") {matches.push(doc.doc_id);}
+    }
+    if matches.len()!=1 {throw "Plume gate requires exactly one owning fixture document: "+matches;}
+    this.doc=matches[0];
 }
 fn on_tick(me,ctx) {
     if this.done {return;}this.elapsed+=dt();if this.elapsed<0.25 {return;}this.elapsed=0.0;
@@ -66,7 +83,7 @@ fn on_tick(me,ctx) {
         write(this.engine,[["thrust_n",1000.0],["propellant_flow_kgs",1000.0/2600.0],
             ["exhaust_velocity_mps",2600.0]]);
     } else if this.phase==1 {
-        this.checks += conservation(this.engine,1000.0/2600.0);
+        this.checks += conservation(this.engine,1000.0/2600.0,this.doc);
         let flame=find_path("/World/Engine/Exhaust/Flame");
         this.checks.push(t_true(abs(get(flame,"flow_phase_sin")-value(this.engine,"flow_phase_sin"))<1.0e-6
             && abs(get(flame,"flow_phase_cos")-value(this.engine,"flow_phase_cos"))<1.0e-6,
@@ -94,7 +111,7 @@ fn on_tick(me,ctx) {
         write(this.engine,[["nozzle_exit_radius_m",0.2],["thrust_n",4000.0],
             ["maximum_thrust_n",4000.0],["propellant_flow_kgs",4000.0/2600.0]]);
     } else if this.phase==5 {
-        this.checks += conservation(this.engine,4000.0/2600.0);
+        this.checks += conservation(this.engine,4000.0/2600.0,this.doc);
         this.checks.push(t_true((station(this.engine,"radius_m",4)/this.radius-2.0).abs()<1.0e-6,
             "geometric similarity doubles the profile radii"));
         this.checks.push(t_true((station(this.engine,"density_kg_m3",0)-this.rho).abs()<1.0e-9
@@ -102,7 +119,8 @@ fn on_tick(me,ctx) {
             "geometric similarity preserves mass flux and scales volumetric emission"));
         write(this.engine,[["thrust_n",0.0],["propellant_flow_kgs",0.0]]);
     } else {
-        let mesh=query("QueryUsdPrim",#{path:"/World/Engine/Exhaust/Flame",attrs:[]});
+        let mesh=query("QueryUsdPrim",#{doc_id:this.doc,path:"/World/Engine/Exhaust/Flame",attrs:[]});
+        if mesh.contains("ok") && !mesh.ok {throw "Plume proxy inspection failed: "+mesh;}
         this.checks.push(t_true(mesh.type_name=="Cylinder","expanding gas uses a non-tapering proxy"));
         this.done=true;report_verdict(this.checks,"PLUME CONSERVATION","ROCKET_ENGINE_PLUME_DEFAULTS");return;
     }

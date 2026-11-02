@@ -125,7 +125,7 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
     @if((!(!DEPTH_PREPASS))) let radii=array<f32,5>(mat.radius_m_0,mat.radius_m_1,mat.radius_m_2,mat.radius_m_3,mat.radius_m_4);
     @if((!(!DEPTH_PREPASS))) let temps=array<f32,5>(mat.temperature_k_0,mat.temperature_k_1,mat.temperature_k_2,mat.temperature_k_3,mat.temperature_k_4);
     @if((!(!DEPTH_PREPASS))) let emissivity=array<f32,5>(mat.emission_w_m3_0,mat.emission_w_m3_1,mat.emission_w_m3_2,mat.emission_w_m3_3,mat.emission_w_m3_4);
-    @if((!(!DEPTH_PREPASS))) let sigma=clamp(mat.radial_width,0.1,1.0);
+    @if((!(!DEPTH_PREPASS))) let downstream_sigma=clamp(mat.radial_width,0.1,1.0);
     @if((!(!DEPTH_PREPASS))) let fuel=max(vec3<f32>(mat.fuel_color_r,mat.fuel_color_g,mat.fuel_color_b),vec3<f32>(0.0));
     @if((!(!DEPTH_PREPASS))) let seed=f32(input.instance_index%97u)*17.31;
     @if((!(!DEPTH_PREPASS))) let phase=atan2(mat.flow_phase_sin,mat.flow_phase_cos)*1024.0/6.283185307179586;
@@ -144,7 +144,7 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         let exit=min(scene_exit,min(far.x,min(far.y,far.z)));
         if exit<=entry {continue;}
         let metres_per_unit=length(ray*vec3<f32>(mat.bound_radius_m,mat.profile_length_m,mat.bound_radius_m));
-        let target_step=max(0.00001,radii[station]*sigma*0.08);
+        let target_step=max(0.00001,radii[station]*downstream_sigma*0.08);
         let count=u32(clamp(ceil((exit-entry)*metres_per_unit/target_step),12.0,f32(maximum_samples)));
         let step=(exit-entry)/f32(count);
         let ds=step*metres_per_unit;
@@ -159,6 +159,10 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         let emission=exp(mix(log(e0),log(e1),f));
         if length(p.xz)*mat.bound_radius_m>1.15*radius {continue;}
         let z=a*mat.profile_length_m;
+        // Both layers leave the entire exit disk. A narrow rendering core is
+        // a downstream optical profile, never a smaller physical nozzle.
+        let development=smoothstep(0.0,4.0*mat.radius_m_0,z);
+        let sigma=mix(1.0,downstream_sigma,development);
         // Convected spatial texture uses Modelica distance: pause, time scaling
         // and shutdown share the simulation clock, with no render-clock mirror.
         let q=vec3<f32>(p.x*mat.bound_radius_m/mat.radius_m_0,
@@ -171,8 +175,16 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         let n0=transported_noise(q+vec3<f32>(warp*1.5,0.0),1.7,0.45,seed);
         let n1=transported_noise(q,mat.flicker_scale,1.6,seed);
         let intermittent=pow(smoothstep(0.25,0.75,0.7*n0+0.3*n1),3.0);
-        let texture=mix(1.0,intermittent,clamp(mat.flicker,0.0,1.0));
-        let radial_weight=5.0/(sigma*sigma)*pow(1.0-radial*radial,4.0);
+        // An attached jet has a filled, coherent exit, with increasing
+        // downstream structure. Noise attenuates, never creates radiant power.
+        let texture=mix(1.0,intermittent,clamp(mat.flicker,0.0,1.0)*development);
+        // Each distribution has unit disk-mean: integral 2*r*w(r) dr = 1.
+        // (45/32)*(1-r^8)^2 gives a broad exit with a smooth lip boundary;
+        // 5*(1-r^2)^4 is the existing downstream core. Their convex mixture
+        // preserves the Modelica power budget, including the width transform.
+        let exit_weight=(45.0/32.0)*pow(1.0-pow(radial,8.0),2.0);
+        let developed_weight=5.0*pow(1.0-radial*radial,4.0);
+        let radial_weight=mix(exit_weight,developed_weight,development)/(sigma*sigma);
         let tail=1.0-smoothstep(0.85,1.0,a);
         let hot=clamp(temperature/max(1.0,mat.temperature_k_0),0.0,1.0)*(1.0-radial*radial);
         let tint=mix(mat.edge_color*fuel,mat.core_color*mix(fuel,vec3<f32>(1.0),0.7),hot);
