@@ -117,6 +117,7 @@ actually parses, so prefer it if this table and the binary ever disagree.
 | `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |
 | `--no-throttle` | Disable background throttling. The window will update at full rate even when unfocused. |
 | `--log-diag` | Enable Bevy's `LogDiagnosticsPlugin` to print FPS, FrameTime, and physics stats to the console. |
+| `--console` | Windows desktop builds: enable the debug console for this launch without changing the saved preference. |
 | `--window-pos <SPEC>` | Force the OS window to a specific screen region (e.g., `1920x1080+0+0`). |
 | `--host [PORT]` | Start a networked listen-server. Default port is 5888. |
 | `--connect <ADDR>` | Connect to a networked server via WebTransport. An `ADDR` with no port implies `:5888`; a bare IP skips TLS validation (LAN/dev). |
@@ -125,6 +126,27 @@ actually parses, so prefer it if this table and the binary ever disagree.
 
 Measuring FPS? Always pass `--no-vsync --no-throttle` — otherwise you are timing
 the compositor and the unfocused power-save throttle, not the renderer.
+
+### Windows debug console
+
+Windows desktop launches open the simulator without a console by default.
+Enable **Settings → Debug → Show console on next start**, then restart, to
+see startup logs. The preference stays enabled until unchecked; it does not
+open or close a console in the current session. It is stored as
+`debug_console.show_on_startup` in the shared `lunco/settings.json` document.
+Use `luncosim.exe --console` for a single diagnostic launch.
+
+Launching from a terminal attaches to that terminal, and inherited redirected
+streams remain usable for CLI commands and captured logs. Builds without the
+`ui` feature and `luncosim-server` retain their console subsystem.
+
+On Windows, verify startup, preference persistence across restarts, the
+one-launch override, and redirected CLI output with the production binary:
+
+```powershell
+$env:LUNCOSIM_BIN = (Resolve-Path target/debug/luncosim.exe).Path
+python scripts/api/test_windows_console.py --port 4127
+```
 
 ### GPU-backed visual tests
 

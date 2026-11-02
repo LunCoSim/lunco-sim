@@ -2,11 +2,16 @@
 //! `lunco-luncosim-ui`; the headless `luncosim-server` uses the runtime
 //! package directly.
 
+#![cfg_attr(all(windows, feature = "ui"), windows_subsystem = "windows")]
+
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> lunco_luncosim_core::AppExit {
+    #[cfg(all(windows, feature = "ui"))]
+    lunco_luncosim_ui::initialize_windows_console();
+
     #[cfg(not(target_family = "wasm"))]
     if std::env::args_os().any(|argument| argument.to_str().is_none()) {
         eprintln!("luncosim: command-line arguments must be valid Unicode");

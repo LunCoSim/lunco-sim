@@ -25,6 +25,13 @@ crates/lunco-ui/ARCHITECTURE.md
 It explains the full architecture, step-by-step panel integration guide,
 and design decisions. This skill is a quick-reference summary.
 
+Windows **Settings → Debug → Show console on next start** dispatches
+`SetDebugConsoleStartup`; `lunco-luncosim-ui::debug_console` owns the persisted
+preference and pre-app console setup. Changes apply on restart. Use the
+[native startup acceptance check](../../scripts/api/test_windows_console.py)
+and the [console guide](../../docs/apps/luncosim/README.md#windows-debug-console)
+when changing this menu or process boundary.
+
 ## Graph readability
 
 Analyze places the live viewport in the center and Graphs in the bottom dock,

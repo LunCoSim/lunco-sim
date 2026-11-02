@@ -9336,6 +9336,7 @@ dependencies = [
  "usvg",
  "wasm-bindgen-futures",
  "web-sys",
+ "windows-sys 0.61.2",
  "winit",
  "winresource",
 ]
