@@ -28,6 +28,16 @@ API readiness, and one relevant user workflow. Linux AppImages remain writable
 and must be relaunched from that same path for updater testing. The updater
 feed is machine-only; it is not the human installer source.
 
+Windows desktop startup must not create a console by default. Check
+**Settings → Debug → Show console on next start** across restarts and the
+one-launch `--console` override. The preference remains enabled until switched
+off. With `LUNCOSIM_BIN` set to the production Windows executable, run
+`python scripts/api/test_windows_console.py --port <free-port>` to verify
+native console attachment, persistence, and redirected CLI output. The script
+uses isolated settings and controls only its own sessions. Also inspect the
+installed shortcut launch and the Settings menu in the packaged application;
+a source-build gate alone does not establish installer acceptance.
+
 Keep the installed app separate from the user asset cache. Report `NotInstalled`
 for source builds and ordinary archives when testing update behavior. Do not
 lower rendering quality or disable shadows to make package acceptance pass.

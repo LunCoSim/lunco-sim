@@ -60,6 +60,9 @@ you can move from interactive exploration to automated studies.
    to find your way around, then **First Drive** to try a rover.
 3. Follow a [walkthrough](docs/tutorials/README.md#authoring-walkthroughs) to build your own project.
 
+For Windows startup diagnostics, see the
+[debug-console setting and launch option](docs/apps/luncosim/README.md#windows-debug-console).
+
 LunCoSim is under active development. Model coverage and maturity vary;
 engineering conclusions need validation for their intended use. Check the
 [feature status](specs/README.md) and [known limitations](docs/reviews/README.md).

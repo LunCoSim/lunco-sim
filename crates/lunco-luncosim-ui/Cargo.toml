@@ -181,6 +181,9 @@ image = { workspace = true, features = ["ico"], optional = true }
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1.31", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bevy = { workspace = true, features = ["file_watcher"] }
 

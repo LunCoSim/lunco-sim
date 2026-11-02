@@ -91,10 +91,7 @@ fn scope_kind(scope: &DatasetScope) -> &'static str {
 }
 
 fn needs_provisioning(state: &DatasetState) -> bool {
-    matches!(
-        state,
-        DatasetState::Missing | DatasetState::Failed(_) | DatasetState::Cancelled
-    )
+    !state.is_installed()
 }
 
 fn required_missing(
@@ -647,8 +644,11 @@ pub(crate) fn publish_dataset_provisioning_surface(
         state.active = None;
         state.pending.clear();
         state.dismissed.clear();
+    }
+    if requirements_changed || registry.is_changed() {
         for scope in registry.entries().iter().map(|entry| &entry.scope) {
             if !same_scope(&state, scope)
+                && !state.dismissed.contains(&scope.id())
                 && required_missing(&registry, requirements.as_deref(), scope)
             {
                 state.pending.push(scope.clone());

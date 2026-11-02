@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**304 commands** across **57** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**305 commands** across **57** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -99,7 +99,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-services`](#lunco-luncosim-services) (2 commands)
-- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (6 commands)
+- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (7 commands)
 - [`lunco-modelica-api`](#lunco-modelica-api) (10 commands)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
@@ -2541,6 +2541,17 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `target` | `Entity` |  The scripted entity whose live scenario source to persist onto its prim.  Ownership-gated (same as `RunScenario`): saving a scenario is editing it. |
 
+#### `SetDebugConsoleStartup`
+
+ Persist whether Windows desktop launches open a debug console.
+ Takes effect on the next start and remains enabled until switched off.
+
+- *defined in:* `crates/lunco-luncosim-ui/src/debug_console.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
 #### `SetScenarioRegistryFixture`
 
  Toggle the explicit production-harness failure fixture.
@@ -4544,7 +4555,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 304 commands from the runtime schema; scanned 1063 .rs files for docs (0 parse failure(s) skipped).
+<!-- 305 commands from the runtime schema; scanned 1065 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

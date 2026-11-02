@@ -163,6 +163,10 @@ async fn run(
     timeout: u64,
     control: &ProcessControl,
 ) -> std::io::Result<Vec<u8>> {
+    let output_size = u64::from(size[2])
+        .checked_mul(u64::from(size[3]))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .ok_or_else(|| invalid("shader image dimensions exceed the addressable output size"))?;
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -172,7 +176,6 @@ async fn run(
         .request_device(&wgpu::DeviceDescriptor::default())
         .await
         .map_err(|e| invalid(e.to_string()))?;
-    let output_size = size[2] as u64 * size[3] as u64 * 16;
     let limit = device.limits().max_storage_buffer_binding_size as u64;
     if input.len() as u64 > limit || output_size > limit || params.len() as u64 > limit {
         return Err(invalid(

@@ -39,6 +39,12 @@ package. The headless
 `luncosim-server` bin lives in the sibling `lunco-luncosim-server` crate and
 calls `lunco_luncosim_runtime::run_headless()`.
 
+Windows UI builds use the Windows GUI subsystem, so desktop startup does not
+create a console. Before CLI dispatch, the UI package attaches inherited
+terminal output or allocates an explicitly requested debug console. See the
+[Windows debug-console guide](../../docs/apps/luncosim/README.md#windows-debug-console)
+for the restart preference, `--console`, and native acceptance check.
+
 The `luncosim rhai` subcommand is a terminal adapter from
 `lunco-rhai-repl`. It never embeds a Rhai engine: the running simulator
 executes the reflected `RunRhai` command, while `lunco-api-client` owns the

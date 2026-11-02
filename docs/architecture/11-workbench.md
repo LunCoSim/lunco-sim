@@ -52,6 +52,14 @@
 
 ## 1. What "workbench" means here
 
+The native LunCoSim UI owns the persisted `debug_console` startup section and
+the client-local `SetDebugConsoleStartup` command. On Windows its Debug menu
+edits the next process launch's preference. The binary selects the Windows GUI
+subsystem and invokes console initialization before CLI dispatch and logging;
+the platform adapter preserves inherited streams while attaching or allocating
+a console. This pre-app process boundary cannot defer to runtime Rhai. See the
+[Windows console guide](../apps/luncosim/README.md#windows-debug-console).
+
 Windowed offline capture consumes the workbench's painted loading visibility
 through `lunco-capture::presentation::CaptureUiPresentation`. Capture requires
 the current clean revision to have completed render submission. The status

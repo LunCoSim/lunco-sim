@@ -7,6 +7,8 @@
 
 mod application;
 mod camera;
+#[cfg(not(target_family = "wasm"))]
+mod debug_console;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_simulation_host;
 #[cfg(feature = "api-transport")]
@@ -18,6 +20,8 @@ mod ui;
 mod url_scheme;
 
 pub use application::run_gui;
+#[cfg(windows)]
+pub use debug_console::initialize_windows_console;
 #[cfg(feature = "api-transport")]
 pub use offscreen::LunCoSimOffscreenPlugin;
 pub(crate) use save_scenario::SaveScenario;

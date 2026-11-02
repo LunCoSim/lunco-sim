@@ -105,14 +105,18 @@ and publishes no consent view, while the native resource panel and registry
 remain available. It does not authorize network activity; user actions dispatch
 the typed dataset commands.
 
-An accepted download stays visible through transfer and preparation. UI actions
+Requirement and registry changes reconsider every non-ready required scope,
+including work already in flight; an explicit dismissal remains effective until
+the scene requirements change. An accepted download stays visible through
+transfer, preparation and failure. UI actions
 validate owner and target lifetime independently of simulation readiness.
 `InteractionLifetime::Owner` pins the application/Twin/provider; `Scene` pins
 an exact live scene lifecycle, including its load. Only simulation work requires
 a committed scene. Source-node callback leases remain parented to their publisher
 and are validated again before queued execution. Registered tool ownership
 selects the default execution route; naming a target Twin does not change an
-application tool into Twin code. An inherited caller context remains unchanged.
+application tool into Twin code. An inherited caller retains its route, clock,
+phase and exact target.
 
 The data window is non-modal and can be dismissed while its work continues.
 The application's menus, editors and diagnostics stay available. Its background

@@ -369,6 +369,7 @@ PERFORMANCE:
                          wall-clock execution only; it does not fake a transport
                          rate or bypass the co-simulation barrier.
         --log-diag       Log FPS / frame-time / physics diagnostics.
+        --console        Windows: enable the debug console for this launch.
 
 SUBCOMMAND:
     rhai                 REPL client against a RUNNING instance's --api port.

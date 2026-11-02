@@ -238,6 +238,18 @@ def main():
                 list(before), list(after), .5, result["times"], result["series"]["y"], 2.0, .000001)) + ");")
             verdict("verify_preserved_artifact(" + json.dumps((artifact / "image.png").read_bytes().hex()) + "," + json.dumps((artifact / "copy.png").read_bytes().hex()) + ");")
             old = (artifact / "image.png").read_bytes().hex()
+            planner=dynamic/"tools/plan.rhai"
+            valid_planner=planner.read_text()
+            planner.write_text('fn plan(facts) { let plan=facts.plan; plan.steps[1].target_resolution=[4294967295,4294967295]; plan }\n')
+            execute(session,"ProcessDataset",id=row["id"],force=True)
+            wait_for(lambda:terminal(scope,"product","failed"),"oversized shader rejection")
+            verdict(f'verify_pipeline_failure("{scope}","product","addressable output size");')
+            capture_view(scope,"product","process","oversized-shader","addressable output size")
+            verdict("verify_preserved_artifact("+json.dumps(old)+","+json.dumps((artifact/"image.png").read_bytes().hex())+");")
+            planner.write_text(valid_planner)
+            execute(session,"ProcessDataset",id=row["id"],force=False)
+            wait_for(lambda:terminal(scope,"product","installed"),"valid recipe after shader rejection")
+            verdict(f'verify_pipeline("{scope}","product","installed",3,4);')
             def retire():
                 execute(session, "OpenTwin", path=str(retired))
                 wait_for(lambda: not any(d["scope"]==scope for d in execute(session,"ListDatasets").get("datasets",[])), "Twin retirement")
@@ -302,10 +314,8 @@ def main():
             row = open_twin(griffin, scope, "nobile03_dem")
             scope = row["scope"]
             verdict(f'verify_pipeline("{scope}","nobile03_dem","missing",3,3);')
-            def terrain_waiting():
-                report=execute(session,"RunRhai",code='let found=false; for b in clock_snapshot().simulation_progress.blockers {if b.owner=="TerrainPreparation" && b.reason.contains("nobile03_dem") {found=true;}} print(found);')
-                return report["stdout"].strip()=="true"
-            wait_for(terrain_waiting,"required terrain dataset physics hold")
+            wait_for(lambda: dataset(scope,"nobile03_dem")["required_for_scene"],
+                "composed terrain dataset requirement")
             capture_view(scope,"nobile03_dem","process","downloaded-unprepared")
             clock=execute(session,"RunRhai",code="print(clock_snapshot().sim_tick);")["stdout"].strip()
             tick=int(clock.splitlines()[-1])
@@ -324,6 +334,14 @@ def main():
                     raise RuntimeError("Griffin readiness failed: "+str(readiness["fault"]))
                 return readiness.get("ready")
             wait_for(scene_ready,"complete Griffin runtime readiness")
+            library=execute(session,"RegisterToolLibrary",name="flip_panel_visibility",
+                source=assertions+"\n"+(griffin/"scenarios/tests/flip_panel_visibility.rhai").read_text())
+            panel=execute(session,"RunRhaiToolHook",tool="flip_panel_visibility",hook="apply",
+                args={"Map":{"root":{"String":"/Griffin1SurfaceOps/FLIP"}}},owner_twin_id=library["active_twin"])
+            print(panel["stdout"].strip(),flush=True)
+            if "TESTS_OK 4" not in panel["stdout"] or "TESTS_FAIL" in panel["stdout"]:raise RuntimeError(panel)
+            verdicts.append({"scenario":"flip_panel_visibility/apply","stdout":panel["stdout"]})
+            (output/"verdicts.json").write_text(json.dumps(verdicts,indent=2))
             verdict(f'certify_paused({tick});')
             entity=int(execute(session,"RunRhai",code='print(find_path("/Griffin1SurfaceOps/Lander"));')["stdout"].strip())
             execute(session,"SetTimeTransport",playing=True)

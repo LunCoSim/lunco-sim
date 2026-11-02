@@ -200,6 +200,8 @@ impl Plugin for LunCoSimUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(lunco_capture::camera_feed::CameraFeedPlugin)
             .init_scene_resource::<camera_feed::CameraFeedUiState>();
+        #[cfg(not(target_family = "wasm"))]
+        crate::debug_console::install(app);
         camera_feed::install(app);
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
