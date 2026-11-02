@@ -720,6 +720,21 @@ state during paint and retain an owned selection snapshot only when the
 selection changes. Settings groups and other non-hierarchical detail accordions
 remain local to their owning panel.
 
+Ports groups owners by their composed USD path within each stage, with short
+component labels and full paths in tooltips and search. Scene browsing uses the
+USD owner's mounted-stage predicate; All components also exposes previews and
+application owners. Components start folded. Its cached, virtualized
+row index keeps expanded descendants in hierarchy order. Search reveals matching
+ports without replacing ordinary disclosure state. Numeric values and units
+reserve space before indentation and names. Selecting a port opens a resizable
+detail pane that prioritizes the live value and existing typed Apply/Release
+actions. Source, authority, type, frame and exact identity live in Details.
+Large and small magnitudes use compact scientific notation; exact values and
+range bounds remain available on hover and editable values retain round-trip
+precision. Dimensionless unit markers stay out of numeric browser rows. Only
+owners of visible rows and the selected port request bounded live sampling;
+scene teardown retires the hierarchy, selection, and drafts together.
+
 Selectable tree rows use `tree::selectable_label`, including when they are
 drag sources or reserve trailing value columns. The drag wrapper composes
 around the shared label; it does not introduce another button layout.

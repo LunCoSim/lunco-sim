@@ -6,7 +6,7 @@
 //! Entity discovery is delegated to each registered backend through the shared
 //! registry; the panel never probes the whole world to find port owners.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -30,6 +30,8 @@ pub struct PortRow {
     pub wired: bool,
     /// The persisted manual setpoint, if the operator has taken this input.
     pub held: Option<f64>,
+    /// Short presentation label; the exact port name remains in `info`.
+    display_name: String,
     /// Formatted live/held value, refreshed with the sampled port data.
     value_text: String,
     /// Formatted authored range, stable while port topology is unchanged.
@@ -44,6 +46,10 @@ pub struct PortEntity {
     pub label: String,
     /// Stable API identity when the entity has one.
     pub api_id: Option<u64>,
+    /// Namespace for hierarchy disclosure, isolated between composed stages.
+    hierarchy_scope: egui::Id,
+    /// Whether the owner comes from a currently mounted scene source.
+    scene_source: bool,
     /// Its complete shared port surface.
     pub ports: Vec<PortRow>,
 }
@@ -63,9 +69,9 @@ pub struct PortView {
     candidate_topology_revision: Option<u64>,
 }
 
-/// Entities whose port bodies were actually visible in the last egui pass.
+/// Owners of visible port rows or the selected port in the last egui pass.
 ///
-/// An empty set is meaningful: collapsed bodies have no live-value consumer and
+/// An empty set is meaningful: collapsed, unselected ports have no consumer and
 /// must not make the Update schedule read tens of thousands of ports. The panel
 /// publishes the next set after painting, so a disclosure change takes effect on
 /// the following sample.
@@ -81,20 +87,53 @@ pub struct PortInspectionRequest {
 struct PortMatchCache {
     topology_revision: Option<u64>,
     filter: String,
-    matching_counts: Vec<usize>,
-    matching_indices: Vec<usize>,
+    all_sources: bool,
+    port_count: usize,
+    roots: BTreeMap<u64, PortTreeNode>,
     matching_port_indices: Vec<Vec<usize>>,
+}
+
+/// Hierarchy prepared only when topology or the search changes.
+struct PortTreeNode {
+    id: egui::Id,
+    label: String,
+    path: String,
+    port_count: usize,
+    owners: Vec<usize>,
+    children: BTreeMap<String, PortTreeNode>,
+}
+
+impl Default for PortTreeNode {
+    fn default() -> Self {
+        Self {
+            id: egui::Id::NULL,
+            label: String::new(),
+            path: String::new(),
+            port_count: 0,
+            owners: Vec::new(),
+            children: BTreeMap::new(),
+        }
+    }
+}
+
+enum PortBrowserRow {
+    Branch {
+        id: egui::Id,
+        title: String,
+        path: String,
+        depth: usize,
+    },
+    Port {
+        entity_index: usize,
+        port_index: usize,
+        depth: usize,
+    },
 }
 
 #[derive(Default)]
 struct PortRowIndexCache {
     built: bool,
-    topology_revision: Option<u64>,
-    filter: String,
-    expanded_entities: HashSet<Entity>,
-    expanded_indices: Vec<usize>,
-    collapsed_indices: Vec<usize>,
-    row_titles: Vec<Option<String>>,
+    rows: Vec<PortBrowserRow>,
 }
 
 struct PortDraft {
@@ -102,60 +141,95 @@ struct PortDraft {
     validation: Result<f64, String>,
 }
 
-impl PortRowIndexCache {
-    fn matches(
-        &self,
-        topology_revision: Option<u64>,
-        filter: &str,
-        expanded_entities: &HashSet<Entity>,
-    ) -> bool {
-        self.built
-            && self.topology_revision == topology_revision
-            && self.filter == filter
-            && self.expanded_entities == *expanded_entities
+fn insert_port_owner(
+    root: &mut PortTreeNode,
+    scope: egui::Id,
+    path: &str,
+    owner: usize,
+    count: usize,
+) {
+    let mut node = root;
+    let mut prefix = String::new();
+    for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+        prefix.push('/');
+        prefix.push_str(segment);
+        node = node
+            .children
+            .entry(segment.to_owned())
+            .or_insert_with(|| PortTreeNode {
+                id: scope.with(&prefix),
+                label: lunco_core::entity_display_name(
+                    Some(&Name::new(segment.to_owned())),
+                    None,
+                    None,
+                ),
+                path: prefix.clone(),
+                ..default()
+            });
+        node.port_count += count;
     }
+    node.owners.push(owner);
+}
 
-    fn rebuild(
-        &mut self,
-        view: &PortView,
-        topology_revision: Option<u64>,
-        filter: &str,
-        expanded_entities: &HashSet<Entity>,
-        matching_indices: &[usize],
-        matching_counts: &[usize],
-    ) {
-        let auto_expand_single = expanded_entities.is_empty() && matching_indices.len() == 1;
-        self.expanded_indices.clear();
-        self.collapsed_indices.clear();
-        self.row_titles.clear();
-        self.row_titles.resize_with(view.entities.len(), || None);
-        for &index in matching_indices {
-            let entity = view.entities[index].entity;
-            self.row_titles[index] = Some(format!(
-                "{}  ({})",
-                view.entities[index].label, matching_counts[index]
-            ));
-            if expanded_entities.contains(&entity) || auto_expand_single {
-                self.expanded_indices.push(index);
-            } else {
-                self.collapsed_indices.push(index);
+impl PortRowIndexCache {
+    fn rebuild(&mut self, context: &egui::Context, cache: &PortMatchCache) {
+        self.rows.clear();
+        for root in cache.roots.values() {
+            for child in root.children.values() {
+                self.collect(context, child, cache, 0);
             }
         }
-        self.topology_revision = topology_revision;
-        self.filter.clear();
-        self.filter.push_str(filter);
-        self.expanded_entities.clone_from(expanded_entities);
         self.built = true;
+    }
+
+    fn collect(
+        &mut self,
+        context: &egui::Context,
+        node: &PortTreeNode,
+        cache: &PortMatchCache,
+        depth: usize,
+    ) {
+        self.rows.push(PortBrowserRow::Branch {
+            id: node.id,
+            title: format!("{} ({})", node.label, node.port_count),
+            path: node.path.clone(),
+            depth,
+        });
+        let open = egui::collapsing_header::CollapsingState::load_with_default_open(
+            context, node.id, false,
+        )
+        .is_open();
+        if !open && cache.filter.is_empty() {
+            return;
+        }
+        for &entity_index in &node.owners {
+            for &port_index in &cache.matching_port_indices[entity_index] {
+                self.rows.push(PortBrowserRow::Port {
+                    entity_index,
+                    port_index,
+                    depth: depth + 1,
+                });
+            }
+        }
+        for child in node.children.values() {
+            self.collect(context, child, cache, depth + 1);
+        }
     }
 }
 
-fn build_port_match_cache(view: &PortView, filter: &str) -> PortMatchCache {
-    let mut matching_counts = Vec::with_capacity(view.entities.len());
-    let mut matching_indices = Vec::new();
+fn build_port_match_cache(view: &PortView, filter: &str, all_sources: bool) -> PortMatchCache {
+    let mut roots = BTreeMap::new();
     let mut matching_port_indices = Vec::with_capacity(view.entities.len());
 
     for (entity_index, entity) in view.entities.iter().enumerate() {
-        let port_indices: Vec<usize> = if filter.is_empty() {
+        let search_label = format!(
+            "{} {}",
+            entity.label,
+            lunco_core::humanize_identifier(&entity.label)
+        );
+        let port_indices: Vec<usize> = if !all_sources && !entity.scene_source {
+            Vec::new()
+        } else if filter.is_empty() {
             (0..entity.ports.len()).collect()
         } else {
             entity
@@ -163,23 +237,30 @@ fn build_port_match_cache(view: &PortView, filter: &str) -> PortMatchCache {
                 .iter()
                 .enumerate()
                 .filter_map(|(port_index, row)| {
-                    port_matches(row, &entity.label, &filter).then_some(port_index)
+                    port_matches(row, &search_label, &filter).then_some(port_index)
                 })
                 .collect()
         };
         let matching_count = port_indices.len();
         if matching_count > 0 {
-            matching_indices.push(entity_index);
+            insert_port_owner(
+                roots.entry(entity.hierarchy_scope.value()).or_default(),
+                entity.hierarchy_scope,
+                &entity.label,
+                entity_index,
+                matching_count,
+            );
         }
-        matching_counts.push(matching_count);
         matching_port_indices.push(port_indices);
     }
 
+    let port_count = matching_port_indices.iter().map(Vec::len).sum();
     PortMatchCache {
+        port_count,
         topology_revision: view.candidate_topology_revision,
         filter: filter.to_owned(),
-        matching_counts,
-        matching_indices,
+        all_sources,
+        roots,
         matching_port_indices,
     }
 }
@@ -219,6 +300,7 @@ fn build_port_rows(
             let value_text = display_value(held, info.value);
             let range_text = range_label(&info.metadata);
             PortRow {
+                display_name: lunco_core::humanize_identifier(&info.name),
                 entity,
                 owner,
                 wired: wired
@@ -289,6 +371,16 @@ fn refresh_display_values(entities: &mut [PortEntity], requested_entities: &Hash
     }
 }
 
+fn port_hierarchy_scope(world: &World, entity: Entity, label: &str) -> egui::Id {
+    if let Some(prim) = world.get::<lunco_usd_bevy_scene::UsdPrimPath>(entity) {
+        egui::Id::new(("port_stage", prim.stage_handle.id()))
+    } else if label.starts_with('/') {
+        egui::Id::new("port_named_hierarchy")
+    } else {
+        egui::Id::new(("port_entity", entity))
+    }
+}
+
 /// Project all registered port backends into the panel's render model.
 pub fn populate_port_view(world: &mut World) {
     let Some(registry) = world.get_resource::<PortRegistry>().cloned() else {
@@ -356,15 +448,24 @@ pub fn populate_port_view(world: &mut World) {
         .map(|(entity, key)| {
             let name = world.get::<Name>(entity);
             let global_id = world.get::<lunco_core::GlobalEntityId>(entity);
-            let label = name
-                .map(|name| name.as_str().to_owned())
+            let label = world
+                .get::<lunco_usd_bevy_scene::UsdPrimPath>(entity)
+                .map(|prim| prim.path.clone())
+                .or_else(|| name.map(|name| name.as_str().to_owned()))
                 .or_else(|| global_id.map(|id| format!("Entity {}", id.get())))
                 .unwrap_or_else(|| format!("{entity:?}"));
+            let scene_source = world
+                .get::<lunco_usd_bevy_scene::UsdPrimPath>(entity)
+                .is_some_and(|prim| {
+                    lunco_usd_bevy_scene::is_mounted_scene_stage(world, prim.stage_handle.id())
+                })
+                && !lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
             (
                 entity,
                 label,
                 global_id.map(lunco_core::GlobalEntityId::get),
                 key,
+                scene_source,
             )
         })
         .collect::<Vec<_>>();
@@ -382,7 +483,7 @@ pub fn populate_port_view(world: &mut World) {
         .collect();
     let mut rows = Vec::with_capacity(candidates.len());
     let mut candidate_topology_keys = HashMap::with_capacity(candidates.len());
-    for (entity, label, api_id, key) in candidates {
+    for (entity, label, api_id, key, scene_source) in candidates {
         let topology_unchanged = old_topology_keys.get(&entity).copied() == Some(key);
         candidate_topology_keys.insert(entity, key);
 
@@ -391,6 +492,8 @@ pub fn populate_port_view(world: &mut World) {
             if !ports.is_empty() {
                 rows.push(PortEntity {
                     entity,
+                    hierarchy_scope: port_hierarchy_scope(world, entity, &label),
+                    scene_source,
                     label,
                     api_id,
                     ports,
@@ -402,6 +505,8 @@ pub fn populate_port_view(world: &mut World) {
         if !topology_unchanged {
             port_entity.ports = build_port_rows(&registry, world, entity, &wired, &holds);
         }
+        port_entity.hierarchy_scope = port_hierarchy_scope(world, entity, &label);
+        port_entity.scene_source = scene_source;
         port_entity.label = label;
         port_entity.api_id = api_id;
         if !port_entity.ports.is_empty() {
@@ -425,9 +530,10 @@ pub fn populate_port_view(world: &mut World) {
 pub(crate) struct PortPanelState {
     filter: String,
     normalized_filter: String,
+    all_sources: bool,
     drafts: HashMap<Entity, HashMap<String, PortDraft>>,
-    expanded_entities: HashSet<Entity>,
-    next_expanded_entities: HashSet<Entity>,
+    selected: Option<(Entity, String)>,
+    selected_indices: Option<(usize, usize)>,
     matching_cache: Option<PortMatchCache>,
     row_index: PortRowIndexCache,
 }
@@ -485,245 +591,376 @@ impl Panel for PortPanel {
 
 impl PortPanelState {
     fn render_view(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, view: &PortView) {
-        ui.heading("Ports");
-        ui.label(
-            egui::RichText::new(
-                "Inspect every registered vehicle/system port. Writes use the shared SetPorts command.",
-            )
-            .weak(),
-        );
-        ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Filter");
+            let width =
+                (ui.available_width() - ui.spacing().interact_size.y - ui.spacing().item_spacing.x)
+                    .max(0.0);
             let response = ui.add(
                 lunco_workbench_widgets::text_editor::singleline(&mut self.filter)
-                    .hint_text("entity, port, source, or authority")
-                    .desired_width(ui.available_width()),
+                    .hint_text("Search ports, components, sources…")
+                    .desired_width(width),
             );
             if response.changed() {
                 self.normalized_filter = self.filter.trim().to_lowercase();
             }
+            if ui
+                .add_enabled(!self.filter.is_empty(), egui::Button::new("×").small())
+                .on_hover_text("Clear search")
+                .clicked()
+            {
+                self.filter.clear();
+                self.normalized_filter.clear();
+            }
         });
-        ui.label(
-            egui::RichText::new(format!(
-                "{} entities · {} ports · sampled at {:.1} Hz",
-                view.entities.len(),
-                view.total_ports,
-                10.0,
-            ))
-            .text_style(lunco_theme::TypographyRole::DenseData.text_style())
-            .weak(),
-        );
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.all_sources, false, "Scene");
+            ui.selectable_value(&mut self.all_sources, true, "All components")
+                .on_hover_text("Include editor previews and application components");
+        });
 
-        let topology_revision = view.candidate_topology_revision;
         let cache_stale = self.matching_cache.as_ref().is_none_or(|cache| {
-            cache.topology_revision != topology_revision || cache.filter != self.normalized_filter
+            cache.topology_revision != view.candidate_topology_revision
+                || cache.filter != self.normalized_filter
+                || cache.all_sources != self.all_sources
         });
         if cache_stale {
-            self.matching_cache = Some(build_port_match_cache(view, &self.normalized_filter));
+            self.matching_cache = Some(build_port_match_cache(
+                view,
+                &self.normalized_filter,
+                self.all_sources,
+            ));
+            self.row_index.built = false;
         }
-        // Temporarily own the cache while painting so the expanded row controls
-        // can still mutate the panel's draft state without cloning the cached
-        // index vectors on every frame.
         let cache = self
             .matching_cache
             .take()
-            .expect("port match cache is initialized above");
-        let matching_counts = &cache.matching_counts;
-        let matching_indices = &cache.matching_indices;
-
-        let auto_expand_single = self.expanded_entities.is_empty() && matching_indices.len() == 1;
-        if !self.row_index.matches(
-            topology_revision,
-            &self.normalized_filter,
-            &self.expanded_entities,
-        ) {
-            self.row_index.rebuild(
-                view,
-                topology_revision,
-                &self.normalized_filter,
-                &self.expanded_entities,
-                matching_indices,
-                matching_counts,
-            );
+            .expect("port match cache initialized above");
+        ui.weak(format!("{} ports", cache.port_count));
+        if !self.row_index.built {
+            self.row_index.rebuild(ui.ctx(), &cache);
         }
-
-        // Expanded bodies are painted outside the virtualized header list. The
-        // stable row index is rebuilt only for topology, filter, or expansion
-        // changes; widgets are still painted for the current frame.
-        let expanded_indices = std::mem::take(&mut self.row_index.expanded_indices);
-        let collapsed_indices = std::mem::take(&mut self.row_index.collapsed_indices);
-        let row_titles = std::mem::take(&mut self.row_index.row_titles);
-        let mut next_expanded = std::mem::take(&mut self.next_expanded_entities);
-        next_expanded.clear();
-        for index in expanded_indices.iter().copied() {
-            let entity = &view.entities[index];
-            if self.render_entity(
-                ui,
-                ctx,
-                entity,
-                row_titles[index]
-                    .as_deref()
-                    .expect("matching port entity has a cached row title"),
-                &cache.matching_port_indices[index],
-                self.expanded_entities.contains(&entity.entity) || auto_expand_single,
-            ) {
-                next_expanded.insert(entity.entity);
+        if cache_stale {
+            self.selected_indices = self.selected.as_ref().and_then(|(owner, name)| {
+                view.entities
+                    .iter()
+                    .enumerate()
+                    .find(|(_, entity)| entity.entity == *owner)
+                    .and_then(|(entity_index, entity)| {
+                        entity
+                            .ports
+                            .iter()
+                            .position(|row| row.info.name == *name)
+                            .map(|port_index| (entity_index, port_index))
+                    })
+            });
+            if self.selected_indices.is_none() {
+                self.selected = None;
             }
         }
-
-        let row_height = ui.text_style_height(&egui::TextStyle::Body);
-        egui::ScrollArea::vertical()
-            .id_salt("port_entity_browser")
-            .auto_shrink([false; 2])
-            .show_rows(ui, row_height, collapsed_indices.len(), |ui, range| {
-                for row_index in range {
-                    let index = collapsed_indices[row_index];
-                    let entity = &view.entities[index];
-                    let title = row_titles[index]
-                        .as_deref()
-                        .expect("matching port entity has a cached row title");
-                    if lunco_workbench_widgets::tree::branch(
-                        ui,
-                        ui.make_persistent_id(("port_entity", entity.entity)),
-                        false,
-                        None,
-                        |ui| {
-                            let width = ui.available_width();
-                            lunco_workbench_widgets::tree::label(
-                                ui,
-                                title,
-                                width,
-                                egui::Sense::click(),
-                            )
-                            .clicked()
-                        },
-                        |_| {},
-                    )
-                    .is_open
-                    {
-                        next_expanded.insert(entity.entity);
-                    }
-                }
-            });
-        if next_expanded != self.expanded_entities {
-            std::mem::swap(&mut next_expanded, &mut self.expanded_entities);
+        let selected = self.selected_indices.map(|(entity_index, port_index)| {
+            let entity = &view.entities[entity_index];
+            (entity, &entity.ports[port_index])
+        });
+        if let Some((entity, row)) = selected {
+            let row_height = ui.spacing().interact_size.y;
+            egui::Panel::top(ui.id().with("port_details"))
+                .resizable(true)
+                .default_size(row_height * 16.0)
+                .min_size(row_height * 3.0)
+                .max_size((ui.available_height() - row_height * 3.0).max(row_height * 3.0))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("port_detail_scroll")
+                        .show(ui, |ui| {
+                            self.render_details(ui, ctx, entity, row);
+                        });
+                });
         }
-        next_expanded.clear();
+        let rows = std::mem::take(&mut self.row_index.rows);
+        let mut requested = HashSet::new();
+        let mut changed = false;
+        let searching = !cache.filter.is_empty();
+        let row_height = ui.spacing().interact_size.y;
+        if rows.is_empty() {
+            ui.weak(if searching {
+                "No matching ports."
+            } else if self.all_sources {
+                "No ports available."
+            } else {
+                "No scene ports. Choose All components to browse other sources."
+            });
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("port_browser")
+                .auto_shrink([false; 2])
+                .show_rows(ui, row_height, rows.len(), |ui, range| {
+                    for index in range {
+                        match &rows[index] {
+                            PortBrowserRow::Branch {
+                                id,
+                                title,
+                                path,
+                                depth,
+                            } => {
+                                let indent = (ui.spacing().indent * *depth as f32).min(
+                                    (ui.available_width() - ui.spacing().interact_size.x).max(0.0),
+                                );
+                                ui.horizontal(|ui| {
+                                    ui.add_space(indent);
+                                    ui.vertical(|ui| {
+                                        let branch = lunco_workbench_widgets::tree::branch_header(
+                                            ui,
+                                            if searching { id.with("search") } else { *id },
+                                            false,
+                                            searching.then_some(true),
+                                            |ui| {
+                                                lunco_workbench_widgets::tree::label(
+                                                    ui,
+                                                    egui::RichText::new(title).strong(),
+                                                    ui.available_width(),
+                                                    egui::Sense::click(),
+                                                )
+                                                .on_hover_text(path)
+                                                .clicked()
+                                            },
+                                        );
+                                        changed |= branch.changed;
+                                    });
+                                });
+                            }
+                            PortBrowserRow::Port {
+                                entity_index,
+                                port_index,
+                                depth,
+                            } => {
+                                let entity = &view.entities[*entity_index];
+                                let row = &entity.ports[*port_index];
+                                requested.insert(entity.entity);
+                                if self.render_port_label(ui, entity, row, *depth) {
+                                    self.selected = Some((entity.entity, row.info.name.clone()));
+                                    self.selected_indices = Some((*entity_index, *port_index));
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+        if let Some((entity, _)) = &self.selected {
+            requested.insert(*entity);
+        }
         let _ = ctx.resource_scope::<PortInspectionRequest, _>(|_, request| {
-            if request.expanded_entities != self.expanded_entities {
-                request
-                    .expanded_entities
-                    .clone_from(&self.expanded_entities);
+            if request.expanded_entities != requested {
+                request.expanded_entities = requested;
             }
         });
-        self.next_expanded_entities = next_expanded;
-        self.row_index.expanded_indices = expanded_indices;
-        self.row_index.collapsed_indices = collapsed_indices;
-        self.row_index.row_titles = row_titles;
+        self.row_index.rows = rows;
+        self.row_index.built &= !changed;
         self.matching_cache = Some(cache);
     }
 
-    fn render_entity(
+    fn render_port_label(
+        &self,
+        ui: &mut egui::Ui,
+        entity: &PortEntity,
+        row: &PortRow,
+        depth: usize,
+    ) -> bool {
+        let selected = self
+            .selected
+            .as_ref()
+            .is_some_and(|(owner, name)| *owner == row.entity && *name == row.info.name);
+        let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+        let (_, rect) = ui.allocate_space(size);
+        let mut clicked = false;
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                let value =
+                    egui::WidgetText::from(egui::RichText::new(&row.value_text).monospace())
+                        .into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Extend),
+                            f32::INFINITY,
+                            egui::TextStyle::Body,
+                        );
+                if let Some(unit) = row
+                    .info
+                    .metadata
+                    .unit
+                    .as_ref()
+                    .filter(|unit| unit.id() != "1")
+                {
+                    let width =
+                        (ui.available_width() - value.size().x - ui.spacing().item_spacing.x)
+                            .max(0.0);
+                    let galley = egui::WidgetText::from(egui::RichText::new(unit.id()).weak())
+                        .into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Truncate),
+                            width,
+                            egui::TextStyle::Body,
+                        );
+                    ui.add(egui::Label::new(galley)).on_hover_text(unit.id());
+                }
+                ui.add(egui::Label::new(value).extend()).on_hover_text(
+                    row.held
+                        .or(row.info.value)
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "Unavailable".into()),
+                );
+                let indent = (ui.spacing().indent * depth as f32)
+                    .min((ui.available_width() - ui.spacing().button_padding.x * 2.0).max(0.0));
+                let width = (ui.available_width() - indent).max(0.0);
+                let response = lunco_workbench_widgets::tree::selectable_label(
+                    ui,
+                    selected,
+                    &row.display_name,
+                    width,
+                )
+                .on_hover_text(format!(
+                    "{}\n{} · {}",
+                    entity.label,
+                    row.info.name,
+                    direction_label(row.info.direction)
+                ));
+                clicked = response.clicked();
+            },
+        );
+        clicked
+            || ui
+                .interact(
+                    rect,
+                    ui.id().with((row.entity, &row.info.name)),
+                    egui::Sense::click(),
+                )
+                .clicked()
+    }
+
+    fn render_details(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &mut PanelCtx,
         entity: &PortEntity,
-        title: &str,
-        matching_port_indices: &[usize],
-        default_open: bool,
-    ) -> bool {
-        lunco_workbench_widgets::tree::branch(
-            ui,
-            ui.make_persistent_id(("port_entity", entity.entity)),
-            default_open,
-            None,
-            |ui| {
-                let width = ui.available_width();
-                lunco_workbench_widgets::tree::label(ui, title, width, egui::Sense::click())
-                    .clicked()
-            },
-            |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.small(format!("entity {:?}", entity.entity));
-                    if let Some(api_id) = entity.api_id {
-                        ui.small(format!("api_id {api_id}"));
-                    }
-                });
-                egui::Grid::new(("port_rows", entity.entity))
-                    .striped(true)
-                    .num_columns(5)
-                    .show(ui, |ui| {
-                        ui.strong("Port");
-                        ui.strong("Value");
-                        ui.strong("Type / unit");
-                        ui.strong("Source / authority");
-                        ui.strong("Control");
-                        ui.end_row();
-
-                        for &port_index in matching_port_indices {
-                            let row = &entity.ports[port_index];
-                            self.render_row(ui, ctx, row);
-                            ui.end_row();
-                        }
-                    });
-            },
-        )
-        .is_open
-    }
-}
-
-impl PortPanelState {
-    fn render_row(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &PortRow) {
+        row: &PortRow,
+    ) {
         let info = &row.info;
+        let theme = lunco_theme::active(ui.ctx());
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+        ui.horizontal(|ui| {
+            let width =
+                (ui.available_width() - ui.spacing().interact_size.x - ui.spacing().item_spacing.x)
+                    .max(0.0);
+            lunco_workbench_widgets::tree::label(
+                ui,
+                egui::RichText::new(&row.display_name).strong(),
+                width,
+                egui::Sense::hover(),
+            )
+            .on_hover_text(&info.name);
+            if ui
+                .small_button("×")
+                .on_hover_text("Close port details")
+                .clicked()
+            {
+                self.selected = None;
+                self.selected_indices = None;
+            }
+        });
+        let owner_name =
+            lunco_core::entity_display_name(Some(&Name::new(entity.label.clone())), None, None);
+        ui.add(egui::Label::new(egui::RichText::new(owner_name).weak()).truncate())
+            .on_hover_text(&entity.label);
+        ui.add_space(theme.spacing.item_spacing);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(&row.value_text)
+                    .text_style(lunco_theme::TypographyRole::Display.text_style()),
+            )
+            .on_hover_text(
+                row.held
+                    .or(info.value)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "Unavailable".into()),
+            );
+            if let Some(unit) = &info.metadata.unit {
+                ui.weak(if unit.id() == "1" {
+                    "Dimensionless"
+                } else {
+                    unit.id()
+                });
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(direction_label(info.direction));
+            if !info.metadata.writable {
+                ui.weak("Read only");
+            }
+            if row.wired {
+                ui.weak("Connected");
+            }
+            if row.held.is_some() {
+                ui.colored_label(theme.tokens.accent, "Manual override");
+            }
+        });
+        if info.metadata.writable {
+            ui.add_space(theme.spacing.item_spacing);
+            self.render_controls(ui, ctx, row);
+        }
+        if let Some(range) = &row.range_text {
+            ui.add(egui::Label::new(egui::RichText::new(range).weak()).wrap())
+                .on_hover_text(format!(
+                    "Minimum: {}\nMaximum: {}",
+                    info.metadata
+                        .min
+                        .map(|value| format!("{value:?}"))
+                        .unwrap_or_else(|| "Unbounded".into()),
+                    info.metadata
+                        .max
+                        .map(|value| format!("{value:?}"))
+                        .unwrap_or_else(|| "Unbounded".into())
+                ));
+        }
+        ui.add_space(theme.spacing.item_spacing);
+        egui::CollapsingHeader::new("Details")
+            .id_salt((row.entity, &info.name))
+            .show(ui, |ui| {
+                for (label, value) in [
+                    ("Source", info.metadata.source.as_ref()),
+                    ("Authority", info.metadata.authority.as_ref()),
+                    ("Type", info.metadata.value_type.as_str()),
+                ] {
+                    ui.weak(label);
+                    ui.add(egui::Label::new(value).wrap());
+                }
+                if let Some(frame) = &info.metadata.frame {
+                    ui.weak("Reference frame");
+                    ui.add(egui::Label::new(frame.as_str()).wrap());
+                }
+                ui.weak("Port address");
+                ui.add(egui::Label::new(format!("{} · {}", entity.label, info.name)).wrap());
+                if let Some(id) = entity.api_id {
+                    ui.weak(format!("Entity {id}"));
+                }
+            });
+    }
+
+    fn render_controls(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &PortRow) {
+        let info = &row.info;
+        let theme = lunco_theme::active(ui.ctx());
         let local_origin = ctx
             .resource::<lunco_core_session::LocalSession>()
             .map(|session| lunco_core::CommandOrigin::LocalUser {
                 session_id: session.0,
             });
-        ui.vertical(|ui| {
-            ui.label(&info.name);
-            ui.small(direction_label(info.direction));
-            if row.wired {
-                ui.small(egui::RichText::new("wired").weak());
-            }
-        });
-
-        ui.label(&row.value_text);
-
-        ui.vertical(|ui| {
-            ui.label(info.metadata.value_type.as_str());
-            ui.small(
-                info.metadata
-                    .unit
-                    .as_ref()
-                    .map(|unit| unit.id())
-                    .unwrap_or("unitless / unspecified"),
-            );
-            if let Some(frame) = &info.metadata.frame {
-                ui.small(format!("frame: {frame}"));
-            }
-            if let Some(range) = row.range_text.as_deref() {
-                ui.small(range);
-            }
-        });
-
-        ui.vertical(|ui| {
-            ui.label(info.metadata.source.as_ref());
-            ui.small(info.metadata.authority.as_ref());
-        });
-
-        if !info.metadata.writable {
-            ui.small(egui::RichText::new("read-only").weak());
-            return;
-        }
-
+        ui.weak("Set value");
         let entity_drafts = self.drafts.entry(row.entity).or_default();
         if !entity_drafts.contains_key(info.name.as_str()) {
             let value = row
                 .held
                 .or(info.value)
-                .map(|value| format!("{value:.9}"))
+                .map(|value| value.to_string())
                 .unwrap_or_default();
             let validation = validate_port_value(info, &value);
             entity_drafts.insert(info.name.clone(), PortDraft { value, validation });
@@ -731,14 +968,14 @@ impl PortPanelState {
         let draft = entity_drafts
             .get_mut(info.name.as_str())
             .expect("port draft was inserted above");
-        ui.horizontal(|ui| {
-            let response = ui.add(
-                lunco_workbench_widgets::text_editor::singleline(&mut draft.value)
-                    .desired_width(82.0),
-            );
-            if response.changed() {
-                draft.validation = validate_port_value(info, &draft.value);
-            }
+        let response = ui.add(
+            lunco_workbench_widgets::text_editor::singleline(&mut draft.value)
+                .desired_width(ui.available_width()),
+        );
+        if response.changed() {
+            draft.validation = validate_port_value(info, &draft.value);
+        }
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     draft.validation.is_ok() && local_origin.is_some(),
@@ -779,11 +1016,11 @@ impl PortPanelState {
         });
         if local_origin.is_none() {
             ui.label(
-                egui::RichText::new("local control session unavailable").color(egui::Color32::RED),
+                egui::RichText::new("local control session unavailable").color(theme.tokens.error),
             );
         }
         if let Err(error) = &draft.validation {
-            ui.label(egui::RichText::new(error).color(egui::Color32::RED));
+            ui.label(egui::RichText::new(error).color(theme.tokens.error));
         }
     }
 }
@@ -795,6 +1032,7 @@ fn port_matches(row: &PortRow, entity_label: &str, filter: &str) -> bool {
     [
         entity_label,
         &row.info.name,
+        &row.display_name,
         &row.info.metadata.source,
         &row.info.metadata.authority,
         row.info
@@ -810,25 +1048,31 @@ fn port_matches(row: &PortRow, entity_label: &str, filter: &str) -> bool {
 
 fn direction_label(direction: PortDirection) -> &'static str {
     match direction {
-        PortDirection::In => "in",
-        PortDirection::Out => "out",
-        PortDirection::InOut => "in / out",
+        PortDirection::In => "Input",
+        PortDirection::Out => "Output",
+        PortDirection::InOut => "Bidirectional",
     }
 }
 
 fn format_value(value: Option<f64>) -> String {
     match value {
-        Some(value) if value.is_finite() => format!("{value:.6}"),
+        Some(value) if value.is_finite() => {
+            if value != 0.0 && !(0.0001..1_000_000.0).contains(&value.abs()) {
+                format!("{value:.4e}")
+            } else {
+                format!("{value:.4}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_owned()
+            }
+        }
         Some(_) => "invalid".into(),
         None => "unavailable".into(),
     }
 }
 
 fn display_value(held: Option<f64>, value: Option<f64>) -> String {
-    match held {
-        Some(held) => format!("{held:.6}  (held)"),
-        None => format_value(value),
-    }
+    format_value(held.or(value))
 }
 
 fn validate_port_value(info: &PortInfo, value: &str) -> Result<f64, String> {
@@ -840,9 +1084,13 @@ fn validate_port_value(info: &PortInfo, value: &str) -> Result<f64, String> {
 
 fn range_label(metadata: &PortMetadata) -> Option<String> {
     match (metadata.min, metadata.max) {
-        (Some(min), Some(max)) => Some(format!("range {min}..{max}")),
-        (Some(min), None) => Some(format!("min {min}")),
-        (None, Some(max)) => Some(format!("max {max}")),
+        (Some(min), Some(max)) => Some(format!(
+            "Range {} … {}",
+            format_value(Some(min)),
+            format_value(Some(max))
+        )),
+        (Some(min), None) => Some(format!("Minimum {}", format_value(Some(min)))),
+        (None, Some(max)) => Some(format!("Maximum {}", format_value(Some(max)))),
         (None, None) => None,
     }
 }
@@ -850,6 +1098,94 @@ fn range_label(metadata: &PortMetadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_numbers_stay_compact_without_changing_the_value() {
+        let bound = f32::MAX as f64;
+        assert_eq!(format_value(Some(bound)), "3.4028e38");
+        assert_eq!(format_value(Some(-bound)), "-3.4028e38");
+        assert_eq!(format_value(Some(0.0)), "0");
+        assert_eq!(format_value(Some(0.125)), "0.125");
+        assert_eq!(format_value(Some(0.00001)), "1.0000e-5");
+        assert_eq!(format_value(Some(f64::INFINITY)), "invalid");
+        assert_eq!(format_value(None), "unavailable");
+        let metadata = PortMetadata::scalar(
+            PortDirection::In,
+            None,
+            Some(-bound),
+            Some(bound),
+            "property",
+            "author",
+            true,
+            None,
+        );
+        assert_eq!(
+            range_label(&metadata).as_deref(),
+            Some("Range -3.4028e38 … 3.4028e38")
+        );
+        assert_eq!(metadata.max, Some(bound));
+    }
+
+    #[test]
+    fn port_hierarchy_keeps_parent_owners_and_distinct_leaf_identities() {
+        let mut root = PortTreeNode::default();
+        let scope = egui::Id::new("stage");
+        for (index, path) in ["/Plant", "/Plant/Pump", "/Plant/Valve", "/Plant/Pump"]
+            .into_iter()
+            .enumerate()
+        {
+            insert_port_owner(&mut root, scope, path, index, 2);
+        }
+        let plant = root.children.get("Plant").unwrap();
+        assert_eq!(plant.label, "Plant");
+        assert_eq!(plant.port_count, 8);
+        assert_eq!(plant.owners, vec![0]);
+        assert_eq!(plant.children["Pump"].owners, vec![1, 3]);
+        assert_eq!(plant.children["Valve"].port_count, 2);
+        assert_ne!(plant.id, plant.children["Pump"].id);
+
+        let mut other = PortTreeNode::default();
+        insert_port_owner(&mut other, egui::Id::new("other stage"), "/Plant", 0, 1);
+        assert_ne!(plant.id, other.children["Plant"].id);
+        assert!(PortTreeNode::default().children.is_empty());
+
+        let plant_id = plant.id;
+        let context = egui::Context::default();
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+            &context, plant_id, true,
+        );
+        state.set_open(false);
+        state.store(&context);
+        let mut cache = PortMatchCache {
+            roots: BTreeMap::from([(scope.value(), root)]),
+            matching_port_indices: vec![vec![0, 1]; 4],
+            ..default()
+        };
+        let mut index = PortRowIndexCache::default();
+        index.rebuild(&context, &cache);
+        assert_eq!(
+            index.rows.len(),
+            1,
+            "a folded ancestor hides its complete subtree"
+        );
+        cache.filter = "pump".into();
+        index.rebuild(&context, &cache);
+        assert_eq!(
+            index
+                .rows
+                .iter()
+                .filter(|row| matches!(row, PortBrowserRow::Port { .. }))
+                .count(),
+            8
+        );
+        cache.filter.clear();
+        index.rebuild(&context, &cache);
+        assert_eq!(
+            index.rows.len(),
+            1,
+            "search preserves ordinary disclosure state"
+        );
+    }
 
     #[test]
     fn filter_matches_metadata_as_well_as_port_name() {
@@ -873,8 +1209,9 @@ mod tests {
             },
             wired: false,
             held: None,
-            value_text: "0.000000".into(),
-            range_text: Some("range -1..1".into()),
+            display_name: "Throttle".into(),
+            value_text: "0".into(),
+            range_text: Some("Range -1 … 1".into()),
         };
         assert!(port_matches(&row, "Rover", "controller"));
         assert!(port_matches(&row, "Rover", "throttle"));
@@ -903,29 +1240,34 @@ mod tests {
             },
             wired: false,
             held: None,
-            value_text: "0.000000".into(),
-            range_text: Some("range -1..1".into()),
+            display_name: "Throttle".into(),
+            value_text: "0".into(),
+            range_text: Some("Range -1 … 1".into()),
         };
         let view = PortView {
             entities: vec![PortEntity {
                 entity: Entity::PLACEHOLDER,
                 label: "Rover".into(),
                 api_id: None,
+                hierarchy_scope: egui::Id::new("test"),
+                scene_source: false,
                 ports: vec![row],
             }],
             candidate_topology_revision: Some(7),
             ..default()
         };
 
-        let cache = build_port_match_cache(&view, "controller".into());
+        let cache = build_port_match_cache(&view, "controller", true);
         assert_eq!(cache.topology_revision, Some(7));
-        assert_eq!(cache.matching_indices, vec![0]);
-        assert_eq!(cache.matching_counts, vec![1]);
+        assert_eq!(cache.roots.len(), 1);
         assert_eq!(cache.matching_port_indices, vec![vec![0]]);
 
-        let cache = build_port_match_cache(&view, "lander".into());
-        assert!(cache.matching_indices.is_empty());
-        assert_eq!(cache.matching_counts, vec![0]);
+        assert!(
+            build_port_match_cache(&view, "", false).roots.is_empty(),
+            "scene browsing excludes application/preview-only sources"
+        );
+        let cache = build_port_match_cache(&view, "lander", true);
+        assert!(cache.roots.is_empty());
         assert_eq!(cache.matching_port_indices, vec![Vec::<usize>::new()]);
     }
 

@@ -598,7 +598,18 @@ over neighbouring rows.
 All hierarchy rows use `lunco_workbench_widgets::tree::{branch, leaf}` and
 `tree::{label, selectable_label}`; depth-based initial expansion uses
 `tree::default_open_at_depth`. The Ports entity browser follows the same
-contract as the Twin, Entity, USD, Modelica, library, and telemetry trees. Raw
+contract as the Twin, Entity, USD, Modelica, library, and telemetry trees. Ports
+folds composed paths into short component labels with stage-scoped disclosure
+IDs. Components start folded; Scene uses the existing mounted-stage source
+predicate and All components includes application and preview owners. Keep its
+virtualized rows in hierarchy order; active search reveals matches without changing
+normal expansion. Reserve numeric values and units before names and indentation.
+Use compact magnitudes with exact values/bounds on hover; omit redundant
+dimensionless markers. Prioritize the selected value and controls, with secondary
+metadata in Details. Port selection opens the resizable detail pane; preserve the
+typed Apply/Release actions and sample only visible owners plus the selected port.
+Verify native folding, search/no-match recovery, selection/details, narrow widths,
+and scene retirement in an owned production session. Raw
 `CollapsingHeader` is for non-tree sections, not a second tree implementation.
 The Prims rows reuse the Entities selectable-row presentation
 and expose preview-scoped Visible, Invisible, and Contour controls at the
