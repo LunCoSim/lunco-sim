@@ -115,7 +115,47 @@ pub fn validate_usda_nesting(text: &str) -> Result<()> {
 /// Parse one USDA layer after applying the stack-safety preflight.
 pub fn parse_usda(text: &str) -> Result<Data> {
     validate_usda_nesting(text)?;
-    usda::parse(text).map_err(|e| anyhow!("USD parse error: {e}"))
+    let data = usda::parse(text).map_err(|e| anyhow!("USD parse error: {e}"))?;
+    validate_layer_structure("<source>", &data)?;
+    Ok(data)
+}
+
+/// Reject malformed authored child lists before composition can project them.
+/// Child names are identifiers, not relative prim paths. Accepting a slash here
+/// can project the same prim beneath both its parent and a more distant ancestor.
+pub fn validate_layer_structure(id: &str, data: &dyn openusd::sdf::AbstractData) -> Result<()> {
+    use openusd::sdf::{Path as SdfPath, SpecType, Value};
+    for path in data.spec_paths() {
+        let Some(value) = data.try_field(&path, "primChildren")? else {
+            continue;
+        };
+        let Value::TokenVec(names) = value.as_ref() else {
+            return Err(anyhow!(
+                "USD asset `{id}`, prim `{path}`: primChildren must be a list of child identifiers"
+            ));
+        };
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            let name = name.as_str();
+            if !SdfPath::is_valid_identifier(name) {
+                return Err(anyhow!(
+                    "USD asset `{id}`, prim `{path}`: invalid child name `{name}`. A prim name must be one identifier; author separate nested prims instead of a path in the name."
+                ));
+            }
+            if !seen.insert(name) {
+                return Err(anyhow!(
+                    "USD asset `{id}`, prim `{path}`: duplicate child name `{name}`"
+                ));
+            }
+            let child = path.append_path(name)?;
+            if data.spec_type(&child) != Some(SpecType::Prim) {
+                return Err(anyhow!(
+                    "USD asset `{id}`, prim `{path}`: child `{name}` has no authored prim spec at `{child}`"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validate one layer-closure accounting snapshot against the shared safety
@@ -457,6 +497,7 @@ fn authored_dependencies(id: &str, raw: &[u8]) -> Result<Vec<String>> {
         validate_usda_nesting(std::str::from_utf8(raw)?)?;
     }
     let mut layer = openusd::sdf::Layer::from_bytes(id, raw.to_vec())?;
+    validate_layer_structure(id, layer.data())?;
     dependency_paths(&mut layer)
 }
 
@@ -523,6 +564,45 @@ fn dependency_paths(layer: &mut openusd::sdf::Layer) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_prim_child_names_fail_before_composition() {
+        let id = "lunco://fixtures/invalid-wheel.usda";
+        let invalid = br#"#usda 1.0
+def Xform "Vehicle" {
+    over "Carrier" {}
+    over "Carrier/Wheel" { float physics:mass = 18 }
+}
+"#;
+        let error = child_layer_ids(id, invalid).unwrap_err().to_string();
+        assert!(error.contains(id), "{error}");
+        assert!(error.contains("/Vehicle"), "{error}");
+        assert!(
+            error.contains("invalid child name `Carrier/Wheel`"),
+            "{error}"
+        );
+        assert!(parse_usda(std::str::from_utf8(invalid).unwrap()).is_err());
+        let valid = br#"#usda 1.0
+def Xform "Vehicle" (
+    prepend variantSets = "drive"
+    variants = { string drive = "physical" }
+) {
+    variantSet "drive" = {
+        "physical" {
+            over "Carrier" {
+                over "Wheel" { float physics:mass = 18 }
+            }
+        }
+    }
+}
+"#;
+        assert!(child_layer_ids("lunco://fixtures/valid-wheel.usda", valid).is_ok());
+        assert!(parse_usda(std::str::from_utf8(valid).unwrap()).is_ok());
+        let layer = openusd::sdf::Layer::from_bytes(id, invalid.to_vec()).unwrap();
+        let format = openusd::sdf::LayerRegistry::find_by_extension("usdc").unwrap();
+        let binary = format.write_bytes(layer.data()).unwrap();
+        assert!(child_layer_ids("lunco://fixtures/invalid-wheel.usdc", &binary.bytes).is_err());
+    }
 
     #[test]
     fn asset_provenance_follows_the_strongest_contributing_layer() {

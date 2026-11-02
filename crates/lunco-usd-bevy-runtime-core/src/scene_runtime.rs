@@ -669,6 +669,7 @@ mod restart_overlay_tests {
                 .init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
                 .init_resource::<DocumentRegistry<UsdDocument>>()
                 .init_resource::<lunco_core::SceneTransitionCoordinator>()
+                .init_resource::<lunco_core::RuntimeFaults>()
                 .init_resource::<lunco_core::SceneMountState>()
                 .add_observer(clear_scene_on_twin_closed)
                 .add_observer(crate::scene::on_scene_transition_failed)

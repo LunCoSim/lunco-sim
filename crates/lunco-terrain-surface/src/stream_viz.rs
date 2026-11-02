@@ -2373,25 +2373,31 @@ pub(crate) fn sync_terrain_visual_continuations(
                     && declared == Some(LUNAR_SURFACE_CONTINUATION_INTERFACE)
                     && actual == Some(LUNAR_SURFACE_CONTINUATION_INTERFACE) =>
             {
-                let Ok((dem_look, maps, authored, dem_source)) =
-                    terrain_sources.get(continuation.source)
-                else {
-                    bind_continuation_look(
-                        &mut commands,
-                        target,
-                        current.as_ref(),
-                        &mut visibility,
-                        shader_ready,
-                        false,
-                        &continuation.surface_look,
-                    );
-                    raise_continuation_fault(
-                        &mut faults,
-                        target,
-                        surface_look,
-                        "the authored DEM material or map source is no longer present",
-                    );
-                    continue;
+                let (dem_look, maps, authored, dem_source) = match terrain_sources
+                    .get(continuation.source)
+                {
+                    Ok(source) => source,
+                    Err(error) => {
+                        bind_continuation_look(
+                            &mut commands,
+                            target,
+                            current.as_ref(),
+                            &mut visibility,
+                            shader_ready,
+                            false,
+                            &continuation.surface_look,
+                        );
+                        raise_continuation_fault(
+                            &mut faults,
+                            target,
+                            surface_look,
+                            format!(
+                                "terrain continuation {target:?} cannot read its DEM source {:?}: {error}. Simulation is stopped. Fix the source asset or use RestartScene to reload the complete scene.",
+                                continuation.source
+                            ),
+                        );
+                        continue;
+                    }
                 };
                 let Some(dem_source) = dem_source
                     .filter(|source| source.shader == dem_look.shader && source.source_valid)

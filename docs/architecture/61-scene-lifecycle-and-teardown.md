@@ -73,6 +73,18 @@ transition merely because it entered through a different command.
 Failed loads leave the viewport in its normal empty-scene presentation. The
 typed transition failure and runtime diagnostics retain the cause; the failure
 text does not replace the empty-state headline.
+The accepted failure also publishes `scene-load-failed` through `RuntimeFaults`
+and the runtime error event. `GetReadiness` therefore remains `ready: false`,
+with the requested asset in `fault.subject` and the loader cause in
+`fault.detail`. Command and UI processing remain available; simulation stops.
+A valid replacement clears the retired scene's fault at teardown.
+
+Layer admission validates authored `primChildren` before composition. Each
+entry must be one valid identifier, listed once, with a corresponding local
+prim spec. A path such as `Carrier/Wheel` is rejected with its asset and parent
+path; the asset must author nested `Carrier` and `Wheel` prims. The same check
+applies to textual and binary USD. No read-side repair changes authored data.
+
 
 An asset-load success is not a scene success. The terminal owner checks
 `UsdSceneProjectionFailed` for the running mount, including prims reparented

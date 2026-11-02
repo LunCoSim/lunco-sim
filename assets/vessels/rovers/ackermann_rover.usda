@@ -461,48 +461,53 @@ def Xform "AckermannRover" (
             over "Suspension_FR_Slider" {
                 rel physics:body0 = </AckermannRover/SteeringKnuckle_FR>
             }
-            over "Suspension_FL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
-            over "Suspension_FR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
-            over "Suspension_RL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
-            over "Suspension_RR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            over "Suspension_FL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {
+                over "Wheel_FL" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                ) {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = [
+                        </AckermannRover/Chassis>,
+                        </AckermannRover/SteeringKnuckle_FL>
+                    ]
+                }
+            }
+            over "Suspension_FR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {
+                over "Wheel_FR" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                ) {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = [
+                        </AckermannRover/Chassis>,
+                        </AckermannRover/SteeringKnuckle_FR>
+                    ]
+                }
+            }
+            over "Suspension_RL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {
+                over "Wheel_RL" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                ) {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = </AckermannRover/Chassis>
+                }
+            }
+            over "Suspension_RR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {
+                over "Wheel_RR" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                ) {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = </AckermannRover/Chassis>
+                }
+            }
             # The wheel is a separate rigid body and its full suspension travel can
             # enter the chassis envelope.  Use the standard authored filtered-pair
             # contract for this deliberate clearance; the revolute joint already
             # filters wheel↔carrier, while this relation covers wheel↔chassis.
-            over "Suspension_FL/Wheel_FL" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = [
-                    </AckermannRover/Chassis>,
-                    </AckermannRover/SteeringKnuckle_FL>
-                ]
-            }
-            over "Suspension_FR/Wheel_FR" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = [
-                    </AckermannRover/Chassis>,
-                    </AckermannRover/SteeringKnuckle_FR>
-                ]
-            }
-            over "Suspension_RL/Wheel_RL" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = </AckermannRover/Chassis>
-            }
-            over "Suspension_RR/Wheel_RR" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            ) {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = </AckermannRover/Chassis>
-            }
+
         }
     }
 

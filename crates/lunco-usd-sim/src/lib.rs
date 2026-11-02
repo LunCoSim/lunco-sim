@@ -2841,19 +2841,27 @@ fn process_usd_sim_prim_read(
                 q_child_of,
                 q_preview_only,
             ) else {
+                let count = all_prims
+                    .iter()
+                    .filter(|(candidate, prim, _)| {
+                        prim.stage_handle.id() == prim_path.stage_handle.id()
+                            && prim.path == path.as_str()
+                            && !is_preview_only(*candidate, q_child_of, q_preview_only)
+                    })
+                    .count();
+                let detail = format!(
+                    "expected one live wheel render root `{path}` in `{stage_source}`, found {count}; check the asset hierarchy for missing or duplicate prim projections"
+                );
                 runtime_faults.raise(
                     "usd-wheel-visual-identity",
                     Some(entity),
                     &prim_path.path,
-                    format!("missing authored render root {path}"),
+                    &detail,
                 );
                 lunco_core::trigger_runtime_error(
                     commands,
                     "usd-wheel-visual-identity",
-                    format!(
-                        "{} requires its authored render root {path}",
-                        prim_path.path
-                    ),
+                    format!("{}: {detail}", prim_path.path),
                 );
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;

@@ -20,6 +20,14 @@ def Xform "WheelAttachmentContract" (
     {
         double3 xformOp:translate = (0.0, 1.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Suspension_FL"
+        {
+            over "Wheel_FL"
+            {
+                rel physxVehicleWheelAttachment:tire = </WheelAttachmentContract/SeparateTire>
+                rel physxVehicleWheelAttachment:suspension = </WheelAttachmentContract/SeparateSuspension>
+            }
+        }
     }
     def Xform "SeparateTire" (
         prepend references = @lunco://components/mobility/tires/hard.usda@</Tire>
@@ -31,11 +39,7 @@ def Xform "WheelAttachmentContract" (
     )
     {
     }
-    over "Rover/Suspension_FL/Wheel_FL"
-    {
-        rel physxVehicleWheelAttachment:tire = </WheelAttachmentContract/SeparateTire>
-        rel physxVehicleWheelAttachment:suspension = </WheelAttachmentContract/SeparateSuspension>
-    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "wheel-attachment-contract"

@@ -34,54 +34,55 @@ def Xform "SkidRover" (
                 prepend apiSchemas = "PhysicsRigidBodyAPI"
             )
             {
+                over "Wheel_FL" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                )
+                {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = </SkidRover/Chassis>
+                }
             }
             over "Suspension_FR" (
                 prepend apiSchemas = "PhysicsRigidBodyAPI"
             )
             {
+                over "Wheel_FR" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                )
+                {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = </SkidRover/Chassis>
+                }
             }
             over "Suspension_RL" (
                 prepend apiSchemas = "PhysicsRigidBodyAPI"
             )
             {
+                over "Wheel_RL" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                )
+                {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = </SkidRover/Chassis>
+                }
             }
             over "Suspension_RR" (
                 prepend apiSchemas = "PhysicsRigidBodyAPI"
             )
             {
+                over "Wheel_RR" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+                )
+                {
+                    bool physics:rigidBodyEnabled = true
+                    bool physics:collisionEnabled = true
+                    rel physics:filteredPairs = </SkidRover/Chassis>
+                }
             }
-            over "Suspension_FL/Wheel_FL" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            )
-            {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = </SkidRover/Chassis>
-            }
-            over "Suspension_FR/Wheel_FR" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            )
-            {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = </SkidRover/Chassis>
-            }
-            over "Suspension_RL/Wheel_RL" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            )
-            {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = </SkidRover/Chassis>
-            }
-            over "Suspension_RR/Wheel_RR" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-            )
-            {
-                bool physics:rigidBodyEnabled = true
-                bool physics:collisionEnabled = true
-                rel physics:filteredPairs = </SkidRover/Chassis>
-            }
+
         }
     }
     variantSet "power" = {

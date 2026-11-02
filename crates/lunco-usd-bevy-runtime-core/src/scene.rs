@@ -760,8 +760,23 @@ pub(crate) fn on_scene_transition_completed(
 pub(crate) fn on_scene_transition_failed(
     trigger: On<SceneTransitionFailed>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut commands: Commands,
 ) {
     if coordinator.fail(trigger.event().id) {
+        let event = trigger.event();
+        let subject = match &event.transition {
+            SceneTransition::Load { path, .. } | SceneTransition::Restart { path, .. } => {
+                path.clone()
+            }
+            transition => format!("{transition:?}"),
+        };
+        faults.raise("scene-load-failed", None, &subject, &event.error);
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "scene-load-failed",
+            format!("Could not load `{subject}`: {}", event.error),
+        );
         warn!(
             "[scene] transition {} failed: {}",
             trigger.event().id.get(),
@@ -1244,6 +1259,7 @@ mod tests {
             let stage_id = stage_handle.id();
             let mut app = App::new();
             app.init_resource::<SceneTransitionCoordinator>()
+                .init_resource::<lunco_core::RuntimeFaults>()
                 .init_resource::<lunco_core::SceneMountState>()
                 .init_resource::<CompletedTransitions>()
                 .init_resource::<FailedTransitions>()
