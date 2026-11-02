@@ -8,15 +8,6 @@ fn simulation_dependencies(me, params) {
 fn matches_surface(error_m) { error_m < 0.001 }
 fn on_start(me, params) {
     this.body = find_path(params.body_path);
-    let status = query("TerrainLodStatus", #{});
-    this.tiles = status.contacts;
-    this.camera_detail = status.camera_cover.len() > 0;
-    for cover in status.camera_cover {
-        if abs(cover.clearance_m) < 10.0 {
-            this.camera_detail = this.camera_detail && cover.ready && cover.pinned
-                && cover.depth.to_int() >= status.config.max_depth.to_int();
-        }
-    }
     this.index = 0;
     this.samples = 0;
     this.finer_samples = 0;
@@ -33,20 +24,33 @@ fn on_start(me, params) {
 }
 fn on_tick(me, params) {
     if this.done { return; }
-    if this.index < this.tiles.len() {
+    // Read the cover and its mesh handles within one World hook. Streaming may
+    // retire a handle between application frames.
+    let status = query("TerrainLodStatus", #{});
+    this.tiles = status.contacts;
+    this.camera_detail = status.camera_cover.len() > 0;
+    for cover in status.camera_cover {
+        if abs(cover.clearance_m) < 10.0 {
+            this.camera_detail = this.camera_detail && cover.ready && cover.pinned
+                && cover.depth.to_int() >= status.config.max_depth.to_int();
+        }
+    }
+    while this.index < this.tiles.len() {
         let tile = this.tiles[this.index];
         this.index += 1;
         this.all_ready = this.all_ready && tile.ready && tile.drawn;
         this.all_pinned = this.all_pinned && tile.pinned;
-        if tile.entity == () { this.all_meshes = false; return; }
+        if tile.entity == () { print("CONTACT MISSING ENTITY: " + tile.to_string()); this.all_meshes = false; continue; }
         let res = tile.resolution.to_int();
         let status = query("TerrainLodStatus", #{include_geometry: true,
             mesh_entity: tile.entity, vertex_offset: (res / 2) * res + res / 2,
             vertex_limit: res + 2, index_limit: 1});
         if status.tiles.len() != 1 || status.tiles[0].geometry == () {
-            this.all_meshes = false; return;
+            print("CONTACT RETIRED MESH: " + tile.to_string() + " rows=" + status.tiles.len());
+            this.all_meshes = false; continue;
         }
         let geometry = status.tiles[0].geometry;
+        if geometry.vertex_count.to_int() != res * res { print("CONTACT MESH SIZE: " + tile.to_string() + " vertices=" + geometry.vertex_count); }
         this.all_meshes = this.all_meshes && geometry.vertex_count.to_int() == res * res;
         let p = geometry.physical_positions;
         // Interior triangle: no edge stitching; pinning must disable distance morph.
@@ -65,9 +69,8 @@ fn on_tick(me, params) {
                 this.worst = max(this.worst, abs(hit.point[1]-y));
                 this.displaced_rejected = this.displaced_rejected
                     && !matches_surface(abs(hit.point[1] - (y + 0.02)));
-            } else { this.all_meshes = false; }
+            } else { print("CONTACT RAY MISS: " + tile.to_string() + " point=" + [x,y,z].to_string()); this.all_meshes = false; }
         }
-        return;
     }
     this.done = true;
     print("CONTACT VISUAL: tiles=" + this.tiles.len() + ", rays=" + this.samples

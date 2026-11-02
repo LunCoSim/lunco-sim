@@ -7,7 +7,7 @@ import os
 import math
 import time
 from pathlib import Path
-from runtime import ProductionSession, ROOT, assert_render_log_clean, run_authored_scenario, port_is_open
+from runtime import BINARY, ProductionSession, ROOT, assert_render_log_clean, run_authored_scenario, port_is_open
 
 
 def main():
@@ -17,6 +17,8 @@ def main():
     p.add_argument('--route-path', required=True)
     p.add_argument('--port', type=int, default=4794)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--no-vsync', action='store_true', help='diagnostic uncapped presentation')
+    p.add_argument('--no-throttle', action='store_true', help='diagnostic continuous host updates')
     args = p.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -24,11 +26,20 @@ def main():
     os.environ['LUNCOSIM_EPHEMERAL_SETTINGS'] = '1'
     rows = []
     log = out / 'runtime.log'
+    extra_args = ['--scene', args.scene, '--window-pos', '1280x720+0+0']
+    if args.no_vsync:
+        extra_args.append('--no-vsync')
+    if args.no_throttle:
+        extra_args.append('--no-throttle')
     with ProductionSession(args.port, windowed=True, log_path=log,
-            extra_args=['--scene', args.scene, '--window-pos', '1280x720+0+0']) as session:
+            extra_args=extra_args) as session:
         pid = session.process.pid
         if Path(f'/proc/{pid}/cwd').resolve() != ROOT:
             raise RuntimeError('owned runtime cwd does not match this checkout')
+        if Path(f'/proc/{pid}/exe').resolve() != BINARY.resolve():
+            raise RuntimeError('owned runtime executable does not match LUNCOSIM_BIN')
+        cohort = {'pid': pid, 'binary': str(BINARY.resolve()), 'no_vsync': args.no_vsync,
+                  'no_throttle': args.no_throttle, 'phases': rows}
         def execute(command, **params):
             response = session.post({'type': 'ExecuteCommand', 'command': command, 'params': params})
             if response.get('error'):
@@ -72,7 +83,7 @@ def main():
             session.capture_screenshot(out / f'{name}.png')
             rows.append({'phase': name, 'config': status['config'], 'stream': status['stream'],
                          'contacts': status['contacts'], 'camera_cover': status['camera_cover'], 'performance': execute('EnginePerformance')})
-            (out / 'validation.json').write_text(json.dumps({'pid': pid, 'phases': rows}, indent=2))
+            (out / 'validation.json').write_text(json.dumps(cohort, indent=2))
             assert_render_log_clean(log)
         phase('initial', False)
         body = json.dumps(args.body_path)
@@ -82,7 +93,7 @@ def main():
         execute('SetPorts', target=body_id, producer_id=4794001, seq=0, tick=0,
                 writes=[['program_active', 1.0], ['autopilot_enable', 0.0],
                         ['throttle', .35], ['steer', 0.0], ['brake', 0.0]])
-        # Observe an ordinary, focused production drive without changing solver or pacing.
+        # Observe the production drive with the selected host flags and unchanged solver.
         frame_samples = {}
         first_frame = execute('EnginePerformance')['frame_sample_count']
         drive_deadline = time.monotonic() + 15
@@ -91,8 +102,9 @@ def main():
             count = performance['frame_sample_count']
             history = performance['frame_time_samples_ms']
             for i, value in enumerate(history):
-                if count-len(history)+i >= first_frame:
-                    frame_samples[count-len(history)+i] = value
+                sample_id = count-len(history)+i+1
+                if sample_id > first_frame:
+                    frame_samples[sample_id] = value
             time.sleep(1)
         position = execute('QueryEntity', id=body_id)['position']
         distance = math.dist(start_position, position)
@@ -100,6 +112,7 @@ def main():
             raise RuntimeError(f'drive did not exercise tile boundaries: {distance} m')
         ordered = sorted(frame_samples.values())
         drive_metrics = {'distance_m': distance, 'sample_count': len(ordered),
+            'first_sample_id': min(frame_samples), 'last_sample_id': max(frame_samples),
             'frame_ms_p50': ordered[len(ordered)//2],
             'frame_ms_p95': ordered[int(.95*(len(ordered)-1))],
             'frame_ms_max': ordered[-1]}
@@ -129,8 +142,8 @@ def main():
     assert_render_log_clean(log)
     if port_is_open(args.port):
         raise RuntimeError('owned API port was not released')
-    (out / 'validation.json').write_text(json.dumps({
-        'pid': pid, 'phases': rows, 'diagnostics': diagnostics, 'port_released': True}, indent=2))
+    cohort.update(diagnostics=diagnostics, port_released=True)
+    (out / 'validation.json').write_text(json.dumps(cohort, indent=2))
     print('PASS contact geometry, route/trail bindings, drive, constrained graphics, owned Exit', flush=True)
 
 if __name__ == '__main__':

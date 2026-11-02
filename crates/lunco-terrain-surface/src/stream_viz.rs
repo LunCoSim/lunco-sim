@@ -3728,6 +3728,7 @@ pub fn update_lod_tiles(
                 })?;
                 Some(results.remove(index))
             });
+            let mut cover_committed = false;
             if let Some(completion) = completion {
                 tiles.pending_cover = None;
                 match completion.result {
@@ -3739,6 +3740,7 @@ pub fn update_lod_tiles(
                         commit_prepared_terrain_cover(
                             &mut tiles, &mut errs, prepared, oracle_key, sig,
                         );
+                        cover_committed = true;
                     }
                     Ok(_) => selection_due = true,
                     Err(()) => {
@@ -3765,7 +3767,10 @@ pub fn update_lod_tiles(
             }
             {
                 let cover_status = selected_cover_status(&tiles, cur_gen);
-                if !promoted_tiles
+                // A complete resident cover can still have new morph pins to
+                // publish when physics moves onto geometry already in memory.
+                if !cover_committed
+                    && !promoted_tiles
                     && pending.is_empty()
                     && tiles.pending_cover.is_none()
                     && tiles.last_sig == Some(sig)

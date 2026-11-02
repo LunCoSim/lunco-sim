@@ -64,6 +64,9 @@ alone exceeds the graphics budget.
 Moving support nodes participate in the selection signature and receive bake
 priority. Cached geometry distinguishes contact from visual-only tiles, and
 resident material morph windows update when nodes enter or leave support.
+A newly committed cover publishes those windows before taking the idle path,
+including when every required mesh was already resident. Mesh readiness alone
+does not establish that the material has consumed the new contact pins.
 Frozen cinematic selection applies only without active contact demands. Physics
 never waits for visual preparation. `TerrainLodStatus.contacts` reports support
 nodes (including finer render descendants), visible readiness, the physical

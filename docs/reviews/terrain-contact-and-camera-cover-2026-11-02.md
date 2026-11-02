@@ -13,6 +13,10 @@ and spends the remaining graphics budget on discretionary camera LOD. Contact
 and camera constraints preserve finer leaves and install morph pins after every
 split. Coarser neighbours split first to retain 2:1 seams. Material morph-window
 changes are consumed by resident tile looks when the support cover moves.
+A committed cover must pass through morph publication even when its geometry
+is already complete and resident. The idle path only applies after that commit
+has reached the material reader, so a reused tile cannot retain an old unpinned
+morph band as physics moves onto it.
 
 The physical lattice supplies the nested streamed posting count. Canonical
 contact tiles reuse `sample_heights_xz`; finer camera tiles sample

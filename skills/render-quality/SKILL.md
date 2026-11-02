@@ -203,8 +203,10 @@ GPU acceptance still require the rendered fixture and a clean process log.
    sunlight to hide a traversal/certificate failure.
    For wheels moving over visually flat ground, inspect
    `TerrainLodStatus.contacts`: every physics support/build-ahead node must have a ready, drawn and pinned
-   visual cover, including finer descendants. Check `camera_cover` as well: a
-   nearby camera reserves its finest local patch independently of the bodies. The visual support cover uses the authored physical
+   visual cover, including finer descendants. A newly committed cover must
+   publish changed resident material pins before entering the idle path;
+   resident mesh readiness alone is insufficient. Check `camera_cover` as well:
+   a nearby camera reserves its finest local patch independently of the bodies. The visual support cover uses the authored physical
    lattice even when camera depth or discretionary tile budget is smaller. Do
    not reduce collider detail or increase a global graphics preset to conceal
    this mismatch. Run `scripts/api/test_terrain_contact_visual.py --scene <scene>
