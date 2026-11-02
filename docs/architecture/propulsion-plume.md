@@ -115,21 +115,29 @@ than cutting holes into the exit plane. This changes optical distribution, not
 the gas density, mass flow, or available radiant power. Increasing apparent
 density by inventing extra propellant is not an optical fix.
 
-`NozzleWallThermal` estimates a separate wall temperature using the existing
-`ThermalMass` and a connected signed heat-exchange boundary. Gas recovery
-temperature, flow-dependent film transfer, grey-body radiation and conduction
-to the mount determine heating and cooling. Heating is capped by an authored
-fraction of jet power. The observer is passive: it does not yet feed wall heat
+`NozzleWallThermal` estimates throat, middle and exit-wall temperatures using
+three existing `ThermalMass` components and connected heat-exchange boundaries.
+The bell design supplies geometry and gamma. Frustum areas follow its contour;
+gas recovery temperatures use local isentropic Mach numbers. Film transfer uses
+the Bartz area dependence `(Ae/A)^0.9`, with an authored exit reference
+coefficient. This is a reduced axial closure, not the full Bartz correlation.
+Axial conduction transfers heat between zones. The exposed outer surface
+radiates to the environment; the inner wall is heated by the gas rather than
+being counted as a second cold-space radiator. Total heating remains capped
+by the same authored fraction of jet power. The observer is passive: it does not yet feed wall heat
 loss back into the chamber solution. Its heat capacity, areas, recovery factor,
 film coefficient and mounting conductance require hardware calibration; the
 defaults are explicitly study assumptions, not measured Griffin properties.
 
-The opaque `thermal_metal.wesl` material converts that temperature to visible
+The opaque `thermal_metal.wesl` material interpolates the three wall temperatures
+at their actual local axial positions using the same nozzle length. It converts
+the resulting temperature to visible
 emission with Planck's law and coarse CIE 1931 quadrature (400–700 nm, 20 nm
 spacing, [CIE 2019 data](https://doi.org/10.25039/CIE.DS.xvudnb9b)),
 then uses the shared PBR lighting path. Temperature and emissivity
 have explicit float GPU projection outputs; the thermal state and diagnostics
-remain double precision. Cold metal stays dark. Hot metal can remain luminous
+remain double precision. The reported `wall_temperature_k` is a heat-capacity
+weighted mean, not the hot-zone temperature. Cold metal stays dark. Hot metal can remain luminous
 after delivered thrust and plume light have reached zero. This is a surface
 emission model, not ray-traced indirect lighting or a combustion spectrum.
 

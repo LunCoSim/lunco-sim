@@ -12,7 +12,8 @@ fn on_start(me,ctx) {
 }
 fn sample(wall) {
  let r=query("ReadPorts",#{api_id:wall,port_names:["wall_temperature_k","heating_w",
- "radiation_w","conduction_w","stored_heat_rate_w","energy_residual_w","jet_power_w"]});
+ "radiation_w","conduction_w","stored_heat_rate_w","energy_residual_w","jet_power_w",
+ "throat_temperature_k","middle_temperature_k","exit_temperature_k"]});
  if r.contains("ok") && !r.ok {throw "Nozzle thermal state unavailable: "+r;}
  let v=#{};for p in r.ports {v[p.name]=p.value;}v
 }
@@ -31,21 +32,26 @@ fn on_tick(me,ctx) {
   this.checks.push(t_true(abs(v.wall_temperature_k-293.15)<1.0,"cold metal begins near its authored temperature"));
   this.checks.push(t_true(v.heating_w==0.0,"idle engine supplies no gas heating"));
   let r=cmd("SetPorts",#{target:this.wall,writes:[["propellant_flow_kgs",0.8],
-   ["exit_temperature_k",600.0],["stagnation_temperature_k",3000.0],["jet_power_w",2000000.0]]});
+   ["stagnation_temperature_k",3000.0],["jet_power_w",2000000.0]]});
   if !r.ok {throw "Nozzle warm-up stimulus rejected: "+r;}
   this.phase=1;this.elapsed=0.0;
  }else if this.phase==1 && this.elapsed>=20.0 {
   this.hot=v.wall_temperature_k;
   this.checks.push(t_true(this.hot>1000.0 && this.hot<3000.0,"delivered gas heats the wall below recovery temperature"));
-  let gpu=query("ReadPorts",#{api_id:this.metal,port_names:["temperature_k","emissivity"]});
-  let temp=();let emissivity=();for p in gpu.ports {
-   if p.name=="temperature_k" {temp=p.value;}if p.name=="emissivity" {emissivity=p.value;}
+  let gpu=query("ReadPorts",#{api_id:this.metal,port_names:["temperature_throat_k",
+   "temperature_middle_k","temperature_exit_k","nozzle_length_m","emissivity"]});
+  let rendered=#{};for p in gpu.ports {rendered[p.name]=p.value;}
+  for zone in ["throat","middle","exit"] {
+   this.checks.push(t_true(abs(rendered["temperature_"+zone+"_k"]-v[zone+"_temperature_k"])<2.0,
+    "solved "+zone+" temperature reaches the real bell material"));
   }
-  this.checks.push(t_true(abs(temp-this.hot)<2.0,"solved wall temperature reaches the actual PBR shader"));
-  this.checks.push(t_true(abs(emissivity-0.8)<1.0e-6,"thermal balance and shader use the same emissivity"));
+  this.checks.push(t_true(v.throat_temperature_k>v.middle_temperature_k
+   && v.middle_temperature_k>v.exit_temperature_k,"localized gas heating produces a wall-temperature gradient"));
+  this.checks.push(t_true(abs(rendered.emissivity-0.8)<1.0e-6,"thermal balance and shader use the same emissivity"));
+  this.checks.push(t_true(abs(rendered.nozzle_length_m-0.494)<1.0e-6,"material profile uses the same nozzle length"));
   print("NOZZLE_THERMAL_HOT|"+v);
   let r=cmd("SetPorts",#{target:this.wall,writes:[["propellant_flow_kgs",0.0],
-   ["exit_temperature_k",0.0],["stagnation_temperature_k",0.0],["jet_power_w",0.0]]});
+   ["stagnation_temperature_k",0.0],["jet_power_w",0.0]]});
   if !r.ok {throw "Nozzle shutdown stimulus rejected: "+r;}
   this.phase=2;this.elapsed=0.0;
  }else if this.phase==2 {

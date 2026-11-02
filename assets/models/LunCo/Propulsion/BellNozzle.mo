@@ -41,6 +41,9 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   output Real throat_area "A_t (m^2)";
   output Real exit_area "A_e (m^2)";
   output Real exit_radius_m "Exit-plane radius exposed to connected consumers (m)";
+  output Real throat_radius_m "Authored throat geometry for downstream thermal consumers (m)";
+  output Real nozzle_length_m "Authored throat-to-exit geometry (m)";
+  output Real contour_out "Authored contour exponent";
   output Real expansion_ratio "epsilon = A_e / A_t — the number that names a nozzle";
 
   // Four contour stations, the same ones the USD lathe is built from, so the
@@ -75,6 +78,9 @@ equation
   throat_area = pi * throat_radius ^ 2;
   exit_area = pi * exit_radius ^ 2;
   exit_radius_m = exit_radius;
+  throat_radius_m = throat_radius;
+  nozzle_length_m = length;
+  contour_out = contour;
   expansion_ratio = exit_area / throat_area;
 
   r_station_1 = throat_radius + (exit_radius - throat_radius) * (1.0 / 3.0) ^ contour;
