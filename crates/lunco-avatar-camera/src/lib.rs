@@ -943,8 +943,64 @@ fn orbit_system(
         if surface_exit {
             let transition_direction = zoom.delta;
             zoom.begin_mode_transition(Some(transition_direction));
-            commands.trigger(ReturnFromOrbit { camera: avatar_ent });
-            info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");
+            // Scroll-through continues the gesture at its current pose. The
+            // explicit ReturnFromOrbit command restores a saved view instead.
+            let Some(frame) = terrain_frame.active_frame.as_deref().map(|frame| frame.0) else {
+                warn!("ORBITAL SCROLL-THROUGH: active surface frame is unavailable");
+                continue;
+            };
+            let Some((position, rotation)) = lunco_spatial::coords::pose_in_grid_seeded(
+                avatar_ent,
+                frame,
+                Some(&*cell),
+                &tf,
+                q_parents,
+                q_grids,
+                q_spatial,
+            ) else {
+                warn!(
+                    "ORBITAL SCROLL-THROUGH: current camera pose cannot be resolved in the surface frame"
+                );
+                continue;
+            };
+            let Some((east, north, up)) = surface_axes_for_grid_position(
+                frame,
+                position,
+                physical_target,
+                q_parents,
+                q_grids,
+                q_spatial,
+            ) else {
+                warn!("ORBITAL SCROLL-THROUGH: surface orientation is unavailable");
+                continue;
+            };
+            let Ok(grid) = q_grids.get(frame) else {
+                warn!("ORBITAL SCROLL-THROUGH: active surface frame has no Grid");
+                continue;
+            };
+            // Camera rotation narrows only at the render-camera boundary.
+            let (heading, pitch) = surface_camera_angles(east, north, up, rotation.as_quat());
+            migrate_to_grid_local_pose(&mut commands, avatar_ent, frame, grid, position, rotation);
+            commands
+                .entity(avatar_ent)
+                .remove::<OrbitCamera>()
+                .remove::<OrbitViewReturn>()
+                .remove::<OrbitCameraTransition>()
+                .remove::<OrbitUserInput>()
+                .remove::<CurrentRegionArrival>()
+                .remove::<RadialArrival>()
+                .try_insert((
+                    SurfaceCamera { heading, pitch },
+                    SurfaceRelativeMode,
+                    GravityBody {
+                        body_entity: physical_target,
+                    },
+                ));
+            if let Some(pin) = orbital_pin.as_mut() {
+                pin.active = false;
+            }
+            commands.trigger(lunco_camera_core::RequestLocalEmbodimentView);
+            info!("ORBITAL SCROLL-THROUGH: migrated current pose to surface frame");
             continue;
         }
 
