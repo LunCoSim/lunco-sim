@@ -1269,7 +1269,8 @@ and Twin-scoped traversal policy are defined in
 
 ### glTF Payloads & Placeholders
 
-For glTFs that ship via `Assets.toml` (e.g. Perseverance), we pair a `lunco://` payload with a **`def Cube` placeholder**. 
+For glTFs delivered through `Assets.toml`, a scene can pair a logical payload
+with a **`def Cube` placeholder**.
 - Third-party tools (Blender, usdview) fall back to the Cube.
 - Our pipeline overlays the photoreal glTF and hides the Cube.
 

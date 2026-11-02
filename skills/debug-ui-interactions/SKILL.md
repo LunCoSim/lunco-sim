@@ -173,7 +173,7 @@ before despawning the popup; the shared queue owns its terminal cleanup. Use
 `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` to check a held
 press across replacement, then a fresh click, dismissal, scene teardown and a
 replacement Twin. Installed workbench menu endpoints belong to a provider root;
-selection creates a scene-bound invocation child. Provider replacement revokes
+selection creates an owner-bound invocation child. Provider replacement revokes
 the child before or after queue admission, while scene reset preserves the
 installed endpoint for fresh input. Verify completed deferred stop verdicts as
 well as input. Nested commands keep their caller's phase and capabilities;
@@ -316,6 +316,12 @@ Runtime HUI is the native HTML-like surface documented by
 [`skills/runtime-ui/SKILL.md`](../runtime-ui/SKILL.md), not a browser DOM. Use
 the generic typed action surface and Rhai-authored labels/options. Do not add
 JavaScript, browser automation, or a Rust branch for a domain-specific button.
+Runtime surfaces deliver authored `on_press` callbacks from native pointer-press
+events through HUI's public function registry. Test both a same-frame click and
+a held press: each must dispatch once. UI callbacks validate their owner and optional live scene target through the
+UI tool queue independently of simulation readiness. Verify menus and document
+controls while a scene is waiting for required data, and reject callbacks after
+their exact provider, Twin or scene target retires.
 
 ## Display and workspace handling
 

@@ -80,7 +80,7 @@ fn report_simulation_lifecycle(
     use lunco_time::SimulationLifecycleTransition as T;
     let Some(mut bus) = bus else { return };
     let message = match trigger.event().transition {
-        T::Started => "Simulation started",
+        T::Started => "Simulation initialized",
         T::Paused => "Simulation paused",
         T::Unpaused => "Simulation unpaused",
         T::Stopped => "Simulation stopped",
@@ -114,7 +114,10 @@ fn report_runtime_fault_status(
     bus.push(
         "Simulation",
         lunco_status_core::status_bus::StatusLevel::Error,
-        format!("Simulation stopped: {} [{}]", fault.subject, fault.kind),
+        format!(
+            "Simulation stopped: {} [{}]\n{}",
+            fault.subject, fault.kind, fault.detail
+        ),
     );
     status.reported = true;
 }
@@ -1234,7 +1237,7 @@ mod simulation_lifecycle_status_tests {
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].message,
-            "Simulation stopped: continuous contact solve [contact-invalid]"
+            "Simulation stopped: continuous contact solve [contact-invalid]\nnative geometry unavailable"
         );
         lunco_core::run_scene_teardown(app.world_mut());
         app.world_mut()
@@ -1253,7 +1256,7 @@ mod simulation_lifecycle_status_tests {
         assert_eq!(bus.history().count(), 1);
         assert_eq!(
             bus.history().next().unwrap().message,
-            "Simulation stopped: joint admission [joint-invalid]"
+            "Simulation stopped: joint admission [joint-invalid]\ninvalid endpoints"
         );
     }
 
@@ -1277,7 +1280,7 @@ mod simulation_lifecycle_status_tests {
         assert_eq!(
             messages,
             [
-                ("Simulation", "Simulation started"),
+                ("Simulation", "Simulation initialized"),
                 ("Simulation", "Simulation paused"),
                 ("Simulation", "Simulation unpaused")
             ]

@@ -59,6 +59,7 @@ fn main() {
     // effective resolution, so switching quality rebakes exactly the
     // affected outputs and nothing silently serves the wrong tier.
     let mut quality: &str = "good";
+    let mut force = false;
     let mut parallel_limit: Option<usize> = None;
     let mut binary: Option<&str> = None;
     let mut stage_cache: Option<&str> = None;
@@ -68,7 +69,7 @@ fn main() {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "download" | "list" | "process" | "stage" => action = Some(args[i].as_str()),
+            "download" | "list" | "process" | "stage" | "verify" => action = Some(args[i].as_str()),
             "-g" | "--group" => {
                 i += 1;
                 group = args.get(i).map(|s| s.as_str());
@@ -87,6 +88,7 @@ fn main() {
                     parallel_limit = Some(val);
                 }
             }
+            "--force" => force = true,
             "--quality" => {
                 i += 1;
                 match args.get(i).map(|s| s.as_str()) {
@@ -143,7 +145,13 @@ fn main() {
     // `-a KEY` composes with it: a school twin that lists every candidate
     // territory would otherwise pull multiple GB on each provisioning run.
     if let Some(dir) = twin_dir {
-        let twin_root = PathBuf::from(dir);
+        let twin_root = match std::fs::canonicalize(dir) {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!("Error: Twin root: {error}");
+                std::process::exit(1);
+            }
+        };
         let result = match (action, asset_key) {
             ("download", Some(key)) => download::download_one_for_twin(&twin_root, key, &settings)
                 .map_err(|e| e.to_string()),
@@ -151,7 +159,8 @@ fn main() {
                 download::download_all_for_twin_with_limit(&twin_root, parallel, &settings)
                     .map_err(|e| e.to_string())
             }
-            ("process", key) => process_for_twin(&twin_root, key, quality),
+            ("process", key) => process_for_twin(&twin_root, key, quality, force),
+            ("verify", key) => verify_twin(&twin_root, key),
             ("list", _) => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
             ("stage", _) => Err("stage cannot be used with --twin".to_string()),
             _ => Err("invalid arguments for --twin".to_string()),
@@ -185,9 +194,9 @@ fn main() {
         }
         "process" => {
             if let Some(g) = group {
-                process_group(g)
+                process_group(g, force)
             } else {
-                process_all_groups()
+                process_all_groups(force)
             }
         }
         "list" => {
@@ -239,6 +248,7 @@ fn process_filtered(
     twin_root: Option<&std::path::Path>,
     only_key: Option<&str>,
     quality: &str,
+    force: bool,
 ) -> Result<(), String> {
     let manifest = AssetManifest::from_file(manifest_path)
         .map_err(|e| format!("Failed to read {}: {}", manifest_path.display(), e))?;
@@ -255,20 +265,28 @@ fn process_filtered(
             continue;
         }
         if let Some(ref proc_cfg) = entry.process {
-            let owner_cache = twin_root.map(|root| {
-                lunco_assets_datasets::DatasetScope::twin_cache_root(root, entry.shared)
-            });
-            let source_path = entry_dest_path(entry, owner_cache.as_deref())
-                .map_err(|error| format!("invalid destination for {key}: {error}"))?;
-            if !installed_destination_present(entry, &source_path) {
-                println!(
-                    "  ⚠ {} source not found at {}, skipping",
-                    key,
-                    source_path.display()
-                );
-                println!("    Run 'download' first.");
-                continue;
-            }
+            let owner = twin_root
+                .map(std::path::Path::to_path_buf)
+                .map(Ok)
+                .unwrap_or_else(lunco_assets_core::assets_dir_abs)
+                .map_err(|e| e.to_string())?;
+            let source = lunco_assets_datasets::source_read_path(
+                entry,
+                &entry_cache_root(entry, twin_root),
+                &lunco_assets_core::asset_read_roots(&owner),
+            );
+            let source_path = match source {
+                Ok(path) => path,
+                Err(error) if only_key.is_some() => {
+                    return Err(format!(
+                        "{key}: {error}; request the dataset before processing"
+                    ));
+                }
+                Err(error) => {
+                    println!("  skipping {key}: {error}");
+                    continue;
+                }
+            };
             println!("  processing {}...", key);
             // `coarse` is a derived config, not an edit: the bake key hashes
             // the EFFECTIVE config, so coarse and good outputs never alias.
@@ -277,13 +295,34 @@ fn process_filtered(
                 if let Some([w, h]) = cfg.target_resolution {
                     cfg.target_resolution = Some([(w / 4).max(64), (h / 4).max(64)]);
                 }
+                if let Some(pipeline) = &mut cfg.pipeline {
+                    for step in &mut pipeline.steps {
+                        if let Some(values) = step
+                            .parameters
+                            .get_mut("target_resolution")
+                            .and_then(toml::Value::as_array_mut)
+                        {
+                            for value in values {
+                                let n = value.as_integer().ok_or_else(|| {
+                                    "step resolution must contain integers".to_string()
+                                })?;
+                                *value = (n / 4).max(64).into();
+                            }
+                        }
+                    }
+                    for artifact in &mut pipeline.artifacts {
+                        if let Some([w, h]) = artifact.dimensions {
+                            artifact.dimensions = Some([(w / 4).max(64), (h / 4).max(64)]);
+                        }
+                    }
+                }
             }
             process::process_asset(
                 &source_path,
                 &cfg,
                 &entry_cache_root(entry, twin_root),
                 twin_root,
-                &process::ProcessControl::unrestricted(),
+                &process::ProcessControl::unrestricted().with_force(force),
             )
             .map_err(|e| format!("Failed to process {}: {}", key, e))?;
             processed += 1;
@@ -311,7 +350,7 @@ fn entry_cache_root(entry: &AssetEntry, twin_root: Option<&std::path::Path>) -> 
 
 /// Process one engine manifest group (`assets/manifests/<group>.toml`).
 #[cfg(not(target_arch = "wasm32"))]
-fn process_group(group: &str) -> Result<(), String> {
+fn process_group(group: &str, force: bool) -> Result<(), String> {
     println!("Processing `{group}`...");
     process_filtered(
         &lunco_assets_core::manifests_dir()
@@ -320,15 +359,16 @@ fn process_group(group: &str) -> Result<(), String> {
         None,
         None,
         "good",
+        force,
     )
 }
 
 /// Process every engine manifest group.
 #[cfg(not(target_arch = "wasm32"))]
-fn process_all_groups() -> Result<(), String> {
+fn process_all_groups(force: bool) -> Result<(), String> {
     let manifests = lunco_assets_core::engine_manifests().map_err(|error| error.to_string())?;
     for (group, _) in manifests {
-        process_group(&group)?;
+        process_group(&group, force)?;
     }
     Ok(())
 }
@@ -353,13 +393,47 @@ fn process_for_twin(
     twin_root: &std::path::Path,
     only_key: Option<&str>,
     quality: &str,
+    force: bool,
 ) -> Result<(), String> {
     process_filtered(
         &twin_root.join("Assets.toml"),
         Some(twin_root),
         only_key,
         quality,
+        force,
     )
+}
+
+/// Validate the same authored/cache selection used by the runtime registry.
+#[cfg(not(target_arch = "wasm32"))]
+fn verify_twin(root: &std::path::Path, only_key: Option<&str>) -> Result<(), String> {
+    let contract =
+        lunco_twin::TwinManifest::read(&root.join("twin.toml")).map_err(|e| e.to_string())?;
+    let mut registry = lunco_assets_datasets::DatasetRegistry::default();
+    registry.scan_twin(&contract.name, root);
+    let failures = registry.take_pending_failures();
+    if !failures.is_empty() {
+        return Err(failures.join("\n"));
+    }
+    let selected: Vec<_> = registry
+        .entries()
+        .iter()
+        .filter(|entry| only_key.map_or(entry.recommended, |key| entry.key == key))
+        .collect();
+    if selected.is_empty() {
+        return Err("no matching required datasets".to_string());
+    }
+    for entry in selected {
+        if !entry.state.is_installed() {
+            return Err(format!(
+                "{}: {} is incomplete or stale",
+                entry.key,
+                entry.artifact_uri()
+            ));
+        }
+        println!("  verified {}", entry.artifact_uri());
+    }
+    Ok(())
 }
 
 /// Stage the complete set of manifest-declared artifacts for one binary. The
@@ -476,15 +550,24 @@ fn print_usage() {
     println!("  cargo run -p lunco-assets -- list                  List every declared asset");
     println!("  cargo run -p lunco-assets -- list -g GROUP         List one manifest group");
     println!("  cargo run -p lunco-assets -- list -t DIR           List a Twin folder's assets");
+    println!(
+        "  cargo run -p lunco-assets -- verify -t DIR [-a KEY]  Verify complete required artifacts"
+    );
     println!("  cargo run -p lunco-assets -- stage --binary BIN --cache DIR --destination DIR");
     println!();
+    println!(
+        "  --force with process reruns all steps and retains the last good bundle on failure."
+    );
     println!("Process kinds (in an Assets.toml [name.process] section):");
+    println!(
+        "  kind = \"pipeline\" ordered native/custom steps publishing a validated artifact bundle"
+    );
     println!("  kind = \"texture\"  resize/re-encode an image (PNG/JPEG/TIFF/...) [default]");
     println!(
         "  kind = \"gltf\"     normalize Draco geometry in a .glb (WebP extension conversion pending)"
     );
     println!(
-        "  kind = \"dem\"      crop a square georeferenced float32 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)"
+        "  kind = \"dem\"      crop a square georeferenced float64 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)"
     );
     println!(
         "  kind = \"map\"      crop a co-registered ortho/shade/slope raster to the same ROI as an 8-bit PNG layer map"
@@ -493,6 +576,7 @@ fn print_usage() {
         "  kind = \"albedo\"   bake a stable material albedo from a calibrated raster or illumination-bearing orthophoto"
     );
     println!("  kind = \"normalmap\" derive a world-space normal-map PNG from a DTM crop");
+    println!("  kind = \"coverage\" source coverage mask aligned with the DEM node grid");
     println!();
     println!("Examples:");
     println!("  cargo run -p lunco-assets -- download -p lunco-modelica-core");

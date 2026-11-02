@@ -382,6 +382,7 @@ mod tests {
             }
         }
         let context = lunco_hooks::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_hooks::RuntimeRoute::twin_owned(
                 lunco_hooks::RuntimeCycle::Simulation,
                 9,

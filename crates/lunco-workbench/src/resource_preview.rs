@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use lunco_workbench_core::commands::OpenAssetResource;
+use lunco_workbench_core::commands::{OpenAssetResource, OpenWebUrl};
 use lunco_workbench_core::uri::{UriClicked, UriResolution};
 
 const TEXT_SCROLL: &str = "asset-resource-text";
@@ -25,7 +25,31 @@ fn open_resource(
         lunco_assets_runtime::ui_loader::invalidate_resource_image(ctx, &trigger.event().uri);
     }
 }
-lunco_core::register_commands!(open_resource,);
+#[lunco_core::on_command(OpenWebUrl)]
+fn open_web_url(
+    trigger: On<OpenWebUrl>,
+    mut contexts: EguiContexts,
+) -> Result<lunco_command_contracts::Ack, String> {
+    let value = &trigger.event().url;
+    let url = url::Url::parse(value).map_err(|e| format!("Invalid web link: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(
+            "Web links require an absolute HTTP(S) address without embedded credentials".into(),
+        );
+    }
+    contexts
+        .ctx_mut()
+        .map_err(|e| e.to_string())?
+        .open_url(egui::OpenUrl::new_tab(url.as_str()));
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
+}
+lunco_core::register_commands!(open_resource, open_web_url);
 
 fn on_link(trigger: On<UriClicked>, mut preview: ResMut<ResourcePreview>, mut commands: Commands) {
     match &trigger.event().resolution {

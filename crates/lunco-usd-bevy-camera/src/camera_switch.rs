@@ -313,6 +313,7 @@ fn first_authored_camera(candidates: impl IntoIterator<Item = (Entity, String)>)
 
 fn presentation_runtime_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::application(
             lunco_core::RuntimeCycle::Presentation,
         )),

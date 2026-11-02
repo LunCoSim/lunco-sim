@@ -1240,6 +1240,7 @@ mod simulated_intent_source_tests {
         let route = RuntimeRoute::twin(lunco_core::RuntimeCycle::Simulation, 23);
         let actor = lunco_core::GlobalEntityId::from_raw(0x11);
         let context = lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(route),
             phase: lunco_core::RuntimePhase::Behavior,
             clock: lunco_core::RuntimeClock::Simulation,
@@ -2722,6 +2723,7 @@ mod tests {
         );
 
         let origin_context = lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::twin(
                 lunco_core::RuntimeCycle::Simulation,
                 3,

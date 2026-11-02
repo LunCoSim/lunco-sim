@@ -262,10 +262,13 @@ it. Immediate active-session cleanup at `TwinClosed` checks `was_active`;
 closing an inactive Twin preserves the active session's presentation state.
 Keep scene-derived panel state in registered resources instead of panel fields;
 hidden panels must release rows, drafts and workers without repainting. Cursor
-modes and tool names are scene intent. Queued Rhai tools pin the committed
-scene generation independently of the library's application/Twin scope. Callback
-commands also pin the exact `ToolHookBinding`. A scene transition or retired
-binding rejects the invocation through the shared terminal-result owner.
+modes and tool names are scene intent. Queued Rhai tools retain their exact
+owner and source lifetime independently of simulation readiness. Scene-bound
+work pins its live lifecycle generation; owner-bound application/Twin UI stays
+available during loading. Callback commands also pin the exact
+`ToolHookBinding`. Retired targets reject through the shared terminal-result
+owner. `RuntimeExecutionContext.target_twin_id` retains the target separately
+from execution scope and clock, including nested commands.
 Queue admission publishes `CommandOutcome::Pending`; only execution or owner
 retirement may publish the terminal result.
 Parameter drafts pin their preview and document; document closure and preview

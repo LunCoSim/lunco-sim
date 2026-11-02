@@ -53,6 +53,7 @@ package-icons = [
 tracy = ["bevy/trace_tracy"]
 
 [dependencies]
+lunco-readiness = { path = "../lunco-readiness" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
@@ -89,7 +90,7 @@ lunco-api-transport = { path = "../lunco-api-transport", default-features = fals
 lunco-updater = { path = "../lunco-updater", optional = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets = { path = "../lunco-assets", features = ["shader-processing", "modelica-processing"] }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-avatar-camera = { path = "../lunco-avatar-camera" }

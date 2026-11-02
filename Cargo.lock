@@ -8043,8 +8043,10 @@ dependencies = [
  "lunco-geotiff",
  "lunco-settings",
  "lunco-status-core",
+ "lunco-twin",
  "lunco-workspace",
  "tiff",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]
@@ -8077,6 +8079,7 @@ dependencies = [
  "bevy",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-settings",
  "lunco-storage",
@@ -8120,16 +8123,26 @@ name = "lunco-assets-processing"
 version = "0.1.0-dev"
 dependencies = [
  "draco-gltf",
+ "futures-lite",
  "image",
+ "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-celestial-data",
+ "lunco-experiments",
  "lunco-geotiff",
+ "lunco-hooks",
+ "lunco-hooks-rhai",
+ "lunco-modelica-compiler",
+ "lunco-modelica-runner",
  "lunco-storage",
  "resvg",
  "tempfile",
  "tiff",
  "toml 1.1.2+spec-1.1.0",
  "usvg",
+ "web-time",
+ "wesl",
+ "wgpu",
 ]
 
 [[package]]
@@ -9285,6 +9298,7 @@ dependencies = [
  "lunco-networking",
  "lunco-networking-sync",
  "lunco-notifications-core",
+ "lunco-readiness",
  "lunco-render",
  "lunco-render-bevy",
  "lunco-render-recovery",
@@ -10506,6 +10520,7 @@ dependencies = [
  "lunco-api",
  "lunco-api-core",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -10540,6 +10555,7 @@ dependencies = [
  "lunco-api",
  "lunco-api-core",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -11274,6 +11290,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -11362,6 +11379,7 @@ dependencies = [
  "openusd",
  "openusd-schemas",
  "serde",
+ "tempfile",
 ]
 
 [[package]]
@@ -11986,6 +12004,7 @@ dependencies = [
  "lunco-workspace-api",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -12134,6 +12153,7 @@ dependencies = [
  "bevy_egui",
  "bevy_flair",
  "bevy_hui",
+ "bevy_ui_widgets",
  "lunco-assets-core",
  "lunco-assets-path",
  "lunco-assets-runtime",
@@ -18501,6 +18521,7 @@ dependencies = [
  "smallvec",
  "static_assertions",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "wgpu-core",
  "wgpu-hal",

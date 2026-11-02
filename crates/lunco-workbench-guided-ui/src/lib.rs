@@ -85,16 +85,15 @@ fn command_owner_twin(
     clearing_retired_owner: bool,
 ) -> Result<Option<lunco_workspace::TwinId>, String> {
     let context = lunco_scripting_bridge_core::execution_context();
-    let Some(route) = context.route else {
+    let Some(raw) = context.target_twin().map_err(|error| error.to_string())? else {
+        if context
+            .route
+            .is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin)
+        {
+            return Err("Twin guided HUD command has no owner identity".to_owned());
+        }
         return Ok(None);
     };
-    if route.scope != lunco_core::RuntimeScope::Twin {
-        return Ok(None);
-    }
-    let raw = route
-        .owner_id
-        .filter(|raw| *raw != 0)
-        .ok_or_else(|| "Twin guided HUD command has no owner identity".to_owned())?;
     let twin = lunco_workspace::TwinId::new(raw);
     if clearing_retired_owner {
         return Ok(Some(twin));

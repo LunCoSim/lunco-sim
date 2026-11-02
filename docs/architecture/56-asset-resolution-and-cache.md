@@ -50,7 +50,7 @@ revision and owning mount; publication validates both before admitting bytes.
 Authored forms retain logical identities. Custom schemes require the registered
 resolver when another USD tool opens the document:
 
-- `@lunco://models/perseverance.glb@` — the engine asset library
+- `@lunco://components/power/battery.usda@` — the engine asset library
 - `@terrain/apollo15@` — search beside the contributing layer, then in its supplied Twin context
 - `@./terrain/apollo15@` — strictly relative to the contributing layer
 
@@ -387,7 +387,7 @@ can overlap; their typed registry results commit in discovery order, and
 open must not open a connection. `DatasetRegistry::request(key)` is the only
 call in the engine that authorises traffic. For an interactive Twin, a missing
 declared dataset is presented at Twin open in a consent window with an explicit
-selection; the same request remains available in Settings ▸ Downloadable data,
+selection; the same request remains available in Settings ▸ Data & libraries,
 the Twin inspector, and the Files section's Twin assets rows. Those rows are a
 read-only projection of the registry: Download, Retry, and Cancel emit the
 typed dataset commands, while progress, processing, integrity failure, and
@@ -501,6 +501,12 @@ Native HTTP reads have connect, response, and per-read body deadlines. The body
 deadline is an inactivity bound, not a total transfer-duration limit, so a
 large healthy DEM can continue while a silent peer releases its worker.
 
+Ordered artifact recipes, typed custom stages, integrity receipts and native
+source reprojection are specified in [artifact processing](asset-processing.md).
+A compound recipe owns one output directory and publishes it through the same
+transaction as a leaf processor. Its raw/code dependencies are part of readiness
+and bake identity; recipe topology belongs in `Assets.toml`.
+
 ### One download policy and resumable recovery
 
 `lunco-settings::DownloadSettings` is the single application-wide transport
@@ -533,11 +539,14 @@ Dataset transport facts and domain meaning stay together in the manifest.
 `AssetEntry` preserves domain tables and exposes them to the owning Rust
 consumer through `AssetEntry::domain::<T>()`; for example,
 `lunco-celestial-spatial` reads body imagery metadata. The dataset layer does
-not select scene assets. When a scene needs a declared text artifact, the
+not assign importance to scene assets. Composed USD references and actual
+runtime consumers determine requirements through the shared registry, as
+described in [artifact processing](asset-processing.md#scene-requirements-and-admission).
+When a scene needs a declared text artifact, the
 authored `application.asset.lifecycle` Rhai policy returns its dataset id in
 `dataset_text_artifacts`; the generic asset runtime resolves and reads it.
-Missing requested assets are reported by that owner. A scene with no authored
-dataset request does not probe for unrelated data during startup.
+Missing requested artifacts use the same recoverable scene-data hold and
+download window. A scene does not probe for unrelated Twin data during startup.
 
 ### Still open
 
@@ -564,7 +573,7 @@ shadow the other. The workspace `assets/` dir is just a root with an
 
 Body imagery is **declared data, not a path in Rust**. `lunco-celestial`'s
 `Assets.toml` carries the Earth and Moon maps like any other dataset — listed in
-Settings ▸ Downloadable data, fetched only when a user asks — and each entry
+Settings ▸ Data & libraries, fetched only when a user asks — and each entry
 names the body it belongs to in a domain sub-table:
 
 ```toml
@@ -639,11 +648,17 @@ drift. Native targets stage into `assets/.cache`; web targets stage into the
 web bundle root. Entries with no target remain user-provisioned resources and
 never enter a release by accident.
 
+Package-only manifest inputs (`package_only = true`) are fetched and integrity-
+checked by the existing CI bundle download/staging commands. They require a
+bundle target and cannot be recommended downloads. The runtime registry does
+not admit them. UI fonts are package inputs; Earth/Moon imagery and source
+libraries are user downloads. The same rule applies to native and web staging.
+
 Target names distinguish delivery profiles where the same binary has different
 packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and
-`luncosim-web`. The web build still creates its dedicated source-library bundle through
-`lunco-modelica-assets`'s `build_modelica_library_assets`; raw source-library entries therefore target
-native packaging only.
+`luncosim-web`. Browser source-library bundles retain their explicit library
+transport through `lunco-modelica-assets`; they are separate from the native
+installer payload.
 
 The downloader qualifies bundle keys as `<group>/<key>` for actionable errors,
 but leaves those keys out of opaque on-cache scratch filenames. The process ID
@@ -773,3 +788,12 @@ Language source identities require exact UTF-8; source discovery reports an
 unrepresentable path instead of dropping components or replacing bytes. Reloading
 an open resource is an explicit typed request which retires its byte/texture
 entry and decoder generation before reading again.
+
+Native scene data admission uses the composed USD snapshot and canonical live
+asset edits, consumed by the dataset registry's artifact identity matcher.
+`SceneDatasetRequirements` supplies the query/UI's `required_for_scene` facts;
+recommendations are optional catalog priorities. The native preparation queue
+honors the shared download concurrency setting, and the simulation progress
+owner keeps scene requirements held through queueing, failure and cancellation.
+See [artifact processing](asset-processing.md) for owner/lifecycle details and
+[geo-assets](../../skills/geo-assets/SKILL.md) for production verification.

@@ -191,8 +191,8 @@ private dock layout.
    its vertical history viewport fills that width, and each message column
    uses the remaining inner width after action controls.
    The popup opens automatically for a new terminal RuntimeFault. Its
-   explanation is the ordinary Modelica error event in the shared history;
-   selecting that row expands the complete message. Compile failures explain
+   explanation includes the complete owner-issued fault diagnostic in the
+   shared history; selecting that row expands the complete message. Compile failures explain
    why simulation did not start and list unmatched Modelica unknowns when
    Rumoca can identify them. Step failures list Modelica values that were not
    produced by the failed step, their last accepted values, and sample and
@@ -1089,15 +1089,10 @@ crates):
 
 User-global `<OS config dir>/lunco/settings.json` remains the baseline for user
 preferences. Project-owned configuration lives in the Twin manifest, where
-the project can enforce behavior that should travel with the project. The
-missing-declared-assets prompt is the first implemented example:
-`twin.toml [downloads] suppress_missing_prompt = true` hides the startup
-consent window for that project. When the prompt is shown, only manifest entries
-with `recommended = true` participate in startup consent; other declared
-resources remain available from Settings ▸ Data & libraries without blocking a
-scene. Omitted/false preserves the default of showing consent for recommended
-entries. The popup checkbox and Settings ▸ Data & libraries edit this same
-manifest-owned value.
+the project can enforce behavior that should travel with the project. The active scene's composed USD asset references determine required downloads.
+Missing required artifacts hold simulation; dismissing their preparation window
+keeps that hold. Recommended and optional Twin resources remain available in
+Settings > Data & libraries and do not block unrelated scenes.
 
 The generic `[settings]` table in `twin.toml` is the per-Twin override
 mechanism. It is a namespaced scalar map, so a new project-owned preference

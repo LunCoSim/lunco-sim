@@ -2396,7 +2396,7 @@ register_commands!(
 mod pointer_hook_lifecycle_tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use lunco_scripting_bridge_core::ToolHookBindingLifetime;
+    use lunco_core::InteractionLifetime;
 
     fn install(app: &mut App, doc: u64, twin: Option<u64>) -> Entity {
         let binding = app
@@ -2406,7 +2406,7 @@ mod pointer_hook_lifecycle_tests {
                 hook: "on_move".into(),
                 owner_twin_id: twin,
                 retention: ToolHookBindingRetention::Surface,
-                lifetime: ToolHookBindingLifetime::Scene(None),
+                lifetime: InteractionLifetime::Scene(None),
                 tool_scope: lunco_tools::ToolScope::Application,
             })
             .id();

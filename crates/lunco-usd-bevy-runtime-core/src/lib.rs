@@ -16,6 +16,8 @@
 
 use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod dataset_requirements;
 mod live_consume;
 mod native_assets;
 mod native_references;
@@ -64,6 +66,8 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.init_resource::<twin_projection::ReferenceLayerInputs>();
         app.init_resource::<twin_projection::PendingDocumentProjectionAdmissions>();
         app.init_resource::<lunco_core_runtime::SimulationProgress>();
+        #[cfg(not(target_arch = "wasm32"))]
+        dataset_requirements::install(app);
         app.init_resource::<live_consume::PendingStageProjections>();
         app.init_resource::<native_assets::PendingNativeAssetPaths>();
         live_consume::install_live_prim_entity_index(app);

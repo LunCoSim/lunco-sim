@@ -545,18 +545,19 @@ impl ApiQueryProvider for ReadPortsProvider {
     }
 }
 
-/// `GetReadiness` — backs `GET /api/ready`. Reports whether the world is holding
+/// `GetReadiness` — backs `GET /api/ready`. Reports whether simulation is holding
 /// on any not-yet-satisfied readiness wait (scene load, program compile,
 /// participant init) and enumerates what is still pending.
 ///
-/// Truthful by construction: it reports exactly what the [`ReadinessRegistry`]
-/// tracks and nothing it doesn't. It does NOT invent asset/camera/port readiness
-/// signals the substrate can't vouch for — a false "ready" is the failure mode
-/// the interaction report calls out, so an untracked host reports
-/// `ready: false, readiness_tracked: false` rather than a hopeful `true`.
+/// Combines the [`ReadinessRegistry`], owner-issued simulation preparation holds,
+/// and runtime faults. An untracked host reports
+/// `ready: false, readiness_tracked: false`.
 ///
 /// params: none · returns:
-/// `{ ready, world_hold, faulted, fault: {kind, subject, detail} | null,
+/// `application_available` is true when this request reaches the application
+/// command/query loop, including while simulation is waiting or faulted.
+/// `{ application_available, ready, world_hold, faulted, fault: {kind, subject, detail} | null,
+///    preparation_held, preparation: [reason],
 ///    readiness_tracked, pending_count, pending: [{kind, subject, label, elapsed_s, action}] }`
 pub struct ReadinessProvider;
 impl ApiQueryProvider for ReadinessProvider {
@@ -597,7 +598,20 @@ impl ApiQueryProvider for ReadinessProvider {
                     .collect()
             })
             .unwrap_or_default();
-        let ready = registry.is_some() && pending.is_empty() && !world_hold && fault.is_none();
+        let preparation: Vec<_> = world
+            .get_resource::<lunco_core_runtime::SimulationProgress>()
+            .map(|progress| {
+                progress
+                    .blockers()
+                    .map(|blocker| ApiValue::str(blocker.reason.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let ready = registry.is_some()
+            && pending.is_empty()
+            && !world_hold
+            && preparation.is_empty()
+            && fault.is_none();
         let fault = fault.map(|fault| {
             ApiValue::map([
                 ("kind", ApiValue::str(fault.kind)),
@@ -606,10 +620,13 @@ impl ApiQueryProvider for ReadinessProvider {
             ])
         });
         Ok(Some(ApiValue::map([
+            ("application_available", ApiValue::Bool(true)),
             ("ready", ApiValue::Bool(ready)),
             ("world_hold", ApiValue::Bool(world_hold)),
             ("faulted", ApiValue::Bool(fault.is_some())),
             ("fault", fault.into_api_value()),
+            ("preparation_held", ApiValue::Bool(!preparation.is_empty())),
+            ("preparation", ApiValue::Array(preparation)),
             ("readiness_tracked", ApiValue::Bool(registry.is_some())),
             ("pending_count", ApiValue::Int(pending.len() as i64)),
             ("pending", ApiValue::Array(pending)),

@@ -48,6 +48,9 @@ use geotiff_core::tags::{
 use tiff::encoder::{DirectoryEncoder, TiffKind};
 use tiff::tags::Tag;
 
+mod projection;
+pub use projection::{RasterProjection, SphericalRaster, read_spherical_raster};
+
 // GeoKey ids (OGC 01-004, Annex F). `geotiff-core` names the ones it models; the
 // projection-parameter keys below are not in its constant set, so they are spelled
 // out here against the spec.
@@ -61,7 +64,9 @@ use geotiff_core::geokeys::{
 const KEY_GEOG_SEMI_MAJOR: u16 = 2057;
 const KEY_GEOG_SEMI_MINOR: u16 = 2058;
 const KEY_PROJ_STD_PARALLEL1: u16 = 3078;
-const KEY_PROJ_NAT_ORIGIN_LONG: u16 = 3088;
+const KEY_PROJ_CENTER_LONG: u16 = 3088;
+const KEY_PROJ_CENTER_LAT: u16 = 3089;
+const KEY_PROJ_NAT_ORIGIN_LAT: u16 = 3081;
 
 const MODEL_TYPE_PROJECTED: u16 = 1;
 /// Sample positions ARE the grid nodes — see the module note.
@@ -264,8 +269,12 @@ where
         GeoKeyValue::Double(vec![tf.center_lat_deg]),
     );
     keys.set(
-        KEY_PROJ_NAT_ORIGIN_LONG,
+        KEY_PROJ_CENTER_LONG,
         GeoKeyValue::Double(vec![tf.center_lon_deg]),
+    );
+    keys.set(
+        KEY_PROJ_CENTER_LAT,
+        GeoKeyValue::Double(vec![tf.center_lat_deg]),
     );
 
     // `CompressedDataCorrupt` is the only `TiffFormatError` variant carrying a free
@@ -393,7 +402,7 @@ pub fn read_geo_tags<R: Read + Seek>(
         // instead of user-defined axes, and the radius is informational for us.
         body_radius_m: double_key(KEY_GEOG_SEMI_MAJOR).unwrap_or(0.0),
         center_lat_deg: double_key(KEY_PROJ_STD_PARALLEL1).unwrap_or(0.0),
-        center_lon_deg: double_key(KEY_PROJ_NAT_ORIGIN_LONG).unwrap_or(0.0),
+        center_lon_deg: double_key(KEY_PROJ_CENTER_LONG).unwrap_or(0.0),
         // Exact-token match on GTCitation; absent or anything else → None. An
         // undeclared frame is UNKNOWN, not MOON_ME by assumption — ME and PA
         // disagree by ≈ 875 m and only provenance can tell them apart.

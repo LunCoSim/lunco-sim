@@ -615,6 +615,7 @@ mod tests {
         )
         .unwrap();
         let simulation = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute {
                 scope: RuntimeScope::Twin,
                 cycle: RuntimeCycle::Simulation,
@@ -637,6 +638,7 @@ mod tests {
         );
 
         let ui = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::application(RuntimeCycle::Ui)),
             phase: RuntimePhase::Evaluation,
             clock: RuntimeClock::Application,
@@ -676,6 +678,7 @@ mod tests {
         )
         .unwrap();
         let context = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::twin(RuntimeCycle::Simulation, 9)),
             phase: RuntimePhase::Event,
             clock: RuntimeClock::Simulation,

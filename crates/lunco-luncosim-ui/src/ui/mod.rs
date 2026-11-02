@@ -590,8 +590,41 @@ fn on_runtime_ui_action(
                 ),
                 ("parameters".to_owned(), parameters),
             ]));
+            let binding = match trigger.event().scope.lifetime {
+                lunco_core::InteractionLifetime::Owner => {
+                    lunco_scripting_bridge_core::ToolHookBinding::for_owner(
+                        "runtime_ui".to_owned(),
+                        "on_action".to_owned(),
+                        trigger.event().scope.owner_twin_id,
+                        lunco_scripting_bridge_core::ToolHookBindingRetention::Invocation,
+                    )
+                }
+                lunco_core::InteractionLifetime::Scene(_) => {
+                    lunco_scripting_bridge_core::ToolHookBinding::for_scene(
+                        "runtime_ui".to_owned(),
+                        "on_action".to_owned(),
+                        trigger.event().scope.owner_twin_id,
+                        lunco_scripting_bridge_core::ToolHookBindingRetention::Invocation,
+                        scene.as_deref(),
+                    )
+                }
+            };
+            let binding = match binding {
+                Ok(binding) => binding,
+                Err(error) => {
+                    report_runtime_ui_failure(&mut commands, &error);
+                    return;
+                }
+            };
+            let entity = commands.spawn(binding).id();
+            if trigger.event().source != Entity::PLACEHOLDER {
+                commands
+                    .entity(entity)
+                    .insert(ChildOf(trigger.event().source));
+            }
+            let binding = Some(entity);
             commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-                binding: None,
+                binding,
                 tool: "runtime_ui".to_owned(),
                 hook: "on_action".to_owned(),
                 args: action_args.clone(),
@@ -1273,7 +1306,7 @@ fn install_window_icon(
     }
 }
 
-/// Settings ▸ downloadable data — the generic view over
+/// Settings ▸ Data & libraries — the generic view over
 /// [`lunco_assets_core::datasets`].
 ///
 /// The app never reaches the network on its own: every fetchable dataset is
@@ -1283,11 +1316,13 @@ fn install_window_icon(
 /// manifest entry and no UI change at all.
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
-    use lunco_assets_datasets::{DatasetRegistry, DatasetState};
+    use lunco_assets_datasets::DatasetRegistry;
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
     menus.register_settings_submenu("Data & libraries", |ui, ctx| {
+        ui.set_min_width(520.0);
+        ui.set_max_width(620.0);
         ui.label(
             egui::RichText::new("Downloadable data")
                 .text_style(lunco_theme::TypographyRole::Label.text_style())
@@ -1297,7 +1332,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
             return;
         };
         let original_settings = settings.clone();
-        {
+        egui::CollapsingHeader::new("Transfer settings").show(ui,|ui| {
             ui.horizontal(|ui| {
                 ui.label("Max parallel downloads:");
                 ui.add(egui::Slider::new(
@@ -1343,30 +1378,8 @@ fn register_downloadable_assets_settings(world: &mut World) {
                 .weak(),
             );
             ui.add_space(8.0);
-        }
-        if let Some((root, suppressed)) = dataset_provisioning::active_project_prompt_setting(
-            ctx.resource::<lunco_workspace::WorkspaceResource>(),
-        ) {
-            let mut suppressed = suppressed;
-            if ui
-                .checkbox(
-                    &mut suppressed,
-                    "Don't show missing-asset prompt at startup for this project",
-                )
-                .changed()
-            {
-                ctx.trigger(dataset_provisioning::SetMissingAssetPromptSuppressed {
-                    root,
-                    suppressed,
-                });
-            }
-        } else {
-            ui.label(
-                egui::RichText::new("Open a project to configure its missing-asset prompt")
-                    .weak()
-                    .italics(),
-            );
-        }
+        });
+        ui.label("Data required by the active scene must be ready before simulation can run. Other Twin data can be downloaded later.");
         ui.add_space(8.0);
         if settings != original_settings {
             ctx.set_resource(settings);
@@ -1387,158 +1400,73 @@ fn register_downloadable_assets_settings(world: &mut World) {
             );
             return;
         }
-        // Snapshot: the rows below emit a typed request after painting.
-        //
-        // The heading is WHO declared it — the LunCo library that owns the
-        // dataset ("celestial", "ephemeris", "modelica") or the twin's own
-        // name. `scope.label()` says "engine" for every engine dataset, which
-        // is true and useless: a user looking for Earth imagery is looking for
-        // the celestial library, not for the fact that it isn't a twin's.
-        let rows: Vec<(String, String, String, DatasetState)> = registry
-            .entries()
-            .iter()
-            .map(|e| {
-                let owner = match &e.scope {
-                    lunco_assets_datasets::DatasetScope::Engine => e.group.clone(),
-                    lunco_assets_datasets::DatasetScope::Twin { name, .. } => name.clone(),
+        let Some(projection)=ctx.resource::<dataset_provisioning::DatasetProvisioningState>() else {
+            ui.label("Asset presentation is unavailable.");return;
+        };
+        let groups=projection.settings_groups.clone();
+        let mut actions=Vec::new();
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Assets").strong());
+            if ui.button("Reload scene").on_hover_text("Reload the current scene to consume rebuilt artifacts. The shared scene lifecycle prepares physics before simulation resumes.").clicked() {
+                actions.push(("reload_asset_scene".to_owned(),String::new(),String::new(),String::new()));
+            }
+        });
+        ui.label(egui::RichText::new("Prepare reuses valid work. Rebuild reruns the pipeline and keeps the last good output if it fails. Reload the scene to apply rebuilt terrain.").weak());
+        let filter_id=egui::Id::new("downloadable-data-filter");
+        let mut filter=ui.data_mut(|data|data.get_persisted::<String>(filter_id).unwrap_or_default());
+        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search assets or source files").desired_width(f32::INFINITY));
+        ui.data_mut(|data|data.insert_persisted(filter_id,filter.clone()));
+        let filter=filter.to_lowercase();
+        egui::ScrollArea::vertical().max_height(440.0).auto_shrink([false,true]).show(ui,|ui| {
+            for group in groups {
+                let rows=match group.rows {
+                    Ok(rows)=>rows,
+                    Err(error)=>{ui.colored_label(ui.visuals().error_fg_color,error);continue;}
                 };
-                (e.id.clone(), owner, e.name.clone(), e.state.clone())
-            })
-            .collect();
-        // Registration order already groups by owner; sorting makes that a
-        // guarantee rather than a coincidence, so the headings below can be
-        // emitted on change instead of buffering the whole list.
-        let mut rows = rows;
-        rows.sort_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)));
-        enum DatasetAction {
-            Request(String),
-            Cancel(String),
-        }
-        let mut requested: Option<DatasetAction> = None;
-        // One stable section per existing owner keeps Settings compact without
-        // inventing a second categorisation system for generic datasets.
-        let mut index = 0;
-        while index < rows.len() {
-            let owner = rows[index].1.clone();
-            let start = index;
-            while index < rows.len() && rows[index].1 == owner {
-                index += 1;
+                let rows:Vec<_>=rows.iter().filter(|row|filter.is_empty() || format!("{} {} {}",group.owner,row.label,row.source_files).to_lowercase().contains(&filter)).collect();
+                if rows.is_empty() {continue;}
+                let ready=rows.iter().filter(|row|row.ready).count();
+                egui::CollapsingHeader::new(format!("{} · {ready}/{} ready",group.owner,rows.len()))
+                    .id_salt(("asset-scope",group.scope.clone(),group.owner.clone()))
+                    .default_open(group.scope.starts_with("twin:") || !filter.is_empty())
+                    .show(ui,|ui| {
+                        for row in rows {
+                            egui::CollapsingHeader::new(format!("{} — {}",row.label,row.status))
+                                .id_salt(("asset-entry",row.id.clone()))
+                                .default_open(!row.detail.is_empty() || row.action=="cancel")
+                                .show(ui,|ui| {
+                                    ui.label(&row.download_status);
+                                    ui.label(&row.preparation_status);
+                                    if !row.detail.is_empty() {ui.colored_label(ui.visuals().error_fg_color,&row.detail);}
+                                    ui.horizontal_wrapped(|ui| {
+                                        if row.action_display!="none" && row.action!="dismiss" && ui.button(&row.action_label).clicked() {
+                                            actions.push((row.action.clone(),row.id.clone(),row.scope.clone(),String::new()));
+                                        }
+                                        if !row.rebuild_action.is_empty() && ui.button(&row.rebuild_label).on_hover_text("Rerun every declared processing stage, even when cached output is current.").clicked() {
+                                            actions.push((row.rebuild_action.clone(),row.id.clone(),row.scope.clone(),String::new()));
+                                        }
+                                        if ui.link("View source ↗").clicked() {actions.push(("open_web_url".into(),row.id.clone(),row.scope.clone(),row.source_url.clone()));}
+                                    });
+                                    ui.collapsing("Source files",|ui| {ui.label(&row.source_files);ui.label(egui::RichText::new(&row.source_url).weak());});
+                                });
+                        }
+                    });
             }
-            let slice = &rows[start..index];
-            let installed = slice
-                .iter()
-                .filter(|row| matches!(row.3, DatasetState::Installed))
-                .count();
-            ui.add_space(4.0);
-            egui::CollapsingHeader::new(format!("{} ({}/{})", owner, installed, slice.len()))
-                .id_salt(("download-owner", owner.as_str()))
-                .default_open(
-                    slice
-                        .iter()
-                        .any(|row| !matches!(row.3, DatasetState::Installed)),
-                )
-                .show(ui, |ui| {
-                    for (key, _, name, state) in slice {
-                        ui.horizontal(|ui| {
-                            ui.label(name);
-                            match state {
-                                DatasetState::Installed => {
-                                    let (icon_rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(18.0, 18.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    lunco_workbench_widgets::paint_icon(
-                                        ui.painter(),
-                                        lunco_workbench_widgets::UiIcon::Check,
-                                        icon_rect,
-                                        ui.visuals().weak_text_color(),
-                                    );
-                                    ui.label(egui::RichText::new("ready · cached").weak());
-                                }
-                                DatasetState::Downloading {
-                                    bytes_done,
-                                    bytes_total,
-                                } => {
-                                    if *bytes_total == 0 {
-                                        ui.label("Downloading…");
-                                    } else {
-                                        ui.label(format!(
-                                            "Downloading {:.1}/{:.1} MB",
-                                            *bytes_done as f64 / 1_048_576.0,
-                                            *bytes_total as f64 / 1_048_576.0
-                                        ));
-                                    }
-                                    if lunco_workbench_widgets::icon_text_button(
-                                        ui,
-                                        lunco_workbench_widgets::UiIcon::Stop,
-                                        "Cancel",
-                                        "Cancel dataset download",
-                                    )
-                                    .clicked()
-                                    {
-                                        requested = Some(DatasetAction::Cancel(key.clone()));
-                                    }
-                                }
-                                DatasetState::Processing { kind } => {
-                                    ui.label(format!("Processing {kind}…"));
-                                }
-                                DatasetState::Cancelling => {
-                                    ui.label("Stopping…");
-                                }
-                                DatasetState::Cancelled => {
-                                    ui.label(egui::RichText::new("Cancelled").weak());
-                                    if lunco_workbench_widgets::icon_text_button(
-                                        ui,
-                                        lunco_workbench_widgets::UiIcon::Refresh,
-                                        "Retry",
-                                        "Retry dataset download",
-                                    )
-                                    .clicked()
-                                    {
-                                        requested = Some(DatasetAction::Request(key.clone()));
-                                    }
-                                }
-                                DatasetState::Missing => {
-                                    ui.label(egui::RichText::new("not installed").weak());
-                                    if lunco_workbench_widgets::icon_text_button(
-                                        ui,
-                                        lunco_workbench_widgets::UiIcon::Download,
-                                        "Download",
-                                        "Download this dataset",
-                                    )
-                                    .clicked()
-                                    {
-                                        requested = Some(DatasetAction::Request(key.clone()));
-                                    }
-                                }
-                                DatasetState::Failed(error) => {
-                                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                                    if lunco_workbench_widgets::icon_text_button(
-                                        ui,
-                                        lunco_workbench_widgets::UiIcon::Refresh,
-                                        "Retry",
-                                        "Retry dataset download",
-                                    )
-                                    .clicked()
-                                    {
-                                        requested = Some(DatasetAction::Request(key.clone()));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                });
+        });
+        for (action,id,scope,url) in actions {
+            use lunco_telemetry_core::TelemetryValue;
+            ctx.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+                tool:"runtime_ui".to_owned(),hook:"on_action".to_owned(),binding:None,owner_twin_id:None,
+                args:TelemetryValue::Map(std::collections::BTreeMap::from([
+                    ("action".into(),TelemetryValue::String(action)),
+                    ("parameters".into(),TelemetryValue::Map(std::collections::BTreeMap::from([
+                        ("id".into(),TelemetryValue::String(id)),("scope".into(),TelemetryValue::String(scope)),("url".into(),TelemetryValue::String(url)),
+                    ]))),
+                ])),
+            });
         }
-        if let Some(action) = requested {
-            match action {
-                DatasetAction::Request(id) => {
-                    ctx.trigger(lunco_assets_datasets::RequestDataset { id });
-                }
-                DatasetAction::Cancel(id) => {
-                    ctx.trigger(lunco_assets_datasets::CancelDataset { id });
-                }
-            }
-        }
+
     });
 }
 

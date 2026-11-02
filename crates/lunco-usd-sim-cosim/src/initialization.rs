@@ -873,6 +873,7 @@ pub(super) fn coordinate(world: &mut World) {
         }
     };
     let context = lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::twin(
             lunco_core::RuntimeCycle::Lifecycle,
             plan.generation,

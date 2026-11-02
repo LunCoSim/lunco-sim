@@ -139,7 +139,7 @@ retired mount through the production consumer; do not register an unrestricted
 `file:` source or enable unapproved paths to make a fixture load.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
-downloaded only on request (Settings ▸ Downloadable data, the Twin Browser
+downloaded only on request (Settings ▸ Data & libraries, the Twin Browser
 Files section's Twin assets rows, or the `lunco-assets` CLI) — the engine never
 fetches on its own, so an asset that is merely declared resolves to nothing
 until someone asks for it. The browser rows are only a view of
@@ -353,7 +353,11 @@ There is no standalone regenerate command.
 
 Binary runtime assets are staged by the manifest-declared bundle target as part
 of the same build. Add or change the `bundle` field on the authoritative
-`Assets.toml` entry, then rebuild; do not add a second shell list. The staging
+`Assets.toml` entry, then rebuild; do not add a second shell list.
+UI fonts use `package_only = true`: CI fetches and stages their pinned bytes,
+while the runtime registry excludes them from user downloads. Planetary imagery,
+external models and source libraries remain downloadable and have no bundle
+target. Package-only entries must name a bundle and cannot be recommended. The staging
 command validates the declared raw/processed artifact before copying it, so a
 missing or incomplete asset fails the build instead of becoming a browser 404.
 Bundle-qualified keys are for log identity; temporary download files use an

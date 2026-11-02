@@ -2184,6 +2184,7 @@ fn continuation_runtime_context(
             lunco_core::RuntimeRoute::application(lunco_core::RuntimeCycle::Visualization)
         });
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(route),
         phase: lunco_core::RuntimePhase::Visualization,
         clock: lunco_core::RuntimeClock::None,

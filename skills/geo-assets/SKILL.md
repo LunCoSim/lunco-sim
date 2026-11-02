@@ -7,10 +7,13 @@ description: Download and process lunar geo assets (DEMs, stable material albedo
 
 The application pipeline is composed by `crates/lunco-assets`; the heavy native
 processors live in `crates/lunco-assets-processing`. Pure Rust — no GDAL.
-Sources may be **GeoTIFF or PDS3 `.IMG`** (attached or detached `.LBL`;
-`lunco-assets-processing/src/pds_img.rs`); polar-stereographic products are refused loudly because the
-crop affine is equirectangular-only. Use the target Twin's own `Assets.toml` as
-the worked example and inspect its current scene before wiring outputs.
+Sources may be **GeoTIFF or PDS3 `.IMG`**. Spherical polar-stereographic
+(north/south) and equirectangular GeoTIFFs use their own CRS and sample
+registration. Raw PDS/plain rasters use their declared geographic metadata.
+Read [artifact processing](../../docs/architecture/asset-processing.md) for
+ordered `kind = "pipeline"` recipes, additional raw sources, declared outputs,
+Rhai customization, WESL image kernels, Modelica results, and external stages.
+Keep reusable operations native; site parameters and specific policy stay authored.
 
 Wire baked terrain outputs into a scene through LunCoSim's USD document
 authoring commands. Open the exact USD source, inspect its layer and target,
@@ -35,7 +38,7 @@ cargo run -p lunco-assets -- process  --twin <TWIN> -a <key> --quality coarse|go
 
 `<TWIN>` = a folder holding `Assets.toml` + `twin.toml`. `-a <key>` = the
 `[section]` name in its Assets.toml. The same entries appear in-app under
-Settings ▸ Downloadable data and the Twin inspector once the Twin is open
+Settings ▸ Data & libraries and the Twin inspector once the Twin is open
 (scanned on open). Asset-consuming domains begin only after the asset owner
 publishes `TwinAssetMounted`; they must not depend on observer registration
 order. If a declared dataset is missing, the interactive app asks
@@ -50,24 +53,40 @@ with `good` (default) for full res.
 
 The consent modal retains transfer/preparation progress and offers background
 work, cancellation, and retry with the failure detail. `ListDatasets` and
-`assets::request_recommended(scope)` use `engine` or `twin:<name>` from
+`assets::request_required(scope)` use `engine` or `twin:<name>` from
 `DatasetScope::id()`. Recent Events records lifecycle transitions; live byte
 progress stays in the registry. A required missing DEM holds simulation while
 UI remains usable, then the existing terrain bridge automatically retries the
-pending prim when the dataset is installed. Do not add a full scene reload.
-For Griffin's polar NOBILE03 source, use the Twin's prepared release payload:
-downloading its raw TIF and label does not create `terrain/nobile03`.
-Polar adapters prepare a local raster for the native processor. Keep void
-interpolation and its coverage rejection in that processor, record its filled
-sample count, and verify the emitted node span: `(resolution - 1) * spacing`.
-Adapters must preserve unresolved samples as NaN, without a nearest-neighbour
-fill. Native processing uses bounded minimum-curvature (biharmonic)
-interpolation with measured nodes fixed; failed convergence rejects the bake.
-Use pipeline version 10 or newer, retain the interpolated-node count in
-provenance, and compare measured
-postings before and after regeneration. Filled regions are estimates.
-For a crop enlargement, compare the retained operating area's heights before
-and after processing and again through `TerrainHeights` in the production app.
+pending prim when the dataset is installed. Initial installation uses that bridge.
+Settings offers Rebuild (`ProcessDataset { id, force: true }`) to rerun a valid
+recipe; normal Prepare reuses valid outputs. A deliberate rebuild of an already
+loaded terrain bundle needs Reload scene to apply it through the full scene
+lifecycle. Neither preparation nor dismissal changes the user's transport pause.
+
+For school startup acceptance, use the built production binary with
+`scripts/api/test_school_asset_preparation.py --twin <school-root> --output
+<fresh-evidence-directory> --port <owned-free-port>`. It stages a source-only
+Twin from the current checkout and pinned cached raw inputs, then checks the
+four composed scene dependencies, missing-ground tick hold, preserved manual pause,
+and full rendered terrain cover through authored Rhai verdicts. Inspect the
+captures separately from the API verdict. Every texture bound by the startup
+material needs a delivered artifact, including an overlay whose authored weight
+starts at zero; unrelated candidate sites remain optional.
+For Griffin's NOBILE03 source, the Twin's `Assets.toml` defines a complete
+native recipe. Requesting its `nobile03_dem` dataset obtains the DEM, orthophoto
+and provenance label, then publishes float64 heightmap, albedo, coverage mask
+and integrity receipt under `.cache/terrain/nobile03`. No custom Python adapter
+or manual terrain copy is part of provisioning. `lunco-assets verify --twin
+<TWIN> -a nobile03_dem` checks a prepared/extracted bundle.
+
+The native processor preserves unresolved source coverage as NaN, performs
+bounded minimum-curvature interpolation with measured samples fixed, and
+rejects failed convergence or excessive missing coverage. Filled regions are
+estimates. Output node span is `(resolution - 1) * spacing`. For crop changes,
+compare retained heights through both the artifact and production `TerrainHeights`.
+Procedural craters, overzoom and rocks remain USD terrain layers; derived
+geometry-dependent maps consume the composed surface instead of a duplicate
+asset-preparation crater pass.
 
 For download UI acceptance, use `scripts/api/test_dataset_provisioning.py`
 with `LUNCOSIM_BIN`, a free `--port`, a fresh `--output`, and exact prepared
@@ -186,17 +205,16 @@ Raw downloads belong under the Twin's `.cache` (or the shared global cache when
 `shared = true`); processed DEMs, maps, and bake stamps are regenerable bytes.
 Commit `Assets.toml`, processing/reprojection tools, provenance and parameter
 reports, and USD references. Do not force-add cache or generated terrain bytes.
-Use `git check-ignore -v <raw-file> <processed-file>` before staging. A
-download-only manifest entry is honest when a source projection is unsupported;
-do not add a misleading `[entry.process]` section just to make a polar product
-look native. Use an explicit reprojection adapter and record its command and
-vertical datum, or record the native-tool gap as blocked work.
+Use `git check-ignore -v <raw-file> <processed-file>` before staging. A source with unsupported or invalid projection metadata must fail at its
+native owner. Do not reinterpret it as an equirectangular raster. Supported
+GeoTIFF projections are selected from metadata, and the manifest owns the
+output crop, frame and vertical datum.
 
 ## Process kinds (in `[key.process]`)
 
 | kind | Input | Output |
 |---|---|---|
-| `dem` | DTM (GeoTIFF/.IMG) | `<output>/materials/textures/heightmap.tif` — square float32, georef in tags. `output` is a FOLDER; scenes reference it as the search path `demSource = @terrain/<site>@`, found from any scene folder through the Twin root/cache |
+| `dem` | DTM (GeoTIFF/.IMG) | `<output>/materials/textures/heightmap.tif` — square float64, georef in tags. `output` is a FOLDER; scenes reference it as the search path `demSource = @terrain/<site>@`, found from any scene folder through the Twin root/cache |
 | `map` | co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/`_CLRGRAD` `.TIF`) | 8-bit RGB PNG at `output` (a FILE). Gray sources get a 1–99 percentile stretch in linear contrast space, then sRGB encoding for the runtime loader |
 | `albedo` | grayscale PDS3 `.IMG` or georeferenced TIFF orthophoto | stable linear material-albedo PNG at `output` (a FILE) |
 | `normalmap` | DTM | DEM-local ENU normal PNG (`RGB = n*0.5+0.5`, decoded by the shared terrain-surface shader kernel) |
@@ -240,9 +258,9 @@ processor excludes unmapped zero radiance before resampling, so missing coverage
 cannot darken neighbouring measurements. It writes a stable `albedo.png`; it does
 not claim to perform full photometric calibration. PDS3 `.IMG` sources supply
 their projection extent and pixel scale from the attached or detached label.
-A grayscale TIFF albedo source
-must author `pixel_scale_m` and all four `src_*` bounds in the process table;
-the grayscale TIFF decoder does not infer those geographic facts from its tags.
+A plain grayscale TIFF albedo source must author `pixel_scale_m` and all four
+`src_*` bounds; a supported spherical GeoTIFF supplies these spatial facts
+through its standard projection metadata.
 Keep `map` for analysis/display outputs. In Rhai,
 `assembly_builder::lunar_albedo_material_plan(...)` returns standard USD
 `SetAttribute` operations for the produced albedo/normal assets; submit those
@@ -254,14 +272,14 @@ image math in Rust while making the assembly policy replaceable and extensible.
 1. Find the product: `https://data.lroc.im-ldi.com/lroc/view_rdr/NAC_DTM_<SITE>`;
    files under `https://pds.lroc.im-ldi.com/data/LRO-L-LROC-5-RDR-V1.0/LROLRC_2001/DATA/SDP/NAC_DTM/<SITE>/`.
 2. For an LROC PDS3 source, read its `.LBL`: `MAP_PROJECTION_TYPE`
-   (EQUIRECTANGULAR → processable; POLARSTEREOGRAPHIC → download-only entry,
-   no `[*.process]`), `MAP_SCALE` → `pixel_scale_m`, and
+   (`.IMG` currently uses EQUIRECTANGULAR; spherical polar/equirectangular
+   GeoTIFFs use standard tags), `MAP_SCALE` → `pixel_scale_m`, and
    `MIN/MAXIMUM_LATITUDE` + `EASTERNMOST/WESTERNMOST_LONGITUDE` → the four
    `src_*` fields. **Label longitudes are 0–360 °E — author `center_lon` in
    the same convention.** Never trust `CENTER_LONGITUDE` (body-frame quirk).
-   For a GeoTIFF, verify its CRS/geotransform is equirectangular, then author
-   `pixel_scale_m` and all four geographic extent fields explicitly; the
-   grayscale decoder does not read those facts from TIFF tags.
+   For a GeoTIFF, verify its spherical CRS/geotransform. Standard polar
+   stereographic and equirectangular metadata is consumed natively; plain TIFFs
+   require explicit scale and extent declarations.
 3. Pick `center_lat/lon` (the POI), `window_m` (scene size),
    `target_resolution ≈ window_m / native m-per-px` (square).
 4. `sha256 = ""` on first download → the tool prints the hash; paste it in.
@@ -444,3 +462,38 @@ multi-domain architecture before introducing a new graph owner.
 - Optional QGIS/GDAL extras (custom-sun hillshade, slope ramps, contours) are
   external to `lunco-assets`; verify that the Twin supplies and documents its
   own tooling before invoking it.
+
+The provisioning dialog distinguishes verified source inputs from prepared
+artifacts. `ListDatasets.inputs` records each source URL and verified state;
+`inputs_ready` selects preparation without another transfer. Inspect both these
+facts and `state` when diagnosing a failure. An authored override may hide a
+valid generated cache: the failure names the selected and output paths. Correct
+that authored state explicitly; do not change resolver precedence. Current
+pipeline/UI acceptance is `scripts/api/test_asset_pipeline.py`, using authored
+Rhai verdicts, source-only Griffin extraction and an owned windowed session.
+
+Native scene requirements come from active composed USD asset values, including
+arrays, time samples and binary asset references. `SceneDatasetRequirements`
+(`lunco-assets-datasets`) is supplied by the USD runtime and exposed as
+`ListDatasets.required_for_scene`. `recommended` ranks optional content only.
+Do not add a duplicate scene-to-dataset list in a manifest or suppress required
+consent. Settings uses the same row policy; closing the dialog does not release
+`SceneDatasets` progress holds. Preparation jobs queue in request order under
+`DownloadSettings.max_parallel_downloads`; cancellation works before admission.
+The current source name accompanies per-file byte counts. Recent Events reports
+source/phase changes, not byte updates. Native Windows acceptance must run the
+nightly matrix's transfer recovery, publication and path tests on Windows.
+
+Runtime consumers add concrete URI requirements through the same registry;
+Rhai scenario/tool imports are discovered before execution. For a URI selected
+by code, use `assets::require(uri)`, then consume data through the owning
+loader's ready event after `DATASET_INSTALLED`. The acknowledgement does not
+mean bytes are ready, and no partially executed script is replayed. Missing
+declared data is recoverable; unknown URIs and fresh loader failures are visible
+errors. Catalog/preload reads do not make optional data mandatory.
+
+Use `scripts/api/test_scene_asset_requirements.py --port <owned-port> --output
+<fresh-directory>` for the generic selected-scene gate. It authors fixture USD
+through document commands, serves controlled HTTP bytes, and verifies
+nonrecommended requirements, optional recommendations, queue cancellation,
+checksum failure/retry, preserved manual pause, scene replacement and teardown.

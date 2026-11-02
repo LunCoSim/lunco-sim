@@ -207,6 +207,9 @@ impl RuntimeProducerStamp {
 pub struct RuntimeExecutionContext {
     /// Owner lifetime and active cycle.
     pub route: Option<RuntimeRoute>,
+    /// Exact Twin targeted by an invocation independently of its execution
+    /// owner. Inherited calls retain this target; it grants no capabilities.
+    pub target_twin_id: Option<u64>,
     /// Operation phase within the cycle.
     pub phase: RuntimePhase,
     /// Clock selected by the owning cycle.
@@ -224,6 +227,8 @@ pub struct RuntimeExecutionContext {
 /// Why an owner-supplied runtime context cannot be used for an invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeExecutionContextError {
+    /// An explicit target is zero or conflicts with the Twin execution owner.
+    InvalidTargetTwin,
     /// An unclassified context contains facts that require a classified owner.
     UnclassifiedContainsOwnerFacts,
     /// A selected clock has no current time sample.
@@ -243,6 +248,9 @@ pub enum RuntimeExecutionContextError {
 impl std::fmt::Display for RuntimeExecutionContextError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let detail = match self {
+            Self::InvalidTargetTwin => {
+                "the target Twin must be non-zero and match a Twin execution owner"
+            }
             Self::UnclassifiedContainsOwnerFacts => {
                 "an unclassified context cannot carry owner, clock, sequence, or producer facts"
             }
@@ -267,6 +275,7 @@ impl RuntimeExecutionContext {
     pub const fn unclassified() -> Self {
         Self {
             route: None,
+            target_twin_id: None,
             phase: RuntimePhase::Unclassified,
             clock: RuntimeClock::None,
             time_seconds: None,
@@ -279,6 +288,24 @@ impl RuntimeExecutionContext {
     /// Replace the phase while preserving the owner's cycle and clock sample.
     pub const fn with_phase(self, phase: RuntimePhase) -> Self {
         Self { phase, ..self }
+    }
+
+    /// Resolve the target without changing the invocation's owner or cadence.
+    /// Twin-owned calls cannot redirect work to another Twin.
+    pub fn target_twin(self) -> Result<Option<u64>, RuntimeExecutionContextError> {
+        let twin_route = self
+            .route
+            .filter(|route| route.scope == RuntimeScope::Twin);
+        let owner = twin_route.and_then(|route| route.owner_id);
+        if self.target_twin_id == Some(0)
+            || owner == Some(0)
+            || (twin_route.is_some()
+                && self.target_twin_id.is_some()
+                && self.target_twin_id != owner)
+        {
+            return Err(RuntimeExecutionContextError::InvalidTargetTwin);
+        }
+        Ok(self.target_twin_id.or(owner))
     }
 
     /// Attach the producer origin of an event delivered in this invocation.
@@ -303,12 +330,15 @@ impl RuntimeExecutionContext {
                 && self.delta_seconds.is_none()
                 && self.sequence.is_none()
                 && self.producer.is_none()
+                && self.target_twin_id.is_none()
             {
                 Ok(())
             } else {
                 Err(RuntimeExecutionContextError::UnclassifiedContainsOwnerFacts)
             };
         }
+
+        self.target_twin()?;
 
         if self
             .time_seconds
@@ -403,8 +433,45 @@ mod tests {
     }
 
     #[test]
+    fn invocation_target_preserves_ownership_and_rejects_redirection() {
+        let application = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Ui)),
+            target_twin_id: Some(41),
+            phase: RuntimePhase::Evaluation,
+            ..RuntimeExecutionContext::unclassified()
+        };
+        assert!(application.validate().is_ok());
+        assert_eq!(application.target_twin(), Ok(Some(41)));
+        let twin = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::twin_owned(RuntimeCycle::Ui, 0, 41)),
+            ..application
+        };
+        assert!(twin.validate().is_ok());
+        for invalid in [
+            RuntimeExecutionContext {
+                target_twin_id: Some(0),
+                ..application
+            },
+            RuntimeExecutionContext {
+                target_twin_id: Some(42),
+                ..twin
+            },
+            RuntimeExecutionContext {
+                route: Some(RuntimeRoute::twin(RuntimeCycle::Ui, 0)),
+                ..application
+            },
+        ] {
+            assert_eq!(
+                invalid.validate(),
+                Err(RuntimeExecutionContextError::InvalidTargetTwin)
+            );
+        }
+    }
+
+    #[test]
     fn validates_clocked_contexts_against_their_cycle_and_sample() {
         let simulation = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::twin(RuntimeCycle::Simulation, 17)),
             phase: RuntimePhase::Event,
             clock: RuntimeClock::Simulation,
@@ -416,6 +483,7 @@ mod tests {
         assert!(simulation.validate().is_ok());
 
         let application = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
             phase: RuntimePhase::Evaluation,
             clock: RuntimeClock::Application,
@@ -430,6 +498,7 @@ mod tests {
     #[test]
     fn rejects_a_missing_or_mismatched_clock_sample() {
         let missing_time = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
             phase: RuntimePhase::Evaluation,
             clock: RuntimeClock::Application,
@@ -444,6 +513,7 @@ mod tests {
         );
 
         let wrong_cycle = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::application(RuntimeCycle::Ui)),
             phase: RuntimePhase::Evaluation,
             clock: RuntimeClock::Simulation,
@@ -461,6 +531,7 @@ mod tests {
     #[test]
     fn rejects_invalid_samples_and_clock_data_on_discrete_contexts() {
         let invalid_time = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::core(RuntimeCycle::Simulation)),
             phase: RuntimePhase::Behavior,
             clock: RuntimeClock::Simulation,
@@ -475,6 +546,7 @@ mod tests {
         );
 
         let discrete_with_time = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::twin(RuntimeCycle::Lifecycle, 2)),
             phase: RuntimePhase::Preparation,
             clock: RuntimeClock::None,

@@ -2844,6 +2844,7 @@ fn component_refresh_runtime_context(
         lunco_core::RuntimeRoute::application(lunco_core::RuntimeCycle::Lifecycle)
     };
     Ok(lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(route),
         phase: lunco_core::RuntimePhase::Preparation,
         clock: lunco_core::RuntimeClock::None,

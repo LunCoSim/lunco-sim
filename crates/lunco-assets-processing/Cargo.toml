@@ -9,11 +9,27 @@ description = "Native offline image, DEM, map, albedo, normal-map, and glTF asse
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-celestial-data = { path = "../lunco-celestial-data" }
 lunco-geotiff = { path = "../lunco-geotiff" }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-storage = { path = "../lunco-storage" }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
+toml = { workspace = true }
+wgpu = { version = "30", default-features = false, features = ["std", "vulkan", "metal", "dx12", "wgsl"], optional = true }
+wesl = { workspace = true, optional = true }
+futures-lite = { workspace = true, optional = true }
+lunco-modelica-compiler = { path = "../lunco-modelica-compiler", optional = true }
+lunco-modelica-runner = { path = "../lunco-modelica-runner", optional = true }
+lunco-experiments = { path = "../lunco-experiments", optional = true }
+web-time = { workspace = true, optional = true }
 image = { workspace = true }
 draco-gltf = { workspace = true }
 resvg = { workspace = true }
 tiff = { workspace = true }
 usvg = { workspace = true }
+
+[features]
+shader-processing = ["dep:wgpu", "dep:wesl", "dep:futures-lite"]
+modelica-processing = ["dep:lunco-modelica-compiler", "dep:lunco-modelica-runner", "dep:lunco-experiments", "dep:web-time"]
 
 [dev-dependencies]
 lunco-storage = { path = "../lunco-storage" }

@@ -31,7 +31,7 @@
 //! and never re-entrant while a borrow is outstanding, so no aliasing occurs.
 
 mod tool_binding;
-pub use tool_binding::{ToolHookBinding, ToolHookBindingLifetime, ToolHookBindingRetention};
+pub use tool_binding::{ToolHookBinding, ToolHookBindingRetention};
 
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::math::DVec3;
@@ -2240,6 +2240,7 @@ mod tests {
     #[test]
     fn nested_script_phase_restores_its_callers_context() {
         let simulation = lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::twin(
                 lunco_core::RuntimeCycle::Simulation,
                 7,

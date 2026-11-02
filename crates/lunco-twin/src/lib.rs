@@ -72,10 +72,10 @@ pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindR
 pub use error::TwinError;
 pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
-    ComponentManifest, DEFAULT_SCENE_GLOBS, DownloadManifest, JournalManifest, MANIFEST_FILENAME,
-    ModelicaExternal, ModelicaManifest, NativePluginManifest, RESULTS_DIR_NAME, SysmlManifest,
-    TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, VerificationCase,
-    VerificationManifest, glob_matches,
+    ComponentManifest, DEFAULT_SCENE_GLOBS, JournalManifest, MANIFEST_FILENAME, ModelicaExternal,
+    ModelicaManifest, NativePluginManifest, RESULTS_DIR_NAME, SysmlManifest, TwinChildRef,
+    TwinManifest, TwinSettingValue, UsdManifest, VerificationCase, VerificationManifest,
+    glob_matches,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -469,7 +469,6 @@ impl Twin {
                     components: Vec::new(),
                     modelica: None,
                     journal: None,
-                    downloads: None,
                     native_plugins: Vec::new(),
                     settings: Default::default(),
                 });
@@ -1409,7 +1408,6 @@ version = "0.1.0"
             components: Vec::new(),
             modelica: None,
             journal: None,
-            downloads: None,
             native_plugins: Vec::new(),
             settings: Default::default(),
         };

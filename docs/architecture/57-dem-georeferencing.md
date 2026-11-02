@@ -41,16 +41,16 @@ passes that sampled span to `GeoTransform::centred_square`; for example,
 513 nodes at 4 m spacing cover 2048 m. Processor bake keys include the pipeline
 version, so a georeferencing change invalidates previously processed output.
 
-Missing elevation samples are owned by the native DEM processor. Polar
-reprojection adapters preserve unresolved coverage as NaN rather than copying
-nearby postings. The processor admits gaps within 64 neighbour rings, then
+Missing elevation samples are owned by the native DEM processor. Native spherical reprojection preserves unresolved coverage as NaN rather
+than copying nearby postings. The processor admits gaps within 64 neighbour rings, then
 minimizes squared discrete curvature only at missing nodes, holding measured
 heights fixed. The biharmonic system carries surrounding slopes into the gap
 instead of flattening curved crater walls. A bounded deterministic, diagonally
 preconditioned conjugate-gradient solve must converge before output is written.
-Pipeline version 10 invalidates prior bake stamps. Filled heights are
+Pipeline version 12 covers native spherical reprojection and float64 artifact
+storage. Filled heights are
 interpolated estimates, not measured crater relief;
-the preparation provenance records their count. The same solver precedes
+the coverage artifact identifies unsupported source samples. The same solver precedes
 normal-map derivation so geometry and shading share the repaired surface.
 
 `GeoTransform` is the in-memory form — `pixel_size_m` (one spacing, both axes),
@@ -65,7 +65,7 @@ Called by the bake (`crates/lunco-assets-processing/src/process.rs`) on every em
 heightmap. Writes:
 
 - `ModelPixelScale` — one spacing for both axes (square pixels only).
-- `ModelTiepoint` — raster (0,0) ↦ the model's upper-left corner.
+- `ModelTiepoint` — raster (0,0) ↦ the model's upper-left sample.
 - A `GeoKeyDirectory` (encoded by `geotiff-core`, which owns key ordering,
   value-offset indices, and ASCII terminators):
   - `GTModelType` = projected; `GTRasterType` = **`RasterPixelIsPoint`**,
@@ -76,8 +76,9 @@ heightmap. Writes:
     `GeogSemiMajorAxis` = `GeogSemiMinorAxis` = body radius, angular units
     degrees, `GeogCitation` naming the body for a human (`"Moon 2000"`).
   - User-defined projected CS: equirectangular, linear units metres,
-    `ProjStdParallel1` = centre latitude, `ProjNatOriginLong` = centre
-    longitude.
+    `ProjStdParallel1` and `ProjCenterLat` = centre latitude,
+    `ProjCenterLong` = centre longitude. These are the standard
+    [equirectangular projection parameters](https://gdal.org/en/stable/proj_list/equirectangular.html).
 
 ## Reader contract (`read_geo_tags`)
 
@@ -145,3 +146,14 @@ something is 875 m off.
 **Open:** declaration only. If MOON_PA data ever has to coexist with a MOON_ME
 crop, the ME↔PA transformation is new work; nothing in the pipeline performs
 it today.
+
+## Native source projection
+
+`read_spherical_raster` reads standard projection GeoKeys, sphere axes,
+false origin, pixel scale and tiepoints. It handles north/south polar
+stereographic and equirectangular sources and normalizes PixelIsArea versus
+PixelIsPoint registration. Unsupported projections and ellipsoids are explicit
+errors. The output crop uses the inverse of the same crop-centred
+equirectangular projection encoded by `write_geo_tags`, including its natural
+origin latitude; a crop crossing a pole is rejected. See
+[artifact processing](asset-processing.md) for the recipe and output lifecycle.

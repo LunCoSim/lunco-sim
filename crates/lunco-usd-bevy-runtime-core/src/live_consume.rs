@@ -693,6 +693,8 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     let mut connection_paths_changed = false;
     let mut input_defaults_changed = false;
     for (id, changes, authored_transform_edits) in batches {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::dataset_requirements::stage_changed(world, id, &changes);
         // Merge this stage's committed changes into one resync / info-only set.
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();

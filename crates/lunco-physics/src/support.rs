@@ -237,6 +237,7 @@ pub fn physics_initialization_context(
                 .to_string()
         })?;
     Ok(lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::twin(
             lunco_core::RuntimeCycle::Lifecycle,
             generation,

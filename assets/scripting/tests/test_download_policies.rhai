@@ -27,15 +27,13 @@ let provisioning = invoke_hook("assets.provision", [#{
     scope_id: "twin:test",
     owner: "test",
     interactive: true,
-    show_on_start: true,
-    suppressed: false,
-    suppressible: true,
     datasets: [#{
         id: "twin/test/texture",
         key: "texture",
         name: "Texture",
-        recommended: true,
+        required_for_scene: true, recommended: false,
         processed: false,
+        inputs_ready: false,inputs:[#{id:"source",name:"Texture",url:"https://example.invalid/texture.png",state:"missing",error:()}],
         state: #{ kind: "missing", detail: () },
     }],
 }]);
@@ -43,16 +41,16 @@ checks.push(t_true(provisioning.ok == true
         && provisioning.value.visible == true
         && provisioning.value.rows.len() == 1
         && provisioning.value.rows[0].action == "request"
-        && provisioning.value.actions[0].action == "request_all"
-        && provisioning.value.actions[1].action == "dismiss"
-        && provisioning.value.actions[2].action == "suppress",
+        && provisioning.value.actions.len() == 1
+        && provisioning.value.actions[0].action == "dismiss",
     "Rhai owns consent visibility, rows, and semantic actions"));
 
 let facts = #{
     scope: "twin", scope_id: "twin:test", owner: "test", interactive: true,
-    show_on_start: true, suppressed: false, suppressible: true, datasets: [],
+    datasets: [],
 };
 for state in [
+    #{kind: "queued", detail: ()},
     #{kind: "downloading", detail: (), bytes_done: 1048576, bytes_total: 4194304},
     #{kind: "processing", detail: "dem"},
     #{kind: "cancelling", detail: ()},
@@ -60,7 +58,7 @@ for state in [
     #{kind: "cancelled", detail: ()},
 ] {
     facts.datasets = [#{id: "twin/test/data", key: "data", name: "Terrain",
-        recommended: true, processed: true, state: state}];
+        required_for_scene: true, recommended: false, processed: true, inputs_ready:false,inputs:[#{id:"source",name:"Terrain",url:"https://example.invalid/terrain.tif",state:"missing",error:()}], state: state}];
     let view = provisioned_view(facts);
     checks.push(t_true(view.visible && view.rows.len() == 1,
         "consent retains " + state.kind + " work without another missing row"));
@@ -70,19 +68,53 @@ for state in [
             && view.rows[0].action == "cancel", "download shows real progress and cancellation"));
     }
     if state.kind == "failed" {
-        checks.push(t_true(view.rows[0].status.contains("checksum mismatch")
-            && view.rows[0].action_label == "Retry", "failure retains its cause and retry action"));
+        checks.push(t_true(view.rows[0].detail.contains("checksum mismatch")
+            && view.rows[0].action_label == "Retry download", "failure retains its cause and retry action"));
     }
 }
+facts.datasets[0].inputs_ready=true;
+facts.datasets[0].inputs[0].state="ready";
+facts.datasets[0].state = #{kind: "missing", detail: ()};
+let pending=provisioned_view(facts).rows[0];
+checks.push(t_true(pending.status.contains("Downloaded") && pending.action=="process" && pending.action_label=="Prepare", "downloaded sources offer preparation without another transfer"));
+checks.push(t_eq(pending.source_url,"https://example.invalid/terrain.tif","the source link preserves the authored address"));
 facts.datasets[0].state = #{kind: "installed", detail: ()};
 let complete = provisioned_view(facts);
-checks.push(t_true(complete.visible && complete.rows.len() == 0
+checks.push(t_true(complete.visible && complete.rows.len() == 1
     && complete.title == "Data ready" && complete.actions[0].action == "dismiss",
     "completed downloads retain an explicit completion view"));
-facts.suppressed = true;
-checks.push(t_true(!provisioned_view(facts).visible,
-    "suppressed consent remains hidden"));
-facts.suppressed = false;
+checks.push(t_true(complete.rows[0].stages_display=="none" && complete.rows[0].min_height=="80px","ready rows use compact summaries"));
+facts.simulation=#{pending:[],world_hold:false,blockers:[],playing:false,fault:()};
+let paused=provisioned_view(facts);
+checks.push(t_true(paused.simulation_status=="Simulation paused" && paused.actions[0].action=="dismiss","completion preserves intentional pause and never starts transport"));
+facts.datasets[0].state=#{kind:"missing",detail:()};
+checks.push(t_true(provisioned_view(facts).simulation_detail.contains("Source files are downloaded"),"downloaded files wait for preparation without claiming work is running"));
+facts.datasets[0].inputs_ready=false;
+checks.push(t_true(provisioned_view(facts).simulation_detail.contains("Download the required files"),"missing files explain the required action"));
+facts.datasets[0].state=#{kind:"queued",detail:()};
+checks.push(t_true(provisioned_view(facts).simulation_detail.contains("continue in the background"),"active work leaves the application available"));
+facts.datasets[0].state=#{kind:"failed",detail:"checksum mismatch"};
+checks.push(t_true(provisioned_view(facts).simulation_detail.contains("then retry"),"failed required data retains an explicit recovery step"));
+facts.datasets[0].inputs_ready=true;
+facts.datasets[0].state=#{kind:"installed",detail:()};
+facts.simulation.pending=["collision support"];
+facts.simulation.world_hold=true;
+let held=provisioned_view(facts);
+checks.push(t_true(held.title=="Preparing simulation" && held.simulation_status.contains("held"),"prepared data is distinct from physics readiness"));
+facts.simulation.fault=#{subject:"Physics",detail:"Initialization failed"};
+checks.push(t_true(provisioned_view(facts).title=="Simulation needs attention","a simulation failure is not reported ready merely because data is ready"));
+facts.simulation=();
+checks.push(t_true(provisioned_view(facts).visible,
+    "nonrecommended data remains mandatory when referenced by the scene"));
+facts.datasets[0].required_for_scene=false;
+facts.datasets[0].recommended=true;
+checks.push(t_true(!provisioned_view(facts).visible && provisioned_view(facts).rows.len()==0,
+    "recommendations for other scenes do not trigger startup consent"));
+facts.include_optional=true;
+let optional=provisioned_view(facts);
+checks.push(t_true(optional.rows.len()==1 && optional.rows[0].label.starts_with("Recommended"), "optional Twin data remains available in Settings"));
+facts.include_optional=false;
+facts.datasets[0].required_for_scene=true;
 facts.datasets[0].state = #{kind: "downloading", detail: (), bytes_done: 1048576, bytes_total: 0};
 let unknown_total = provisioned_view(facts).rows[0].status;
 checks.push(t_true(unknown_total.contains("MiB received") && !unknown_total.contains("%"),

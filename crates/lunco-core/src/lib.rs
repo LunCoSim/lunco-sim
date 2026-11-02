@@ -77,10 +77,10 @@ pub use mobility::Mobility;
 pub use model_state::ModelStateRevision;
 pub use physics_state::*;
 pub use scene::{
-    SceneOwnerRetired, SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted,
-    SceneTransitionCommitted, SceneTransitionCompleted, SceneTransitionCoordinator,
-    SceneTransitionFailed, SceneTransitionId, SceneTransitionIntent, SceneTransitionRequest,
-    SceneTransitionStarted,
+    InteractionLifetime, SceneOwnerRetired, SceneTransition, SceneTransitionAdmission,
+    SceneTransitionAdmitted, SceneTransitionCommitted, SceneTransitionCompleted,
+    SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionId, SceneTransitionIntent,
+    SceneTransitionRequest, SceneTransitionStarted,
 };
 pub use scene_lifecycle::{
     AppSceneExt, SceneMountState, SceneOwned, SceneResource, SceneTeardown, run_scene_teardown,

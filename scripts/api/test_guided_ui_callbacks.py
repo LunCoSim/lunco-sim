@@ -183,8 +183,8 @@ def main() -> None:
             click_at(300.0, 46.0)
             verdict("verify_state", "MenuB", owner, True)
 
-            # Installation survives reset, but a held gesture belongs to its
-            # original Twin/scene. A fresh click then uses the new scope.
+            # Provider-owned menus retain their exact Twin across scene reset.
+            # A held selection and a fresh selection both remain usable.
             hook("configure", "MenuB")
             click_at(290.0, 18.0)
             session.capture_screenshot(artifacts / "menu-before-reset.png")
@@ -199,7 +199,9 @@ def main() -> None:
             if time.monotonic() - started >= .8:
                 raise RuntimeError("Reset gesture exceeded egui click duration")
             settle_input()
-            verdict("verify_state", "MenuB", owner, False)
+            verdict("verify_state", "MenuB", owner, True)
+            hook("configure", "MenuB")
+            click_at(290.0, 18.0)
             click_at(300.0, 46.0)
             verdict("verify_state", "MenuB", owner, True)
 

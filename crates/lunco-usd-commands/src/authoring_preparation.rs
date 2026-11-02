@@ -50,7 +50,7 @@ impl DocumentLease {
                 OperationLifetime::Scene(
                     world
                         .get_resource::<lunco_core::SceneTransitionCoordinator>()
-                        .and_then(|scene| scene.completed_generation()),
+                        .and_then(|scene| scene.lifecycle_generation()),
                 )
             } else {
                 OperationLifetime::Document
@@ -95,11 +95,11 @@ impl DocumentLease {
             lunco_usd_bevy_twin::canonical_stage_for_document(world, self.owner.document);
         let lifetime_current = match self.lifetime {
             OperationLifetime::Document => true,
-            OperationLifetime::Scene(generation) => lunco_core::scene::validate_interaction_scene(
-                generation,
-                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
-            )
-            .is_ok(),
+            OperationLifetime::Scene(generation) => {
+                lunco_core::InteractionLifetime::Scene(generation)
+                    .validate(world.get_resource::<lunco_core::SceneTransitionCoordinator>())
+                    .is_ok()
+            }
         };
         lifetime_current
             && self.owner.is_current(

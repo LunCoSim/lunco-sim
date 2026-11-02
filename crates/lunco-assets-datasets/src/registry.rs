@@ -14,8 +14,12 @@ use crate::{installed_destination_present, processed_output_present};
 pub enum DatasetState {
     /// Declared, not on disk.
     Missing,
+    /// Explicitly requested and waiting for a bounded worker slot.
+    Queued,
     /// A user-requested download is running.
     Downloading {
+        /// Human-readable file currently being transferred.
+        source: String,
         /// Bytes received so far.
         bytes_done: u64,
         /// Expected bytes, or zero when unknown.
@@ -41,6 +45,7 @@ impl DatasetState {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Missing => "missing",
+            Self::Queued => "queued",
             Self::Downloading { .. } => "downloading",
             Self::Processing { .. } => "processing",
             Self::Cancelling => "cancelling",
@@ -71,6 +76,14 @@ pub enum DatasetScope {
 }
 
 impl DatasetScope {
+    /// Transport aliases of the same admitted canonical root share one store.
+    pub fn same_storage(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Engine, Self::Engine) => true,
+            (Self::Twin { root: left, .. }, Self::Twin { root: right, .. }) => left == right,
+            _ => false,
+        }
+    }
     /// Stable command/query identity, distinct from the human-readable label.
     pub fn id(&self) -> String {
         match self {
@@ -115,6 +128,48 @@ impl DatasetScope {
     }
 }
 
+/// Verified availability of one declared source, captured on an I/O worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatasetInputState {
+    /// The source has not been installed.
+    Missing,
+    /// The source satisfies its declared integrity contract.
+    Ready,
+    /// A present source or its address fails validation.
+    Invalid(String),
+}
+
+impl DatasetInputState {
+    /// Stable availability token for language-neutral consumers.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Ready => "ready",
+            Self::Invalid(_) => "invalid",
+        }
+    }
+    /// The owner's validation failure, when present.
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            Self::Invalid(detail) => Some(detail),
+            _ => None,
+        }
+    }
+}
+
+/// Source identity and availability, independent of processing lifecycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatasetInput {
+    /// Stable input name within the declaration.
+    pub id: String,
+    /// Human-readable source name.
+    pub name: String,
+    /// Authored download URL.
+    pub url: String,
+    /// Last verified source availability.
+    pub state: DatasetInputState,
+}
+
 /// One declared dataset, its artifact identity, and its live state.
 #[derive(Debug, Clone)]
 pub struct DatasetEntry {
@@ -136,10 +191,12 @@ pub struct DatasetEntry {
     pub artifact_rel: String,
     /// Live lifecycle state.
     pub state: DatasetState,
+    /// Source facts captured at admission and preparation boundaries.
+    pub inputs: Vec<DatasetInput>,
     /// Full declaration, including domain metadata.
     pub spec: AssetEntry,
     read_roots: Vec<PathBuf>,
-    source_identity: lunco_storage::FilePathIdentity,
+    sources: Vec<(PathBuf, lunco_storage::FilePathIdentity)>,
     output: Option<(PathBuf, lunco_storage::FilePathIdentity)>,
 }
 
@@ -159,15 +216,99 @@ fn artifact_present(spec: &AssetEntry, path: &Path, source_path: Option<&Path>) 
 }
 
 impl DatasetEntry {
+    /// Whether every declared download has passed integrity verification.
+    pub fn inputs_ready(&self) -> bool {
+        !self.inputs.is_empty()
+            && self
+                .inputs
+                .iter()
+                .all(|input| input.state == DatasetInputState::Ready)
+    }
+    /// Inspect all declared downloads on the owning I/O worker.
+    pub fn inspect_inputs(&self) -> Vec<DatasetInput> {
+        let mut declarations = vec![("source", &self.spec)];
+        if let Some(pipeline) = self.spec.process.as_ref().and_then(|p| p.pipeline.as_ref()) {
+            declarations.extend(
+                pipeline
+                    .sources
+                    .iter()
+                    .map(|(id, spec)| (id.as_str(), spec)),
+            );
+        }
+        declarations
+            .into_iter()
+            .map(|(id, spec)| {
+                #[cfg(not(target_arch = "wasm32"))]
+                let state = match crate::source_read_path(
+                    spec,
+                    &self.scope.cache_root(spec.shared),
+                    &self.read_roots,
+                ) {
+                    Ok(_) => DatasetInputState::Ready,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        DatasetInputState::Missing
+                    }
+                    Err(e) => DatasetInputState::Invalid(e.to_string()),
+                };
+                #[cfg(target_arch = "wasm32")]
+                let state = DatasetInputState::Missing;
+                DatasetInput {
+                    id: id.to_owned(),
+                    name: spec.name.clone(),
+                    url: spec.url.clone(),
+                    state,
+                }
+            })
+            .collect()
+    }
+
+    /// Explain why the selected artifact cannot be consumed after preparation.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn delivery_error(&self) -> String {
+        let selected = lunco_assets_core::resolve_native_asset(
+            &self.read_roots,
+            Path::new(&self.artifact_rel),
+            None,
+        );
+        if let Ok(Some((root, path))) = selected {
+            if let Some(process) = &self.spec.process {
+                let owner = match &self.scope {
+                    DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                    DatasetScope::Engine => None,
+                };
+                if let Ok(output) = process_output_path(
+                    process,
+                    Some(&self.scope.cache_root(self.spec.shared)),
+                    owner,
+                ) {
+                    if path != output && root == 0 {
+                        return format!(
+                            "Authored override '{}' is incomplete and takes precedence over prepared output '{}'. Remove or replace the override, then retry.",
+                            path.display(),
+                            output.display()
+                        );
+                    }
+                }
+            }
+            return format!(
+                "Prepared artifact '{}' is incomplete, invalid, or out of date. Check the declared artifacts and input integrity, then prepare again.",
+                path.display()
+            );
+        }
+        format!(
+            "Prepared artifact {} is missing. Prepare this dataset before loading it.",
+            self.artifact_uri()
+        )
+    }
+
     /// Exact read roots validated with this declaration on its scan worker.
     pub fn read_roots(&self) -> &[PathBuf] {
         &self.read_roots
     }
 
-    // Installation readiness validates the same first existing entry that
-    // runtime readers select; an invalid authored artifact cannot be replaced
-    // by a later cache copy. This runs on the source scan worker.
-    fn installed_artifact(&self) -> Result<Option<PathBuf>, String> {
+    /// Validate the first artifact selected by the runtime reader, including
+    /// its receipt and current inputs. Run on a scan/preparation worker.
+    pub fn installed_artifact(&self) -> Result<Option<PathBuf>, String> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let relative = lunco_assets_path::relative_path(&self.artifact_rel)
@@ -178,7 +319,35 @@ impl DatasetEntry {
             else {
                 return Ok(None);
             };
-            Ok(artifact_present(&self.spec, &path, None).then_some(path))
+            if !artifact_present(&self.spec, &path, None) {
+                return Ok(None);
+            }
+            if let Some(process) = &self.spec.process {
+                if process.pipeline.is_some() {
+                    let cache = self.scope.cache_root(self.spec.shared);
+                    let owner = match &self.scope {
+                        DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                        DatasetScope::Engine => None,
+                    };
+                    let source = match crate::source_read_path(&self.spec, &cache, &self.read_roots)
+                    {
+                        Ok(source) => source,
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                            ) =>
+                        {
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    };
+                    if !crate::pipeline::inputs_current(&path, process, &source, &cache, owner) {
+                        return Ok(None);
+                    }
+                }
+            }
+            Ok(Some(path))
         }
         #[cfg(target_arch = "wasm32")]
         Ok(None)
@@ -281,7 +450,13 @@ pub fn dataset_state_changed(
 ) -> lunco_telemetry_core::TelemetryEvent {
     let detail = match state {
         DatasetState::Failed(error) => return dataset_failed(format!("{name} ({id}): {error}")),
-        DatasetState::Processing { kind } => format!("{name} ({id}): processing {kind}"),
+        DatasetState::Processing { kind } => format!("{name}: preparing {kind}"),
+        DatasetState::Downloading { source, .. } => format!("{name}: downloading {source}"),
+        DatasetState::Queued => format!("{name}: queued for preparation"),
+        DatasetState::Installed => format!("{name}: data ready"),
+        DatasetState::Cancelled => {
+            format!("{name}: cancelled; resume in Settings > Data & libraries")
+        }
         _ => format!("{name} ({id}): {}", state.kind()),
     };
     lunco_telemetry_core::TelemetryEvent {
@@ -326,6 +501,9 @@ impl DatasetRegistry {
         };
         let mut added = 0;
         for (key, spec) in manifest.assets {
+            if spec.package_only {
+                continue;
+            }
             let id = dataset_id(&scope, group, &key);
             if self.entries.iter().any(|entry| entry.id == id) {
                 self.record_failure(format!(
@@ -379,16 +557,33 @@ impl DatasetRegistry {
                 None
             };
             let identities = (|| -> Result<_, lunco_storage::StorageError> {
-                let source = lunco_storage::FilePathIdentity::prepare(&path)?;
+                let mut sources = vec![(
+                    path.clone(),
+                    lunco_storage::FilePathIdentity::prepare(&path)?,
+                )];
+                if let Some(pipeline) = spec
+                    .process
+                    .as_ref()
+                    .and_then(|process| process.pipeline.as_ref())
+                {
+                    for source in pipeline.sources.values() {
+                        let input = entry_dest_path(source, Some(&destination_root))
+                            .map_err(lunco_storage::StorageError::Io)?;
+                        sources.push((
+                            input.clone(),
+                            lunco_storage::FilePathIdentity::prepare(&input)?,
+                        ));
+                    }
+                }
                 let output = output_path
                     .map(|path| {
                         lunco_storage::FilePathIdentity::prepare(&path)
                             .map(|identity| (path, identity))
                     })
                     .transpose()?;
-                Ok((source, output))
+                Ok((sources, output))
             })();
-            let (source_identity, output) = match identities {
+            let (sources, output) = match identities {
                 Ok(identities) => identities,
                 Err(error) => {
                     self.record_failure(format!(
@@ -397,9 +592,7 @@ impl DatasetRegistry {
                     continue;
                 }
             };
-            if let Err(conflict) =
-                self.process_output_conflict(&key, &path, &source_identity, output.as_ref())
-            {
+            if let Err(conflict) = self.process_output_conflict(&key, &sources, output.as_ref()) {
                 self.record_failure(conflict);
                 continue;
             }
@@ -420,11 +613,13 @@ impl DatasetRegistry {
                 path,
                 artifact_rel,
                 state: DatasetState::Missing,
+                inputs: Vec::new(),
                 spec,
                 read_roots,
-                source_identity,
+                sources,
                 output,
             };
+            entry.inputs = entry.inspect_inputs();
             entry.state = match entry.installed_artifact() {
                 Ok(Some(_)) => DatasetState::Installed,
                 Ok(None) => DatasetState::Missing,
@@ -456,12 +651,9 @@ impl DatasetRegistry {
                 ));
                 continue;
             }
-            if let Err(conflict) = self.process_output_conflict(
-                &entry.key,
-                &entry.path,
-                &entry.source_identity,
-                entry.output.as_ref(),
-            ) {
+            if let Err(conflict) =
+                self.process_output_conflict(&entry.key, &entry.sources, entry.output.as_ref())
+            {
                 self.record_failure(conflict);
                 continue;
             }
@@ -474,54 +666,59 @@ impl DatasetRegistry {
     fn process_output_conflict(
         &self,
         key: &str,
-        source_path: &Path,
-        source_identity: &lunco_storage::FilePathIdentity,
+        sources: &[(PathBuf, lunco_storage::FilePathIdentity)],
         output: Option<&(PathBuf, lunco_storage::FilePathIdentity)>,
     ) -> Result<(), String> {
-        let overlaps = |left: &lunco_storage::FilePathIdentity,
-                        right: &lunco_storage::FilePathIdentity| {
-            left.overlaps(right).map_err(|error| {
-                format!("dataset '{key}' output ownership could not be established: {error}")
+        let overlaps = |a: &lunco_storage::FilePathIdentity,
+                        b: &lunco_storage::FilePathIdentity| {
+            a.overlaps(b).map_err(|e| {
+                format!("dataset '{key}' output ownership could not be established: {e}")
             })
         };
         if let Some((path, identity)) = output {
-            if overlaps(source_identity, identity)? {
-                return Err(format!(
-                    "dataset '{key}' process output {} overlaps its downloaded source {}",
-                    path.display(),
-                    source_path.display()
-                ));
+            for (source, source_identity) in sources {
+                if overlaps(identity, source_identity)? {
+                    return Err(format!(
+                        "dataset '{key}' process output {} overlaps its downloaded source {}",
+                        path.display(),
+                        source.display()
+                    ));
+                }
             }
         }
         for entry in &self.entries {
             if let Some((path, identity)) = output {
-                if overlaps(identity, &entry.source_identity)? {
-                    return Err(format!(
-                        "dataset '{key}' process output {} overlaps dataset '{}' source {}",
-                        path.display(),
-                        entry.key,
-                        entry.path.display()
-                    ));
+                for (source, source_identity) in &entry.sources {
+                    if overlaps(identity, source_identity)? {
+                        return Err(format!(
+                            "dataset '{key}' process output {} overlaps dataset '{}' source {}",
+                            path.display(),
+                            entry.key,
+                            source.display()
+                        ));
+                    }
                 }
-            }
-            if let Some((entry_path, entry_identity)) = &entry.output {
-                if let Some((path, identity)) = output {
-                    if overlaps(identity, entry_identity)? {
+                if let Some((other, other_identity)) = &entry.output {
+                    if overlaps(identity, other_identity)? {
                         return Err(format!(
                             "dataset '{key}' process output {} overlaps dataset '{}' process output {}",
                             path.display(),
                             entry.key,
-                            entry_path.display()
+                            other.display()
                         ));
                     }
                 }
-                if overlaps(source_identity, entry_identity)? {
-                    return Err(format!(
-                        "dataset '{key}' source {} overlaps dataset '{}' process output {}",
-                        source_path.display(),
-                        entry.key,
-                        entry_path.display()
-                    ));
+            }
+            if let Some((path, identity)) = &entry.output {
+                for (source, source_identity) in sources {
+                    if overlaps(identity, source_identity)? {
+                        return Err(format!(
+                            "dataset '{key}' source {} overlaps dataset '{}' process output {}",
+                            source.display(),
+                            entry.key,
+                            path.display()
+                        ));
+                    }
                 }
             }
         }
@@ -598,10 +795,42 @@ impl DatasetRegistry {
 
     /// Whether a scope completed discovery.
     pub fn is_scope_scanned(&self, scope: &DatasetScope) -> bool {
-        self.scanned_scopes.iter().any(|scanned| scanned == scope)
+        self.scanned_scopes
+            .iter()
+            .any(|scanned| scanned.same_storage(scope))
     }
 
-    /// Find a declaration by its delivered scope-relative artifact path.
+    /// Mark discovery complete even when a scope declares no downloads.
+    pub fn mark_scope_scanned(&mut self, scope: DatasetScope) {
+        if !self.is_scope_scanned(&scope) {
+            self.scanned_scopes.push(scope);
+        }
+    }
+
+    /// Resolve a consumed logical URI through the same scope/artifact matcher.
+    /// This is a read-side operation over admitted mount metadata; it performs no I/O.
+    pub fn declared_uri<'a>(
+        &'a self,
+        uri: &str,
+        roots: Option<&lunco_assets_core::TwinRoots>,
+    ) -> Result<Option<&'a DatasetEntry>, String> {
+        let Some((scope, relative)) = dataset_scope_for_uri(uri, roots)? else {
+            return Ok(None);
+        };
+        Ok(self.declared_artifact(&scope, &relative))
+    }
+
+    /// Discovery must settle before a runtime loader can classify a missing file.
+    pub fn uri_scope_scanned(
+        &self,
+        uri: &str,
+        roots: Option<&lunco_assets_core::TwinRoots>,
+    ) -> Result<bool, String> {
+        Ok(dataset_scope_for_uri(uri, roots)?
+            .is_none_or(|(scope, _)| self.is_scope_scanned(&scope)))
+    }
+
+    /// Find the declaration delivering a file or an explicit bundle member.
     pub fn declared_artifact(
         &self,
         scope: &DatasetScope,
@@ -610,9 +839,29 @@ impl DatasetRegistry {
         let relative = lunco_assets_path::slashed(relative)
             .trim_start_matches('/')
             .to_owned();
-        self.entries
-            .iter()
-            .find(|entry| &entry.scope == scope && entry.artifact_rel == relative)
+        self.entries.iter().find(|entry| {
+            if !entry.scope.same_storage(scope) {
+                return false;
+            }
+            if entry.artifact_rel == relative {
+                return true;
+            }
+            let Some(member) = Path::new(&relative).strip_prefix(&entry.artifact_rel).ok() else {
+                return false;
+            };
+            if let Some(pipeline) = entry
+                .spec
+                .process
+                .as_ref()
+                .and_then(|process| process.pipeline.as_ref())
+            {
+                return pipeline
+                    .artifacts
+                    .iter()
+                    .any(|artifact| Path::new(&artifact.path) == member);
+            }
+            entry.spec.process.is_none() && crate::archive_extension(&entry.spec.url).is_some()
+        })
     }
 
     /// Look up one dataset's state.
@@ -653,6 +902,7 @@ impl DatasetRegistry {
         if matches!(
             entry.state,
             DatasetState::Installed
+                | DatasetState::Queued
                 | DatasetState::Downloading { .. }
                 | DatasetState::Processing { .. }
                 | DatasetState::Cancelling
@@ -660,6 +910,7 @@ impl DatasetRegistry {
             return false;
         }
         entry.state = DatasetState::Downloading {
+            source: entry.name.clone(),
             bytes_done: 0,
             bytes_total: 0,
         };
@@ -678,7 +929,8 @@ impl DatasetRegistry {
         };
         if matches!(
             entry.state,
-            DatasetState::Downloading { .. }
+            DatasetState::Queued
+                | DatasetState::Downloading { .. }
                 | DatasetState::Processing { .. }
                 | DatasetState::Cancelling
         ) {
@@ -697,7 +949,9 @@ impl DatasetRegistry {
         };
         if !matches!(
             entry.state,
-            DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+            DatasetState::Queued
+                | DatasetState::Downloading { .. }
+                | DatasetState::Processing { .. }
         ) {
             return false;
         }
@@ -719,13 +973,22 @@ impl DatasetRegistry {
         if entry.state == DatasetState::Cancelling
             && matches!(
                 state,
-                DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+                DatasetState::Queued
+                    | DatasetState::Downloading { .. }
+                    | DatasetState::Processing { .. }
             )
         {
             return false;
         }
         entry.state = state;
         true
+    }
+
+    /// Commit input facts prepared by the current scope's I/O worker.
+    pub fn set_inputs(&mut self, id: &str, inputs: Vec<DatasetInput>) {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) {
+            entry.inputs = inputs;
+        }
     }
 }
 
@@ -753,6 +1016,10 @@ pub struct RequestDataset {
 pub struct ProcessDataset {
     /// Globally unique dataset id.
     pub id: String,
+    /// Rerun all steps even when the published bake key matches. Defaults to false.
+    #[serde(default)]
+    #[reflect(default)]
+    pub force: bool,
 }
 
 /// User intent to cancel one dataset operation.
@@ -877,6 +1144,7 @@ dest = "data/demo.csv"
         assert!(!registry.set_state(
             &id,
             DatasetState::Downloading {
+                source: "Fixture".to_owned(),
                 bytes_done: 1,
                 bytes_total: 2,
             }
@@ -940,4 +1208,66 @@ output = "terrain/site/materials/textures/albedo.png"
         assert!(failures[0].contains("detail_albedo"));
         assert!(failures[0].contains("overlaps dataset 'base_dem' process output"));
     }
+}
+
+/// A mounted storage owner retired or transferred to another live authority.
+/// The worker owner must cross its commit barrier before removing declarations.
+#[derive(Event, Clone, Debug)]
+pub struct RetireDatasetScope {
+    /// Exact retiring authority and canonical root.
+    pub scope: DatasetScope,
+}
+
+fn dataset_scope_for_uri(
+    uri: &str,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<Option<(DatasetScope, PathBuf)>, String> {
+    let (scope, relative) = if let Some(relative) = lunco_assets_core::parse_lunco_uri(uri) {
+        (DatasetScope::Engine, relative)
+    } else if let Some((name, relative)) = lunco_assets_core::parse_twin_uri(uri) {
+        let root = roots
+            .ok_or("Twin asset registry is unavailable")?
+            .root_of(name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Twin asset authority retired: {name}"))?;
+        (
+            DatasetScope::Twin {
+                name: name.to_owned(),
+                root,
+            },
+            relative,
+        )
+    } else {
+        return Ok(None);
+    };
+    let relative = lunco_assets_path::relative_path(relative)
+        .ok_or_else(|| format!("Unsafe asset URI: {uri}"))?;
+    Ok(Some((scope, relative)))
+}
+
+/// A runtime owner actually needs a logical asset; this is independent of catalog recommendations.
+#[derive(Event, Clone, Debug)]
+pub struct AssetRequired {
+    /// Exact admitted scene lease. Retired scene completions cannot add requirements.
+    pub scene: Entity,
+    /// Canonical URI used by the real loader.
+    pub uri: String,
+}
+
+/// Assets consumed dynamically during this admitted scene. Cleared by scene teardown.
+#[derive(Resource, Default)]
+pub struct RuntimeAssetRequirements {
+    /// Exact scene lease.
+    pub scene: Option<Entity>,
+    /// Actual runtime use, rather than a separately authored importance list.
+    pub uris: std::collections::BTreeSet<String>,
+}
+impl lunco_core::SceneResource for RuntimeAssetRequirements {}
+
+/// Declare a concrete runtime asset dependency without initiating a network request.
+/// Missing declared data holds simulation and opens the shared preparation window.
+#[Command]
+pub struct RequireAsset {
+    /// Logical asset URI consumed by the caller, normally twin:// or lunco://.
+    pub uri: String,
 }

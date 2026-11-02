@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**302 commands** across **57** crates. 4 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**304 commands** across **57** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -87,7 +87,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Other (source location unknown)**
 
-- [`lunco-assets-datasets`](#lunco-assets-datasets) (3 commands)
+- [`lunco-assets-datasets`](#lunco-assets-datasets) (4 commands)
 - [`lunco-camera-core`](#lunco-camera-core) (7 commands)
 - [`lunco-capture`](#lunco-capture) (12 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
@@ -119,7 +119,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (7 commands)
 - [`lunco-workbench-browser`](#lunco-workbench-browser) (2 commands)
-- [`lunco-workbench-core`](#lunco-workbench-core) (16 commands)
+- [`lunco-workbench-core`](#lunco-workbench-core) (17 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
@@ -1952,6 +1952,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `id` | `String` |  Globally unique dataset id. |
+| `force` | `bool` |  Rerun all steps even when the published bake key matches. Defaults to false. |
 
 #### `RequestDataset`
 
@@ -1962,6 +1963,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `id` | `String` |  Globally unique dataset id. |
+
+#### `RequireAsset`
+
+ Declare a concrete runtime asset dependency without initiating a network request.
+ Missing declared data holds simulation and opens the shared preparation window.
+
+- *defined in:* `crates/lunco-assets-datasets/src/registry.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `uri` | `String` |  Logical asset URI consumed by the caller, normally twin:// or lunco://. |
 
 ### `lunco-camera-core` <a id="lunco-camera-core"></a>
 
@@ -2553,15 +2565,15 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `source` | `Option < GlobalEntityId >` |   |
 
-#### `SuppressDatasetProvisioning`
+#### `ToggleDatasetDetails`
 
-*(no description — add a `///` doc on the struct)*
+ Expand or collapse the current dataset's source details.
 
 - *defined in:* `crates/lunco-luncosim-ui/src/ui/dataset_provisioning.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `scope` | `String` |   |
+| `id` | `String` |   |
 
 ### `lunco-modelica-api` <a id="lunco-modelica-api"></a>
 
@@ -4095,6 +4107,16 @@ actually call, with the fields the deserializer actually accepts. See the
 | `pinned` | `bool` |  Keep the file open when another preview is selected. |
 | `focus` | `Option < bool >` |  Whether opening the source should focus its tab. |
 
+#### `OpenWebUrl`
+
+ Open an absolute HTTP(S) link through the shell's existing browser adapter.
+
+- *defined in:* `crates/lunco-workbench-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `url` | `String` |  Absolute web address. Other URI schemes are rejected. |
+
 #### `ResetToDefaultPerspective`
 
  Reset the shell to its required or first registered perspective.
@@ -4522,7 +4544,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 302 commands from the runtime schema; scanned 1055 .rs files for docs (0 parse failure(s) skipped).
+<!-- 304 commands from the runtime schema; scanned 1063 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred
 -->

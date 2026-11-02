@@ -113,12 +113,6 @@ match TwinMode::open(Path::new("./my_base"))? {
    [`lunco-workspace`](../lunco-workspace/README.md); Twin just
    answers membership questions.
 
-Project-owned presentation preferences belong in `twin.toml`, not the
-user-global `<OS config dir>/lunco/settings.json`. The `[downloads]` section currently
-contains `suppress_missing_prompt`; it defaults to `false`, so a project with
-missing declared datasets shows the consent window when opened. The Workbench
-Settings menu and the popup checkbox both update this same manifest field.
-
 The generic `[settings]` table is the extensible project-policy surface. It
 stores namespaced scalar TOML values (`bool`, integer, number, or string), so
 new Twin settings do not require new Rust fields or per-setting commands.

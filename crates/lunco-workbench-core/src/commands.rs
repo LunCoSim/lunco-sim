@@ -82,6 +82,13 @@ pub struct OpenAssetResource {
     pub uri: String,
 }
 
+/// Open an absolute HTTP(S) link through the shell's existing browser adapter.
+#[Command]
+pub struct OpenWebUrl {
+    /// Absolute web address. Other URI schemes are rejected.
+    pub url: String,
+}
+
 /// Open quick navigation. An empty category searches every contributed destination.
 #[Command(default)]
 pub struct SearchNavigation {

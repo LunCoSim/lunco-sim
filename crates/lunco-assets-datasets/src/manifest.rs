@@ -7,7 +7,7 @@ use lunco_assets_core::cache_dir;
 use serde::{Deserialize, Serialize};
 
 /// A single asset entry from `Assets.toml`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AssetEntry {
     /// Human-readable name.
     pub name: String,
@@ -33,6 +33,9 @@ pub struct AssetEntry {
     /// Binary names for which the delivered artifact belongs in the package.
     #[serde(default)]
     pub bundle: Vec<String>,
+    /// Build-time package input, excluded from the runtime download catalog.
+    #[serde(default)]
+    pub package_only: bool,
     /// Optional native post-processing declaration.
     #[serde(default)]
     pub process: Option<ProcessConfig>,
@@ -65,6 +68,9 @@ pub struct ProcessConfig {
     /// Pipeline selector. Built-ins include `texture`, `gltf`, `dem`, `map`,
     /// `albedo`, and `normalmap`; native hosts may register additional kinds.
     pub kind: String,
+    /// Ordered artifact recipe when `kind = "pipeline"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<crate::pipeline::PipelineConfig>,
     /// Target dimensions for image-like pipelines.
     #[serde(default)]
     pub target_resolution: Option<[u32; 2]>,
@@ -82,10 +88,10 @@ pub struct ProcessConfig {
     /// Side length of a geographic crop in metres.
     #[serde(default)]
     pub window_m: Option<f64>,
-    /// Source metres per pixel for a geographic crop. When omitted, a PDS3
-    /// label supplies its map scale; otherwise the documented 2 m default is
-    /// used. Georeferenced grayscale TIFF albedo sources require this value.
-    #[serde(default, serialize_with = "serialize_pixel_scale_m")]
+    /// Source metres per pixel for extent-based crops. A PDS3 label supplies
+    /// an omitted scale, followed by the documented 2 m default. Standard
+    /// spherical GeoTIFF crops use their embedded projection and registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pixel_scale_m: Option<f64>,
     /// Source-height units converted to metres.
     #[serde(default = "default_dem_height_scale")]
@@ -142,15 +148,6 @@ pub fn default_dem_pixel_scale_m() -> f64 {
     2.0
 }
 
-fn serialize_pixel_scale_m<S>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    // Preserve the effective historic value in bake keys while retaining
-    // whether the manifest explicitly authored a scale for source validation.
-    serializer.serialize_f64((*value).unwrap_or_else(default_dem_pixel_scale_m))
-}
-
 fn default_dem_height_scale() -> f64 {
     1.0
 }
@@ -167,9 +164,29 @@ impl std::str::FromStr for AssetManifest {
     type Err = std::io::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        toml::from_str(s).map_err(|error| {
+        let manifest: Self = toml::from_str(s).map_err(|error| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-        })
+        })?;
+        for entry in manifest.assets.values() {
+            if entry.package_only && (entry.bundle.is_empty() || entry.recommended) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "package-only assets need a bundle target and cannot be recommended downloads",
+                ));
+            }
+            if let Some(process) = &entry.process {
+                if (process.kind == "pipeline") != process.pipeline.is_some() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "kind=pipeline and process.pipeline must be declared together",
+                    ));
+                }
+                if let Some(pipeline) = &process.pipeline {
+                    pipeline.validate()?;
+                }
+            }
+        }
+        Ok(manifest)
     }
 }
 
@@ -215,6 +232,43 @@ pub fn entry_dest_path(
         Some(destination) => root.join(destination),
         None => source_pool_path(&root, &entry.url)?,
     })
+}
+
+/// Select and verify the same raw input that the registered asset reader owns.
+/// Call on the existing preparation worker; checksum verification can read large files.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn source_read_path(
+    entry: &AssetEntry,
+    cache: &Path,
+    roots: &[PathBuf],
+) -> std::io::Result<PathBuf> {
+    let cache = if entry.shared {
+        cache_dir()
+    } else {
+        cache.to_path_buf()
+    };
+    let destination = entry_dest_path(entry, Some(&cache))?;
+    let relative = destination.strip_prefix(&cache).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "source destination is outside its owning cache",
+        )
+    })?;
+    let path = lunco_assets_core::resolve_native_asset(roots, relative, None)?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("source {} is unavailable", relative.display()),
+            )
+        })?
+        .1;
+    if !installed_destination_present(entry, &path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("source {} fails its integrity contract", relative.display()),
+        ));
+    }
+    Ok(path)
 }
 
 /// Resolve the delivered artifact path for a manifest process declaration.
@@ -360,7 +414,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> std::io::Result<PathBuf> {
 }
 
 /// Current processing pipeline identity used by bake completion stamps.
-pub const PROCESS_PIPELINE_VERSION: u32 = 10;
+pub const PROCESS_PIPELINE_VERSION: u32 = 12;
 
 /// Resolve the output path of a manifest process declaration.
 pub fn process_output_path(
@@ -405,8 +459,8 @@ pub fn process_output_path(
 }
 
 /// Path of the completion stamp for a processed artifact.
-pub fn bake_stamp_path(output_path: &Path) -> PathBuf {
-    if output_path.extension().is_none() {
+pub fn bake_stamp_path(output_path: &Path, process: &ProcessConfig) -> PathBuf {
+    if matches!(process.kind.as_str(), "pipeline" | "dem") || output_path.extension().is_none() {
         return output_path.join(".bakekey");
     }
     let mut name = output_path
@@ -454,6 +508,7 @@ pub fn processed_output_present(
     source_path: Option<&Path>,
 ) -> bool {
     let payload_present = match process.kind.as_str() {
+        "pipeline" => crate::pipeline::bundle_present(output_path, process),
         "dem" => {
             output_path.is_dir()
                 && output_path
@@ -482,17 +537,33 @@ pub fn processed_output_present(
     if !payload_present {
         return false;
     }
-    let Ok(stamp) = std::fs::read_to_string(bake_stamp_path(output_path)) else {
+    let Ok(stamp) = std::fs::read_to_string(bake_stamp_path(output_path, process)) else {
         return false;
     };
     let stamp = stamp.trim();
     !stamp.is_empty()
-        && source_path.is_none_or(|source| bake_key(source, process).is_ok_and(|key| key == stamp))
+        && (process.kind == "pipeline"
+            || source_path
+                .is_none_or(|source| bake_key(source, process).is_ok_and(|key| key == stamp)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_only_inputs_require_bundle_targets_and_cannot_be_recommended() {
+        let input =
+            "[font]\nname='Font'\nurl='https://example.invalid/font.ttf'\npackage_only=true\n";
+        assert!(input.parse::<AssetManifest>().is_err());
+        let valid = format!("{input}bundle=['desktop']\n");
+        assert!(valid.parse::<AssetManifest>().unwrap().assets["font"].package_only);
+        assert!(
+            format!("{valid}recommended=true\n")
+                .parse::<AssetManifest>()
+                .is_err()
+        );
+    }
 
     #[test]
     fn source_pool_names_preserve_literals_and_reject_nonportable_url_names() {

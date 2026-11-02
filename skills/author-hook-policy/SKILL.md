@@ -103,8 +103,10 @@ files through `std::fs` in a runtime/domain crate.
 
 Inline `bind_policy(id, entry, source)` is useful for a local non-deterministic
 experiment. It mutates the caller's existing application or Twin layer through
-the policy owner. A Twin caller needs its exact active identity and committed
-scene generation; retired callbacks are rejected. Application calls cannot
+the policy owner. A Twin caller needs its exact active identity; a scene-bound
+caller also needs its current lifecycle generation. UI calls remain available
+during preparation, while simulation calls require committed scene readiness.
+Retired callbacks are rejected. Application calls cannot
 overwrite Twin-owned policies, and USD-authored policies require editing their
 USD owner. Twin closure restores the retained application implementation.
 It must not claim a deterministic contract. Use `unbind_policy`
@@ -250,3 +252,17 @@ Discover exact panel and instance capabilities with `InspectWorkbench` and read
 Evaluation is revision-driven Visualization/Preparation work over immutable
 facts; a policy reload does not reset a visited layout. Verify positive and
 rejected plans, explicit reset, and Twin replacement through the production app.
+
+## Recipe-local asset planning
+
+For `Assets.toml` processing customization, use the recipe-local
+`assets.process.plan` contract documented in
+[artifact processing](../../docs/architecture/asset-processing.md). The recipe
+selects a declared, hashed Rhai file and entry. The asset owner invokes the
+shared `RhaiHook` interpreter with immutable `plan`, `settings`, input hashes
+and processor facts, validates the returned plan and consumes it on its worker.
+This non-installable binding lives for one preparation attempt and has no
+live-World access or simulation clock. It does not install an application/Twin
+policy layer. Keep heavy processing in native operations, WESL kernels,
+Modelica or an explicit external stage. Cover code-change invalidation and
+failure without replacement in the production artifact gate.

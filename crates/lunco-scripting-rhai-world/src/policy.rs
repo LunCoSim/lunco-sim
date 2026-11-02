@@ -591,6 +591,7 @@ fn invoke_twin_lifecycle_context(
         };
     }
     let runtime_context = lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::twin_owned(
             lunco_core::RuntimeCycle::Lifecycle,
             0,
@@ -1263,6 +1264,7 @@ pub fn apply_twin_policy_commands(world: &mut World) {
             continue;
         }
         let context = lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::application(
                 lunco_core::RuntimeCycle::Command,
             )),
@@ -1458,15 +1460,15 @@ fn runtime_policy_layer(world: &World, id: &str) -> Result<RuntimePolicyLayer, S
             if workspace.active_twin != Some(twin)
                 || workspace.twin(twin).is_none()
                 || registry.active_twin != Some(twin)
-                || lunco_core::scene::validate_interaction_scene(
-                    (route.generation != 0).then_some(route.generation),
-                    Some(coordinator),
-                )
+                || (if route.generation == 0 {
+                    lunco_core::InteractionLifetime::Owner
+                } else {
+                    lunco_core::InteractionLifetime::Scene(Some(route.generation))
+                })
+                .validate(Some(coordinator))
                 .is_err()
             {
-                return Err(
-                    "Twin policy mutation belongs to a retired or uncommitted scene".to_owned(),
-                );
+                return Err("Twin policy mutation belongs to a retired target".to_owned());
             }
             Ok(RuntimePolicyLayer::Twin)
         }

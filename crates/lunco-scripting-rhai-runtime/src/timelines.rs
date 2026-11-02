@@ -346,6 +346,11 @@ fn drain_pending_twin_timelines(
     mut store: ResMut<TimelineStore>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     assets: Option<Res<Assets<lunco_assets_runtime::TextAsset>>>,
+    asset_server: Res<AssetServer>,
+    datasets: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    mut commands: Commands,
 ) {
     let Some(assets) = assets else {
         return;
@@ -356,6 +361,23 @@ fn drain_pending_twin_timelines(
     let mut still_pending = Vec::new();
     for item in items {
         let id = item.handle.id();
+        if !workspace
+            .as_deref()
+            .is_some_and(|workspace| workspace.active_twin == Some(item.twin))
+        {
+            continue;
+        }
+        if lunco_assets_datasets::required_asset_data_pending(
+            id,
+            &asset_server,
+            datasets.as_deref(),
+            roots.as_deref(),
+            mount.as_ref().and_then(|mount| mount.active_root()),
+            &mut commands,
+        ) {
+            still_pending.push(item);
+            continue;
+        }
         if let Some(error) = failed.get(&id) {
             warn!(
                 "[timelines] failed to load `{}`: {error}",
@@ -374,12 +396,6 @@ fn drain_pending_twin_timelines(
             );
             continue;
         };
-        if !workspace
-            .as_deref()
-            .is_some_and(|workspace| workspace.active_twin == Some(item.twin))
-        {
-            continue;
-        }
         let timeline: ScenarioParameters = match serde_json::from_str(&source.text) {
             Ok(timeline) => timeline,
             Err(error) => {

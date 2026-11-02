@@ -5,7 +5,7 @@
 # Builds a LunCoSim desktop binary (lunica or luncosim) for the
 # host platform (Linux, macOS, Windows) and assembles a self-contained
 # distributable directory containing the binary, the assets/ tree with the
-# relevant cache subdirs (fonts, source libraries, models, …) packed INSIDE it, and a
+# relevant cache subdirs (fonts) packed INSIDE it, and a
 # launcher script.
 #
 # The packed cache lives at assets/.cache/ because that is the second root the
@@ -53,7 +53,7 @@
 #   dist/<binary>-<platform>-<arch>/
 #     <binary>[.exe]          — the compiled binary
 #     assets/                  — scene files, config, models, shaders
-#     assets/.cache/           — fonts, source libraries, models, ephemeris (what each binary needs)
+#     assets/.cache/           — packaged UI fonts
 #     run.sh / run.bat         — launcher
 #     README.md                — quick-start for end users
 # ============================================================================
@@ -384,7 +384,7 @@ Or run the binary directly (from this directory):
 
 - \`$binary\` — the application binary
 - \`assets/\` — scene files, config, models, shaders
-- \`assets/.cache/\` — fonts and runtime data (source libraries, models, ephemeris as needed)
+- \`assets/.cache/\` — packaged UI fonts
 - \`docs/\` — architecture docs, tutorials, app guides
 - \`skills/\` — project-level agent skills (runbook workflows)
 - \`AGENTS.md\` — AI agent guidelines for working on the codebase
@@ -429,8 +429,7 @@ the second place the app looks for any asset, after \`assets/\` itself. No
 environment variable is involved, so running the binary directly is the same
 as running the launcher.
 
-Anything not bundled (and anything you download from Settings ▸ Downloadable
-data) comes from the shared machine cache:
+Anything not bundled (and anything you download from Settings ▸ Data & libraries) comes from the shared machine cache:
   - Linux:   ~/.cache/lunco/
   - macOS:   ~/Library/Caches/lunco/
   - Windows: %LOCALAPPDATA%\\lunco\\
@@ -629,7 +628,7 @@ prepare_package_icon
 
 # ── Download cache assets before staging ──────────────────────────────────
 # Runs `cargo run -p lunco-assets -- download` for the crates this binary
-# needs (fonts, source libraries, models). Skipped with --skip-download or --no-cache.
+# needs (packaged UI fonts). Skipped with --skip-download or --no-cache.
 # Idempotent — re-runs verify sha256 and skip already-present files.
 if [ "$NO_CACHE" -eq 0 ] && [ "$SKIP_DOWNLOAD" -eq 0 ]; then
     download_cache_for "$BINARY"

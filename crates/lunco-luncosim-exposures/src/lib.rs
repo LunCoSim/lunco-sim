@@ -215,6 +215,7 @@ const RUNTIME_UI_PROPERTIES_HOOK: &str = "runtime.ui.properties";
 
 fn runtime_ui_execution_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::application(
             lunco_core::RuntimeCycle::Ui,
         )),
@@ -232,6 +233,7 @@ fn presentation_execution_context(
     phase: lunco_core::RuntimePhase,
 ) -> lunco_core::RuntimeExecutionContext {
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::application(
             lunco_core::RuntimeCycle::Presentation,
         )),
@@ -675,6 +677,7 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::UsdPhysicsAdmission => {
                         "UsdPhysicsAdmission"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::SceneDatasets => "SceneDatasets",
                     lunco_core_runtime::SimulationProgressOwner::TerrainPreparation => {
                         "TerrainPreparation"
                     }

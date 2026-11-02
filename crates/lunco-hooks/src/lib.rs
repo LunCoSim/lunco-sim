@@ -581,6 +581,12 @@ pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue
         ("phase", label(context.phase)),
         ("generation", generation),
         ("owner_id", owner_id),
+        (
+            "target_twin_id",
+            context
+                .target_twin_id
+                .map_or(HookValue::Unit, HookValue::UInt),
+        ),
         ("clock", label(context.clock)),
         (
             "sequence",
@@ -1351,6 +1357,7 @@ mod tests {
         });
 
         let invalid = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::application(RuntimeCycle::Ui)),
             phase: RuntimePhase::Evaluation,
             clock: RuntimeClock::Simulation,

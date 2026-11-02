@@ -2755,7 +2755,7 @@ fn build_world_engine_base(
     engine.register_fn("clock_snapshot", || -> Dynamic {
         time_bridge::clock_snapshot(&RhaiBuilder)
     });
-    // execution_context() -> #{scope, cycle, phase, clock, time_seconds,
+    // execution_context() -> #{scope, cycle, phase, target_twin_id, clock, time_seconds,
     // delta_seconds, sequence, producer}. This is the read-only
     // owner context for the current callback and every nested Rhai function.
     engine.register_fn("execution_context", || -> Dynamic {
@@ -3386,8 +3386,13 @@ impl RhaiScenarioRuntime {
             visited: &mut std::collections::BTreeSet<String>,
             sources: &mut Vec<(String, &'a crate::source_asset::RhaiSource)>,
         ) -> Result<bool, String> {
-            if !asset_server.is_loaded_with_dependencies(handle) {
-                return Ok(false);
+            // Each source handle owns its current load attempt. The recursive
+            // Bevy state retains failed dependencies across child reloads;
+            // traverse this explicit import graph using current source states.
+            match asset_server.load_state(handle) {
+                bevy::asset::LoadState::Failed(error) => return Err(error.to_string()),
+                bevy::asset::LoadState::Loaded => {}
+                _ => return Ok(false),
             }
             let path = asset_server.get_path(handle.id()).ok_or_else(|| {
                 format!(
@@ -5321,15 +5326,15 @@ impl WorldScriptWorkspace {
 }
 
 /// The registration scope and optional Twin flow admitted for one tool call.
-/// An application tool gains Twin lifetime when the caller has a typed Twin
-/// route or explicitly names a Twin-owned flow. A Twin registration always
+/// An application tool gains a Twin target lifetime when its caller retains
+/// that target or explicitly names a Twin-owned flow. A Twin registration always
 /// supplies its own owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorldToolOwner {
     scope: lunco_tools::ToolScope,
     twin: Option<lunco_workspace::TwinId>,
     callback: Option<(Entity, bridge_core::ToolHookBinding)>,
-    scene_generation: Option<u64>,
+    lifetime: lunco_core::InteractionLifetime,
 }
 
 impl WorldToolOwner {
@@ -5339,11 +5344,14 @@ impl WorldToolOwner {
         requested_twin: Option<u64>,
         workspace: Option<&lunco_workspace::WorkspaceResource>,
         scene: Option<&lunco_core::SceneTransitionCoordinator>,
+        binding: Option<(Entity, &bridge_core::ToolHookBinding)>,
     ) -> Result<Self, String> {
         let scope = lunco_tools::resolve_hook(tool, hook)?;
         let mut owner = Self::from_scope(scope, requested_twin, workspace)?;
-        owner.scene_generation = scene.and_then(|scene| scene.completed_generation());
-        owner.validate_scene(scene)?;
+        if let Some((entity, binding)) = binding {
+            owner.bind_callback(entity, binding, tool, hook, scene)?;
+        }
+        owner.validate_lifetime(scene)?;
         Ok(owner)
     }
 
@@ -5372,7 +5380,7 @@ impl WorldToolOwner {
         let owner = Self {
             scope,
             callback: None,
-            scene_generation: None,
+            lifetime: lunco_core::InteractionLifetime::Owner,
             twin: registered_twin
                 .or(requested_twin)
                 .map(lunco_workspace::TwinId::new),
@@ -5394,15 +5402,15 @@ impl WorldToolOwner {
     fn validate(&self, tool: &str, world: &World) -> Result<(), String> {
         self.validate_twin(world.get_resource::<lunco_workspace::WorkspaceResource>())?;
         self.validate_scope(tool, lunco_tools::active_scope(tool).as_ref())?;
-        self.validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
+        self.validate_lifetime(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
         self.validate_callback(world)
     }
 
-    fn validate_scene(
+    fn validate_lifetime(
         &self,
         scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<(), String> {
-        lunco_core::scene::validate_interaction_scene(self.scene_generation, scene)
+        self.lifetime.validate(scene)
     }
 
     fn validate_callback(&self, world: &World) -> Result<(), String> {
@@ -5410,8 +5418,9 @@ impl WorldToolOwner {
             if world.get::<bridge_core::ToolHookBinding>(*entity) != Some(admitted) {
                 return Err("UI callback binding has been retired or replaced".into());
             }
-            admitted
-                .validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
+            admitted.validate_lifetime(
+                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
+            )?;
         }
         Ok(())
     }
@@ -5439,7 +5448,8 @@ impl WorldToolOwner {
         {
             return Err("UI callback endpoint does not match its explicit binding".into());
         }
-        binding.validate_scene(scene)?;
+        binding.validate_lifetime(scene)?;
+        self.lifetime = binding.lifetime;
         self.callback = Some((entity, binding.clone()));
         Ok(())
     }
@@ -5463,15 +5473,14 @@ fn execution_flow_twin(
     context: lunco_core::RuntimeExecutionContext,
     requested: Option<u64>,
 ) -> Result<Option<u64>, String> {
-    let caller = match context.route {
-        Some(route) if route.scope == lunco_core::RuntimeScope::Twin => Some(
-            route
-                .owner_id
-                .filter(|owner| *owner != 0)
-                .ok_or_else(|| "Twin Rhai call has no assigned owner identity".to_owned())?,
-        ),
-        _ => None,
-    };
+    let caller = context.target_twin().map_err(|error| error.to_string())?;
+    if context
+        .route
+        .is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin)
+        && caller.is_none()
+    {
+        return Err("Twin Rhai call has no assigned owner identity".to_owned());
+    }
     if let (Some(caller), Some(requested)) = (caller, requested) {
         if caller != requested {
             return Err(format!(
@@ -5562,20 +5571,31 @@ impl WorldScriptExecution {
     }
 
     fn scene_route(self) -> Option<lunco_core::RuntimeRoute> {
-        self.context
-            .and_then(|context| context.route)
-            .filter(|route| route.scope == lunco_core::RuntimeScope::Twin)
+        self.context.and_then(|context| {
+            context.route.filter(|route| {
+                route.scope == lunco_core::RuntimeScope::Twin
+                    && (route.generation != 0
+                        || route.cycle == lunco_core::RuntimeCycle::Simulation
+                        || context.clock == lunco_core::RuntimeClock::Simulation)
+            })
+        })
     }
 
-    pub fn validate_scene(
+    pub fn validate_target(
         self,
         scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<(), String> {
         if let Some(route) = self.scene_route() {
-            lunco_core::scene::validate_interaction_scene(
-                (route.generation != 0).then_some(route.generation),
-                scene,
-            )?;
+            let generation = (route.generation != 0).then_some(route.generation);
+            if route.cycle == lunco_core::RuntimeCycle::Simulation
+                || self
+                    .context
+                    .is_some_and(|context| context.clock == lunco_core::RuntimeClock::Simulation)
+            {
+                lunco_core::scene::validate_simulation_scene(generation, scene)?;
+            } else {
+                lunco_core::InteractionLifetime::Scene(generation).validate(scene)?;
+            }
         }
         Ok(())
     }
@@ -5593,7 +5613,9 @@ impl WorldScriptExecution {
         world: &mut World,
         fallback: lunco_core::RuntimeExecutionContext,
     ) -> (bridge_core::WorldScope, bridge_core::ScriptEntityScope) {
-        let scope = bridge_core::WorldScope::enter(world, self.context.unwrap_or(fallback));
+        let mut context = self.context.unwrap_or(fallback);
+        context.target_twin_id = context.target_twin_id.or(fallback.target_twin_id);
+        let scope = bridge_core::WorldScope::enter(world, context);
         bridge_core::set_script_authority(self.authority);
         bridge_core::set_script_client_local(self.client_local);
         let actor = bridge_core::ScriptEntityScope::enter(self.actor);
@@ -5665,7 +5687,12 @@ pub fn retire_scene_world_scripts(world: &mut World) {
         world
             .resource_mut::<PendingWorldScripts>()
             .take_matching(|request| match request {
-                PendingWorldScript::Tool { .. } => true,
+                PendingWorldScript::Tool {
+                    owner, execution, ..
+                } => {
+                    matches!(owner.lifetime, lunco_core::InteractionLifetime::Scene(_))
+                        || execution.scene_route().is_some()
+                }
                 PendingWorldScript::Code { execution, .. } => execution.scene_route().is_some(),
             });
     finish_retired_world_scripts(world, retired, "scene transition started".into());
@@ -5821,7 +5848,7 @@ fn drain_world_script_queue(world: &mut World, ui: bool) {
                 ..
             } => admitted.validate(workspace).and_then(|_| {
                 execution
-                    .validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())
+                    .validate_target(world.get_resource::<lunco_core::SceneTransitionCoordinator>())
             }),
             PendingWorldScript::Tool { tool, owner, .. } => owner.validate(tool, world),
         };
@@ -5998,6 +6025,7 @@ pub fn eval_tool_with_world_as(
         execution.twin_owner(None)?,
         world.get_resource::<lunco_workspace::WorkspaceResource>(),
         world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
+        None,
     )?;
     let engine = world_script_engine(world)?
         .ok_or_else(|| "Rhai runtime preparation is still in progress".to_owned())?;
@@ -6026,7 +6054,7 @@ fn eval_tool_with_engine(
 ) -> Result<String, String> {
     lunco_tools::resolve_hook(tool, hook)?;
     owner.validate(tool, world)?;
-    execution.validate_scene(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
+    execution.validate_target(world.get_resource::<lunco_core::SceneTransitionCoordinator>())?;
 
     use std::sync::{Arc, Mutex};
     let out = Arc::new(Mutex::new(String::new()));
@@ -6034,10 +6062,16 @@ fn eval_tool_with_engine(
 
     let mut context =
         application_execution_context(world, cycle, lunco_core::RuntimePhase::Evaluation);
-    if let Some(twin) = owner.twin {
+    context.target_twin_id = owner.twin.map(|twin| twin.raw());
+    if let lunco_tools::ToolScope::Twin(_) = &owner.scope {
+        let twin = owner.twin.ok_or("Twin tool has no admitted owner")?;
+        let generation = match owner.lifetime {
+            lunco_core::InteractionLifetime::Scene(generation) => generation.unwrap_or(0),
+            lunco_core::InteractionLifetime::Owner => 0,
+        };
         context.route = Some(lunco_core::RuntimeRoute::twin_owned(
             cycle,
-            owner.scene_generation.unwrap_or(0),
+            generation,
             twin.raw(),
         ));
     }
@@ -6070,6 +6104,7 @@ fn application_execution_context(
     if cycle == lunco_core::RuntimeCycle::Ui {
         let time = world.get_resource::<Time<Real>>();
         return lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::application(cycle)),
             phase,
             clock: if time.is_some() {
@@ -6091,6 +6126,7 @@ fn application_execution_context(
             _ => cadence.repl,
         });
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::application(cycle)),
         phase,
         clock: lunco_core::RuntimeClock::Application,
@@ -6458,6 +6494,7 @@ mod tests {
         use super::{World, WorldScriptExecution, bridge_core};
         let mut world = World::new();
         let context = lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::twin_owned(
                 lunco_core::RuntimeCycle::Lifecycle,
                 4,
@@ -6496,7 +6533,7 @@ mod tests {
         assert_eq!(execution.twin_owner(None).unwrap(), Some(7));
         assert!(execution.twin_owner(Some(8)).is_err());
         assert!(
-            execution.validate_scene(None).is_err(),
+            execution.validate_target(None).is_err(),
             "nested scene work cannot acquire a replacement scene"
         );
         let fallback = super::application_execution_context(
@@ -6630,7 +6667,7 @@ mod tests {
             tool: "probe".into(),
             hook: "apply".into(),
             owner_twin_id: None,
-            lifetime: bridge_core::ToolHookBindingLifetime::Scene(None),
+            lifetime: lunco_core::InteractionLifetime::Scene(None),
             tool_scope: lunco_tools::ToolScope::Application,
         };
         let entity = world.spawn(binding.clone()).id();
@@ -6661,29 +6698,29 @@ mod tests {
         world.spawn(binding.clone());
 
         let provider = bridge_core::ToolHookBinding {
-            lifetime: bridge_core::ToolHookBindingLifetime::Provider,
+            lifetime: lunco_core::InteractionLifetime::Owner,
             ..binding.clone()
         };
         let root = world.spawn(provider.clone()).id();
-        let selected = provider.select_for_scene(None, None).unwrap();
+        let selected = provider.select_for_owner(None).unwrap();
         let mut scene = lunco_core::SceneTransitionCoordinator::default();
         let generation = scene.start(lunco_core::SceneTransition::Clear);
         assert!(scene.complete(generation));
         assert!(
-            provider.validate_scene(Some(&scene)).is_ok(),
+            provider.validate_lifetime(Some(&scene)).is_ok(),
             "installation survives scene replacement"
         );
         assert!(
-            selected.validate_scene(Some(&scene)).is_err(),
-            "old selection cannot acquire a new scene"
+            selected.validate_lifetime(Some(&scene)).is_ok(),
+            "owner selection remains independent of scene replacement"
         );
         assert!(
             provider
-                .select_for_scene(None, scene.completed_generation())
+                .select_for_owner(None)
                 .unwrap()
-                .validate_scene(Some(&scene))
+                .validate_lifetime(Some(&scene))
                 .is_ok(),
-            "fresh selection captures the new scene without reinstalling the provider"
+            "fresh owner selection does not require reinstalling the provider"
         );
         let child = world
             .spawn((selected.clone(), bevy::prelude::ChildOf(root)))
@@ -6719,9 +6756,9 @@ mod tests {
             owner_twin_id: Some(7),
             ..provider
         };
-        assert!(twin_provider.select_for_scene(Some(8), None).is_err());
-        assert!(twin_provider.select_for_scene(None, None).is_err());
-        assert!(twin_provider.select_for_scene(Some(7), Some(3)).is_ok());
+        assert!(twin_provider.select_for_owner(Some(8)).is_err());
+        assert!(twin_provider.select_for_owner(None).is_err());
+        assert!(twin_provider.select_for_owner(Some(7)).is_ok());
 
         assert!(owner.validate_callback(&world).is_err());
     }
@@ -6738,7 +6775,7 @@ mod tests {
             tool: "probe".into(),
             hook: "apply".into(),
             owner_twin_id: None,
-            lifetime: bridge_core::ToolHookBindingLifetime::Scene(None),
+            lifetime: lunco_core::InteractionLifetime::Scene(None),
             tool_scope: lunco_tools::ToolScope::Application,
         };
         let entity = world.spawn(binding.clone()).id();
@@ -6789,6 +6826,34 @@ mod tests {
                             context: lunco_core::RuntimeExecutionContext {
                                 route: Some(lunco_core::RuntimeRoute::twin_owned(
                                     lunco_core::RuntimeCycle::Ui,
+                                    3,
+                                    7,
+                                )),
+                                ..lunco_core::RuntimeExecutionContext::unclassified()
+                            },
+                            actor: None,
+                            authority: None,
+                            client_local: false,
+                        }),
+                        None,
+                    ),
+                },
+                limits,
+            )
+            .unwrap();
+        world
+            .resource_mut::<PendingWorldScripts>()
+            .enqueue(
+                PendingWorldScript::Code {
+                    id: 44,
+                    code: "independent Twin UI".into(),
+                    correlation_id: None,
+                    workspace: super::WorldScriptWorkspace::Detached,
+                    execution: super::WorldScriptExecution::for_command(
+                        Some(lunco_core::CommandOrigin::Rhai {
+                            context: lunco_core::RuntimeExecutionContext {
+                                route: Some(lunco_core::RuntimeRoute::twin_owned(
+                                    lunco_core::RuntimeCycle::Ui,
                                     0,
                                     7,
                                 )),
@@ -6820,6 +6885,14 @@ mod tests {
         assert!(matches!(
             world.resource::<lunco_core::CommandResults>().get(43),
             Some(lunco_core::CommandOutcome::Rejected(_))
+        ));
+        let surviving = world.resource_mut::<PendingWorldScripts>().take_batch(2);
+        assert!(matches!(
+            surviving.as_slice(),
+            [
+                PendingWorldScript::Code { id: 42, .. },
+                PendingWorldScript::Code { id: 44, .. }
+            ]
         ));
         duplicate.retire_invocation(&mut world);
         super::retire_scene_world_scripts(&mut world);
@@ -6958,6 +7031,51 @@ mod tests {
     }
 
     #[test]
+    fn application_tool_target_does_not_rewrite_its_execution_owner_during_loading() {
+        use super::{
+            RhaiScenarioRuntime, World, WorldScriptExecution, WorldToolOwner, eval_tool_with_engine,
+        };
+        let _guard = crate::tool_libs::registry_test_guard();
+        let name = "application_target_scope_probe";
+        crate::tool_libs::register_tool_library(
+            name,
+            "fn apply(ctx) { let c=execution_context(); c.scope+\":\"+c.cycle+\":\"+c.clock+\":\"+c.target_twin_id }",
+        );
+        let root = tempfile::tempdir().unwrap();
+        let mut workspace = lunco_workspace::WorkspaceResource::new();
+        let twin = queue_owner_twin(&mut workspace, root.path());
+        let mut scene = lunco_core::SceneTransitionCoordinator::default();
+        scene.start(lunco_core::SceneTransition::load("fixture.usda", ""));
+        let owner = WorldToolOwner::capture(
+            name,
+            "apply",
+            Some(twin.raw()),
+            Some(&workspace),
+            Some(&scene),
+            None,
+        )
+        .unwrap();
+        let mut world = World::new();
+        world.insert_resource(workspace);
+        world.insert_resource(scene);
+        world.insert_resource(bevy::prelude::Time::<bevy::prelude::Real>::default());
+        let runtime = RhaiScenarioRuntime::default();
+        let result = eval_tool_with_engine(
+            &mut world,
+            &runtime.one_shot_engine,
+            name,
+            "apply",
+            &TelemetryValue::Bool(true),
+            WorldScriptExecution::default(),
+            lunco_core::RuntimeCycle::Ui,
+            &owner,
+        )
+        .unwrap();
+        assert_eq!(result, format!("application:ui:application:{}", twin.raw()));
+        lunco_tools::unregister(name);
+    }
+
+    #[test]
     fn queued_snippet_workspace_fence_rejects_replacement_and_empty_to_mounted() {
         use super::WorldScriptWorkspace;
 
@@ -7019,6 +7137,18 @@ mod tests {
             super::WorldScriptWorkspace::capture(None, super::WorldScriptExecution::capture())
                 .is_err()
         );
+        let application = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::application(
+                lunco_core::RuntimeCycle::Ui,
+            )),
+            target_twin_id: Some(caller),
+            ..context
+        };
+        let _application_scope =
+            lunco_scripting_bridge_core::ExecutionContextScope::enter(application);
+        let inherited = super::WorldScriptExecution::capture();
+        assert_eq!(inherited.twin_owner(None).unwrap(), Some(caller));
+        assert!(inherited.twin_owner(Some(caller + 1)).is_err());
     }
 
     #[test]
@@ -7355,6 +7485,7 @@ mod tests {
         let mut world = bevy::prelude::World::new();
         world.init_resource::<lunco_core::RuntimeFaults>();
         let context = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
             phase: RuntimePhase::Evaluation,
             clock: RuntimeClock::Application,

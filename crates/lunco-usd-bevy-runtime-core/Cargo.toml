@@ -6,6 +6,7 @@ license.workspace = true
 description = "Headless-safe USD scene admission and live projection runtime"
 
 [dependencies]
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }

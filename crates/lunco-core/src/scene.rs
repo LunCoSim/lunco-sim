@@ -7,18 +7,80 @@
 
 use bevy::prelude::*;
 
-/// Fence interaction work to its admitted scene, including an explicitly empty
-/// scene. Admission and execution use the same transaction-owner check.
-pub fn validate_interaction_scene(
+/// Target lifetime of non-authoritative interaction work. Readiness is checked
+/// by the operation owner, independently of whether this target is still live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InteractionLifetime {
+    /// The publishing application, Twin or provider owns retirement.
+    Owner,
+    /// An exact scene lifecycle, including an explicitly empty scene.
+    Scene(Option<u64>),
+}
+
+impl InteractionLifetime {
+    pub fn capture_scene(scene: Option<&SceneTransitionCoordinator>) -> Self {
+        Self::Scene(scene.and_then(SceneTransitionCoordinator::lifecycle_generation))
+    }
+
+    pub fn validate(self, scene: Option<&SceneTransitionCoordinator>) -> Result<(), String> {
+        let Self::Scene(generation) = self else {
+            return Ok(());
+        };
+        if scene.is_some_and(|scene| {
+            scene.has_admitted() || matches!(scene.active(), Some(SceneTransition::Clear))
+        }) || scene.and_then(SceneTransitionCoordinator::lifecycle_generation) != generation
+        {
+            return Err("interaction target belongs to a retired scene".into());
+        }
+        Ok(())
+    }
+}
+
+/// Require a committed target before authoritative simulation work can run.
+/// Application/UI work validates only its own target lifetime.
+pub fn validate_simulation_scene(
     generation: Option<u64>,
     scene: Option<&SceneTransitionCoordinator>,
 ) -> Result<(), String> {
     if scene.is_some_and(|scene| scene.active().is_some() || scene.has_admitted())
-        || scene.and_then(|scene| scene.completed_generation()) != generation
+        || scene.and_then(SceneTransitionCoordinator::completed_generation) != generation
     {
-        return Err("interaction belongs to a retired or transitioning scene".into());
+        return Err("simulation target is not the current committed scene".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod interaction_lifetime_tests {
+    use super::*;
+
+    #[test]
+    fn lifetime_and_simulation_readiness_have_independent_boundaries() {
+        let mut scene = SceneTransitionCoordinator::default();
+        let first = scene.start(SceneTransition::load("fixture.usda", ""));
+        let target = InteractionLifetime::capture_scene(Some(&scene));
+        assert!(target.validate(Some(&scene)).is_ok());
+        assert!(validate_simulation_scene(Some(first.get()), Some(&scene)).is_err());
+        assert!(InteractionLifetime::Owner.validate(Some(&scene)).is_ok());
+        assert!(scene.complete(first));
+        assert!(target.validate(Some(&scene)).is_ok());
+        assert!(validate_simulation_scene(Some(first.get()), Some(&scene)).is_ok());
+        let replacement = scene.start(SceneTransition::load("fixture.usda", ""));
+        assert!(target.validate(Some(&scene)).is_err());
+        assert!(
+            InteractionLifetime::capture_scene(Some(&scene))
+                .validate(Some(&scene))
+                .is_ok()
+        );
+        assert!(scene.complete(replacement));
+        scene.start(SceneTransition::Clear);
+        assert!(
+            InteractionLifetime::capture_scene(Some(&scene))
+                .validate(Some(&scene))
+                .is_err()
+        );
+        assert!(InteractionLifetime::Owner.validate(Some(&scene)).is_ok());
+    }
 }
 
 /// Monotonic identity for one admitted scene lifecycle transaction.
@@ -370,26 +432,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn interaction_lifetime_rejects_pending_and_repeated_scene_transactions() {
+    fn simulation_admission_rejects_pending_and_repeated_scene_transactions() {
         let mut scene = lunco_core::SceneTransitionCoordinator::default();
-        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_ok());
+        assert!(lunco_core::scene::validate_simulation_scene(None, Some(&scene)).is_ok());
         scene.admit(lunco_core::SceneTransitionRequest::Clear);
-        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_err());
+        assert!(lunco_core::scene::validate_simulation_scene(None, Some(&scene)).is_err());
         scene.take_admitted();
         let first = scene.start(lunco_core::SceneTransition::Clear);
-        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_err());
+        assert!(lunco_core::scene::validate_simulation_scene(None, Some(&scene)).is_err());
         assert!(scene.complete(first));
-        assert!(lunco_core::scene::validate_interaction_scene(None, Some(&scene)).is_err());
+        assert!(lunco_core::scene::validate_simulation_scene(None, Some(&scene)).is_err());
         assert!(
-            lunco_core::scene::validate_interaction_scene(Some(first.get()), Some(&scene)).is_ok()
+            lunco_core::scene::validate_simulation_scene(Some(first.get()), Some(&scene)).is_ok()
         );
         let second = scene.start(lunco_core::SceneTransition::Clear);
         assert!(scene.complete(second));
         assert!(
-            lunco_core::scene::validate_interaction_scene(Some(first.get()), Some(&scene)).is_err()
+            lunco_core::scene::validate_simulation_scene(Some(first.get()), Some(&scene)).is_err()
         );
         assert!(
-            lunco_core::scene::validate_interaction_scene(Some(second.get()), Some(&scene)).is_ok()
+            lunco_core::scene::validate_simulation_scene(Some(second.get()), Some(&scene)).is_ok()
         );
     }
 

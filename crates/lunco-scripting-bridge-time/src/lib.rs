@@ -159,6 +159,10 @@ pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
             optional_u64(b, route.and_then(|route| route.owner_id)),
         ),
         (
+            "target_twin_id".to_owned(),
+            optional_u64(b, context.target_twin_id),
+        ),
+        (
             "clock".to_owned(),
             b.string(&format!("{:?}", context.clock).to_ascii_lowercase()),
         ),
@@ -650,6 +654,7 @@ mod tests {
         world.init_resource::<lunco_core::RuntimeFaults>();
         world.insert_resource(lunco_core_runtime::SimTick(12));
         let context = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute {
                 scope: RuntimeScope::Application,
                 cycle: RuntimeCycle::Repl,
@@ -689,6 +694,7 @@ mod tests {
         world.insert_resource(fixed);
         world.init_resource::<lunco_core::RuntimeFaults>();
         let context = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::twin(RuntimeCycle::Simulation, 3)),
             phase: RuntimePhase::Behavior,
             clock: RuntimeClock::Simulation,
@@ -711,6 +717,7 @@ mod tests {
     fn event_producer_sequence_takes_precedence_over_consumer_sequence() {
         let mut world = World::new();
         let context = RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
             phase: RuntimePhase::Event,
             clock: RuntimeClock::Application,

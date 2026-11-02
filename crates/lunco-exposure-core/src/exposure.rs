@@ -194,6 +194,11 @@ impl EngineExposures {
         self.application_surfaces.insert(namespace.into());
     }
 
+    /// Whether this namespace's producer retains application lifetime across scenes.
+    pub fn is_application_surface(&self, namespace: &str) -> bool {
+        self.application_surfaces.contains(namespace)
+    }
+
     /// Publish a complete view in one revision, including removal of retired keys.
     pub fn replace_surface(&mut self, namespace: &str, surface: ExposureSurface) {
         if self.surfaces.get(namespace) != Some(&surface) {

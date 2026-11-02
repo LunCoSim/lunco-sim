@@ -112,7 +112,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
 
     def test_application_reads_the_machine_only_repository(self) -> None:
         updater = (
-            ROOT / "crates/lunco-luncosim-ui/src/ui/update.rs"
+            ROOT / "crates/lunco-updater/src/lib.rs"
         ).read_text(encoding="utf-8")
 
         self.assertIn(
@@ -166,7 +166,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
 
     def test_linux_package_identity_reaches_the_compiled_window_and_final_appimage(self) -> None:
         package_builder = (ROOT / "scripts/build_native.sh").read_text(encoding="utf-8")
-        window_source = (ROOT / "crates/lunco-luncosim/src/lib.rs").read_text(encoding="utf-8")
+        window_source = (ROOT / "crates/lunco-luncosim-ui/src/application.rs").read_text(encoding="utf-8")
         verifier = (ROOT / "scripts/verify_linux_appimage.sh").read_text(encoding="utf-8")
 
         self.assertIn('VPK_PACK_ID="luncosim"', package_builder)

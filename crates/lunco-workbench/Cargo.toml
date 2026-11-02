@@ -17,6 +17,7 @@ api = [
 ] # `web-time` is already an unconditional dep
 
 [dependencies]
+url = { workspace = true }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-api = { path = "../lunco-api" }

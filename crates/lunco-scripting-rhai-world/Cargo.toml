@@ -10,6 +10,7 @@ name = "lunco_scripting_rhai_world"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }

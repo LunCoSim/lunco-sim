@@ -235,10 +235,18 @@ fn drive_native_library_dataset(
     };
 
     match &dataset.state {
+        DatasetState::Queued => {
+            *state = LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::FetchingBundle,
+                bytes_done: 0,
+                bytes_total: 0,
+            }
+        }
         DatasetState::Missing => *state = LibraryLoadState::NotStarted,
         DatasetState::Downloading {
             bytes_done,
             bytes_total,
+            ..
         } => {
             *state = LibraryLoadState::Loading {
                 phase: LibraryLoadPhase::FetchingBundle,

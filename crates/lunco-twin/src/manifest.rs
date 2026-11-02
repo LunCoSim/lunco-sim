@@ -123,12 +123,6 @@ pub struct TwinManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<JournalManifest>,
 
-    /// Project-owned asset download presentation settings (`[downloads]`).
-    /// Absent means the default consent behaviour: show the missing-asset
-    /// prompt when this project is opened.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub downloads: Option<DownloadManifest>,
-
     /// Explicit native hook providers approved by this Twin. A provider is
     /// never discovered from USD or loaded from an arbitrary script path; its
     /// relative library path is declared here and validated before the native
@@ -196,16 +190,6 @@ pub struct JournalManifest {
     /// would show a history that silently stops growing.)
     #[serde(default)]
     pub persist: bool,
-}
-
-/// The `[downloads]` section of `twin.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct DownloadManifest {
-    /// Suppress the consent prompt when declared project assets are missing.
-    /// The default is `false`, so a newly opened project offers the prompt.
-    #[serde(default)]
-    pub suppress_missing_prompt: bool,
 }
 
 /// One Twin-approved native hook provider (`[[native_plugins]]`).
@@ -417,7 +401,6 @@ impl TwinManifest {
             components: Vec::new(),
             modelica: None,
             journal: None,
-            downloads: None,
             native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         }
@@ -450,14 +433,6 @@ impl TwinManifest {
     /// Validate a generic setting key without modifying the manifest.
     pub fn validate_setting_key(key: &str) -> Result<(), String> {
         validate_setting_key(key)
-    }
-
-    /// Whether this project has opted out of the missing-asset consent prompt.
-    /// An absent `[downloads]` section retains the default of showing it.
-    pub fn suppress_missing_asset_prompt(&self) -> bool {
-        self.downloads
-            .as_ref()
-            .is_some_and(|settings| settings.suppress_missing_prompt)
     }
 
     /// Return this manifest's stable id, minting one in place if absent.
@@ -612,7 +587,6 @@ mod tests {
             components: Vec::new(),
             modelica: None,
             journal: None,
-            downloads: None,
             native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         };
@@ -671,9 +645,6 @@ mod tests {
                 }],
             }),
             journal: Some(JournalManifest { persist: true }),
-            downloads: Some(DownloadManifest {
-                suppress_missing_prompt: true,
-            }),
             native_plugins: Vec::new(),
             settings: BTreeMap::from([
                 ("ui.camera_status".into(), TwinSettingValue::Bool(true)),
@@ -702,7 +673,6 @@ mod tests {
             components: Vec::new(),
             modelica: None,
             journal: None,
-            downloads: None,
             native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         };
@@ -737,7 +707,6 @@ version = "0.1.0"
         assert_eq!(parsed.usd, None);
         assert_eq!(parsed.modelica, None);
         assert_eq!(parsed.uuid, None);
-        assert_eq!(parsed.downloads, None);
         assert!(parsed.settings.is_empty());
 
         // Re-serializing should not add the optional keys with null/empty values.
@@ -747,24 +716,7 @@ version = "0.1.0"
         assert!(!out.contains("children"));
         assert!(!out.contains("usd"));
         assert!(!out.contains("uuid"));
-        assert!(!out.contains("downloads"));
         assert!(!out.contains("settings"));
-    }
-
-    #[test]
-    fn missing_asset_prompt_defaults_to_showing() {
-        let manifest = TwinManifest::new("x");
-        assert!(!manifest.suppress_missing_asset_prompt());
-
-        let text = r#"
-name = "x"
-version = "0.1.0"
-
-[downloads]
-suppress_missing_prompt = true
-"#;
-        let parsed: TwinManifest = toml::from_str(text).unwrap();
-        assert!(parsed.suppress_missing_asset_prompt());
     }
 
     #[test]
@@ -944,7 +896,6 @@ uuid = "{id}"
             components: Vec::new(),
             modelica: None,
             journal: None,
-            downloads: None,
             native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         };

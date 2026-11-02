@@ -95,7 +95,7 @@ Rust exposure code nor the HUI template adds a second visibility rule.
 
 The application dataset surface uses the existing `assets.provision` hook,
 declared by `lunco-core-session` and installed by application/Twin policy.
-Its typed input map contains scope identity, prompt preferences, and registry
+Its typed input map contains scope identity, scene requirements, and registry
 dataset states, including unsigned byte counters and processing/failure detail.
 Its closed output map contains visibility, title, description, scoped rows,
 and semantic actions. `lunco-luncosim-ui` validates and publishes that view;
@@ -105,9 +105,31 @@ and publishes no consent view, while the native resource panel and registry
 remain available. It does not authorize network activity; user actions dispatch
 the typed dataset commands.
 
-An accepted download stays visible through transfer and preparation. The user
-can dismiss the surface to continue in the background; completion remains
-explicit until dismissal. Suppression persists through the Twin manifest.
+An accepted download stays visible through transfer and preparation. UI actions
+validate owner and target lifetime independently of simulation readiness.
+`InteractionLifetime::Owner` pins the application/Twin/provider; `Scene` pins
+an exact live scene lifecycle, including its load. Only simulation work requires
+a committed scene. Source-node callback leases remain parented to their publisher
+and are validated again before queued execution. Registered tool ownership
+selects the default execution route; naming a target Twin does not change an
+application tool into Twin code. An inherited caller context remains unchanged.
+
+The data window is non-modal and can be dismissed while its work continues.
+The application's menus, editors and diagnostics stay available. Its background
+panel uses HUI's existing explicit `pickable` style to consume clicks within the
+panel; the rest of the viewport stays interactive. Completion stays visible until
+dismissed. A required-data hold never changes transport Play/Pause. New runtime
+requirements reopen the window. `TwinClosed` retires the exact scope.
+
+Interactive runtime surfaces transfer HUI `on_press` metadata to the runtime's native
+`PointerPress` observer. The observer uses HUI's public function registry;
+HUI no longer samples these same callbacks. Short press/release pairs dispatch
+once even within one host frame, and held presses do not repeat.
+
+The user can dismiss the surface to continue in the background; completion remains
+explicit until dismissal. Dismissal preserves required-data holds and transport
+pause; a new scene or runtime dependency reopens the window. Required-data
+consent has no persistent suppression setting.
 `TwinClosed` retires the scope and queued presentation. The production Rhai
 gates are `test_download_policies.rhai` for policy states and
 `dataset_provisioning_surface.rhai` for live scope/action and dismissal behavior.
@@ -250,7 +272,7 @@ The fields are:
 | `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
 | `modal` | Requires an interactive viewport surface and makes its visible root claim the full-window scene-pick gate. This is the generic simple-modal primitive, not a rich dialog queue. |
-| `dismiss_action` | Optional authored semantic action emitted by Escape while a modal surface is visible. Rhai owns what dismissal means. |
+| `dismiss_action` | Optional authored semantic action emitted by Escape while the surface is visible. Rhai owns what dismissal means. |
 | `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in Settings ▸ HUD. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
@@ -258,7 +280,7 @@ The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
 callbacks, unsafe relative paths, empty contract names, and non-finite or
 non-positive window geometry before any surface is mounted. A `modal` surface
 must be interactive and use viewport placement; its optional `dismiss_action`
-is an authored semantic action. Authored semantic actions are intentionally
+is an authored semantic action shared with non-modal surfaces. Authored semantic actions are intentionally
 open-ended; their meaning belongs to the active Twin Rhai program, not to the
 runtime UI crate.
 
@@ -530,6 +552,18 @@ The bridge projects bound values to HUI template properties. A binding with
 (underscores become hyphens). Text-only bindings and implicit same-name
 bindings never enter the CSS token stream. Mapping
 values can themselves be CSS values, for example `var(--accent-color)`.
+HUI property declarations need a nonempty initial text value to register the
+property. The producer may subsequently project an empty string; an empty
+declaration is omitted by the template parser and cannot receive a root binding.
+
+Collection definitions may list scalar row fields in `css`, for example
+`"css": ["details_display"]`. These fields retain their ordinary template
+values and also publish inherited `--ui-details-display` CSS custom properties
+on that row. Flair consumes these in the stylesheet; dynamic layout does not
+use HUI inline style attributes. Undeclared row text never enters CSS.
+The dataset policy supplies collapsed/expanded card minimum heights through
+that same row CSS boundary, so scrolling collections retain readable controls
+and source details instead of compressing each card's contents.
 
 The runtime retains HUI's compiler style context outside its active style
 system. Property updates restore that context for the public HUI compiler,
@@ -842,27 +876,28 @@ Replacement and dismissal despawn all unselected endpoints. Selection transfers
 only its endpoint to the shared tool queue with `ToolHookBindingRetention::Invocation`;
 the queue retires it after execution or rejection. HUD rows use `Surface`
 retention and keep their binding until their owner replaces or clears it.
-Scene transitions retire queued tool work immediately, including while the
-interpreter is preparing; application REPL work retains its workspace lifetime.
-Stop hooks cannot open menus.
+Scene transitions retire scene-targeted queued calls, including while the
+interpreter is preparing. Owner-scoped application/Twin UI work remains live;
+Twin closure and source/provider retirement revoke their own calls. Stop hooks
+cannot open menus.
 
-Installed workbench menus use provider-owned ECS roots and child endpoint
-leases with `ToolHookBindingLifetime::Provider`. Each installation scopes its
-widget tree to that fresh root identity and the current input Twin/scene.
-Input is disabled while a scene transition is pending. Replacement atomically
-publishes a validated tree and despawns the outgoing root; `TwinClosed` retires the owning
-Twin's contribution. Application contributions remain installed across scene
-resets. Selecting an item creates a child `Invocation` lease pinned to the
-input's Twin and committed scene generation. Provider replacement revokes that
-child even before command admission; scene replacement rejects it at admission
-or retires it from the queue. The provider endpoint stays available for a fresh
-selection in the next scene. No menu callback dispatches by name alone.
+Installed workbench menus use provider-owned ECS roots and child endpoints
+with `InteractionLifetime::Owner`. Each installation scopes its widget tree to
+that fresh root identity and the current input Twin. Menus remain available
+while scene preparation is pending. Replacement atomically publishes a validated
+tree and despawns the outgoing root; `TwinClosed` retires that Twin's contribution.
+Selecting an item creates a child `Invocation` lease pinned to its exact provider
+and target Twin. Provider replacement revokes the child before or after command
+admission. A scene context menu instead pins the current live scene lifecycle.
+No menu callback dispatches by name alone.
 
 Deferred Rhai work retains its caller's typed origin, actor, authority and
 client-local restrictions. Its phase and clock are independent of which queue
 executes it; a nested `RunRhai` or tool call from `on_stop` remains a stop call
-and cannot publish new presentation. Twin-route snippets also retain the
-caller's scene generation and retire on scene transition. Idempotent cleanup
+and cannot publish new presentation. `target_twin_id` remains separate from
+the execution route through commands, hooks and deferred queues. Scene-bound
+Twin snippets retain the caller's lifecycle generation and retire on scene
+transition; owner-bound Twin UI snippets retain only their Twin lifetime. Idempotent cleanup
 stays available while that owning scene remains current.
 
 Run `scripts/api/test_guided_ui_callbacks.py --port PORT` against the production
@@ -906,3 +941,17 @@ selection and persisted Twin preferences remain authored Rhai policy. See
 negative cases. Independent camera image windows are owned by
 [`lunco-capture`](render-decoupling.md#live-camera-observations), with exact
 camera selection and per-window render targets; they are not HUI image nodes.
+
+The shared asset-consent surface uses `assets.provision` for source/preparation
+status and semantic actions. Its source link routes through the generic
+`OpenWebUrl` command: the workbench validates an absolute HTTP(S) URL without
+embedded credentials and delegates browser opening to its existing egui adapter.
+Other schemes fail as terminal command results. File and logical asset previews
+continue to use `OpenAssetResource` and their registered byte loaders.
+
+Collection definitions may name an authored `scrollbar` track node. The shared
+runtime binds Bevy's maintained `Scrollbar`/`ScrollbarThumb` to that collection's
+`ScrollPosition`; Bevy `ScrollArea` handles wheel/trackpad units, scale and bounds.
+The track belongs to HTML/CSS, while the native thumb uses `lunco-theme` tokens.
+Thumbs are children of their track and retire with the surface. No domain-specific
+scroll handler or independent scroll state is installed.

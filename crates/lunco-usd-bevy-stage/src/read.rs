@@ -123,7 +123,7 @@ impl std::error::Error for AssetIdentifierReadError {}
 /// Canonical identifier of a consumed asset value. An OpenUSD search path in a
 /// Twin returns the location chosen by worker preparation: beside its layer
 /// when that exists, otherwise from the Twin root.
-fn consumed_asset_identifier(
+pub(crate) fn consumed_asset_identifier(
     value: Option<Value>,
     prepared: Option<&lunco_assets_core::asset_path::PreparedAssetPaths>,
     source_layer: Option<&str>,

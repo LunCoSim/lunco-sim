@@ -468,7 +468,8 @@ bridge state on exit, including after an evaluation error.
 Every cross-domain callback receives an immutable `RuntimeExecutionContext`
 from its owning Rust cycle with:
 
-- owner scope and generation;
+- owner scope and generation, with an independent exact `target_twin_id` when
+  acting on a mounted Twin;
 - cycle and phase;
 - the selected clock identity and resolved `{ time, delta }` sample;
 - a logical sequence (`SimTick` for simulation, an owner sequence for
@@ -1811,3 +1812,35 @@ It writes a separate candidate with binary, input and log hashes. Replace the
 maintained reference only after paired agreement, then replay its production
 profiles against the candidate. Each launch owns an explicit API port and verifies
 process identity and port release.
+
+### Interaction lifetime and simulation admission
+
+`lunco-core::InteractionLifetime` validates an owner-scoped endpoint or an exact
+live scene lifecycle. Loading that same scene does not retire its input targets.
+Simulation-time work separately uses the committed scene boundary and shared
+`SimulationProgress` holds. Application and Twin UI work continue on application
+cadence; simulation, Modelica and controllers remain on the one fixed clock.
+No new scheduler or global loading bit participates in UI dispatch.
+
+Tool registration ownership and request targets are independent. Standard/Core/
+Application tools use an Application UI route; Twin tools use their registered
+Twin route, with no scene generation unless an explicit scene target is bound.
+Inherited execution ownership, clock and phase are never rewritten. An
+unassigned target may be supplied by the admitted tool request. Callback bindings retain
+exact source entities and endpoints. Installed provider selections keep provider
+lifetime across scene changes; scene context menus pin the live scene instead.
+Scene teardown retires only scene-bound queued calls. Twin closure and provider
+replacement still revoke their own calls, including selected invocations.
+`RuntimeExecutionContext.target_twin_id` carries that exact target through nested
+hooks, typed commands and deferred queues. It grants no capabilities and cannot
+redirect a Twin-owned caller to another Twin. Guided HUD publication reads this
+target and validates its live workspace lease without rewriting the route.
+Document-authoring preparation uses its document/stage revision lease while a
+scene loads, and keeps its causal projection hold until the edit is committed.
+
+`GET /api/health` reports service liveness. `GetReadiness`/`GET /api/ready` reports
+`application_available` when the query reaches the application loop, and `ready`
+for simulation admission. A waiting or faulted simulation does not disable API
+commands or diagnostics. Required owner dependencies release only their own
+holds. Completion does not change requested transport state or accumulate wall
+waiting time into simulation catch-up ticks.

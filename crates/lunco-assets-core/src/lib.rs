@@ -76,8 +76,8 @@ pub use lunco_source::{
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
-    TWIN_SCHEME, TwinReadScope, TwinRoots, TwinRootsError, TwinRootsSnapshot, parse_twin_root_uri,
-    parse_twin_uri, split_twin_rel, stable_source_path, twin_uri,
+    TWIN_SCHEME, TwinReadScope, TwinRoots, TwinRootsError, TwinRootsSnapshot, logical_twin_name,
+    parse_twin_root_uri, parse_twin_uri, split_twin_rel, stable_source_path, twin_uri,
 };
 
 /// Explicit native asset-library root override.
@@ -993,14 +993,8 @@ pub fn fonts_dir() -> PathBuf {
 /// `fonts/DejaVuSans.ttf`, so it finds a PACKAGED build's bundled copy (which
 /// ships in `assets/.cache/`) as readily as a `download`-populated shared cache.
 ///
-/// Previously this returned `fonts_dir()` (the shared cache) alone, so a fresh
-/// packaged install reported the font missing until the machine-global cache was
-/// populated — even though the bundle carried it. `engine_asset_local_path`
-/// yields the last authored candidate when nothing exists, so a genuinely absent
-/// font still returns a sensible path for the "not found" warning.
-///
-/// Populated by `cargo run -p lunco-assets -- download` via the
-/// `crates/lunco-theme/Assets.toml` entry.
+/// CI populates the pinned package input from `assets/manifests/fonts.toml`
+/// with `lunco-assets download --bundle <target>`, then stages that target.
 pub fn dejavu_sans_path() -> std::io::Result<PathBuf> {
     engine_asset_local_path("fonts/DejaVuSans.ttf")?.ok_or_else(|| {
         std::io::Error::new(

@@ -26,7 +26,7 @@ fn certify_dataset(scope, key, kind, visible, action, text) {
         if row != () {
             checks.push(t_eq(row.scope, scope, "row action retains the real scope"));
             checks.push(t_eq(row.action, action, "row action matches its phase"));
-            checks.push(t_true(row.status.contains(text), "status retains progress or failure detail"));
+            checks.push(t_true((row.status+" "+row.detail).contains(text), "status retains progress or failure detail"));
         }
     }
     if kind == "downloading" {
@@ -44,13 +44,16 @@ fn certify_terrain_hold(dataset_key, tick_before) {
     let clock = clock_snapshot();
     let found = false;
     for blocker in clock.simulation_progress.blockers {
-        if blocker.owner == "TerrainPreparation" && blocker.reason.contains(dataset_key) {
-            found = true;
+        if blocker.owner == "TerrainPreparation" && blocker.reason.contains(dataset_key) { found = true; }
+        if blocker.owner == "SceneDatasets" {
+            for dataset in query("ListDatasets",#{}).datasets {
+                if dataset.key==dataset_key && dataset.required_for_scene && dataset.state.kind!="installed" {found=true;}
+            }
         }
     }
     t_report([
         t_true(clock.simulation_progress.held, "missing ground holds authoritative ticks"),
-        t_true(found, "the terrain hold identifies the exact required dataset"),
+        t_true(found, "the readiness hold identifies the required dataset"),
         t_eq(clock.sim_tick, tick_before, "simulation cannot advance without ground"),
         t_true(!query("GetReadiness", #{}).ready, "readiness does not claim a usable world"),
     ]);

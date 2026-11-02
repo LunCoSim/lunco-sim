@@ -150,3 +150,8 @@ the banner pattern). **Draft** = under live review, may be wrong.
 A number is an ordering hint, not an identifier: docs are linked by filename, so
 gaps (`32`, `47`, `52`) and the two `55-*` docs are harmless and are **not**
 renumbered — renumbering would break every inbound link for no reader benefit.
+
+Artifact preparation and dynamic processing are specified in
+[`asset-processing.md`](asset-processing.md): manifest-owned ordered recipes,
+native spherical raster sampling, Rhai/WESL/Modelica/external stages, and atomic
+publication of validated cache artifacts.

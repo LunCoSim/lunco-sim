@@ -30,9 +30,9 @@ pub struct RhaiSource {
     pub text: String,
     /// Parsed source, prepared by the asynchronous asset loader.
     pub ast: rhai::AST,
-    /// Handles for every literal import in this source. Bevy keeps the source
-    /// asset pending until this graph is loaded, so synchronous Rhai resolution
-    /// never needs a discovery scan or a per-tick async bridge.
+    /// Handles for every literal import in this source. The runtime admits this
+    /// explicit graph using each handle's current load state and published AST,
+    /// so synchronous Rhai resolution never performs I/O.
     #[dependency]
     pub dependencies: Vec<Handle<RhaiSource>>,
 }
@@ -47,6 +47,35 @@ pub struct RhaiSourceLoader;
 #[cfg(feature = "rhai")]
 pub fn canonical_asset_id(path: &AssetPath<'_>) -> String {
     lunco_assets_core::engine_asset_uri(&lunco_assets_core::asset_path::anchor_of(path))
+}
+
+/// Runtime consumers admit their actual source/import graph through the shared
+/// asset requirement owner. Catalog/preload reads never call this function.
+#[cfg(feature = "rhai")]
+pub fn required_source_data_pending(
+    root: &Handle<RhaiSource>,
+    assets: &Assets<RhaiSource>,
+    server: &AssetServer,
+    registry: Option<&lunco_assets_datasets::DatasetRegistry>,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+    scene: Option<Entity>,
+    commands: &mut Commands,
+) -> bool {
+    let mut pending = false;
+    let mut visited = std::collections::HashSet::new();
+    let mut stack = vec![root.id()];
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        pending |= lunco_assets_datasets::required_asset_data_pending(
+            id, server, registry, roots, scene, commands,
+        );
+        if let Some(source) = assets.get(id) {
+            stack.extend(source.dependencies.iter().map(Handle::id));
+        }
+    }
+    pending
 }
 
 /// Schedule boundary for admitting manifest candidates through the authored

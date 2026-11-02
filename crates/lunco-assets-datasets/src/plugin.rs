@@ -18,6 +18,58 @@ use crate::{DatasetRegistry, DatasetScopeRemoved, dataset_failed};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{DatasetScope, DatasetScopeReady};
 
+use crate::RequireAsset;
+use lunco_core::{AppSceneExt, on_command, register_commands};
+
+#[on_command(RequireAsset)]
+fn on_require_asset(
+    trigger: On<RequireAsset>,
+    mount: Res<lunco_core::SceneMountState>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    registry: Res<DatasetRegistry>,
+    mut commands: Commands,
+) -> Result<lunco_command_contracts::Ack, String> {
+    if cfg!(target_arch = "wasm32") {
+        return Err("Downloadable artifact provisioning requires the desktop application".into());
+    }
+    let scene = mount
+        .active_root()
+        .ok_or("RequireAsset needs an admitted scene")?;
+    let uri = &trigger.event().uri;
+    if registry.uri_scope_scanned(uri, roots.as_deref())?
+        && registry.declared_uri(uri, roots.as_deref())?.is_none()
+    {
+        return Err(format!(
+            "No downloadable artifact is declared for {uri}; correct the URI or declare it in Assets.toml"
+        ));
+    }
+    commands.trigger(crate::AssetRequired {
+        scene,
+        uri: uri.clone(),
+    });
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
+}
+register_commands!(on_require_asset);
+
+fn on_asset_required(
+    event: On<crate::AssetRequired>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    mut required: ResMut<crate::RuntimeAssetRequirements>,
+) {
+    if mount.as_ref().and_then(|mount| mount.active_root()) != Some(event.scene) {
+        return;
+    }
+    if required.scene != Some(event.scene) {
+        required.scene = Some(event.scene);
+        required.uris.clear();
+    }
+    if !required.uris.contains(&event.uri) {
+        required.uris.insert(event.uri.clone());
+    }
+}
+
 /// Marker installed by the native provisioning plugin while it owns dataset
 /// workers. The registry plugin uses it to leave Twin-scope retirement to the
 /// worker owner, preserving the close/write barrier.
@@ -132,9 +184,69 @@ mod failure_drain_tests {
 fn reload_installed_asset(
     trigger: On<crate::DatasetInstalled>,
     asset_server: Option<Res<AssetServer>>,
+    registry: Res<DatasetRegistry>,
+    runtime: Res<crate::RuntimeAssetRequirements>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     if let Some(asset_server) = asset_server {
-        asset_server.reload(trigger.event().artifact_uri.clone());
+        let mut paths = std::collections::BTreeSet::from([trigger.event().artifact_uri.clone()]);
+        // Consumers can request bundle members before preparation finishes.
+        // Reload their existing handles as well as the directory handle so
+        // failed image/DEM dependencies cross the ordinary readiness boundary.
+        if let Some(pipeline) = registry
+            .entry(&trigger.event().id)
+            .and_then(|entry| entry.spec.process.as_ref())
+            .and_then(|process| process.pipeline.as_ref())
+        {
+            for artifact in &pipeline.artifacts {
+                paths.insert(format!(
+                    "{}/{}",
+                    trigger.event().artifact_uri.trim_end_matches('/'),
+                    artifact.path
+                ));
+            }
+        }
+        // Runtime consumers can select a member of an archive dynamically.
+        // Reload precisely those consumed identities through their existing handles.
+        for uri in &runtime.uris {
+            if registry
+                .declared_uri(uri, roots.as_deref())
+                .ok()
+                .flatten()
+                .is_some_and(|entry| entry.id == trigger.event().id)
+            {
+                paths.insert(uri.clone());
+            }
+        }
+        for path in paths {
+            let path = match lunco_assets_core::asset_path::load_asset_path(&path, None, None, None)
+            {
+                Ok(path) => path,
+                Err(error) => {
+                    warn!("[datasets] installed artifact has an invalid load identity: {error}");
+                    continue;
+                }
+            };
+            let handles = asset_server.get_handles_untyped(path.clone());
+            let mut reload = false;
+            for handle in handles {
+                if asset_server.load_state(handle.id()).is_failed() {
+                    // Requesting a failed handle synchronously transitions it
+                    // to Loading. Async reload alone leaves its old failure
+                    // visible to consumers after publication has completed.
+                    drop(
+                        asset_server
+                            .load_builder()
+                            .load_erased(handle.type_id(), path.clone()),
+                    );
+                } else {
+                    reload = true;
+                }
+            }
+            if reload {
+                asset_server.reload(path);
+            }
+        }
     }
 }
 
@@ -160,8 +272,56 @@ fn on_twin_closed(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn scan_open_twins_for_datasets(
+fn live_dataset_scopes(
+    roots: &lunco_assets_core::TwinRoots,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Result<Vec<DatasetScope>, String> {
+    // Preview documents can mount the same admitted root through several
+    // authorities. A real open Twin owns its store; otherwise one deterministic
+    // mounted authority owns standalone-source preparation.
+    let mut owners = std::collections::BTreeMap::new();
+    for name in roots.names().map_err(|e| e.to_string())? {
+        if let Some(root) = roots.root_for(&name).map_err(|e| e.to_string())? {
+            owners.entry(root).or_insert(name);
+        }
+    }
+    if let Some(workspace) = workspace {
+        for (_, twin) in workspace.twins() {
+            if let Some(name) = roots
+                .mounted_name_for_logical(&lunco_assets_core::logical_twin_name(twin))
+                .map_err(|e| e.to_string())?
+            {
+                if let Some(root) = roots.root_for(&name).map_err(|e| e.to_string())? {
+                    owners.insert(root, name);
+                }
+            }
+        }
+    }
+    Ok(owners
+        .into_iter()
+        .map(|(root, name)| DatasetScope::Twin { name, root })
+        .collect())
+}
+
+fn retire_registry_scope(
+    event: On<crate::RetireDatasetScope>,
+    provisioning: Option<Res<DatasetProvisioningActive>>,
+    mut registry: ResMut<DatasetRegistry>,
+    mut commands: Commands,
+) {
+    if provisioning.is_some() {
+        return;
+    }
+    registry.forget_scope(&event.scope);
+    commands.trigger(DatasetScopeRemoved {
+        scope: event.scope.clone(),
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn retire_unmounted_dataset_scopes(
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     registry: Res<DatasetRegistry>,
     mut pending: ResMut<PendingTwinManifestScans>,
     mut commands: Commands,
@@ -169,61 +329,96 @@ fn scan_open_twins_for_datasets(
     let Some(roots) = roots else {
         return;
     };
-    let open = match roots.names() {
+    let live = match live_dataset_scopes(&roots, workspace.as_deref()) {
+        Ok(live) => live,
+        Err(error) => {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "twin-dataset-registry-unavailable",
+                error,
+            );
+            return;
+        }
+    };
+    pending.scans.retain(|scan| live.contains(&scan.scope));
+    for scope in registry
+        .scanned_scopes()
+        .iter()
+        .filter(|scope| matches!(scope, DatasetScope::Twin { .. }) && !live.contains(scope))
+    {
+        commands.trigger(crate::RetireDatasetScope {
+            scope: scope.clone(),
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn dataset_scopes_changed(
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    pending: Res<PendingTwinManifestScans>,
+    mut revision: Local<Option<u64>>,
+) -> bool {
+    let current = roots.as_ref().and_then(|roots| roots.revision().ok());
+    let changed = *revision != current
+        || workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.is_changed())
+        || !pending.scans.is_empty();
+    *revision = current;
+    changed
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_open_twins_for_datasets(
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    registry: Res<DatasetRegistry>,
+    mut pending: ResMut<PendingTwinManifestScans>,
+    mut commands: Commands,
+) {
+    let Some(roots) = roots else {
+        return;
+    };
+    let open = match live_dataset_scopes(&roots, workspace.as_deref()) {
         Ok(open) => open,
         Err(error) => {
             lunco_core::trigger_runtime_error(
                 &mut commands,
                 "twin-dataset-registry-unavailable",
-                format!("could not enumerate open Twins for dataset discovery: {error}"),
+                error,
             );
             return;
         }
     };
-    for name in open {
-        match roots.root_for(&name) {
-            Ok(Some(root)) => {
-                let scope = DatasetScope::Twin {
-                    name: name.clone(),
-                    root: root.clone(),
-                };
-                if registry.is_scope_scanned(&scope) || pending.contains(&scope) {
-                    continue;
-                }
-                let scan_name = name.clone();
-                let scan_root = root.clone();
-                let task = AsyncComputeTaskPool::get().spawn(async move {
-                    let _scan_span = bevy::log::info_span!(
-                        "dataset_twin_manifest_scan",
-                        twin = %scan_name
-                    )
-                    .entered();
-                    let mut prepared = DatasetRegistry::default();
-                    prepared.scan_twin(&scan_name, &scan_root);
-                    prepared
-                });
-                pending.scans.push_back(PendingTwinManifestScan {
-                    scope,
-                    task: Some(task),
-                    result: None,
-                });
-            }
-            Ok(None) => {}
-            Err(error) => {
-                lunco_core::trigger_runtime_error(
-                    &mut commands,
-                    "twin-dataset-registry-unavailable",
-                    format!("could not resolve Twin {name} for dataset discovery: {error}"),
-                );
-                return;
-            }
+    for scope in open {
+        if registry.is_scope_scanned(&scope) || pending.contains(&scope) {
+            continue;
         }
+        let DatasetScope::Twin { name, root } = &scope else {
+            continue;
+        };
+        let scan_name = name.clone();
+        let scan_root = root.clone();
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            let _span =
+                bevy::log::info_span!("dataset_twin_manifest_scan",twin=%scan_name).entered();
+            let mut prepared = DatasetRegistry::default();
+            prepared.scan_twin(&scan_name, &scan_root);
+            prepared
+        });
+        pending.scans.push_back(PendingTwinManifestScan {
+            scope,
+            task: Some(task),
+            result: None,
+        });
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn commit_pending_twin_manifest_scans(
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut pending: ResMut<PendingTwinManifestScans>,
     mut registry: ResMut<DatasetRegistry>,
     mut commands: Commands,
@@ -253,24 +448,19 @@ fn commit_pending_twin_manifest_scans(
         };
         pending.scans.pop_front();
 
-        let DatasetScope::Twin { name, root } = &scope else {
-            continue;
-        };
-        let still_open = match roots.as_deref() {
-            Some(roots) => match roots.root_for(name) {
-                Ok(Some(current)) => current.as_path() == root.as_path(),
-                Ok(None) => false,
-                Err(error) => {
-                    lunco_core::trigger_runtime_error(
-                        &mut commands,
-                        "twin-dataset-registry-unavailable",
-                        format!(
-                            "could not resolve Twin {name} while completing dataset discovery: {error}"
-                        ),
-                    );
-                    false
-                }
-            },
+        let still_open = match roots
+            .as_ref()
+            .map(|roots| live_dataset_scopes(roots, workspace.as_deref()))
+        {
+            Some(Ok(live)) => live.contains(&scope),
+            Some(Err(error)) => {
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "twin-dataset-registry-unavailable",
+                    error,
+                );
+                false
+            }
             None => false,
         };
         if still_open {
@@ -301,6 +491,7 @@ fn start_engine_manifest_scan(mut pending: ResMut<PendingEngineManifestScan>) {
                 }
             }
         }
+        prepared.mark_scope_scanned(DatasetScope::Engine);
         Ok(prepared)
     }));
 }
@@ -336,20 +527,29 @@ impl Plugin for DatasetRegistryPlugin {
     fn build(&self, app: &mut App) {
         lunco_settings::ensure_download_settings(app);
         app.init_resource::<DatasetRegistry>();
+        app.init_scene_resource::<crate::RuntimeAssetRequirements>();
+        app.add_observer(on_asset_required);
+        register_all_commands(app);
         app.init_resource::<PendingTwinManifestScans>();
         app.add_observer(reload_installed_asset);
         app.add_observer(on_twin_closed);
+        app.add_observer(retire_registry_scope);
         app.add_systems(Update, drain_registry_failures);
         #[cfg(not(target_arch = "wasm32"))]
         app.init_resource::<PendingEngineManifestScan>()
             .add_systems(Startup, start_engine_manifest_scan)
             .add_systems(Update, commit_engine_manifest_scan);
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Update, scan_open_twins_for_datasets);
-        #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(
             Update,
-            commit_pending_twin_manifest_scans.before(scan_open_twins_for_datasets),
+            (
+                retire_unmounted_dataset_scopes,
+                ApplyDeferred,
+                commit_pending_twin_manifest_scans,
+                scan_open_twins_for_datasets,
+            )
+                .chain()
+                .run_if(dataset_scopes_changed),
         );
     }
 }

@@ -29,6 +29,9 @@ fn request(id) {
     if declared.dataset.state.kind == "installed" {
         return #{ ok: true, status: "already_installed", id: id };
     }
+    if declared.dataset.inputs_ready && declared.dataset.processed {
+        return cmd("ProcessDataset",#{id:id});
+    }
     cmd("RequestDataset", #{ id: id })
 }
 
@@ -42,10 +45,18 @@ fn bake(id) {
         return #{ ok: false, error: "dataset has no manifest processing pipeline: " + id };
     }
     let kind = declared.dataset.state.kind;
-    if kind == "downloading" || kind == "processing" || kind == "cancelling" {
+    if kind == "queued" || kind == "downloading" || kind == "processing" || kind == "cancelling" {
         return #{ ok: false, error: "dataset already has an active operation: " + id };
     }
     cmd("ProcessDataset", #{ id: id })
+}
+
+/// Rebuild using the current declaration and code, retaining the last good output on failure.
+fn rebuild(id) {
+    let declared=find(id);
+    if declared.ok==false {return declared;}
+    if !declared.dataset.processed {return #{ok:false,error:"Dataset has no processing recipe: "+id};}
+    cmd("ProcessDataset",#{id:id,force:true})
 }
 
 /// Queue every idle manifest pipeline in a scope. Each worker resolves its
@@ -56,7 +67,7 @@ fn bake_scope(scope) {
     let bakes = [];
     for dataset in result.datasets {
         let kind = dataset.state.kind;
-        if dataset.processed && kind != "downloading" && kind != "processing" && kind != "cancelling" {
+        if dataset.processed && kind != "queued" && kind != "downloading" && kind != "processing" && kind != "cancelling" {
             bakes.push(bake(dataset.id));
         }
     }
@@ -86,3 +97,23 @@ fn request_recommended(scope) {
     }
     #{ ok: true, requested: requests }
 }
+
+/// Request only dependencies of the selected scene. Recommendations for other
+/// scenes stay available for explicit user selection in Settings.
+fn request_required(scope) {
+    let result=list(scope);
+    if result.ok==false {return result;}
+    let requests=[];
+    for dataset in result.datasets {
+        if dataset.required_for_scene && ["missing","failed","cancelled"].contains(dataset.state.kind) {
+            requests.push(request(dataset.id));
+        }
+    }
+    if requests.len()==0 {return #{ok:false,error:"No idle scene dependencies in scope: "+scope};}
+    #{ok:true,requested:requests}
+}
+
+/// Require the concrete URI used by runtime code. The registry derives its
+/// download/preparation declaration; no dataset importance list is needed.
+/// Listen for DATASET_INSTALLED before consuming data that was unavailable.
+fn require(uri) {cmd("RequireAsset",#{uri:uri})}

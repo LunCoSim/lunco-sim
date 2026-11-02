@@ -3,15 +3,40 @@
   <property name="parameter_id">—</property>
   <property name="label">resource</property>
   <property name="status">Not downloaded</property>
+  <property name="download_status">Source files</property>
+  <property name="preparation_status">Prepared artifacts</property>
+  <property name="detail">—</property>
+  <property name="source_url">—</property>
+  <property name="source_files">—</property>
+  <property name="details_display">none</property>
+  <property name="details_label">Details</property>
+  <property name="min_height">104px</property>
+  <property name="stages_display">flex</property>
+  <property name="action_display">flex</property>
   <property name="action">request</property>
   <property name="action_label">Download</property>
   <property name="scope">scope</property>
 
   <node id="asset-consent-row">
-    <node id="asset-consent-row-copy">
-      <text id="asset-consent-row-label">{label}</text>
-      <text id="asset-consent-row-status">{status}</text>
+    <node id="asset-consent-row-header">
+      <node id="asset-consent-row-copy">
+        <text id="asset-consent-row-label">{label}</text>
+        <text id="asset-consent-row-status">{status}</text>
+      </node>
+      <button id="asset-consent-row-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:id="{parameter_id}" tag:scope="{scope}"><text>{action_label}</text></button>
     </node>
-    <button id="asset-consent-row-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:id="{parameter_id}" tag:scope="{scope}"><text>{action_label}</text></button>
+    <node id="asset-consent-row-stages">
+    <text id="asset-consent-row-download">{download_status}</text>
+    <text id="asset-consent-row-preparation">{preparation_status}</text>
+    </node>
+    <text id="asset-consent-row-error">{detail}</text>
+    <node id="asset-consent-row-links">
+      <button id="asset-consent-row-source" on_press="runtime_ui_authored_action" tag:action="open_web_url" tag:url="{source_url}"><text>View source</text></button>
+      <button id="asset-consent-row-details-toggle" on_press="runtime_ui_authored_action" tag:action="dataset_details" tag:id="{parameter_id}"><text>{details_label}</text></button>
+    </node>
+    <node id="asset-consent-row-details">
+      <text>{source_files}</text>
+      <text>{source_url}</text>
+    </node>
   </node>
 </template>

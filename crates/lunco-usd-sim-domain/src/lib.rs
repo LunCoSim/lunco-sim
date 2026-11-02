@@ -1214,6 +1214,7 @@ fn modelica_synthesis_context(
         })?;
     Ok((
         lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::twin(
                 lunco_core::RuntimeCycle::Lifecycle,
                 generation,
@@ -3183,6 +3184,7 @@ mod tests {
 
     fn synthesis_test_context() -> lunco_core::RuntimeExecutionContext {
         lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::twin(
                 lunco_core::RuntimeCycle::Lifecycle,
                 1,

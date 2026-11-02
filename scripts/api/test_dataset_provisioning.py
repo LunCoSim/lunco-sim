@@ -4,7 +4,7 @@
 The driver serves deterministic local bytes and captures actual UI phases.
 Rhai owns state/clock verdicts. Enter logical button coordinates from each
 saved screenshot when prompted, or supply a recorded --clicks JSON mapping.
-No authored USD is rewritten: test Twins are extracted package snapshots.
+USD fixture references are authored through the document API.
 """
 from __future__ import annotations
 
@@ -133,8 +133,6 @@ def main():
         return text
 
     (cold / "Assets.toml").write_text(declaration("terrain", "/terrain.tar.gz", "terrain/apollo15_dem"))
-    manifest = cold / "twin.toml"
-    manifest.write_text(manifest.read_text().replace("suppress_missing_prompt = true", "suppress_missing_prompt = false"))
     cancel = fixtures / "cancel"
     cancel.mkdir()
     (cancel / "twin.toml").write_text('name = "DatasetTransferProbe"\nversion = "0.1.0"\n[usd]\ndefault_scene = "scene.usda"\n')
@@ -195,6 +193,10 @@ def main():
             def state(scope, key, kind):
                 return next((row for row in datasets(scope) if row["key"] == key and row["state"]["kind"] == kind), None)
 
+            from test_scene_asset_requirements import author_asset_references
+            author_asset_references(session,cancel/"scene.usda",["textures/cancel.png"])
+            author_asset_references(session,retry/"scene.usda",["textures/retry.png"])
+
             def open_twin(path):
                 previous = {row["scope"] for row in execute(session, "ListDatasets")["datasets"] if row["scope"] != "engine"}
                 execute(session, "OpenTwin", path=str(path))
@@ -242,7 +244,7 @@ def main():
                 execute(session, "DismissDatasetProvisioning", scope="engine")
                 cold_scope = open_twin(cold)
                 execute(session, "SetTimeTransport", playing=True)
-                wait_for(lambda: "Simulation waiting for required terrain dataset" in run('print(clock_snapshot().simulation_progress);'), "terrain admission hold")
+                wait_for(lambda: "SceneDatasets" in run('print(clock_snapshot().simulation_progress);'), "terrain admission hold")
                 tick = int(run('print(clock_snapshot().sim_tick);').strip())
                 rover = int(run('print(find_path("/Traverse/Rover"));').strip())
                 verdict(f'certify_terrain_hold("/terrain", {tick});')

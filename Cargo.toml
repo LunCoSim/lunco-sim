@@ -256,6 +256,7 @@ description = "Initialize multi-crate workspace architecture for vessel control 
 license = "Apache-2.0"
 
 [workspace.dependencies]
+bevy_ui_widgets = { version = "=0.20.0" }
 faer = { version = "0.24.4", default-features = false, features = ["std", "linalg"] }
 kurbo = "0.13.1"
 # Keep astronomy consumers on one checked native revision.

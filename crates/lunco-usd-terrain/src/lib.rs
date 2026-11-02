@@ -2072,7 +2072,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
         if let Some(entry) = datasets.declared_artifact(&scope, std::path::Path::new(relative)) {
             if !entry.state.is_installed() {
                 let detail = format!(
-                    "Terrain data '{}' is not installed. Choose Download in Twin resources to continue.",
+                    "Terrain data '{}' is not installed. Open Settings > Data & libraries to download and prepare it. Simulation stays paused.",
                     entry.name
                 );
                 commands

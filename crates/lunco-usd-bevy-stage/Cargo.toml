@@ -17,5 +17,8 @@ lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-data = { path = "../lunco-usd-data" }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

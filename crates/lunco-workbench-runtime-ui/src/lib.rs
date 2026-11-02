@@ -6,7 +6,6 @@
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
 use bevy::ecs::entity::EntityHashSet;
-use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::picking::Pickable;
 use bevy::picking::events::{PointerClick, PointerDrag};
 use bevy::picking::pointer::PointerButton;
@@ -17,8 +16,8 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
-    CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
-    TemplateProperties, UiId,
+    CompileContextEvent, FunctionBindings, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate,
+    OnUiPress, Tags, TemplateProperties, UiId,
 };
 use lunco_assets_runtime::{JsonAssetContent, JsonAssetScopeChanged};
 use lunco_core::AppSceneExt;
@@ -70,8 +69,8 @@ pub struct RuntimeUiAction {
 pub struct RuntimeUiActionScope {
     /// Workspace Twin active when input occurred, including no active Twin.
     pub owner_twin_id: Option<u64>,
-    /// Committed scene transaction when input occurred, including no scene.
-    pub scene_generation: Option<u64>,
+    /// Optional scene target, independent of the UI's execution cadence.
+    pub lifetime: lunco_core::InteractionLifetime,
 }
 
 impl RuntimeUiActionScope {
@@ -82,7 +81,15 @@ impl RuntimeUiActionScope {
     ) -> Self {
         Self {
             owner_twin_id: workspace.and_then(|w| w.active_twin).map(|id| id.raw()),
-            scene_generation: scene.and_then(|s| s.completed_generation()),
+            lifetime: lunco_core::InteractionLifetime::capture_scene(scene),
+        }
+    }
+
+    /// Capture an application/Twin/provider action without a scene target.
+    pub fn capture_owner(workspace: Option<&lunco_workspace::WorkspaceResource>) -> Self {
+        Self {
+            owner_twin_id: workspace.and_then(|w| w.active_twin).map(|id| id.raw()),
+            lifetime: lunco_core::InteractionLifetime::Owner,
         }
     }
 
@@ -95,7 +102,31 @@ impl RuntimeUiActionScope {
         if self.owner_twin_id != workspace.and_then(|w| w.active_twin).map(|id| id.raw()) {
             return Err("UI action belongs to a retired Twin".into());
         }
-        lunco_core::scene::validate_interaction_scene(self.scene_generation, scene)
+        self.lifetime.validate(scene)
+    }
+}
+
+fn authored_action_scope(
+    world: &bevy::ecs::world::DeferredWorld,
+    source: Entity,
+) -> Option<RuntimeUiActionScope> {
+    let mut scope = RuntimeUiActionScope::capture(
+        world.get_resource::<lunco_workspace::WorkspaceResource>(),
+        world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
+    );
+    let mut entity = source;
+    loop {
+        if let Some(surface) = world.get::<RuntimeUiSurface>(entity) {
+            if world
+                .get_resource::<EngineExposures>()
+                .is_some_and(|exposures| exposures.is_application_surface(&surface.namespace))
+            {
+                scope.lifetime = lunco_core::InteractionLifetime::Owner;
+            }
+            return Some(scope);
+        }
+        let parent = world.get::<ChildOf>(entity)?;
+        entity = parent.parent();
     }
 }
 
@@ -157,10 +188,9 @@ fn register_action(functions: &mut HtmlFunctions, callback: impl Into<String>, a
     functions.register(
         callback,
         move |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
-            let scope = RuntimeUiActionScope::capture(
-                world.get_resource::<lunco_workspace::WorkspaceResource>(),
-                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
-            );
+            let Some(scope) = authored_action_scope(&world, source) else {
+                return;
+            };
             world.trigger(RuntimeUiAction {
                 scope,
                 action: action.clone(),
@@ -189,10 +219,9 @@ fn register_dynamic_action(functions: &mut HtmlFunctions) {
                     .map(|(key, value)| (key.clone(), HookValue::str(value.clone())))
                     .collect(),
             );
-            let scope = RuntimeUiActionScope::capture(
-                world.get_resource::<lunco_workspace::WorkspaceResource>(),
-                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
-            );
+            let Some(scope) = authored_action_scope(&world, source) else {
+                return;
+            };
             world.trigger(RuntimeUiAction {
                 scope,
                 action,
@@ -332,6 +361,12 @@ pub struct RuntimeUiCollectionDefinition {
     pub container: String,
     pub template: String,
     pub key: String,
+    /// Row fields explicitly admitted to Flair's CSS custom-property stream.
+    #[serde(default)]
+    pub css: Vec<String>,
+    /// Optional authored vertical scrollbar track id, sharing this collection's scroll position.
+    #[serde(default)]
+    pub scrollbar: Option<String>,
 }
 
 /// Generic dropdown mechanics for an authored runtime surface.
@@ -491,6 +526,9 @@ impl RuntimeUiManifest {
                 require_non_empty("collection template", &collection.template)?;
                 require_non_empty("collection key", &collection.key)?;
                 require_asset_path("collection template", &collection.template)?;
+                if let Some(scrollbar) = &collection.scrollbar {
+                    require_non_empty("collection scrollbar", scrollbar)?;
+                }
                 if !collection_sources.insert(collection.source.as_str()) {
                     return Err(format!(
                         "duplicate runtime UI collection source `{}` on `{}`",
@@ -636,11 +674,18 @@ impl Plugin for RuntimeUiPlugin {
         app.world_mut()
             .resource_mut::<UiPickingSettings>()
             .require_markers = true;
+        if !app.is_plugin_added::<bevy_ui_widgets::ScrollbarPlugin>() {
+            app.add_plugins(bevy_ui_widgets::ScrollbarPlugin);
+        }
+        if !app.is_plugin_added::<bevy_ui_widgets::ScrollAreaPlugin>() {
+            app.add_plugins(bevy_ui_widgets::ScrollAreaPlugin);
+        }
         app.add_plugins((
             bevy_hui::HuiPlugin,
             bevy_flair::FlairPlugin,
             RuntimeUiManifestPlugin,
         ))
+        .add_observer(dispatch_runtime_ui_press)
         .init_resource::<RuntimeSurfaceLayouts>()
         .init_resource::<RuntimeUiRenderState>()
         .init_resource::<RuntimeUiPresentationGeneration>()
@@ -680,14 +725,14 @@ impl Plugin for RuntimeUiPlugin {
                     .after(bevy_hui::HuiSystems::Build)
                     .before(bevy_hui::HuiSystems::Style),
                 register_runtime_ui_input_regions.after(apply_runtime_ui_exposures),
-                dismiss_modal_runtime_ui,
+                sync_runtime_ui_scrollbar_theme,
+                dismiss_runtime_ui,
             )
                 .in_set(lunco_core::RuntimeCycleSet::Ui),
         )
         .add_systems(
             PostUpdate,
             (
-                scroll_runtime_ui_collections.after(bevy::ui::UiSystems::PostLayout),
                 apply_runtime_ui_placement_after_style
                     .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
                     .after(bevy::ui::UiSystems::Propagate)
@@ -967,6 +1012,8 @@ impl RuntimeUiSurface {
                         container: collection.container.clone(),
                         template,
                         key: collection.key.clone(),
+                        css: collection.css.clone(),
+                        scrollbar: collection.scrollbar.clone(),
                     })
                 })
                 .collect::<Result<_, String>>()?,
@@ -1011,7 +1058,12 @@ struct RuntimeUiCollection {
     container: String,
     template: Handle<HtmlTemplate>,
     key: String,
+    css: Vec<String>,
+    scrollbar: Option<String>,
 }
+
+#[derive(Component)]
+struct RuntimeUiScrollbarThumb;
 
 #[derive(Component, Debug)]
 struct RuntimeUiCollectionRow {
@@ -1220,6 +1272,7 @@ fn update_runtime_ui_recording_contract(
 
 fn runtime_ui_recording_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::application(
             lunco_core::RuntimeCycle::Ui,
         )),
@@ -1952,6 +2005,9 @@ fn hand_runtime_ui_styling_to_flair(
         }
 
         if belongs_to_runtime_surface {
+            if let Some(pickable) = style.computed.pickable {
+                commands.entity(entity).try_insert(pickable);
+            }
             commands
                 .entity(entity)
                 .insert(RuntimeUiTemplateStyle(style.clone()))
@@ -2177,6 +2233,9 @@ fn reconcile_runtime_ui_collections(
     rows: Query<(Entity, &RuntimeUiCollectionRow)>,
     hosts: Query<(), With<RuntimeUiCollectionHost>>,
     mut properties: Query<&mut TemplateProperties>,
+    styles: Query<&InlineStyle>,
+    scrollbars: Query<(), With<bevy_ui_widgets::Scrollbar>>,
+    theme: Option<Res<lunco_theme::Theme>>,
 ) {
     for (surface_entity, surface, visibility) in &roots {
         if !surface.mounted || !matches!(*visibility, Visibility::Visible) {
@@ -2198,9 +2257,58 @@ fn reconcile_runtime_ui_collections(
                 continue;
             };
             if hosts.get(host).is_err() {
-                commands
-                    .entity(host)
-                    .insert((RuntimeUiCollectionHost, ScrollPosition::default()));
+                commands.entity(host).insert((
+                    RuntimeUiCollectionHost,
+                    ScrollPosition::default(),
+                    bevy_ui_widgets::ScrollArea,
+                    Pickable::default(),
+                ));
+            }
+
+            if let Some(track_id) = &collection.scrollbar {
+                if let Some(track) = ids.iter().find_map(|(entity, id)| {
+                    (id.id() == track_id
+                        && is_descendant_of_runtime_surface(
+                            entity,
+                            &HashSet::from([surface_entity]),
+                            &parents,
+                        ))
+                    .then_some(entity)
+                }) && scrollbars.get(track).is_err()
+                {
+                    let default_theme;
+                    let theme = match theme.as_deref() {
+                        Some(theme) => theme,
+                        None => {
+                            default_theme = lunco_theme::Theme::default();
+                            &default_theme
+                        }
+                    };
+                    let color = theme.tokens.accent;
+                    commands.entity(track).try_insert((
+                        bevy_ui_widgets::Scrollbar {
+                            target: host,
+                            orientation: bevy_ui_widgets::ControlOrientation::Vertical,
+                            min_thumb_length: theme.spacing.titlebar_control_size.y,
+                        },
+                        Pickable::default(),
+                    ));
+                    commands.spawn((
+                        RuntimeUiScrollbarThumb,
+                        bevy_ui_widgets::ScrollbarThumb {
+                            border_radius: BorderRadius::all(px(theme.rounding.button)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba_u8(
+                            color.r(),
+                            color.g(),
+                            color.b(),
+                            color.a(),
+                        )),
+                        Pickable::default(),
+                        ChildOf(track),
+                    ));
+                }
             }
 
             let values = match exposure.properties.get(&collection.source) {
@@ -2304,6 +2412,28 @@ fn reconcile_runtime_ui_collections(
                         ))
                         .id()
                 };
+                let mut style = styles.get(entity).cloned().unwrap_or_default();
+                let mut style_changed = false;
+                for name in &collection.css {
+                    let css_name = format!("--ui-{}", name.replace('_', "-"));
+                    match fields.iter().find(|(field, _)| field == name) {
+                        Some((_, value)) if !value.trim().is_empty() => {
+                            if style.get(&css_name) != Some(value.as_str()) {
+                                style.set(css_name, value.clone());
+                                style_changed = true;
+                            }
+                        }
+                        _ => {
+                            if style.get(&css_name).is_some() {
+                                style.remove(&css_name);
+                                style_changed = true;
+                            }
+                        }
+                    }
+                }
+                if style_changed {
+                    commands.entity(entity).try_insert(style);
+                }
                 ordered.push(entity);
             }
 
@@ -2318,33 +2448,20 @@ fn reconcile_runtime_ui_collections(
     }
 }
 
-/// Scroll any authored collection under the pointer. This is a generic UI
-/// mechanic: the collection manifest owns the host, while Rhai owns the row
-/// data and ordering. HUI/Bevy provide the retained scroll position; the
-/// runtime only maps the existing mouse-wheel input to that position.
-fn scroll_runtime_ui_collections(
-    pointer: lunco_interaction_core::PrimaryMousePointer,
-    scroll: Res<AccumulatedMouseScroll>,
-    mut hosts: Query<
-        (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
-        With<RuntimeUiCollectionHost>,
-    >,
+/// Native thumb styling follows the same application theme as authored CSS.
+fn sync_runtime_ui_scrollbar_theme(
+    theme: Option<Res<lunco_theme::Theme>>,
+    mut thumbs: Query<&mut BackgroundColor, With<RuntimeUiScrollbarThumb>>,
 ) {
-    if scroll.delta.y == 0.0 {
-        return;
-    }
-    let Some(cursor) = pointer.position() else {
+    let Some(theme) = theme else {
         return;
     };
-    for (node, transform, mut position) in &mut hosts {
-        let Some(rect) = runtime_ui_input_rect(node, transform) else {
-            continue;
-        };
-        if !rect.contains(egui::pos2(cursor.x, cursor.y)) {
-            continue;
-        }
-        let max_y = (node.content_size.y - node.size.y).max(0.0);
-        position.y = (position.y - scroll.delta.y * 40.0).clamp(0.0, max_y);
+    if !theme.is_changed() {
+        return;
+    }
+    let color = theme.tokens.accent;
+    for mut background in &mut thumbs {
+        background.0 = Color::srgba_u8(color.r(), color.g(), color.b(), color.a());
     }
 }
 
@@ -2565,6 +2682,32 @@ fn runtime_ui_surface_ancestor(
     None
 }
 
+/// HUI supplies callback names; the runtime owns event-driven press delivery.
+/// A press and release in the same frame must still invoke the callback once.
+#[derive(Component)]
+struct RuntimeUiPressCallbacks(Vec<String>);
+
+fn dispatch_runtime_ui_press(
+    mut press: On<bevy::picking::events::PointerPress>,
+    callbacks: Query<(&RuntimeUiPressCallbacks, Has<bevy::ui::InteractionDisabled>)>,
+    bindings: Res<FunctionBindings>,
+    mut commands: Commands,
+) {
+    if press.button != PointerButton::Primary {
+        return;
+    }
+    let Ok((callbacks, disabled)) = callbacks.get(press.entity) else {
+        return;
+    };
+    press.propagate(false);
+    if disabled {
+        return;
+    }
+    for callback in &callbacks.0 {
+        bindings.maybe_run(callback, press.entity, &mut commands);
+    }
+}
+
 /// Add the visible interactive runtime controls to the existing workbench
 /// scene/chrome gate. This is intentionally a bridge into `ScenePickGate`, not
 /// a second hit-test implementation: egui dock cards and runtime UI controls
@@ -2588,7 +2731,11 @@ fn register_runtime_ui_input_regions(
         &UiGlobalTransform,
         Option<&InheritedVisibility>,
         Option<&OnUiPress>,
+        Has<RuntimeUiPressCallbacks>,
         Option<&Pickable>,
+        Has<bevy_ui_widgets::ScrollArea>,
+        Has<bevy_ui_widgets::Scrollbar>,
+        Has<RuntimeUiScrollbarThumb>,
     )>,
     parents: Query<&ChildOf>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -2624,17 +2771,43 @@ fn register_runtime_ui_input_regions(
         }
     }
 
-    for (entity, node, transform, inherited_visibility, press, pickable) in &controls {
+    for (
+        entity,
+        node,
+        transform,
+        inherited_visibility,
+        press,
+        callbacks,
+        pickable,
+        scroll_area,
+        scrollbar,
+        thumb,
+    ) in &controls
+    {
         if !inherited_visibility.is_some_and(|visibility| visibility.get()) {
             continue;
         }
 
-        let explicit_control = press.is_some()
+        let explicit_control = (press.is_some()
+            || callbacks
+            || scroll_area
+            || scrollbar
+            || thumb
+            || pickable.is_some_and(|pickable| pickable.should_block_lower))
             && is_descendant_of_runtime_surface(entity, &interactive_roots, &parents);
+        if explicit_control && let Some(press) = press {
+            // Transfer callback ownership, so HUI's state-sampling callback
+            // cannot dispatch a second invocation for a held press.
+            commands
+                .entity(entity)
+                .try_insert(RuntimeUiPressCallbacks(press.0.clone()))
+                .try_remove::<OnUiPress>();
+        }
         let draggable_content =
             is_descendant_of_runtime_surface(entity, &draggable_roots, &parents);
         if (explicit_control || draggable_content) && pickable.is_none() {
-            commands.entity(entity).insert(Pickable::default());
+            // Scene teardown may retire the surface before this queue applies.
+            commands.entity(entity).try_insert(Pickable::default());
         }
 
         if !explicit_control {
@@ -2649,28 +2822,31 @@ fn register_runtime_ui_input_regions(
 /// Route Escape through the same authored semantic action path as a button.
 /// The runtime owns only the key-to-dismiss primitive; Rhai owns the resulting
 /// lifecycle decision.
-fn dismiss_modal_runtime_ui(
+fn dismiss_runtime_ui(
     keys: Res<ButtonInput<KeyCode>>,
     roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    exposures: Res<EngineExposures>,
     mut commands: Commands,
 ) {
     if !keys.just_pressed(KeyCode::Escape) {
         return;
     }
     let Some((source, surface, _)) = roots.iter().find(|(_, surface, visibility)| {
-        surface.modal
-            && surface.dismiss_action.is_some()
-            && matches!(*visibility, Visibility::Visible)
+        surface.dismiss_action.is_some() && matches!(*visibility, Visibility::Visible)
     }) else {
         return;
     };
     let Some(action) = surface.dismiss_action.clone() else {
         return;
     };
+    let mut scope = RuntimeUiActionScope::capture(workspace.as_deref(), scene.as_deref());
+    if exposures.is_application_surface(&surface.namespace) {
+        scope.lifetime = lunco_core::InteractionLifetime::Owner;
+    }
     commands.trigger(RuntimeUiAction {
-        scope: RuntimeUiActionScope::capture(workspace.as_deref(), scene.as_deref()),
+        scope,
         action,
         source,
         parameters: HookValue::Map(Vec::new()),
@@ -2951,7 +3127,7 @@ mod tests {
         assert!(scope.validate(None, None).is_ok());
         let outgoing = super::RuntimeUiActionScope {
             owner_twin_id: Some(17),
-            scene_generation: None,
+            lifetime: lunco_core::InteractionLifetime::Owner,
         };
         assert!(outgoing.validate(None, None).is_err());
         let mut incoming = lunco_workspace::WorkspaceResource::new();
@@ -3380,6 +3556,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: true,
+
                     modal: false,
                     dismiss_action: None,
                     draggable: true,
@@ -3476,6 +3653,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: true,
+
                     modal: false,
                     dismiss_action: None,
                     draggable: false,
@@ -3583,6 +3761,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+
                     modal: false,
                     dismiss_action: None,
                     draggable: false,
@@ -3634,6 +3813,7 @@ mod tests {
             setting: None,
             setting_default: false,
             interactive: false,
+
             modal: false,
             dismiss_action: None,
             draggable: false,
@@ -3700,6 +3880,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+
                     modal: false,
                     dismiss_action: None,
                     draggable: false,
@@ -3766,6 +3947,7 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+
                     modal: false,
                     dismiss_action: None,
                     draggable: false,

@@ -229,6 +229,7 @@ fn escape_runtime_context(
     })?;
     let delta_seconds = fixed_time.timestep().as_secs_f64();
     Ok(RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(RuntimeRoute::core(RuntimeCycle::Simulation)),
         phase: RuntimePhase::Behavior,
         clock: RuntimeClock::Simulation,

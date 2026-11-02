@@ -141,6 +141,12 @@ impl BrowserSection for TwinDatasetsSection {
                     DatasetState::Installed => {
                         ui.label(egui::RichText::new("Ready · cached").weak());
                     }
+                    DatasetState::Queued => {
+                        ui.label("Queued");
+                        if ui.button("Cancel").clicked() {
+                            action = Some(Action::Cancel(entry.id.clone()));
+                        }
+                    }
                     DatasetState::Missing => {
                         ui.label(egui::RichText::new("Not downloaded").weak());
                         if ui.button("Download").clicked() {
@@ -150,6 +156,7 @@ impl BrowserSection for TwinDatasetsSection {
                     DatasetState::Downloading {
                         bytes_done,
                         bytes_total,
+                        ..
                     } => {
                         let progress = (*bytes_total > 0)
                             .then_some((*bytes_done as f32 / *bytes_total as f32).clamp(0.0, 1.0));

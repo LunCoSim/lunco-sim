@@ -97,6 +97,55 @@ pub fn download_asset_with_control(
     mut control: DownloadControl<'_>,
     dest_root: Option<&Path>,
 ) -> Result<(), DownloadError> {
+    let result = download_asset_transaction(entry, key, settings, &mut control, dest_root);
+    if result.is_ok() {
+        if let Some(completed) = control.completed.as_mut() {
+            completed(key);
+        }
+    }
+    result
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn download_asset_transaction(
+    entry: &AssetEntry,
+    key: &str,
+    settings: &DownloadSettings,
+    control: &mut DownloadControl<'_>,
+    dest_root: Option<&Path>,
+) -> Result<(), DownloadError> {
+    if let Some(process) = &entry.process {
+        if let Some(pipeline) = &process.pipeline {
+            pipeline
+                .validate()
+                .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
+            for (id, input) in &pipeline.sources {
+                let progress = &mut control.progress;
+                let extracting = &mut control.extracting;
+                let completed = &mut control.completed;
+                let input_control = DownloadControl {
+                    progress: progress.as_mut().map(|cb| {
+                        Box::new(move |source: &str, done, total| cb(source, done, total)) as _
+                    }),
+                    extracting: extracting
+                        .as_mut()
+                        .map(|cb| Box::new(move |count| cb(count)) as _),
+                    completed: completed
+                        .as_mut()
+                        .map(|cb| Box::new(move |key: &str| cb(key)) as _),
+                    cancel: control.cancel.clone(),
+                    commit_gate: control.commit_gate.clone(),
+                };
+                download_asset_with_control(
+                    input,
+                    &format!("{key}/{id}"),
+                    settings,
+                    input_control,
+                    dest_root,
+                )?;
+            }
+        }
+    }
     let dest = entry_dest_path(entry, dest_root)
         .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
 
@@ -194,14 +243,15 @@ pub fn download_asset_with_control(
         |chunk, downloaded, total| {
             hasher.borrow_mut().update(chunk);
             if let Some(cb) = control.progress.as_mut() {
-                cb(downloaded, total);
+                cb(&entry.name, downloaded, total);
             }
         },
         || !cancelled(),
     );
+    // Close the writer before any error unwinds the staging-path cleanup.
+    drop(out);
     if let Err(error) = stream_result {
         if cancelled() || matches!(error, TransferError::Cancelled) {
-            drop(out);
             return Err(DownloadError::Cancelled);
         }
         return Err(match error {
@@ -216,7 +266,6 @@ pub fn download_asset_with_control(
             TransferError::Cancelled => DownloadError::Cancelled,
         });
     }
-    drop(out);
 
     let hash: String = hasher
         .into_inner()
@@ -976,7 +1025,9 @@ fn policy_type(field: &str, expected: &str, actual: &lunco_hooks::HookValue) -> 
 pub struct DownloadControl<'a> {
     /// Called as bytes stream in. Keep the closure cheap — it runs on
     /// the read loop's hot path.
-    pub progress: Option<Box<dyn FnMut(u64, u64) + Send + 'a>>,
+    pub progress: Option<Box<dyn FnMut(&str, u64, u64) + Send + 'a>>,
+    /// Called after the named declaration passes download/integrity/install.
+    pub completed: Option<Box<dyn FnMut(&str) + Send + 'a>>,
     /// Called while a tarball is being unpacked. Argument is the
     /// running count of unpacked entries.
     pub extracting: Option<Box<dyn FnMut(u64) + Send + 'a>>,
@@ -1218,6 +1269,50 @@ mod tests {
     use lunco_assets_core::{cache_dir, twin_cache_dir};
 
     #[test]
+    fn failed_transfer_closes_staging_and_allows_retry_in_literal_paths() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/input.bin", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for response in [
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndata",
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut buffer = [0; 4096];
+                stream.read(&mut buffer).unwrap();
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let manifest: AssetManifest =
+            format!("[input]\nname='Input'\nurl='{url}'\ndest='подаци with spaces/input.bin'\n")
+                .parse()
+                .unwrap();
+        let entry = &manifest.assets["input"];
+        let root = tempfile::tempdir().unwrap();
+        let destination = entry_dest_path(entry, Some(root.path())).unwrap();
+        let settings = DownloadSettings {
+            max_attempts: 1,
+            ..Default::default()
+        };
+        assert!(download_asset(entry, "input", &settings, Some(root.path())).is_err());
+        assert!(!destination.exists());
+        assert_eq!(
+            std::fs::read_dir(destination.parent().unwrap())
+                .unwrap()
+                .count(),
+            0,
+            "failed transfer must leave no staging file, including on Windows"
+        );
+        download_asset(entry, "input", &settings, Some(root.path())).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"data");
+        server.join().unwrap();
+    }
+
+    #[test]
     fn scratch_name_is_opaque_and_cross_platform() {
         let scratch = scratch_name(10_737, 0);
         assert_eq!(scratch, "lunco_10737_0");
@@ -1274,6 +1369,7 @@ mod tests {
             recommended: false,
             process: None,
             bundle: Vec::new(),
+            package_only: false,
             extra: Default::default(),
         };
         let err = download_asset(
@@ -1299,6 +1395,7 @@ mod tests {
             recommended: false,
             process: None,
             bundle: Vec::new(),
+            package_only: false,
             extra: Default::default(),
         };
         let mut entry = entry;
@@ -1336,6 +1433,7 @@ mod tests {
             recommended: false,
             process: None,
             bundle: Vec::new(),
+            package_only: false,
             extra: Default::default(),
         };
 

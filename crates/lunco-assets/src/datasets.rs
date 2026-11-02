@@ -25,7 +25,19 @@ use lunco_core::{on_command, register_commands};
 fn report_phase(commands: &mut Commands, id: &str, name: &str, state: &DatasetState) {
     let event = dataset_state_changed(id, name, state);
     if !matches!(state, DatasetState::Failed(_)) {
-        let message = format!("{name} ({id}): {}", state.kind());
+        let phase = match state {
+            DatasetState::Missing => "Not downloaded".to_owned(),
+            DatasetState::Queued => "Queued; waiting for a preparation slot".to_owned(),
+            DatasetState::Downloading { source, .. } => format!("Downloading source: {source}"),
+            DatasetState::Processing { kind } => format!("Preparing: {kind}"),
+            DatasetState::Cancelling => "Stopping preparation".to_owned(),
+            DatasetState::Installed => "Data ready".to_owned(),
+            DatasetState::Cancelled => {
+                "Cancelled; available to resume in Settings > Data & libraries".to_owned()
+            }
+            DatasetState::Failed(_) => unreachable!(),
+        };
+        let message = format!("{name}: {phase}");
         commands.queue(move |world: &mut World| {
             if let Some(mut status) =
                 world.get_resource_mut::<lunco_status_core::status_bus::StatusBus>()
@@ -42,7 +54,12 @@ fn report_phase(commands: &mut Commands, id: &str, name: &str, state: &DatasetSt
 }
 
 /// Cross-thread slot for progress produced by one download worker.
-type StatusSlot = Arc<Mutex<Option<DatasetState>>>;
+#[derive(Default)]
+struct DatasetProgress {
+    state: Option<DatasetState>,
+    inputs: Option<Vec<lunco_assets_datasets::DatasetInput>>,
+}
+type StatusSlot = Arc<Mutex<DatasetProgress>>;
 
 /// One owned provisioning operation.
 struct DatasetOperation {
@@ -58,7 +75,7 @@ impl DatasetOperation {
     fn new(scope: DatasetScope, commit_gate: Arc<Mutex<()>>) -> Self {
         Self {
             scope,
-            status: Arc::new(Mutex::new(None)),
+            status: Arc::new(Mutex::new(DatasetProgress::default())),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             commit_gate,
             #[cfg(not(target_arch = "wasm32"))]
@@ -71,6 +88,7 @@ impl DatasetOperation {
 #[derive(Resource)]
 struct DatasetRuntime {
     operations: HashMap<String, DatasetOperation>,
+    pending: std::collections::VecDeque<(DatasetEntry, PendingOperation)>,
     #[cfg(not(target_arch = "wasm32"))]
     retiring: Vec<DatasetOperation>,
     commit_gate: Arc<Mutex<()>>,
@@ -82,6 +100,7 @@ impl Default for DatasetRuntime {
     fn default() -> Self {
         Self {
             operations: HashMap::new(),
+            pending: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             retiring: Vec::new(),
             commit_gate: Arc::new(Mutex::new(())),
@@ -89,6 +108,14 @@ impl Default for DatasetRuntime {
             processors: lunco_assets_processing::process::ProcessorRegistry::builtin(),
         }
     }
+}
+
+enum PendingOperation {
+    Download,
+    #[cfg(not(target_arch = "wasm32"))]
+    Process {
+        force: bool,
+    },
 }
 
 impl DatasetRuntime {
@@ -122,14 +149,15 @@ impl DatasetRuntime {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn start_processing(&mut self, entry: DatasetEntry, source: std::path::PathBuf) {
+    fn start_processing(&mut self, entry: DatasetEntry, force: bool) {
         let mut handle = DatasetOperation::new(entry.scope.clone(), self.commit_gate.clone());
         handle.task = Some(spawn_processing(
             &entry,
-            source,
             handle.cancel.clone(),
             handle.commit_gate.clone(),
             self.processors.clone(),
+            handle.status.clone(),
+            force,
         ));
         self.operations.insert(entry.id, handle);
     }
@@ -147,6 +175,8 @@ impl DatasetRuntime {
         if scopes.is_empty() {
             return;
         }
+        self.pending
+            .retain(|(entry, _)| !scopes.contains(&entry.scope));
         let _gate = self
             .commit_gate
             .lock()
@@ -173,7 +203,6 @@ impl DatasetRuntime {
 fn on_request_dataset(
     trigger: On<RequestDataset>,
     mut registry: ResMut<DatasetRegistry>,
-    settings: Res<lunco_settings::DownloadSettings>,
     mut runtime: ResMut<DatasetRuntime>,
     mut commands: Commands,
 ) -> Result<lunco_command_contracts::Ack, String> {
@@ -187,16 +216,11 @@ fn on_request_dataset(
             "dataset '{id}' is already installed or has an active operation"
         ));
     }
-    report_phase(
-        &mut commands,
-        id,
-        &entry.name,
-        &DatasetState::Downloading {
-            bytes_done: 0,
-            bytes_total: 0,
-        },
-    );
-    runtime.start(entry, settings.clone());
+    registry.set_state(id, DatasetState::Queued);
+    report_phase(&mut commands, id, &entry.name, &DatasetState::Queued);
+    runtime
+        .pending
+        .push_back((entry, PendingOperation::Download));
     Ok(lunco_command_contracts::Ack::new(OpId::new()))
 }
 
@@ -218,23 +242,18 @@ fn on_process_dataset(
         .process
         .as_ref()
         .ok_or_else(|| format!("dataset '{id}' has no manifest processing pipeline"))?;
-    let source = source_path(&entry)?;
     if !registry.process(id) {
         return Err(format!("dataset '{id}' already has an active operation"));
     }
-    info!(
-        "[datasets] processing '{}' ({}) — command-requested",
-        process.kind, id
-    );
-    report_phase(
-        &mut commands,
-        id,
-        &entry.name,
-        &DatasetState::Processing {
-            kind: process.kind.clone(),
+    let _ = process;
+    registry.set_state(id, DatasetState::Queued);
+    report_phase(&mut commands, id, &entry.name, &DatasetState::Queued);
+    runtime.pending.push_back((
+        entry,
+        PendingOperation::Process {
+            force: trigger.event().force,
         },
-    );
-    runtime.start_processing(entry, source);
+    ));
     Ok(lunco_command_contracts::Ack::new(OpId::new()))
 }
 
@@ -250,7 +269,7 @@ fn on_process_dataset(
 fn on_cancel_dataset(
     trigger: On<CancelDataset>,
     mut registry: ResMut<DatasetRegistry>,
-    runtime: Res<DatasetRuntime>,
+    mut runtime: ResMut<DatasetRuntime>,
     mut commands: Commands,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let id = &trigger.event().id;
@@ -261,8 +280,14 @@ fn on_cancel_dataset(
     if !registry.cancel(id) {
         return Err(format!("dataset '{id}' has no cancellable operation"));
     }
-    runtime.cancel(id);
-    report_phase(&mut commands, id, &name, &DatasetState::Cancelling);
+    if runtime.pending.iter().any(|(entry, _)| &entry.id == id) {
+        runtime.pending.retain(|(entry, _)| &entry.id != id);
+        registry.set_state(id, DatasetState::Cancelled);
+        report_phase(&mut commands, id, &name, &DatasetState::Cancelled);
+    } else {
+        runtime.cancel(id);
+        report_phase(&mut commands, id, &name, &DatasetState::Cancelling);
+    }
     Ok(lunco_command_contracts::Ack::new(OpId::new()))
 }
 
@@ -280,6 +305,19 @@ fn on_twin_closed(
     }
 }
 
+fn on_retire_dataset_scope(
+    event: On<lunco_assets_datasets::RetireDatasetScope>,
+    mut registry: ResMut<DatasetRegistry>,
+    mut runtime: ResMut<DatasetRuntime>,
+    mut commands: Commands,
+) {
+    runtime.retire_scopes(std::slice::from_ref(&event.scope));
+    registry.forget_scope(&event.scope);
+    commands.trigger(DatasetScopeRemoved {
+        scope: event.scope.clone(),
+    });
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_download(
     entry: &DatasetEntry,
@@ -293,10 +331,10 @@ fn spawn_download(
 
     use lunco_assets_download::download::{DownloadControl, download_asset_with_control};
 
+    let owned_entry = entry.clone();
     let key = entry.key.clone();
     let spec = entry.spec.clone();
     let scope = entry.scope.clone();
-    let destination = entry.path.clone();
     let destination_root = scope.cache_root(spec.shared);
     info!(
         "[datasets] downloading '{}' ({}) — user-requested",
@@ -304,25 +342,55 @@ fn spawn_download(
     );
 
     bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let completion_status = status.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let step_status = status.clone();
             let process_control = lunco_assets_processing::process::ProcessControl::new(
                 cancel.clone(),
                 commit_gate.clone(),
-            );
+            )
+            .with_progress(move |step| {
+                if let Ok(mut slot) = step_status.lock() {
+                    slot.state = Some(DatasetState::Processing {
+                        kind: step.to_owned(),
+                    });
+                }
+            });
             let progress_slot = status.clone();
             let extracting_slot = status.clone();
+            let completed_slot = status.clone();
+            let mut completed_inputs = owned_entry.inputs.clone();
+            let source_key = key.clone();
             let download_control = DownloadControl {
-                progress: Some(Box::new(move |done, total| {
+                progress: Some(Box::new(move |source, done, total| {
                     if let Ok(mut slot) = progress_slot.lock() {
-                        *slot = Some(DatasetState::Downloading {
+                        slot.state = Some(DatasetState::Downloading {
+                            source: source.to_owned(),
                             bytes_done: done,
                             bytes_total: total,
                         });
                     }
                 })),
+                completed: Some(Box::new(move |key| {
+                    let id = if key == source_key {
+                        Some("source")
+                    } else {
+                        key.strip_prefix(source_key.as_str())
+                            .and_then(|suffix| suffix.strip_prefix('/'))
+                    };
+                    if let Some(input) = completed_inputs
+                        .iter_mut()
+                        .find(|input| Some(input.id.as_str()) == id)
+                    {
+                        input.state = lunco_assets_datasets::DatasetInputState::Ready;
+                        if let Ok(mut slot) = completed_slot.lock() {
+                            slot.inputs = Some(completed_inputs.clone());
+                        }
+                    }
+                })),
                 extracting: Some(Box::new(move |entries| {
                     if let Ok(mut slot) = extracting_slot.lock() {
-                        *slot = Some(DatasetState::Processing {
+                        slot.state = Some(DatasetState::Processing {
                             kind: format!("extracting archive ({entries} entries)"),
                         });
                     }
@@ -338,20 +406,24 @@ fn spawn_download(
                 Some(destination_root.as_path()),
             ) {
                 Ok(()) => {
+                    if let Err(error) = publish_inputs(&owned_entry, &status) {
+                        return DatasetState::Failed(error);
+                    }
                     if let Some(process) = &spec.process {
                         if let Ok(mut slot) = status.lock() {
-                            *slot = Some(DatasetState::Processing {
+                            slot.state = Some(DatasetState::Processing {
                                 kind: process.kind.clone(),
                             });
                         }
                     }
-                    match run_process_step(
-                        &spec,
-                        &scope,
-                        &destination,
-                        &process_control,
-                        &processors,
-                    ) {
+                    let processed = if spec.process.is_some() {
+                        source_path(&owned_entry).and_then(|source| {
+                            run_process_step(&spec, &scope, &source, &process_control, &processors)
+                        })
+                    } else {
+                        Ok(())
+                    };
+                    match processed.and_then(|()| verify_delivery(&owned_entry)) {
                         Ok(()) => DatasetState::Installed,
                         Err(error) if cancel.load(Ordering::Acquire) => {
                             let _ = error;
@@ -366,25 +438,43 @@ fn spawn_download(
                 Err(error) => DatasetState::Failed(error.to_string()),
             }
         }))
-        .unwrap_or_else(|_| DatasetState::Failed("dataset worker panicked".into()))
+        .unwrap_or_else(|_| DatasetState::Failed("dataset worker panicked".into()));
+        match publish_inputs(&owned_entry, &completion_status) {
+            Ok(()) => result,
+            Err(error) => DatasetState::Failed(error),
+        }
     })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_processing(
     entry: &DatasetEntry,
-    source: std::path::PathBuf,
     cancel: Arc<std::sync::atomic::AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
     processors: lunco_assets_processing::process::ProcessorRegistry,
+    status: StatusSlot,
+    force: bool,
 ) -> bevy::tasks::Task<DatasetState> {
+    let owned_entry = entry.clone();
     let spec = entry.spec.clone();
     let scope = entry.scope.clone();
     bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let completion_status = status.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let control =
-                lunco_assets_processing::process::ProcessControl::new(cancel.clone(), commit_gate);
-            match run_process_step(&spec, &scope, &source, &control, &processors) {
+                lunco_assets_processing::process::ProcessControl::new(cancel.clone(), commit_gate)
+                    .with_force(force)
+                    .with_progress(move |step| {
+                        if let Ok(mut slot) = status.lock() {
+                            slot.state = Some(DatasetState::Processing {
+                                kind: step.to_owned(),
+                            });
+                        }
+                    });
+            match source_path(&owned_entry)
+                .and_then(|source| run_process_step(&spec, &scope, &source, &control, &processors))
+                .and_then(|()| verify_delivery(&owned_entry))
+            {
                 Ok(()) => DatasetState::Installed,
                 Err(error) if cancel.load(std::sync::atomic::Ordering::Acquire) => {
                     let _ = error;
@@ -393,34 +483,40 @@ fn spawn_processing(
                 Err(error) => DatasetState::Failed(format!("processing failed: {error}")),
             }
         }))
-        .unwrap_or_else(|_| DatasetState::Failed("dataset worker panicked".into()))
+        .unwrap_or_else(|_| DatasetState::Failed("dataset worker panicked".into()));
+        match publish_inputs(&owned_entry, &completion_status) {
+            Ok(()) => result,
+            Err(error) => DatasetState::Failed(error),
+        }
     })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn source_path(entry: &DatasetEntry) -> Result<std::path::PathBuf, String> {
-    let cache_root = entry.scope.cache_root(entry.spec.shared);
-    let source_relative = entry.path.strip_prefix(&cache_root).map_err(|_| {
-        format!(
-            "dataset '{}' source is outside its owning cache; refusing to process it",
-            entry.id
-        )
-    })?;
-    let source = std::iter::once(entry.path.clone())
-        .chain(
-            entry
-                .read_roots()
-                .iter()
-                .map(|root| root.join(source_relative)),
-        )
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            format!(
-                "dataset '{}' source is unavailable; request the dataset before processing it",
-                entry.id
-            )
-        })?;
-    Ok(source)
+fn source_path(entry: &DatasetEntry) -> std::io::Result<std::path::PathBuf> {
+    lunco_assets_datasets::source_read_path(
+        &entry.spec,
+        &entry.scope.cache_root(entry.spec.shared),
+        entry.read_roots(),
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn verify_delivery(entry: &DatasetEntry) -> std::io::Result<()> {
+    entry
+        .installed_artifact()
+        .map_err(std::io::Error::other)?
+        .map(|_| ())
+        .ok_or_else(|| std::io::Error::other(entry.delivery_error()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_inputs(entry: &DatasetEntry, status: &StatusSlot) -> Result<(), String> {
+    let inputs = entry.inspect_inputs();
+    status
+        .lock()
+        .map_err(|_| "dataset status channel poisoned".to_owned())?
+        .inputs = Some(inputs);
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -467,7 +563,7 @@ fn spawn_download(
         entry.key
     );
     if let Ok(mut slot) = status.lock() {
-        *slot = Some(DatasetState::Failed("not downloadable on web".into()));
+        slot.state = Some(DatasetState::Failed("not downloadable on web".into()));
     }
 }
 
@@ -477,9 +573,11 @@ fn apply_state(
     state: DatasetState,
     commands: &mut Commands,
 ) {
-    let changed_phase = registry
-        .state(id)
-        .is_some_and(|previous| previous.kind() != state.kind());
+    let changed_phase = registry.state(id).is_some_and(|previous| {
+        previous.kind() != state.kind()
+            || matches!((previous, &state), (DatasetState::Downloading { source: previous, .. }, DatasetState::Downloading { source: current, .. }) if previous != current)
+            || (matches!(state, DatasetState::Processing { .. } | DatasetState::Failed(_)) && previous != &state)
+    });
     if !registry.set_state(id, state.clone()) {
         return;
     }
@@ -534,7 +632,12 @@ fn drain_dataset_status(
     let mut completed = Vec::new();
     for (id, handle) in &mut runtime.operations {
         let next = match handle.status.lock() {
-            Ok(mut slot) => slot.take(),
+            Ok(mut slot) => {
+                if let Some(inputs) = slot.inputs.take() {
+                    registry.set_inputs(id, inputs);
+                }
+                slot.state.take()
+            }
             Err(_) => Some(DatasetState::Failed(
                 "dataset status channel poisoned".into(),
             )),
@@ -568,6 +671,51 @@ fn drain_dataset_status(
     }
     for id in completed {
         runtime.operations.remove(&id);
+    }
+}
+
+fn admit_dataset_operations(
+    settings: Res<lunco_settings::DownloadSettings>,
+    mut runtime: ResMut<DatasetRuntime>,
+    mut registry: ResMut<DatasetRegistry>,
+    mut commands: Commands,
+) {
+    loop {
+        let active = runtime.operations.len();
+        #[cfg(not(target_arch = "wasm32"))]
+        let active = active + runtime.retiring.len();
+        if active >= settings.max_parallel_downloads.max(1) {
+            break;
+        }
+        let Some((entry, operation)) = runtime.pending.pop_front() else {
+            break;
+        };
+        if registry.state(&entry.id) != Some(&DatasetState::Queued) {
+            continue;
+        }
+        let state = match operation {
+            PendingOperation::Download => DatasetState::Downloading {
+                source: entry.name.clone(),
+                bytes_done: 0,
+                bytes_total: 0,
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            PendingOperation::Process { .. } => DatasetState::Processing {
+                kind: entry
+                    .spec
+                    .process
+                    .as_ref()
+                    .expect("admitted process declaration")
+                    .kind
+                    .clone(),
+            },
+        };
+        apply_state(&mut registry, &entry.id, state, &mut commands);
+        match operation {
+            PendingOperation::Download => runtime.start(entry, settings.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            PendingOperation::Process { force } => runtime.start_processing(entry, force),
+        }
     }
 }
 
@@ -615,6 +763,10 @@ impl Plugin for DatasetProvisioningPlugin {
         register_commands!(on_request_dataset, on_process_dataset, on_cancel_dataset);
         register_all_commands(app);
         app.add_observer(on_twin_closed);
-        app.add_systems(Update, drain_dataset_status);
+        app.add_observer(on_retire_dataset_scope);
+        app.add_systems(
+            Update,
+            (drain_dataset_status, admit_dataset_operations).chain(),
+        );
     }
 }

@@ -38,7 +38,14 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-assets-processing`** | Native offline image/DEM/map/albedo/normal-map/glTF processors, with shared staging/commit and an open `ProcessorRegistry` selected by `ProcessConfig.kind`. Heavy decode and raster math live here. |
 | **`lunco-assets`** | Explicit Bevy provisioning and manifest-processing workers plus the asset-manager CLI. It composes the lightweight dataset contract with transport, download, processing, and renderer-independent operation status; ordinary asset readers should not depend on this package. Rhai selects and sequences authored provisioning and bake policy. |
 | **`lunco-modelica-assets`** | Native Modelica asset packaging and indexing: bundles source-library files and pre-parsed Rumoca definitions for the web runtime and provides the shared editor-index tools; keeps Modelica build-only dependencies out of the generic asset manager. |
-| **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and incremental CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing, independent of byte chunking. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
+| The shared dataset read contract includes worker-prepared input availability
+and source URLs; `lunco-assets` updates it with the existing operation progress
+channel. `assets.provision` owns download/preparation wording and actions. The
+workbench's `OpenWebUrl` command uses its existing egui browser output adapter
+for validated HTTP(S) links. The production artifact pipeline gate exercises
+these dataset facts and the authored consent view.
+
+**`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and incremental CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing, independent of byte chunking. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
 | **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
 | **`lunco-theme`** | Centralized design tokens (Catppuccin-based) for consistent UI across all panels and domains; shared persisted diagram-control presentation preferences. |
@@ -444,10 +451,13 @@ contracts from `lunco-assets-datasets`. It does not depend on Bevy or image
 processing.
 
 **`lunco-assets-processing`**
-The native baking layer. It owns heavy image/DEM/GeoTIFF/SVG/glTF processing,
-cooperative cancellation, bake keys, staging, and atomic publication. New
-heavy processors register a `ProcessorSpec` in the `ProcessorRegistry`; the
-shared pipeline owns output identity and commit semantics.
+Native offline processors and ordered artifact execution. Uses standard GeoTIFF
+sampling, native raster operations, the shared Rhai hook interpreter, optional
+offline WESL GPU kernels and optional Modelica compiler/batch-runner adapters.
+External stages use declared inputs, explicit process arguments and captured
+logs. One staging/validation/commit boundary publishes leaf and bundle artifacts.
+Lightweight recipe/receipt types remain in `lunco-assets-datasets`; policy stays
+authored. See [artifact processing](architecture/asset-processing.md).
 
 **`lunco-assets`**
 The explicit application provisioning boundary. It owns user-authorised Bevy
@@ -1650,3 +1660,7 @@ solver storage; `lunco-cosim` reads completed native joint reactions. The
 registry interpolation package owns render easing. Enhanced determinism remains
 enabled. Production behavior and precision qualification are documented in
 [the integration review](reviews/upstream-only-physics-integration.md).
+
+Scene download completeness is shared through `lunco-assets-datasets::SceneDatasetRequirements`;
+`lunco-usd-bevy-runtime-core` produces it from composed stage facts and owns its
+simulation admission hold. UI and scripting consume the same resource.

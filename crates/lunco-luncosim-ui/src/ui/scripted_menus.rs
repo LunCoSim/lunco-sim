@@ -134,10 +134,7 @@ pub(crate) fn invoke_scripted_menu(
         let binding = bindings
             .get(invocation.binding)
             .map_err(|_| "workbench menu callback has been retired".to_owned())?;
-        let selected = binding.select_for_scene(
-            invocation.scope.owner_twin_id,
-            invocation.scope.scene_generation,
-        )?;
+        let selected = binding.select_for_owner(invocation.scope.owner_twin_id)?;
         let entity = commands.spawn((selected, ChildOf(invocation.binding))).id();
         commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
             binding: Some(entity),
@@ -166,10 +163,11 @@ fn bind_items(
                 .action
                 .as_ref()
                 .map(|action| {
-                    let binding = ToolHookBinding::for_provider(
+                    let binding = ToolHookBinding::for_owner(
                         action.tool.clone(),
                         action.hook.clone(),
                         twin_id,
+                        lunco_scripting_bridge_core::ToolHookBindingRetention::Surface,
                     )?;
                     Ok::<_, String>((
                         commands.spawn((binding, ChildOf(root))).id(),
@@ -239,9 +237,9 @@ pub(crate) fn on_script_ui_request(
                 // from a replaced contribution cannot activate its successor.
                 let workspace = ctx.resource::<lunco_workspace::WorkspaceResource>();
                 let scene = ctx.resource::<lunco_core::SceneTransitionCoordinator>();
-                let scope = RuntimeUiActionScope::capture(workspace, scene);
+                let scope = RuntimeUiActionScope::capture_owner(workspace);
                 let enabled = scope.validate(workspace, scene).is_ok();
-                ui.push_id((root, scope.owner_twin_id, scope.scene_generation), |ui| {
+                ui.push_id((root, scope.owner_twin_id, scope.lifetime), |ui| {
                     ui.add_enabled_ui(enabled, |ui| draw_items(ui, ctx, &rendered, scope));
                 });
             });

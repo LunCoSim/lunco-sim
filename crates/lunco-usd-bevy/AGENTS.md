@@ -69,7 +69,7 @@ The composer passes through three URI shapes for the resolved attribute:
 
 | Shape | Meaning | Example |
 |---|---|---|
-| `lunco://...` | LunCoSim asset **library** — a logical address. The reader resolves `assets/` first, then `<cache>/` (populated by `cargo run -p lunco-assets -- download`), so git-tracked content and downloaded binaries share one address space. | `lunco://models/perseverance.glb` |
+| `lunco://...` | LunCoSim asset **library** — a logical address. The reader resolves `assets/` first, then `<cache>/` (populated by `cargo run -p lunco-assets -- download`), so git-tracked content and downloaded binaries share one address space. | `lunco://components/power/battery.usda` |
 | `/abs/path` (filesystem) | `/`-prefixed USD asset path resolved against the workspace `assets/` root. | `/ws/assets/models/x.glb` |
 | `./relative.glb` | Relative to the layer's parent directory. | `./body.glb` |
 

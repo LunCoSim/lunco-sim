@@ -112,6 +112,7 @@ pub(crate) fn install(app: &mut App) {
 
 fn context(twin: Option<u64>, scene: Option<u64>) -> RuntimeExecutionContext {
     RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(twin.map_or_else(
             || RuntimeRoute::application(RuntimeCycle::Visualization),
             |id| RuntimeRoute::twin_owned(RuntimeCycle::Visualization, scene.unwrap_or(0), id),

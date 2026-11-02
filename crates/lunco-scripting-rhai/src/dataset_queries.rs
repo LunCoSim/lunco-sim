@@ -60,14 +60,17 @@ impl ApiQueryProvider for ListDatasetsProvider {
             .filter(|entry| filter.is_none_or(|value| entry.scope.id() == value))
             .map(|entry| {
                 let state = match &entry.state {
+                    lunco_assets_datasets::DatasetState::Queued => api_value!({"kind":"queued"}),
                     lunco_assets_datasets::DatasetState::Missing => {
                         api_value!({ "kind": "missing" })
                     }
                     lunco_assets_datasets::DatasetState::Downloading {
+                        source,
                         bytes_done,
                         bytes_total,
                     } => api_value!({
                         "kind": "downloading",
+                        "source": source.clone(),
                         "bytes_done": *bytes_done,
                         "bytes_total": *bytes_total,
                     }),
@@ -88,6 +91,20 @@ impl ApiQueryProvider for ListDatasetsProvider {
                     }
                 };
                 let metadata = lunco_api_core::api_value_from_serializable(&entry.spec.extra)?;
+                let inputs:Vec<_>=entry.inputs.iter().map(|input|api_value!({"id":input.id.clone(),"name":input.name.clone(),"url":input.url.clone(),"state":input.state.kind(),"error":input.state.error()})).collect();
+                let recipe = match entry.spec.process.as_ref().and_then(|process|process.pipeline.as_ref()) {
+                    Some(pipeline) => {
+                        let steps:Vec<_> = pipeline.steps.iter().map(|step| api_value!({
+                            "id":step.id.clone(), "kind":step.kind.clone(), "input":step.input.clone(),
+                        })).collect();
+                        let artifacts:Vec<_> = pipeline.artifacts.iter().map(|artifact| {
+                            let dimensions = artifact.dimensions.map(|dimensions|api_value!([dimensions[0],dimensions[1]])).unwrap_or(ApiValue::Unit);
+                            api_value!({"uri":format!("{}/{}",entry.artifact_uri(),artifact.path),"kind":artifact.kind.clone(),"dimensions":dimensions})
+                        }).collect();
+                        api_value!({"steps":steps,"artifacts":artifacts})
+                    }
+                    None => ApiValue::Unit,
+                };
                 Ok(api_value!({
                     "id": entry.id.clone(),
                     "key": entry.key.clone(),
@@ -97,8 +114,13 @@ impl ApiQueryProvider for ListDatasetsProvider {
                     "state": state,
                     "processed": entry.spec.process.is_some(),
                     "recommended": entry.recommended,
+                    "required_for_scene": world.get_resource::<lunco_assets_datasets::SceneDatasetRequirements>()
+                        .is_some_and(|requirements| requirements.ids.contains(&entry.id)),
                     "artifact_uri": entry.artifact_uri(),
                     "metadata": metadata,
+                    "recipe": recipe,
+                    "inputs": inputs,
+                    "inputs_ready": entry.inputs_ready(),
                 }))
             })
             .collect::<Result<Vec<_>, ApiQueryError>>()?;

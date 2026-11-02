@@ -467,6 +467,7 @@ pub fn evaluate_readiness(
     };
     *last_fixed_s = now_fixed_s;
     let runtime_context = RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(RuntimeRoute::core(RuntimeCycle::Simulation)),
         phase: RuntimePhase::Behavior,
         clock: RuntimeClock::Simulation,

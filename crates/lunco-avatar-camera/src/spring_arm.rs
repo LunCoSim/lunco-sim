@@ -219,6 +219,7 @@ pub(crate) fn spring_arm_system(
             ("delta_seconds", F::Float(f64::from(dt))),
         ]);
         let context = lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
             route: Some(lunco_core::RuntimeRoute::application(
                 lunco_core::RuntimeCycle::Presentation,
             )),

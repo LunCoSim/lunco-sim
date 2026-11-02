@@ -67,6 +67,7 @@ fn incomplete_composition_runtime_context(
         lunco_core::RuntimeRoute::application(lunco_core::RuntimeCycle::Lifecycle)
     };
     Ok(lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(route),
         phase: lunco_core::RuntimePhase::Preparation,
         clock: lunco_core::RuntimeClock::None,
@@ -251,6 +252,10 @@ fn record_scene_load_terminal_outcome(
     scene_entities: SceneEntities,
     mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
     mut pending: ResMut<PendingSceneStageOutcome>,
+    datasets: (
+        Option<Res<lunco_assets_datasets::SceneDatasetRequirements>>,
+        Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    ),
     mut commands: Commands,
 ) {
     let Some(g) = in_flight else {
@@ -374,6 +379,20 @@ fn record_scene_load_terminal_outcome(
         .any(|prim| prim.stage_handle.id() == g.stage_id);
     if still_awaiting || still_projecting {
         return;
+    }
+
+    if let (Some(requirements), Some(registry)) = (&datasets.0, &datasets.1) {
+        let root = mount_state.as_deref().and_then(|mount| mount.active_root());
+        if requirements.scene.is_none()
+            || requirements.scene != root
+            || !requirements.pending_scopes.is_empty()
+            || requirements
+                .ids
+                .iter()
+                .any(|id| !registry.state(id).is_some_and(|state| state.is_installed()))
+        {
+            return;
+        }
     }
 
     let missing_dependencies = stages

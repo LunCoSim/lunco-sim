@@ -246,6 +246,7 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
 
 fn evaluate(mut facts: HookValue) -> Result<LayoutResult, String> {
     let context = RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(RuntimeRoute::application(RuntimeCycle::Visualization)),
         phase: RuntimePhase::Preparation,
         clock: RuntimeClock::None,

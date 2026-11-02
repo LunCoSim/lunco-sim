@@ -233,7 +233,7 @@ fn on_run_rhai(
     let execution = WorldScriptExecution::for_command(active.origin(), guard.and_then(|g| g.0));
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    execution.validate_scene(scene.as_deref())?;
+    execution.validate_target(scene.as_deref())?;
     let admitted_workspace = WorldScriptWorkspace::capture(workspace.as_deref(), execution)?;
     pending.enqueue(
         PendingWorldScript::Code {
@@ -262,13 +262,14 @@ fn on_run_rhai_tool(
 ) -> Result<lunco_core::CommandOutcome, String> {
     let cmd = trigger.event();
     let execution = WorldScriptExecution::for_command(active.origin(), guard.and_then(|g| g.0));
-    execution.validate_scene(scene.as_deref())?;
+    execution.validate_target(scene.as_deref())?;
     let owner = WorldToolOwner::capture(
         &cmd.tool,
         "on_click",
         execution.twin_owner(None)?,
         workspace.as_deref(),
         scene.as_deref(),
+        None,
     )
     .inspect_err(|error| warn!("[rhai] {error}"))?;
     let id = active.get().unwrap_or(0);
@@ -318,8 +319,11 @@ fn on_run_rhai_tool_hook(
         .map(|(entity, binding)| (entity, binding.clone()));
     let execution = WorldScriptExecution::for_command(active.origin(), guard.and_then(|g| g.0));
     let result = (|| {
-        execution.validate_scene(scene.as_deref())?;
-        let mut owner = WorldToolOwner::capture(
+        execution.validate_target(scene.as_deref())?;
+        if cmd.binding.is_some() && binding.is_none() {
+            return Err("UI callback binding has been retired".to_owned());
+        }
+        let owner = WorldToolOwner::capture(
             &cmd.tool,
             &cmd.hook,
             execution.twin_owner(
@@ -328,15 +332,9 @@ fn on_run_rhai_tool_hook(
             )?,
             workspace.as_deref(),
             scene.as_deref(),
+            binding,
         )
         .inspect_err(|error| warn!("[rhai] {error}"))?;
-        if let Some(entity) = cmd.binding {
-            let (_, binding) =
-                binding.ok_or_else(|| "UI callback binding has been retired".to_owned())?;
-            owner
-                .bind_callback(entity, binding, &cmd.tool, &cmd.hook, scene.as_deref())
-                .inspect_err(|error| warn!("[rhai] {error}"))?;
-        }
         let id = active.get().unwrap_or(0);
         let correlation_id =
             (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
@@ -1013,6 +1011,10 @@ pub fn attach_requested_scenarios(
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    datasets: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut commands: Commands,
 ) {
     for (entity, request, twin_host) in q.iter() {
@@ -1028,20 +1030,35 @@ pub fn attach_requested_scenarios(
             discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
             continue;
         }
-        let root_failed = asset_server.load_state(&request.handle).is_failed();
-        let dependencies_failed = asset_server
-            .recursive_dependency_load_state(&request.handle)
-            .is_failed();
-        if root_failed || dependencies_failed {
-            error!(
-                "[rhai] failed to load requested scenario asset for {entity:?}; \
-                 root_failed={root_failed}, dependencies_failed={dependencies_failed}"
-            );
-            discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
+        if lunco_scripting_rhai_world::source_asset::required_source_data_pending(
+            &request.handle,
+            &assets,
+            &asset_server,
+            datasets.as_deref(),
+            roots.as_deref(),
+            mount.as_ref().and_then(|mount| mount.active_root()),
+            &mut commands,
+        ) {
             continue;
         }
-        if !asset_server.is_loaded_with_dependencies(&request.handle) {
-            continue;
+        match driver.runtime.try_commit_asset_dependency_closure(
+            &request.handle,
+            &assets,
+            &asset_server,
+        ) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                faults.raise(
+                    "scenario-source-failed",
+                    Some(entity),
+                    "requested scenario source",
+                    error.clone(),
+                );
+                error!("[rhai] requested scenario source for {entity:?} failed: {error}");
+                discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
+                continue;
+            }
         }
         let Some(source) = assets.get(&request.handle) else {
             // Native load completion precedes main-world Assets publication.
@@ -1056,21 +1073,6 @@ pub fn attach_requested_scenarios(
             discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
             continue;
         };
-        match driver.runtime.try_commit_asset_dependency_closure(
-            &request.handle,
-            &assets,
-            &asset_server,
-        ) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(error) => {
-                error!(
-                    "[rhai] requested scenario asset for {entity:?} has an invalid import closure: {error}"
-                );
-                discard_pending_scenario_asset(&mut commands, entity, dedicated_host);
-                continue;
-            }
-        }
         let request = request.clone();
         match attach_rhai_scenario(
             entity,
@@ -1353,6 +1355,9 @@ pub fn resolve_embedded_scenario_paths(
     >,
     mut removed: RemovedComponents<lunco_core::EmbeddedScenarioPath>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
+    datasets: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
     mut commands: Commands,
 ) {
     admissions.retain_sources(
@@ -1394,25 +1399,34 @@ pub fn resolve_embedded_scenario_paths(
             );
             (path.0.clone(), asset_server.load(uri))
         });
-        let root_failed = asset_server.load_state(&*handle).is_failed();
-        let dependencies_failed = asset_server
-            .recursive_dependency_load_state(&*handle)
-            .is_failed();
-        if root_failed || dependencies_failed {
-            preparation.failed = true;
-            faults.raise("scenario-source-failed", Some(entity), "authored scenario source",
-                format!("failed to load {} and its imports (root_failed={root_failed}, dependencies_failed={dependencies_failed})", path.0));
-            pending.remove(&entity);
+        if lunco_scripting_rhai_world::source_asset::required_source_data_pending(
+            handle,
+            &sources,
+            &asset_server,
+            datasets.as_deref(),
+            roots.as_deref(),
+            mount.as_ref().and_then(|mount| mount.active_root()),
+            &mut commands,
+        ) {
             continue;
         }
-        // `RhaiSource` declares its imports as Bevy dependencies. The source
-        // text is present before those dependencies necessarily finish, but
-        // attaching it at that point would let the synchronous Rhai resolver
-        // race the dependency publisher. Wait on Bevy's authoritative recursive
-        // state so a scenario becomes executable only with its complete import
-        // graph, while the UI and the rest of the ECS keep running.
-        if !asset_server.is_loaded_with_dependencies(&*handle) {
-            continue;
+        match driver
+            .runtime
+            .try_commit_asset_dependency_closure(handle, &sources, &asset_server)
+        {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                preparation.failed = true;
+                faults.raise(
+                    "scenario-source-failed",
+                    Some(entity),
+                    "authored scenario source",
+                    error,
+                );
+                pending.remove(&entity);
+                continue;
+            }
         }
         // Native load completion precedes main-world Assets publication.
         // Admission stays held until the source value is published here.
@@ -1451,29 +1465,6 @@ pub fn resolve_embedded_scenario_paths(
                 pending.remove(&entity);
                 continue;
             };
-            match driver.runtime.try_commit_asset_dependency_closure(
-                handle,
-                &sources,
-                &asset_server,
-            ) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(error) => {
-                    error!(
-                        "[rhai] loaded script asset `{}` has an invalid import closure: {error}",
-                        path.0
-                    );
-                    preparation.failed = true;
-                    faults.raise(
-                        "scenario-source-failed",
-                        Some(entity),
-                        "authored scenario source",
-                        format!("source {} has an invalid import closure: {error}", path.0),
-                    );
-                    pending.remove(&entity);
-                    continue;
-                }
-            }
             // Transfer the root handle to the scenario entity. Keeping the
             // exact resolved id is important: a guessed root spelling can
             // disagree with the AssetServer path and make relative imports bind

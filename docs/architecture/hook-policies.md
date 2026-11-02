@@ -243,8 +243,10 @@ Rust also validates the generic menu tree and replaces that provider's
 contribution. The UI host binds every leaf to an explicit provider-owned
 `ToolHookBinding` lease before publishing it. Each installation has a fresh
 widget identity; replacement retires that root and its endpoints. Selection
-creates a scene-bound invocation child, so application menus can remain
-installed across resets while old input and queued work are revoked.
+creates an owner-bound invocation child, so application menus remain usable
+during scene preparation and reset. Provider replacement or Twin closure
+revokes old input and queued work. Execution ownership and clocks remain
+separate from the exact `target_twin_id` carried by nested commands.
 Selected actions route through the shared bound Rhai tool queue. Twin
 contributions are cleared on `TwinClosed`, and a late contribution for an
 already-closed Twin is discarded. An absent optional hook clears its

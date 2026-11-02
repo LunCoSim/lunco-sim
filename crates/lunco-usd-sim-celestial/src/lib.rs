@@ -225,6 +225,7 @@ fn select_scene_time_on_transition_completed(
         has_celestial_source,
     );
     let context = lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::twin(
             lunco_core::RuntimeCycle::Lifecycle,
             transition_id.get(),

@@ -148,7 +148,7 @@ jobs:
         shell: bash
     env:
       # Point the asset pipeline at a project-local .cache/ so the build
-      # script can find the downloaded fonts / MSL / models. Without this,
+      # script can find the packaged fonts. Without this,
       # cache_dir() falls back to an OS-specific path that varies per
       # runner. Using $PWD/.cache keeps everything in the workspace.
       LUNCOSIM_CACHE: ${{ github.workspace }}/.cache
@@ -182,15 +182,6 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ${{ matrix.apt_pkgs }}
-
-      # Node.js is needed by `cargo run -p lunco-assets -- process -p
-      # lunco-usd` (calls `npx @gltf-transform/cli` to strip Draco/WebP
-      # extensions from the rover glTF). Pre-installed on GitHub runners,
-      # but we set it up explicitly to guarantee a known version.
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 'latest'
 
       # Cache the cargo registry + git checkouts. The target/ dir is
       # cached separately by swatinem/rust-cache which keys on
@@ -313,6 +304,24 @@ jobs:
             file_storage::tests::cache_directory_transaction_serializes_independent_writers_and_releases_lock \
             file_storage::tests::cache_directory_transaction_streams_regular_metadata_without_following_links \
             file_storage::tests::cache_directory_transaction_serializes_child_process
+
+      - name: Verify native artifact preparation and transfer recovery
+        run: |
+          cargo test --release --locked -j 4 --lib \
+            -p lunco-assets-processing -p lunco-geotiff -p lunco-assets-datasets -p lunco-assets-download -p lunco-assets-transport -p lunco-usd-bevy-stage -p lunco-scripting-rhai-world \
+            -- --exact \
+            world_bridge::tests::source_closure_commit_waits_for_publication_and_rejects_cycles_atomically \
+            native_paths::tests::composed_requirements_select_active_variants_arrays_and_samples \
+            native_paths::tests::consumed_requirements_use_the_prepared_twin_search_identity \
+            projection::tests::projected_reader_roundtrips_nodes_and_rejects_matrix_transforms \
+            projection::tests::polar_hemispheres_longitudes_and_offsets_are_general \
+            pipeline::tests::recipe_transaction_customization_integrity_and_failed_replacement \
+            pipeline::tests::external_process_uses_declared_inputs_and_validates_its_artifact \
+            download::tests::staged_install_replaces_a_directory_and_version_as_one_commit \
+            download::tests::cancelled_staged_install_leaves_the_previous_payload_intact \
+            download::tests::failed_transfer_closes_staging_and_allows_retry_in_literal_paths \
+            tests::byte_download_resumes_a_truncated_response \
+            tests::shared_retry_policy_stops_on_non_retryable_or_cancelled_errors
 
       - name: Verify Windows literal filename runtime
         if: matrix.platform == 'windows'

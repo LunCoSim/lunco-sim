@@ -927,6 +927,7 @@ pub fn on_run_lint(
         {
             Some(lunco_core::CommandOrigin::Rhai { context, .. }) => context,
             _ => lunco_core::RuntimeExecutionContext {
+                target_twin_id: None,
                 route: Some(lunco_core::RuntimeRoute::application(
                     lunco_core::RuntimeCycle::Command,
                 )),

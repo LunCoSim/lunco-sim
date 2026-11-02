@@ -357,14 +357,18 @@
       "bindings": {
         "title": { "source": "title" },
         "description": { "source": "description" },
-        "scope_label": { "source": "scope_label" }
+        "scope_label": { "source": "scope_label" },
+        "simulation_status": { "source": "simulation_status" },
+        "simulation_detail": { "source": "simulation_detail" }
       },
       "collections": [
         {
           "source": "rows",
           "container": "asset-consent-rows",
           "template": "ui/asset_consent_row.html",
-          "key": "id"
+          "key": "id",
+          "css": ["details_display", "action_display", "min_height", "stages_display"],
+          "scrollbar": "asset-consent-scrollbar"
         },
         {
           "source": "actions",
@@ -374,7 +378,7 @@
         }
       ],
       "interactive": true,
-      "modal": true,
+      "modal": false,
       "dismiss_action": "dismiss",
       "placement": { "mode": "viewport" }
     },

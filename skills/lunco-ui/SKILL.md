@@ -458,7 +458,8 @@ the shared vector `UiIcon::Check` and `UiIcon::Pending` with accessible status
 text; do not render status words or font-dependent glyphs as a second status
 system. Menu contributions bind endpoints under a provider-owned ECS root;
 replace the root and widget scope together. Provider bindings survive scene
-reset, while each selection acquires a scene-bound invocation child. Retire
+reset, while each selection acquires an owner-bound invocation child pinned
+to its exact provider and target Twin. Retire
 that child on every admission failure or completion, and retire the provider
 root on replacement or its Twin's close. See `runtime-ui` for the full callback
 lifecycle and production gate.
@@ -564,8 +565,9 @@ Verify replacement while another perspective is active, then return to the
 Editor: retired source and Modelica views must be absent, including their tabs.
 
 For dataset consent, use the Rhai-owned progress/action model documented in
-[runtime-ui](../runtime-ui/SKILL.md). Prompt suppression persists through
-`twin.toml [downloads]`; do not add a second global settings key for it.
+[runtime-ui](../runtime-ui/SKILL.md). Closing the prompt preserves mandatory
+scene-data holds. New scene/runtime requirements reopen it; required-data
+consent has no persistent suppression setting.
 
 The Entities panel follows `SceneMountState::active_root` through the shared
 `UsdSceneRoot` ancestry helper. Membership follows scene hierarchy through

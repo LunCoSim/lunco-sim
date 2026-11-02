@@ -112,10 +112,19 @@ struct UsdStageProjectionData {
 #[derive(Clone, Debug, Default)]
 pub struct UsdStageProjectionPlan {
     native_paths: Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>>,
+    asset_identifiers: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    layer_identifiers: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     data: Arc<UsdStageProjectionData>,
 }
 
 impl UsdStageProjectionPlan {
+    /// Immutable active-scene requirements, extracted during composition.
+    pub fn asset_identifiers(
+        &self,
+    ) -> &std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+        &self.asset_identifiers
+    }
+
     /// Share the immutable native admission snapshot with its live stage owner.
     pub fn native_asset_paths_snapshot(
         &self,
@@ -138,6 +147,16 @@ impl UsdStageProjectionPlan {
                 references, origin, roots,
             ),
         ));
+        self.asset_identifiers = crate::native_paths::consumed_asset_identifiers_for_prims(
+            self,
+            UsdRead::prim_paths(self),
+        );
+        for (prim, identifiers) in &self.layer_identifiers {
+            self.asset_identifiers
+                .entry(prim.clone())
+                .or_default()
+                .extend(identifiers.iter().cloned());
+        }
     }
 
     /// Build the initial projection from the same composed OpenUSD stage that
@@ -557,10 +576,25 @@ impl UsdStageProjectionPlan {
                     .push(index);
             }
         }
-        Ok(Self {
+        let mut plan = Self {
             data: Arc::new(data),
             ..Self::default()
-        })
+        };
+        plan.asset_identifiers = crate::native_paths::composed_asset_identifiers_for_prims(
+            &plan,
+            UsdRead::prim_paths(&plan),
+        );
+        plan.layer_identifiers = crate::native_paths::composed_layer_identifiers_for_prims(
+            stage,
+            UsdRead::prim_paths(&plan),
+        );
+        for (prim, identifiers) in &plan.layer_identifiers {
+            plan.asset_identifiers
+                .entry(prim.clone())
+                .or_default()
+                .extend(identifiers.iter().cloned());
+        }
+        Ok(plan)
     }
 
     /// Iterate prims with one composed USD schema type from the source stage.

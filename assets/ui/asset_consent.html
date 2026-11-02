@@ -2,14 +2,23 @@
   <property name="title">Download resources</property>
   <property name="description">Some declared resources are not installed.</property>
   <property name="scope_label">scope</property>
+  <property name="simulation_status">Waiting for simulation readiness</property>
+  <property name="simulation_detail">—</property>
 
   <node id="asset-consent-root">
-    <node id="asset-consent-dialog">
+    <node id="asset-consent-dialog" pickable="true false">
       <text id="asset-consent-title">{title}</text>
       <text id="asset-consent-scope">{scope_label}</text>
       <text id="asset-consent-description">{description}</text>
-      <node id="asset-consent-rows" />
+      <node id="asset-consent-list">
+        <node id="asset-consent-rows" />
+        <node id="asset-consent-scrollbar" />
+      </node>
+      <node id="asset-consent-footer">
+      <text id="asset-consent-simulation">{simulation_status}</text>
+      <text id="asset-consent-simulation-detail">{simulation_detail}</text>
       <node id="asset-consent-actions" />
+      </node>
     </node>
   </node>
 </template>

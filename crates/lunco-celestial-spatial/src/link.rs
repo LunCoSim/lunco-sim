@@ -785,6 +785,7 @@ fn link_runtime_context(
         )
     };
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(route),
         phase,
         clock,

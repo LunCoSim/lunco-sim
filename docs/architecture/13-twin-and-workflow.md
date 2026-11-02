@@ -361,11 +361,6 @@ mode = "hybrid"                   # "path" | "uuid" | "hybrid" (default)
 [workspace]
 default = "build"                 # which workspace opens by default
 
-[downloads]
-# Suppress the missing-declared-assets consent window for this project.
-# Omitted/false shows the window when assets are missing.
-suppress_missing_prompt = false
-
 [settings]
 # Generic project-owned scalar settings. The camera-status HUD defaults on
 # when this key is omitted; set false to hide it for this Twin.

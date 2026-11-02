@@ -74,8 +74,20 @@ fn read_requested_dataset_artifact(
     asset_server: Option<Res<AssetServer>>,
     assets: Option<Res<Assets<TextAsset>>>,
     mut reads: ResMut<DatasetArtifactReads>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
     mut commands: Commands,
 ) {
+    if let (Some(scene), Some(entry)) = (
+        mount.as_ref().and_then(|mount| mount.active_root()),
+        registry
+            .as_ref()
+            .and_then(|registry| registry.entry(&trigger.event().id)),
+    ) {
+        commands.trigger(lunco_assets_datasets::AssetRequired {
+            scene,
+            uri: entry.artifact_uri(),
+        });
+    }
     request_dataset_artifact(
         &trigger.event().id,
         registry.as_deref(),
@@ -313,14 +325,7 @@ fn report_dataset_asset_failure(world: &mut World, id: &str, error: &str) {
         .get_resource::<lunco_assets_datasets::DatasetRegistry>()
         .and_then(|registry| registry.entry(id))
         .map(|entry| entry.state.clone());
-    if matches!(
-        state,
-        Some(
-            lunco_assets_datasets::DatasetState::Downloading { .. }
-                | lunco_assets_datasets::DatasetState::Processing { .. }
-                | lunco_assets_datasets::DatasetState::Cancelling
-        )
-    ) {
+    if state.as_ref().is_some_and(|state| !state.is_installed()) {
         if let Some(mut reads) = world.get_resource_mut::<DatasetArtifactReads>() {
             reads.failed.remove(id);
         }

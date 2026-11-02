@@ -9,7 +9,6 @@
 
 #![cfg(feature = "rhai")]
 
-use bevy::asset::{AssetEvent, AssetLoadFailedEvent};
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{ApiQueryError, ApiQueryResult};
@@ -17,7 +16,7 @@ use lunco_api_core::ApiErrorCode;
 use lunco_api_core::{ApiValue, api_value};
 use lunco_hooks::HookValue;
 use rhai::Engine;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
 
@@ -178,36 +177,11 @@ struct PendingTwinTool {
 #[derive(Resource, Default)]
 pub struct PendingTwinTools {
     items: Vec<PendingTwinTool>,
-    ready: HashSet<bevy::asset::AssetId<crate::source_asset::RhaiSource>>,
-    failed: HashMap<bevy::asset::AssetId<crate::source_asset::RhaiSource>, String>,
 }
 
 impl PendingTwinTools {
-    fn mark_ready(&mut self, id: bevy::asset::AssetId<crate::source_asset::RhaiSource>) {
-        if self.items.iter().any(|item| item.handle.id() == id) {
-            self.ready.insert(id);
-        }
-    }
-
-    fn mark_failed(
-        &mut self,
-        id: bevy::asset::AssetId<crate::source_asset::RhaiSource>,
-        error: String,
-    ) {
-        if self.items.iter().any(|item| item.handle.id() == id) {
-            self.failed.insert(id, error);
-        }
-    }
-
     fn release_twin(&mut self, twin: lunco_workspace::TwinId) {
         self.items.retain(|item| item.twin != twin);
-        let live = self
-            .items
-            .iter()
-            .map(|item| item.handle.id())
-            .collect::<HashSet<_>>();
-        self.ready.retain(|id| live.contains(id));
-        self.failed.retain(|id, _| live.contains(id));
     }
 }
 
@@ -238,7 +212,6 @@ fn on_load_twin_tool_library(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     asset_server: Option<Res<AssetServer>>,
-    assets: Option<Res<Assets<crate::source_asset::RhaiSource>>>,
     mut pending: ResMut<PendingTwinTools>,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let request = trigger.event();
@@ -304,49 +277,15 @@ fn on_load_twin_tool_library(
     let path = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
         .map_err(|error| format!("invalid Twin source `{uri}`: {error}"))?;
     let handle = asset_server.load::<crate::source_asset::RhaiSource>(path);
-    let id = handle.id();
-    if assets
-        .as_deref()
-        .is_some_and(|assets| assets.get(id).is_some())
-        && asset_server.is_loaded_with_dependencies(&handle)
-    {
-        pending.ready.insert(id);
-    }
-    let failed = asset_server
-        .get_load_state(id)
-        .is_some_and(|state| state.is_failed());
     pending.items.push(PendingTwinTool {
         handle,
         twin: twin_id,
         library_name: request.library_name.clone(),
         relative_path: request.relative_path.clone(),
     });
-    if failed {
-        pending.mark_failed(id, "the source asset had already failed to load".to_owned());
-    }
     Ok(lunco_command_contracts::Ack::new(
         lunco_command_contracts::OpId::new(),
     ))
-}
-
-fn mark_pending_twin_tools(
-    mut pending: ResMut<PendingTwinTools>,
-    mut events: MessageReader<AssetEvent<crate::source_asset::RhaiSource>>,
-    mut failures: MessageReader<AssetLoadFailedEvent<crate::source_asset::RhaiSource>>,
-) {
-    for event in events.read() {
-        match event {
-            AssetEvent::LoadedWithDependencies { id } => pending.mark_ready(*id),
-            AssetEvent::Added { .. } | AssetEvent::Modified { .. } => {}
-            AssetEvent::Removed { id } | AssetEvent::Unused { id } => pending.mark_failed(
-                *id,
-                "Twin tool source asset was removed before reading".to_owned(),
-            ),
-        }
-    }
-    for failure in failures.read() {
-        pending.mark_failed(failure.id, failure.error.to_string());
-    }
 }
 
 fn drain_pending_twin_tools(
@@ -358,34 +297,31 @@ fn drain_pending_twin_tools(
         ResMut<lunco_scripting::scenario::ScenarioDriver<crate::world_bridge::RhaiScenarioRuntime>>,
     >,
     mut scoped: ResMut<TwinToolLibraries>,
+    datasets: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    mut commands: Commands,
 ) {
-    let ready = std::mem::take(&mut pending.ready);
-    let failed = std::mem::take(&mut pending.failed);
     let items = std::mem::take(&mut pending.items);
     let mut still_pending = Vec::new();
     for item in items {
-        let id = item.handle.id();
-        if let Some(error) = failed.get(&id) {
-            warn!(
-                "[tool_libs] failed to load `{}`: {error}",
-                item.relative_path
-            );
-            continue;
-        }
-        if !ready.contains(&id) {
-            still_pending.push(item);
-            continue;
-        }
-        let Some(source) = assets.get(&item.handle) else {
-            pending.ready.insert(id);
-            still_pending.push(item);
-            continue;
-        };
         if !workspace
             .as_deref()
             .is_some_and(|workspace| workspace.active_twin == Some(item.twin))
             || scoped.owner() != Some(item.twin)
         {
+            continue;
+        }
+        if crate::source_asset::required_source_data_pending(
+            &item.handle,
+            &assets,
+            &asset_server,
+            datasets.as_deref(),
+            roots.as_deref(),
+            mount.as_ref().and_then(|mount| mount.active_root()),
+            &mut commands,
+        ) {
+            still_pending.push(item);
             continue;
         }
         let Some(driver) = driver.as_deref_mut() else {
@@ -402,7 +338,6 @@ fn drain_pending_twin_tools(
         ) {
             Ok(true) => {}
             Ok(false) => {
-                pending.ready.insert(id);
                 still_pending.push(item);
                 continue;
             }
@@ -414,6 +349,10 @@ fn drain_pending_twin_tools(
                 continue;
             }
         }
+        let Some(source) = assets.get(&item.handle) else {
+            still_pending.push(item);
+            continue;
+        };
         let validation = match driver.runtime.validate_prepared_tool_library(
             &item.library_name,
             &source.text,
@@ -468,8 +407,7 @@ pub fn register_twin_tool_loading(app: &mut App) {
         .add_observer(wind_down_twin_tool_scope)
         .add_systems(
             Update,
-            (mark_pending_twin_tools, drain_pending_twin_tools)
-                .chain()
+            drain_pending_twin_tools
                 .after(crate::source_asset::RhaiSourceAssetSet)
                 .after(crate::world_bridge::RhaiBuiltinPreparationSet)
                 .before(lunco_core::RuntimeCycleSet::Repl),

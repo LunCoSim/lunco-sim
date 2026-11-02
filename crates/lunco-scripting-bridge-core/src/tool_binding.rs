@@ -11,15 +11,6 @@ pub enum ToolHookBindingRetention {
     Invocation,
 }
 
-/// Publication lifetime, independent of the scene captured by a selected call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolHookBindingLifetime {
-    /// HUDs and context popups belong to one committed scene transaction.
-    Scene(Option<u64>),
-    /// Installed menu contributions live until provider replacement or Twin close.
-    Provider,
-}
-
 /// A callback lease retired by its surface or selected invocation. Queued tool
 /// work retains the exact entity and endpoint, never a name-only lookup.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
@@ -33,7 +24,7 @@ pub struct ToolHookBinding {
     /// Twin admitted by the UI owner, when Twin-scoped.
     pub owner_twin_id: Option<u64>,
     /// Publication lifetime owned by the installing UI surface.
-    pub lifetime: ToolHookBindingLifetime,
+    pub lifetime: lunco_core::InteractionLifetime,
     /// Registration owner pinned at binding creation.
     pub tool_scope: lunco_tools::ToolScope,
 }
@@ -52,25 +43,25 @@ impl ToolHookBinding {
             hook,
             owner_twin_id,
             retention,
-            ToolHookBindingLifetime::Scene(scene.and_then(|s| s.completed_generation())),
+            lunco_core::InteractionLifetime::Scene(scene.and_then(|s| s.lifecycle_generation())),
         )?;
-        binding.validate_scene(scene)?;
+        binding.validate_lifetime(scene)?;
         Ok(binding)
     }
 
-    /// Bind an installed provider independently of scene resets. Each selected
-    /// invocation still captures and validates its own scene transaction.
-    pub fn for_provider(
+    /// Bind an owner-scoped endpoint independently of scene readiness.
+    pub fn for_owner(
         tool: String,
         hook: String,
         owner_twin_id: Option<u64>,
+        retention: ToolHookBindingRetention,
     ) -> Result<Self, String> {
         Self::create(
             tool,
             hook,
             owner_twin_id,
-            ToolHookBindingRetention::Surface,
-            ToolHookBindingLifetime::Provider,
+            retention,
+            lunco_core::InteractionLifetime::Owner,
         )
     }
 
@@ -79,7 +70,7 @@ impl ToolHookBinding {
         hook: String,
         owner_twin_id: Option<u64>,
         retention: ToolHookBindingRetention,
-        lifetime: ToolHookBindingLifetime,
+        lifetime: lunco_core::InteractionLifetime,
     ) -> Result<Self, String> {
         if owner_twin_id == Some(0) {
             return Err("UI callback Twin owner must be non-zero".into());
@@ -100,18 +91,14 @@ impl ToolHookBinding {
         })
     }
 
-    /// Transfer a selected provider endpoint to a scene-bound invocation.
+    /// Transfer a retained owner endpoint to one invocation.
     /// The host parents this lease to the installed endpoint so replacement
     /// also revokes work that has not reached the execution queue yet.
-    pub fn select_for_scene(
-        &self,
-        owner_twin_id: Option<u64>,
-        generation: Option<u64>,
-    ) -> Result<Self, String> {
-        if self.lifetime != ToolHookBindingLifetime::Provider {
-            return Err(
-                "only installed provider endpoints create selected scene invocations".into(),
-            );
+    pub fn select_for_owner(&self, owner_twin_id: Option<u64>) -> Result<Self, String> {
+        if self.lifetime != lunco_core::InteractionLifetime::Owner
+            || self.retention != ToolHookBindingRetention::Surface
+        {
+            return Err("only retained owner endpoints create selected invocations".into());
         }
         if owner_twin_id == Some(0)
             || self
@@ -122,7 +109,7 @@ impl ToolHookBinding {
         }
         Ok(Self {
             retention: ToolHookBindingRetention::Invocation,
-            lifetime: ToolHookBindingLifetime::Scene(generation),
+            lifetime: lunco_core::InteractionLifetime::Owner,
             owner_twin_id,
             ..self.clone()
         })
@@ -137,16 +124,11 @@ impl ToolHookBinding {
         }
     }
 
-    /// Reject callbacks while replacing the scene or after its generation changes.
-    pub fn validate_scene(
+    /// Validate target lifetime without requiring simulation readiness.
+    pub fn validate_lifetime(
         &self,
         scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<(), String> {
-        match self.lifetime {
-            ToolHookBindingLifetime::Scene(generation) => {
-                lunco_core::scene::validate_interaction_scene(generation, scene)
-            }
-            ToolHookBindingLifetime::Provider => Ok(()),
-        }
+        self.lifetime.validate(scene)
     }
 }

@@ -6,11 +6,10 @@
 //! it to the generic HTML/CSS runtime surface.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use lunco_assets_datasets::{
-    DatasetRegistry, DatasetScope, DatasetScopeReady, DatasetScopeRemoved, DatasetState,
+    DatasetRegistry, DatasetScope, DatasetScopeRemoved, DatasetState, SceneDatasetRequirements,
 };
 use lunco_core::{AppSceneExt, Command, on_command, register_commands};
 use lunco_exposure_core::{EngineExposures, ExposureValue};
@@ -28,17 +27,40 @@ pub(crate) struct DatasetProvisioningState {
     dismissed: HashSet<String>,
     last_hook_generation: u64,
     last_interactive: Option<bool>,
+    last_simulation: Option<HookValue>,
+    expanded: std::collections::HashMap<String, HashSet<String>>,
+    pub(super) settings_groups: Vec<DatasetSettingsGroup>,
 }
 
 #[derive(Clone, Debug)]
-struct ProvisioningRow {
-    id: String,
+pub(super) struct ProvisioningRow {
+    pub(super) id: String,
     parameter_id: String,
-    label: String,
-    status: String,
-    action: String,
-    action_label: String,
-    scope: String,
+    pub(super) label: String,
+    pub(super) status: String,
+    pub(super) download_status: String,
+    pub(super) preparation_status: String,
+    pub(super) detail: String,
+    pub(super) source_url: String,
+    pub(super) source_files: String,
+    details_display: String,
+    details_label: String,
+    min_height: String,
+    stages_display: String,
+    pub(super) action_display: String,
+    pub(super) action: String,
+    pub(super) action_label: String,
+    pub(super) scope: String,
+    pub(super) ready: bool,
+    pub(super) rebuild_action: String,
+    pub(super) rebuild_label: String,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct DatasetSettingsGroup {
+    pub(super) owner: String,
+    pub(super) scope: String,
+    pub(super) rows: Result<Vec<ProvisioningRow>, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +77,8 @@ struct ProvisioningView {
     title: String,
     description: String,
     scope_label: String,
+    simulation_status: String,
+    simulation_detail: String,
     rows: Vec<ProvisioningRow>,
     actions: Vec<ProvisioningAction>,
 }
@@ -73,11 +97,16 @@ fn needs_provisioning(state: &DatasetState) -> bool {
     )
 }
 
-fn recommended_missing(registry: &DatasetRegistry, scope: &DatasetScope) -> bool {
-    registry
-        .entries()
-        .iter()
-        .any(|entry| &entry.scope == scope && entry.recommended && needs_provisioning(&entry.state))
+fn required_missing(
+    registry: &DatasetRegistry,
+    requirements: Option<&SceneDatasetRequirements>,
+    scope: &DatasetScope,
+) -> bool {
+    registry.entries().iter().any(|entry| {
+        &entry.scope == scope
+            && requirements.is_some_and(|requirements| requirements.ids.contains(&entry.id))
+            && needs_provisioning(&entry.state)
+    })
 }
 
 fn same_scope(state: &DatasetProvisioningState, scope: &DatasetScope) -> bool {
@@ -174,6 +203,8 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
             "title",
             "description",
             "scope_label",
+            "simulation_status",
+            "simulation_detail",
             "rows",
             "actions",
         ],
@@ -183,6 +214,8 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
     let title = string_field(fields, "title", "assets.provision result")?;
     let description = string_field(fields, "description", "assets.provision result")?;
     let scope_label = string_field(fields, "scope_label", "assets.provision result")?;
+    let simulation_status = string_field(fields, "simulation_status", "assets.provision result")?;
+    let simulation_detail = string_field(fields, "simulation_detail", "assets.provision result")?;
     let row_values = array_field(fields, "rows", "assets.provision result")?;
     if row_values.len() > MAX_PROVISIONING_ROWS {
         return Err(format!(
@@ -202,6 +235,19 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                     "parameter_id",
                     "label",
                     "status",
+                    "download_status",
+                    "preparation_status",
+                    "detail",
+                    "source_url",
+                    "source_files",
+                    "details_display",
+                    "details_label",
+                    "min_height",
+                    "stages_display",
+                    "action_display",
+                    "rebuild_action",
+                    "rebuild_label",
+                    "ready",
                     "action",
                     "action_label",
                     "scope",
@@ -213,6 +259,19 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                 parameter_id: string_field(fields, "parameter_id", &context)?,
                 label: string_field(fields, "label", &context)?,
                 status: string_field(fields, "status", &context)?,
+                download_status: string_field(fields, "download_status", &context)?,
+                preparation_status: string_field(fields, "preparation_status", &context)?,
+                detail: string_field(fields, "detail", &context)?,
+                source_url: string_field(fields, "source_url", &context)?,
+                source_files: string_field(fields, "source_files", &context)?,
+                details_display: string_field(fields, "details_display", &context)?,
+                details_label: string_field(fields, "details_label", &context)?,
+                min_height: string_field(fields, "min_height", &context)?,
+                stages_display: string_field(fields, "stages_display", &context)?,
+                action_display: string_field(fields, "action_display", &context)?,
+                ready: bool_field(fields, "ready", &context)?,
+                rebuild_action: string_field(fields, "rebuild_action", &context)?,
+                rebuild_label: string_field(fields, "rebuild_label", &context)?,
                 action: string_field(fields, "action", &context)?,
                 action_label: string_field(fields, "action_label", &context)?,
                 scope: string_field(fields, "scope", &context)?,
@@ -279,6 +338,8 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
         title,
         description,
         scope_label,
+        simulation_status,
+        simulation_detail,
         rows,
         actions,
     })
@@ -287,6 +348,13 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
 fn state_value(state: &DatasetState) -> HookValue {
     HookValue::map([
         ("kind", HookValue::str(state.kind())),
+        (
+            "source",
+            match state {
+                DatasetState::Downloading { source, .. } => HookValue::str(source),
+                _ => HookValue::Unit,
+            },
+        ),
         (
             "detail",
             match state {
@@ -314,24 +382,60 @@ fn state_value(state: &DatasetState) -> HookValue {
 
 fn invoke_policy(
     registry: &DatasetRegistry,
+    requirements: Option<&SceneDatasetRequirements>,
     scope: &DatasetScope,
-    workspace: Option<&WorkspaceResource>,
     interactive: bool,
+    simulation: HookValue,
+    expanded: Option<&HashSet<String>>,
+    include_optional: bool,
+    group: Option<&str>,
 ) -> Result<ProvisioningView, String> {
-    let root = project_root_for_scope(scope, workspace);
-    let suppressed = project_suppresses_prompt(root.as_deref(), workspace);
     let datasets = registry
         .entries()
         .iter()
-        .filter(|entry| &entry.scope == scope)
+        .filter(|entry| &entry.scope == scope && group.is_none_or(|group| entry.group == group))
         .map(|entry| {
             HookValue::map([
                 ("id", HookValue::str(entry.id.clone())),
                 ("key", HookValue::str(entry.key.clone())),
                 ("name", HookValue::str(entry.name.clone())),
                 ("recommended", HookValue::Bool(entry.recommended)),
+                (
+                    "required_for_scene",
+                    HookValue::Bool(requirements.is_some_and(|r| r.ids.contains(&entry.id))),
+                ),
                 ("processed", HookValue::Bool(entry.spec.process.is_some())),
                 ("state", state_value(&entry.state)),
+                (
+                    "expanded",
+                    HookValue::Bool(expanded.is_some_and(|ids| ids.contains(&entry.id))),
+                ),
+                ("inputs_ready", HookValue::Bool(entry.inputs_ready())),
+                (
+                    "inputs",
+                    HookValue::Array(
+                        entry
+                            .inputs
+                            .iter()
+                            .map(|input| {
+                                HookValue::map([
+                                    ("id", HookValue::str(input.id.clone())),
+                                    ("name", HookValue::str(input.name.clone())),
+                                    ("url", HookValue::str(input.url.clone())),
+                                    ("state", HookValue::str(input.state.kind())),
+                                    (
+                                        "error",
+                                        input
+                                            .state
+                                            .error()
+                                            .map(HookValue::str)
+                                            .unwrap_or(HookValue::Unit),
+                                    ),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
             ])
         })
         .collect();
@@ -340,10 +444,9 @@ fn invoke_policy(
         ("scope_id", HookValue::str(scope.id())),
         ("owner", HookValue::str(scope.label())),
         ("interactive", HookValue::Bool(interactive)),
-        ("show_on_start", HookValue::Bool(!suppressed)),
-        ("suppressed", HookValue::Bool(suppressed)),
-        ("suppressible", HookValue::Bool(root.is_some())),
         ("datasets", HookValue::Array(datasets)),
+        ("simulation", simulation),
+        ("include_optional", HookValue::Bool(include_optional)),
     ]);
     match lunco_hooks::invoke_unclassified(lunco_core_session::DATASET_PROVISION_HOOK, &[facts]) {
         Some(Ok(value)) => parse_view(value),
@@ -365,6 +468,31 @@ fn exposure_map(view: &ProvisioningView) -> ExposureValue {
                             ("parameter_id".to_owned(), row.parameter_id.clone().into()),
                             ("label".to_owned(), row.label.clone().into()),
                             ("status".to_owned(), row.status.clone().into()),
+                            (
+                                "download_status".to_owned(),
+                                row.download_status.clone().into(),
+                            ),
+                            (
+                                "preparation_status".to_owned(),
+                                row.preparation_status.clone().into(),
+                            ),
+                            ("detail".to_owned(), row.detail.clone().into()),
+                            ("source_url".to_owned(), row.source_url.clone().into()),
+                            ("source_files".to_owned(), row.source_files.clone().into()),
+                            (
+                                "details_display".to_owned(),
+                                row.details_display.clone().into(),
+                            ),
+                            ("details_label".to_owned(), row.details_label.clone().into()),
+                            ("min_height".to_owned(), row.min_height.clone().into()),
+                            (
+                                "stages_display".to_owned(),
+                                row.stages_display.clone().into(),
+                            ),
+                            (
+                                "action_display".to_owned(),
+                                row.action_display.clone().into(),
+                            ),
                             ("action".to_owned(), row.action.clone().into()),
                             ("action_label".to_owned(), row.action_label.clone().into()),
                             ("scope".to_owned(), row.scope.clone().into()),
@@ -393,6 +521,7 @@ fn exposure_map(view: &ProvisioningView) -> ExposureValue {
 }
 
 fn publish_view(view: Option<&ProvisioningView>, exposures: &mut EngineExposures) {
+    exposures.retain_across_scenes(SURFACE_NAMESPACE);
     let mut writer = exposures.writer(SURFACE_NAMESPACE);
     writer.clear_properties();
     let Some(view) = view else {
@@ -403,6 +532,8 @@ fn publish_view(view: Option<&ProvisioningView>, exposures: &mut EngineExposures
     writer.property("title", view.title.clone());
     writer.property("description", view.description.clone());
     writer.property("scope_label", view.scope_label.clone());
+    writer.property("simulation_status", view.simulation_status.clone());
+    writer.property("simulation_detail", view.simulation_detail.clone());
     writer.property("rows", exposure_map(view).get_map("rows"));
     writer.property("actions", exposure_map(view).get_map("actions"));
 }
@@ -424,13 +555,17 @@ impl ExposureMapFields for ExposureValue {
     }
 }
 
-fn advance_active(state: &mut DatasetProvisioningState, registry: &DatasetRegistry) {
+fn advance_active(
+    state: &mut DatasetProvisioningState,
+    registry: &DatasetRegistry,
+    requirements: Option<&SceneDatasetRequirements>,
+) {
     if state.active.is_some() {
         return;
     }
     while let Some(scope) = state.pending.pop() {
         let id = scope.id();
-        if !state.dismissed.contains(&id) && recommended_missing(registry, &scope) {
+        if !state.dismissed.contains(&id) && required_missing(registry, requirements, &scope) {
             state.active = Some(scope);
             return;
         }
@@ -439,37 +574,155 @@ fn advance_active(state: &mut DatasetProvisioningState, registry: &DatasetRegist
 
 pub(crate) fn publish_dataset_provisioning_surface(
     registry: Res<DatasetRegistry>,
+    requirements: Option<Res<SceneDatasetRequirements>>,
     workspace: Option<Res<WorkspaceResource>>,
     windows: Query<(), With<Window>>,
+    readiness: Option<Res<lunco_readiness::ReadinessRegistry>>,
+    readiness_state: Option<Res<lunco_readiness::ReadinessState>>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
+    transport: Option<Res<lunco_time::TimeTransport>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut state: ResMut<DatasetProvisioningState>,
     mut exposures: ResMut<EngineExposures>,
 ) {
     let hook_generation = lunco_hooks::generation();
     let interactive = !windows.is_empty();
-    let dirty = registry.is_changed()
+    let simulation = HookValue::map([
+        (
+            "pending",
+            readiness
+                .as_ref()
+                .map(|r| {
+                    HookValue::Array(
+                        r.pending()
+                            .map(|p| HookValue::str(p.label.clone()))
+                            .collect(),
+                    )
+                })
+                .unwrap_or(HookValue::Unit),
+        ),
+        (
+            "world_hold",
+            readiness_state
+                .as_ref()
+                .map(|s| HookValue::Bool(s.world_hold))
+                .unwrap_or(HookValue::Unit),
+        ),
+        (
+            "blockers",
+            progress
+                .as_ref()
+                .map(|p| {
+                    HookValue::Array(
+                        p.blockers()
+                            .map(|b| HookValue::str(b.reason.clone()))
+                            .collect(),
+                    )
+                })
+                .unwrap_or(HookValue::Unit),
+        ),
+        (
+            "playing",
+            transport
+                .as_ref()
+                .map(|t| HookValue::Bool(t.is_running()))
+                .unwrap_or(HookValue::Unit),
+        ),
+        (
+            "fault",
+            faults
+                .as_ref()
+                .and_then(|f| f.first.as_ref())
+                .map(|f| {
+                    HookValue::map([
+                        ("subject", HookValue::str(f.subject.clone())),
+                        ("detail", HookValue::str(f.detail.clone())),
+                    ])
+                })
+                .unwrap_or(HookValue::Unit),
+        ),
+    ]);
+    let requirements_changed = requirements.as_ref().is_some_and(|r| r.is_changed());
+    if requirements_changed {
+        state.active = None;
+        state.pending.clear();
+        state.dismissed.clear();
+        for scope in registry.entries().iter().map(|entry| &entry.scope) {
+            if !same_scope(&state, scope)
+                && required_missing(&registry, requirements.as_deref(), scope)
+            {
+                state.pending.push(scope.clone());
+            }
+        }
+    }
+    let dirty = requirements_changed
+        || registry.is_changed()
         || workspace.as_ref().is_some_and(|value| value.is_changed())
         || state.is_changed()
         || state.last_hook_generation != hook_generation
         || state.last_interactive != Some(interactive)
+        || state.last_simulation.as_ref() != Some(&simulation)
         || !exposures.surfaces.contains_key(SURFACE_NAMESPACE);
     if !dirty {
         return;
     }
-    advance_active(&mut state, &registry);
+    if requirements_changed
+        || registry.is_changed()
+        || state.last_hook_generation != hook_generation
+        || workspace.as_ref().is_some_and(|w| w.is_changed())
+    {
+        let mut groups = std::collections::BTreeMap::new();
+        for entry in registry.entries() {
+            let group = match &entry.scope {
+                DatasetScope::Engine => Some(entry.group.clone()),
+                DatasetScope::Twin { .. } => None,
+            };
+            let owner = group
+                .clone()
+                .unwrap_or_else(|| entry.scope.label().to_owned());
+            groups.insert((entry.scope.id(), owner), (entry.scope.clone(), group));
+        }
+        state.settings_groups = groups
+            .into_iter()
+            .map(|((scope_id, owner), (scope, group))| {
+                let rows = invoke_policy(
+                    &registry,
+                    requirements.as_deref(),
+                    &scope,
+                    interactive,
+                    HookValue::Unit,
+                    None,
+                    true,
+                    group.as_deref(),
+                )
+                .map(|view| view.rows);
+                DatasetSettingsGroup {
+                    owner,
+                    scope: scope_id,
+                    rows,
+                }
+            })
+            .collect();
+    }
+    advance_active(&mut state, &registry, requirements.as_deref());
     let view = state.active.as_ref().and_then(|scope| {
-        invoke_policy(&registry, scope, workspace.as_deref(), interactive)
-            .map_err(|error| warn!("[datasets] {error}"))
-            .ok()
+        invoke_policy(
+            &registry,
+            requirements.as_deref(),
+            scope,
+            interactive,
+            simulation.clone(),
+            state.expanded.get(&scope.id()),
+            false,
+            None,
+        )
+        .map_err(|error| warn!("[datasets] {error}"))
+        .ok()
     });
     publish_view(view.as_ref(), &mut exposures);
     state.last_hook_generation = hook_generation;
     state.last_interactive = Some(interactive);
-}
-
-#[derive(Event, Clone, Debug)]
-pub(crate) struct SetMissingAssetPromptSuppressed {
-    pub(crate) root: PathBuf,
-    pub(crate) suppressed: bool,
+    state.last_simulation = Some(simulation);
 }
 
 #[Command(default)]
@@ -477,18 +730,35 @@ pub(crate) struct DismissDatasetProvisioning {
     pub(crate) scope: String,
 }
 
-#[Command(default)]
-pub(crate) struct SuppressDatasetProvisioning {
-    pub(crate) scope: String,
+/// Expand or collapse the current dataset's source details.
+#[Command]
+pub(crate) struct ToggleDatasetDetails {
+    pub(crate) id: String,
 }
 
-fn scope_from_id(state: &DatasetProvisioningState, id: &str) -> Option<DatasetScope> {
-    state
+#[on_command(ToggleDatasetDetails)]
+fn toggle_dataset_details(
+    trigger: On<ToggleDatasetDetails>,
+    registry: Res<DatasetRegistry>,
+    mut state: ResMut<DatasetProvisioningState>,
+) -> Result<lunco_command_contracts::Ack, String> {
+    let entry = registry
+        .entry(&trigger.event().id)
+        .ok_or_else(|| "Dataset is no longer declared".to_owned())?;
+    if !state
         .active
-        .iter()
-        .chain(state.pending.iter())
-        .find(|scope| scope.id() == id)
-        .cloned()
+        .as_ref()
+        .is_some_and(|scope| scope == &entry.scope)
+    {
+        return Err("Dataset details belong to another or dismissed scope".into());
+    }
+    let ids = state.expanded.entry(entry.scope.id()).or_default();
+    if !ids.remove(&entry.id) {
+        ids.insert(entry.id.clone());
+    }
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
 }
 
 #[on_command(DismissDatasetProvisioning)]
@@ -512,127 +782,7 @@ fn on_dismiss_dataset_provisioning(
     }
 }
 
-#[on_command(SuppressDatasetProvisioning)]
-fn on_suppress_dataset_provisioning(
-    trigger: On<SuppressDatasetProvisioning>,
-    mut state: ResMut<DatasetProvisioningState>,
-    workspace: Option<Res<WorkspaceResource>>,
-    mut commands: Commands,
-) {
-    let id = trigger.event().scope.as_str();
-    let Some(scope) = scope_from_id(&state, id) else {
-        warn!("[datasets] cannot suppress unknown provisioning scope `{id}`");
-        return;
-    };
-    if let Some(root) = project_root_for_scope(&scope, workspace.as_deref()) {
-        commands.trigger(SetMissingAssetPromptSuppressed {
-            root,
-            suppressed: true,
-        });
-    }
-    state.dismissed.insert(id.to_owned());
-    if state
-        .active
-        .as_ref()
-        .is_some_and(|active| active.id() == id)
-    {
-        state.active = None;
-    }
-}
-
-register_commands!(
-    on_dismiss_dataset_provisioning,
-    on_suppress_dataset_provisioning
-);
-
-fn project_root_for_scope(
-    scope: &DatasetScope,
-    workspace: Option<&WorkspaceResource>,
-) -> Option<PathBuf> {
-    let root = match scope {
-        DatasetScope::Twin { root, .. } => Some(root.clone()),
-        DatasetScope::Engine => workspace.and_then(|workspace| {
-            let id = workspace.active_twin?;
-            workspace.twin(id).map(|twin| twin.root.clone())
-        }),
-    }?;
-    workspace
-        .filter(|workspace| {
-            workspace
-                .twins()
-                .any(|(_, twin)| twin.root == root && twin.manifest.is_some())
-        })
-        .map(|_| root)
-}
-
-fn project_suppresses_prompt(root: Option<&Path>, workspace: Option<&WorkspaceResource>) -> bool {
-    root.and_then(|root| {
-        workspace.and_then(|workspace| {
-            workspace
-                .twins()
-                .find(|(_, twin)| twin.root == root)
-                .and_then(|(_, twin)| twin.manifest.as_ref())
-        })
-    })
-    .is_some_and(lunco_twin::TwinManifest::suppress_missing_asset_prompt)
-}
-
-pub(crate) fn active_project_prompt_setting(
-    workspace: Option<&WorkspaceResource>,
-) -> Option<(PathBuf, bool)> {
-    let workspace = workspace?;
-    let id = workspace.active_twin?;
-    let twin = workspace.twin(id)?;
-    let manifest = twin.manifest.as_ref()?;
-    Some((twin.root.clone(), manifest.suppress_missing_asset_prompt()))
-}
-
-pub(crate) fn on_set_missing_asset_prompt_suppressed(
-    trigger: On<SetMissingAssetPromptSuppressed>,
-    mut workspace: ResMut<WorkspaceResource>,
-) {
-    let event = trigger.event();
-    let Some((id, _)) = workspace.twins().find(|(_, twin)| twin.root == event.root) else {
-        warn!(
-            "[datasets] cannot save missing-asset prompt setting: project `{}` is not open",
-            event.root.display()
-        );
-        return;
-    };
-    let Some(twin) = workspace.twin_mut(id) else {
-        return;
-    };
-    let Some(manifest) = twin.manifest.as_mut() else {
-        warn!(
-            "[datasets] cannot save missing-asset prompt setting: `{}` has no twin.toml",
-            event.root.display()
-        );
-        return;
-    };
-    if manifest.suppress_missing_asset_prompt() == event.suppressed {
-        return;
-    }
-    manifest.downloads = event.suppressed.then_some(lunco_twin::DownloadManifest {
-        suppress_missing_prompt: true,
-    });
-    if let Err(error) = twin.save_manifest() {
-        warn!(
-            "[datasets] could not save missing-asset prompt setting to `{}`: {error}",
-            event.root.display()
-        );
-    }
-}
-
-pub(crate) fn on_dataset_scope_ready(
-    trigger: On<DatasetScopeReady>,
-    registry: Res<DatasetRegistry>,
-    mut state: ResMut<DatasetProvisioningState>,
-) {
-    let scope = &trigger.event().scope;
-    if !same_scope(&state, scope) && recommended_missing(&registry, scope) {
-        state.pending.push(scope.clone());
-    }
-}
+register_commands!(toggle_dataset_details, on_dismiss_dataset_provisioning);
 
 pub(crate) fn on_dataset_scope_removed(
     trigger: On<DatasetScopeRemoved>,
@@ -648,14 +798,16 @@ pub(crate) fn on_dataset_scope_removed(
         state.active = None;
     }
     state.dismissed.remove(&scope.id());
+    state.expanded.remove(&scope.id());
+    state
+        .settings_groups
+        .retain(|group| group.scope != scope.id());
 }
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<DatasetProvisioningState>()
         .init_scene_resource::<EngineExposures>()
-        .add_observer(on_dataset_scope_ready)
         .add_observer(on_dataset_scope_removed)
-        .add_observer(on_set_missing_asset_prompt_suppressed)
         .add_systems(Update, publish_dataset_provisioning_surface);
     register_all_commands(app);
 }
@@ -780,6 +932,7 @@ mod tests {
         assert!(needs_provisioning(&DatasetState::Cancelled));
         assert!(!needs_provisioning(&DatasetState::Installed));
         assert!(!needs_provisioning(&DatasetState::Downloading {
+            source: "Fixture".to_owned(),
             bytes_done: 1,
             bytes_total: 2
         }));

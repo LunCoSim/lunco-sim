@@ -34,6 +34,8 @@ use usvg::{Options, Tree};
 pub struct ProcessControl {
     cancel: Arc<AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
+    progress: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    force: bool,
 }
 
 impl ProcessControl {
@@ -42,6 +44,25 @@ impl ProcessControl {
         Self {
             cancel,
             commit_gate,
+            progress: None,
+            force: false,
+        }
+    }
+
+    /// Attach the host's existing processing-status publication slot.
+    pub fn with_progress(mut self, callback: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.progress = Some(Arc::new(callback));
+        self
+    }
+    /// Explicitly rebuild an artifact without removing its last valid bundle.
+    pub fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+
+    pub(crate) fn report_step(&self, step: &str) {
+        if let Some(callback) = &self.progress {
+            callback(step);
         }
     }
 
@@ -51,7 +72,7 @@ impl ProcessControl {
         Self::new(Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(())))
     }
 
-    fn check(&self) -> Result<(), std::io::Error> {
+    pub(crate) fn check(&self) -> Result<(), std::io::Error> {
         if self.cancel.load(Ordering::Acquire) {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
@@ -124,6 +145,7 @@ impl ProcessorRegistry {
         registry.register(ProcessorSpec::new("map", process_map, &["mean"]));
         registry.register(ProcessorSpec::new("albedo", process_albedo, &["mean"]));
         registry.register(ProcessorSpec::new("normalmap", process_normalmap, &[]));
+        registry.register(ProcessorSpec::new("coverage", process_coverage, &[]));
         registry
     }
 
@@ -161,7 +183,7 @@ impl Default for ProcessorRegistry {
 ///   using `EXT_texture_webp` are rejected until a lossless Rust-owned WebP
 ///   conversion path is available; the extension is never discarded.
 /// - `"dem"`: crop a square ROI from a raw LROC/NAC DTM and write the
-///   square, georeferenced float32 `heightmap.tif` the runtime DEM reader
+///   square, georeferenced float64 `heightmap.tif` the runtime DEM reader
 ///   expects. `output` is a **folder** (the `demSource` target);
 ///   the heightmap lands at `<output>/materials/textures/heightmap.tif`.
 /// - `"map"`: co-registered ROI crop for a display/analysis raster.
@@ -215,6 +237,22 @@ pub fn process_asset_with_registry(
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    if process.kind == "pipeline" {
+        return crate::pipeline::process(
+            source_path,
+            process,
+            &output_path,
+            cache_root,
+            twin_root,
+            control,
+            registry,
+        );
+    }
+    if process.pipeline.is_some() {
+        return Err(io_err(
+            "only kind=\"pipeline\" can declare pipeline settings".into(),
+        ));
+    }
     process_asset_to(source_path, process, &output_path, control, registry)
 }
 
@@ -239,19 +277,30 @@ fn process_asset_to(
         )
     })?;
 
-    // ── Bake-key staleness check ──────────────────────────────────────────
-    // The processed output is a pure function of (source bytes, this config,
-    // pipeline version). Content-address it: a stamp beside the output holds
-    // the key of the bake that produced it, and a matching key plus a complete
-    // consumer artifact skips the whole decode (the expensive part — a big
-    // mosaic decodes to GBs of f64).
-    // Anything that could change the result — new source, edited ROI, a
-    // pipeline fix (bump PROCESS_PIPELINE_VERSION) — changes the key and rebakes.
-    // Never time-based: a cache that can't go stale beats one that expires.
-    let stamp_path = bake_stamp_path(&output_path);
     let key = bake_key(source_path, process)?;
-    if std::fs::read_to_string(&stamp_path).is_ok_and(|s| s.trim() == key)
-        && processed_output_present(&output_path, process, Some(source_path))
+    transaction(
+        &output_path,
+        process,
+        &key,
+        processor.sidecars,
+        control,
+        |stage_output| (processor.run)(source_path, stage_output, process, control),
+    )
+}
+
+/// All recipe and leaf outputs use this single staging/publication boundary.
+pub(crate) fn transaction(
+    output_path: &Path,
+    process: &ProcessConfig,
+    key: &str,
+    sidecars: &[&str],
+    control: &ProcessControl,
+    run: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    if !control.force
+        && std::fs::read_to_string(bake_stamp_path(output_path, process))
+            .is_ok_and(|s| s.trim() == key)
+        && processed_output_present(output_path, process, None)
     {
         println!(
             "  ✓ up-to-date (bake key match) → {}",
@@ -269,14 +318,14 @@ fn process_asset_to(
         ))
     })?);
 
-    (processor.run)(source_path, &stage_output, process, control)?;
+    run(&stage_output)?;
 
     control.check()?;
     // Stamp only after a fully successful bake, so a failed/interrupted run
     // never masquerades as fresh. The staged artifact and all of its sidecars
     // become visible together under the commit gate.
-    std::fs::write(bake_stamp_path(&stage_output), &key)?;
-    commit_staged_output(&stage_root, &output_path, processor.sidecars, control)?;
+    std::fs::write(bake_stamp_path(&stage_output, process), &key)?;
+    commit_staged_output(&stage_root, output_path, process, sidecars, control)?;
 
     println!("  ✓ processed → {}", output_path.display());
     Ok(())
@@ -307,13 +356,18 @@ fn staging_root(output_path: &Path) -> Result<std::path::PathBuf, std::io::Error
 fn commit_staged_output(
     stage_root: &Path,
     output_path: &Path,
+    process: &ProcessConfig,
     sidecars: &[&str],
     control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     let _gate = control.commit_guard()?;
     control.check()?;
 
-    let mut destinations = vec![output_path.to_path_buf(), bake_stamp_path(output_path)];
+    let stamp = bake_stamp_path(output_path, process);
+    let mut destinations = vec![output_path.to_path_buf()];
+    if !stamp.starts_with(output_path) {
+        destinations.push(stamp);
+    }
     if output_path.extension().is_some() {
         destinations.extend(
             sidecars
@@ -543,34 +597,10 @@ fn process_image(
 
 /// `kind = "dem"` pipeline — produce a runtime-loadable terrain site folder.
 ///
-/// Reads a raw LROC/NAC DTM (a non-square float32 raster with no GeoTIFF
-/// tags), crops the **square** region-of-interest the manifest specifies
-/// (`center_lat`/`center_lon` + `window_m`), resamples it to a square
-/// float32 raster, and writes the two files the runtime DEM reader
-/// (`lunco-terrain-surface/src/terrain.rs`) looks up under a `demSource`
-/// folder reference:
-///
-/// - `<output>/materials/textures/heightmap.tif` — square float32 GeoTIFF,
-///   elevation in metres. The reader rejects non-square rasters
-///   (`lunco-terrain-bake/src/dem.rs:148`), so the output is forced square
-///   even when the source ROI is anisotropic.
-///   (`DemMetadata::from_yaml_str`): `site_id`, `resolution_x`/`y`,
-///   `size_x_m`/`y_m`, `elevation_min`/`max_m`, `coordinates`.
-///
-/// No GDAL: the DTM's equirectangular projection is closed-form. With the
-/// mosaic true at `proj_center_lat`/`proj_center_lon`, `pixel_scale_m`
-/// metres per source pixel, and a spherical body of `body_radius_m`, a
-/// geographic `(lat, lon)` maps to source pixel
-/// `(col, row)` by:
-///
-/// ```text
-/// col = src_w/2 + (lon - proj_center_lon)·cos(proj_center_lat)·R / scale
-/// row = src_h/2 - (lat - proj_center_lat)·R               / scale
-/// ```
-///
-/// (longitude shrinks by `cos(lat)`; row grows downward — PDS rasters are
-/// north-up.) For a ≤2 km site the accumulated scale error from ignoring
-/// second-order terms is well under a pixel and irrelevant to the sim.
+/// Prepare a spherical GeoTIFF or explicitly georeferenced PDS/plain raster.
+/// Standard source metadata selects projection and pixel registration. Native
+/// sampling preserves f64 values, repairs bounded voids, and writes a node-based
+/// georeferenced heightmap under `materials/textures/heightmap.tif`.
 fn process_dem(
     source: &Path,
     output_dir: &Path,
@@ -585,16 +615,10 @@ fn process_dem(
         cfg.source_height_offset_m,
         control,
     )?;
-    let (roi, scale, center_lat, center_lon) = resolve_roi(cfg, &src, "dem")?;
-    let (out_n, win) = (roi.out_n, roi.win);
-    // Sanity ceiling only. A DEM's voids are FILLED below, not avoided — this
-    // exists to catch a window that has wandered off the product entirely.
-    reject_if_mostly_nodata(
-        &roi_samples(&src.samples, src.w, src.h, &roi, control)?,
-        "dem",
-        0.05,
-    )?;
-    let mut heights = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
+    let sampled = sample_gray(cfg, &src, "dem", true, control)?;
+    let out_n = sampled.resolution;
+    reject_if_mostly_nodata(&sampled.samples, "dem", 0.05)?;
+    let mut heights = sampled.samples;
     let filled = fill_dem_voids(&mut heights, out_n, "dem", control)?;
     if filled > 0 {
         println!(
@@ -602,9 +626,9 @@ fn process_dem(
             100.0 * filled as f64 / heights.len().max(1) as f64
         );
     }
-    let out: Vec<f32> = heights.iter().map(|&v| v as f32).collect();
+    let out = heights;
 
-    // ── Write the square float32 heightmap. ───────────────────────────────
+    // ── Write the square float64 heightmap. ───────────────────────────────
     let tex_dir = output_dir.join("materials").join("textures");
     std::fs::create_dir_all(&tex_dir)?;
     let tif_path = tex_dir.join("heightmap.tif");
@@ -612,28 +636,14 @@ fn process_dem(
         use tiff::encoder::{TiffEncoder, colortype};
         let mut enc = TiffEncoder::new(std::fs::File::create(&tif_path)?).map_err(tiff_io_err)?;
 
-        // The GEO half — without it QGIS opens the raster in pixel units and every
-        // slope computed from it is wrong by the ground-sample factor, silently.
-        //
-        // `(win - 1) * scale` is the sampled on-the-ground span; the frame is
-        // node-based: sample 0 on the west/north edge, sample n-1 on the east/south.
-        // Body radius, for the GeoTIFF citation only — it does not enter the
-        // pixel→metre mapping, which is a local metric frame.
-        //
-        // The canonical lunar radius: IAU/WGCCRE mean radius, 1737.4 km
-        // (Archinal et al., WGCCRE report) — the datum the LOLA/LRO products this
-        // pipeline ingests are themselves referenced to.
-        //
-        // ⚠ DO NOT re-type this number. It is declared once, in `lunco-core`
-        // (`lunco_celestial_data::MOON_MEAN_RADIUS_M`), precisely so this offline build tool
-        // and the simulation's `lunco_celestial::registry` — which re-exports it —
-        // cannot stamp two different datums. This site used to mirror the VALUE.
+        // Node samples include both crop edges. Preserve the source sphere
+        // and crop centre so downstream readers recover the same metric frame.
         let mut geo = lunco_geotiff::GeoTransform::centred_square(
-            (win - 1) as f64 * scale,
+            sampled.span_m,
             out_n,
-            lunco_celestial_data::MOON_MEAN_RADIUS_M,
-            center_lat,
-            center_lon,
+            sampled.radius_m,
+            sampled.center_lat,
+            sampled.center_lon,
         );
         // Frame provenance: only the manifest can know which lunar frame the
         // source product is in, so a declared `frame` is stamped and an absent
@@ -648,7 +658,7 @@ fn process_dem(
             geo = geo.with_frame(frame);
         }
         let mut img = enc
-            .new_image::<colortype::Gray32Float>(out_n as u32, out_n as u32)
+            .new_image::<colortype::Gray64Float>(out_n as u32, out_n as u32)
             .map_err(tiff_io_err)?;
         lunco_geotiff::write_geo_tags(img.encoder(), &geo, "Moon 2000").map_err(tiff_io_err)?;
         img.write_data(&out).map_err(tiff_io_err)?;
@@ -696,8 +706,8 @@ fn apply_dem_height_units(
 
 /// A grayscale source raster decoded for the geographic pipelines, plus the
 /// projection facts the container itself supplied. PDS3 labels carry their
-/// own extent/scale. TIFF georeferencing is authored in the process manifest;
-/// this grayscale decoder does not project TIFF tags into crop coordinates.
+/// own extent/scale. Standard spherical GeoTIFF metadata supplies the source
+/// projection; the manifest selects the output crop and simulation datum.
 struct GraySource {
     w: usize,
     h: usize,
@@ -705,6 +715,7 @@ struct GraySource {
     extent: Option<crate::pds_img::PdsExtent>,
     scale_m: Option<f64>,
     projection: Option<String>,
+    geo: Option<lunco_geotiff::SphericalRaster>,
 }
 
 /// Decode a DEM-class source raster to grayscale `f64`: TIFF (any numeric
@@ -726,6 +737,7 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
             extent: p.extent,
             scale_m: p.map_scale_m,
             projection: p.projection,
+            geo: None,
         });
     }
 
@@ -745,6 +757,75 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
         extent: None,
         scale_m: None,
         projection: None,
+        geo: read_source_projection(source)?,
+    })
+}
+
+fn process_coverage(
+    source: &Path,
+    output: &Path,
+    cfg: &ProcessConfig,
+    control: &ProcessControl,
+) -> std::io::Result<()> {
+    let mut src = decode_gray_source(source)?;
+    if cfg
+        .parameters
+        .get("zero_is_nodata")
+        .and_then(toml::Value::as_bool)
+        == Some(true)
+    {
+        for value in &mut src.samples {
+            if *value == 0.0 {
+                *value = f64::NAN;
+            }
+        }
+    }
+    let sampled = sample_gray(cfg, &src, "coverage", true, control)?;
+    let pixels: Vec<u8> = sampled
+        .samples
+        .iter()
+        .map(|v| if v.is_finite() { 255 } else { 0 })
+        .collect();
+    let image =
+        image::GrayImage::from_raw(sampled.resolution as u32, sampled.resolution as u32, pixels)
+            .ok_or_else(|| io_err("coverage output dimensions do not match its samples".into()))?;
+    image.save(output).map_err(|e| io_err(e.to_string()))
+}
+
+fn read_source_projection(
+    source: &Path,
+) -> std::io::Result<Option<lunco_geotiff::SphericalRaster>> {
+    let mut decoder =
+        tiff::decoder::Decoder::new(std::fs::File::open(source)?).map_err(tiff_io_err)?;
+    lunco_geotiff::read_spherical_raster(&mut decoder).map_err(|e| io_err(e.to_string()))
+}
+
+fn sample_gray(
+    cfg: &ProcessConfig,
+    src: &GraySource,
+    kind: &str,
+    nodes: bool,
+    control: &ProcessControl,
+) -> std::io::Result<crate::raster::SampledRaster> {
+    if let Some(geo) = &src.geo {
+        return crate::raster::sample(geo, &src.samples, src.w, src.h, cfg, nodes, control);
+    }
+    let (roi, scale, center_lat, center_lon) = resolve_roi(cfg, src, kind)?;
+    let samples = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
+    let span_m = (roi.win - 1) as f64 * scale;
+    let spacing_m = if nodes {
+        span_m / (roi.out_n - 1) as f64
+    } else {
+        roi.win as f64 * scale / roi.out_n as f64
+    };
+    Ok(crate::raster::SampledRaster {
+        samples,
+        resolution: roi.out_n,
+        span_m,
+        spacing_m,
+        center_lat,
+        center_lon,
+        radius_m: lunco_celestial_data::MOON_MEAN_RADIUS_M,
     })
 }
 
@@ -770,7 +851,7 @@ struct RoiCrop {
 /// labels author 0–360 °E).
 ///
 /// Fails loudly on a non-equirectangular source (polar stereographic products
-/// need a real projection, not this affine — the known pipeline gate).
+/// require projection-aware sampling instead of this affine).
 /// Bounding box (inclusive) of the samples that are actual measurements.
 ///
 /// PDS orthorectified products are footprints padded to a rectangle: the imaged
@@ -795,35 +876,6 @@ fn valid_data_bounds(samples: &[f64], w: usize, h: usize) -> Option<(usize, usiz
     let x0 = (0..w).find(|&x| col_has(x))?;
     let x1 = (0..w).rev().find(|&x| col_has(x))?;
     Some((x0, y0, x1, y1))
-}
-
-/// The RAW source samples inside the ROI, un-resampled.
-///
-/// The nodata guard sees these rather than the resampled output so its coverage
-/// decision is made against source measurements, independently of interpolation.
-fn roi_samples(
-    samples: &[f64],
-    src_w: usize,
-    src_h: usize,
-    roi: &RoiCrop,
-    control: &ProcessControl,
-) -> Result<Vec<f64>, std::io::Error> {
-    // RGB sources keep their data in `planes`; nothing to check here (see
-    // `valid_data_bounds`). Returning empty makes the guard a no-op rather than
-    // an index panic.
-    if samples.len() != src_w.saturating_mul(src_h) {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::with_capacity(roi.win * roi.win);
-    for (row, y) in (roi.y0..(roi.y0 + roi.win).min(src_h)).enumerate() {
-        if row.is_multiple_of(4096) {
-            control.check()?;
-        }
-        for x in roi.x0..(roi.x0 + roi.win).min(src_w) {
-            out.push(samples[y * src_w + x]);
-        }
-    }
-    Ok(out)
 }
 
 /// Interpolate bounded DEM voids without modifying measured postings.
@@ -1045,7 +1097,7 @@ fn resolve_roi(
             return Err(io_err(format!(
                 "{kind} pipeline: source declares projection {proj}; only \
                  EQUIRECTANGULAR sources can be cropped with the extent affine \
-                 (polar-stereographic products are not yet ingestible)"
+                 (use a supported spherical GeoTIFF for native projection-aware sampling)"
             )));
         }
     }
@@ -1303,13 +1355,22 @@ fn process_map(
             extent: None,
             scale_m: None,
             projection: None,
+            geo: if matches!(ext.as_str(), "tif" | "tiff") {
+                read_source_projection(source)?
+            } else {
+                None
+            },
         };
-        let (roi, _scale, _clat, _clon) = resolve_roi(cfg, &probe, "map")?;
-        let out_n = roi.out_n;
-        let rgb: Vec<Vec<f64>> = planes
-            .iter()
-            .map(|pl| resample_roi_bilinear(pl, w, h, &roi, control))
-            .collect::<Result<_, _>>()?;
+        let mut probe = probe;
+        let mut rgb = Vec::new();
+        let mut out_n = 0;
+        for plane in planes {
+            probe.samples = plane;
+            let sampled = sample_gray(cfg, &probe, "map", false, control)?;
+            reject_if_mostly_nodata(&sampled.samples, "map", 0.02)?;
+            out_n = sampled.resolution;
+            rgb.push(sampled.samples);
+        }
         let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
         for (i, px) in png.pixels_mut().enumerate() {
             if i.is_multiple_of(out_n.max(1) * 64) {
@@ -1331,14 +1392,10 @@ fn process_map(
 
     // Grayscale path (PDS `.IMG` orthos: single-band radiance).
     let src = decode_gray_source(source)?;
-    let (roi, _scale, _clat, _clon) = resolve_roi(cfg, &src, "map")?;
-    let out_n = roi.out_n;
-    reject_if_mostly_nodata(
-        &roi_samples(&src.samples, src.w, src.h, &roi, control)?,
-        "map",
-        0.02,
-    )?;
-    let gray = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
+    let sampled = sample_gray(cfg, &src, "map", false, control)?;
+    let out_n = sampled.resolution;
+    reject_if_mostly_nodata(&sampled.samples, "map", 0.02)?;
+    let gray = sampled.samples;
 
     // 1–99 percentile stretch over the CROP (not the whole mosaic — the crop
     // is the scene, and mosaic-wide outliers would flatten its contrast).
@@ -1440,7 +1497,9 @@ fn process_albedo(
             "albedo pipeline requires a grayscale PDS orthophoto `.IMG` or GeoTIFF; use `texture` for an already-authored colour albedo".into(),
         ));
     }
-    if is_gray_tiff {
+
+    let mut src = decode_gray_source(source)?;
+    if is_gray_tiff && src.geo.is_none() {
         let extent = (
             cfg.src_min_lat,
             cfg.src_max_lat,
@@ -1476,7 +1535,6 @@ fn process_albedo(
         }
     }
 
-    let mut src = decode_gray_source(source)?;
     // Orthophoto zeroes are unmapped coverage. Canonicalize that mask before
     // the shared valid-sample resampler so zeroes cannot darken adjacent data.
     for chunk in src.samples.chunks_mut(4096) {
@@ -1487,11 +1545,11 @@ fn process_albedo(
             }
         }
     }
-    let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "albedo")?;
-    let out_n = roi.out_n;
-    let crop = roi_samples(&src.samples, src.w, src.h, &roi, control)?;
-    reject_if_mostly_nodata(&crop, "albedo", 0.02)?;
-    let gray = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
+    let sampled = sample_gray(cfg, &src, "albedo", false, control)?;
+    let out_n = sampled.resolution;
+    let texel_m = sampled.spacing_m;
+    reject_if_mostly_nodata(&sampled.samples, "albedo", 0.02)?;
+    let gray = sampled.samples;
     let measured = |v: f64| v.is_finite() && v != 0.0;
     let (lo, hi) = grayscale_percentile_bounds(&gray, measured);
     let span = (hi - lo).max(f64::EPSILON);
@@ -1523,7 +1581,6 @@ fn process_albedo(
         )));
     }
 
-    let texel_m = (roi.win as f64 * scale) / out_n.max(1) as f64;
     let radius_px = if out_n < 2 {
         0
     } else {
@@ -1683,14 +1740,11 @@ fn process_normalmap(
 ) -> Result<(), std::io::Error> {
     control.check()?;
     let src = decode_gray_source(source)?;
-    let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "normalmap")?;
-    let out_n = roi.out_n;
-    reject_if_mostly_nodata(
-        &roi_samples(&src.samples, src.w, src.h, &roi, control)?,
-        "normalmap",
-        0.05,
-    )?;
-    let mut h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
+    let sampled = sample_gray(cfg, &src, "normalmap", true, control)?;
+    let out_n = sampled.resolution;
+    reject_if_mostly_nodata(&sampled.samples, "normalmap", 0.05)?;
+    let step = sampled.spacing_m;
+    let mut h = sampled.samples;
 
     // Fill voids BEFORE differencing, for the same reason `process_dem` does — and
     // this map is derived from the same heights, so it must reach the same answer
@@ -1713,7 +1767,6 @@ fn process_normalmap(
     }
 
     // Metres per output texel — the crop spans `win * scale` metres.
-    let step = (roi.win as f64 * scale) / out_n.max(1) as f64;
     let at = |x: isize, z: isize| -> f64 {
         let x = x.clamp(0, out_n as isize - 1) as usize;
         let z = z.clamp(0, out_n as isize - 1) as usize;
@@ -1863,6 +1916,7 @@ mod tests {
         lunco_storage::write_file_sync(&source, encoded.get_ref()).expect("RGB source raster");
 
         let process = ProcessConfig {
+            pipeline: None,
             kind: "map".into(),
             output: "terrain/test-map.png".into(),
             output_root: "cache".into(),
@@ -2068,9 +2122,11 @@ mod tests {
     #[test]
     fn cancelled_processing_cannot_commit_a_staged_artifact() {
         let tmp = tempfile::tempdir().expect("temporary processing directory");
+        let cfg: ProcessConfig = toml::from_str("kind='texture'\noutput='texture.png'").unwrap();
         let output = tmp.path().join("texture.png");
         lunco_storage::write_file_sync(&output, b"old").expect("old output");
-        lunco_storage::write_file_sync(&bake_stamp_path(&output), b"old-key").expect("old stamp");
+        lunco_storage::write_file_sync(&bake_stamp_path(&output, &cfg), b"old-key")
+            .expect("old stamp");
 
         let stage = tmp.path().join(".lunco-process-stage");
         lunco_storage::ensure_directory_sync(&stage).expect("stage directory");
@@ -2080,13 +2136,13 @@ mod tests {
 
         let control = ProcessControl::unrestricted();
         control.cancel.store(true, Ordering::Release);
-        assert!(commit_staged_output(&stage, &output, &[], &control).is_err());
+        assert!(commit_staged_output(&stage, &output, &cfg, &[], &control).is_err());
         assert_eq!(
             lunco_storage::read_file_sync(&output).expect("output remains"),
             b"old"
         );
         assert_eq!(
-            lunco_storage::read_file_sync(&bake_stamp_path(&output)).expect("stamp remains"),
+            lunco_storage::read_file_sync(&bake_stamp_path(&output, &cfg)).expect("stamp remains"),
             b"old-key"
         );
     }
@@ -2163,7 +2219,7 @@ mod tests {
     }
 
     /// `kind = "dem"` must turn a **non-square** source DTM into a **square**
-    /// georeferenced float32 `heightmap.tif`. This is the
+    /// georeferenced float64 `heightmap.tif`. This is the
     /// one invariant the runtime DEM reader enforces (`w == h`) and the
     /// exact reason the crop step exists — so assert it directly.
     #[test]
@@ -2184,6 +2240,7 @@ mod tests {
         // fit. The 2-point extent affine (extent corners → raster edges) places
         // the center. pixel_scale_m=2 so an 8 m window spans five source nodes.
         let cfg = ProcessConfig {
+            pipeline: None,
             kind: "dem".into(),
             output: "site".into(),
             output_root: "cache".into(),
@@ -2210,7 +2267,7 @@ mod tests {
         let out_dir = tmp.path().join("site");
         process_dem(&src_path, &out_dir, &cfg, &control()).expect("dem process should succeed");
 
-        // heightmap is square float32.
+        // heightmap is square float64.
         let out_bytes =
             lunco_storage::read_file_sync(&out_dir.join("materials/textures/heightmap.tif"))
                 .unwrap();
@@ -2219,7 +2276,7 @@ mod tests {
         assert_eq!(w, 4, "output width is the target");
         assert_eq!(h, 4, "output height equals width (SQUARE)");
         match dec.read_image().unwrap() {
-            tiff::decoder::DecodingResult::F32(v) => {
+            tiff::decoder::DecodingResult::F64(v) => {
                 assert_eq!(v.len(), 16);
                 // Values are a resampled slice of the gradient — all finite,
                 // and within the source's min..max range (0..880).
@@ -2229,7 +2286,7 @@ mod tests {
                         .all(|x| (*x as f64) >= -1.0 && (*x as f64) <= 900.0)
                 );
             }
-            other => panic!("expected F32 heightmap, got {other:?}"),
+            other => panic!("expected F64 heightmap, got {other:?}"),
         }
 
         // The manifest's frame declaration lands in the raster's own tags.
@@ -2280,6 +2337,7 @@ mod tests {
         lunco_storage::write_file_sync(&src_path, &label).unwrap();
 
         let cfg = ProcessConfig {
+            pipeline: None,
             kind: "dem".into(),
             output: "site".into(),
             output_root: "cache".into(),
@@ -2311,11 +2369,11 @@ mod tests {
         let (w, h) = dec.dimensions().unwrap();
         assert_eq!((w, h), (4, 4));
         match dec.read_image().unwrap() {
-            tiff::decoder::DecodingResult::F32(v) => {
+            tiff::decoder::DecodingResult::F64(v) => {
                 assert!(v.iter().all(|x| x.is_finite()));
                 assert!(v.iter().any(|x| *x > 0.0), "real samples made it through");
             }
-            other => panic!("expected F32 heightmap, got {other:?}"),
+            other => panic!("expected F64 heightmap, got {other:?}"),
         }
     }
 
@@ -2335,6 +2393,7 @@ mod tests {
         lunco_storage::write_file_sync(&src_path, &tif).unwrap();
 
         let cfg = ProcessConfig {
+            pipeline: None,
             kind: "normalmap".into(),
             output: "normal.png".into(),
             output_root: "cache".into(),
@@ -2396,6 +2455,7 @@ mod tests {
         lunco_storage::write_file_sync(&src_path, encoded.get_ref()).unwrap();
 
         let cfg = ProcessConfig {
+            pipeline: None,
             kind: "map".into(),
             output: "map.png".into(),
             output_root: "cache".into(),

@@ -37,6 +37,7 @@ fn render_policy_context(
     phase: lunco_core::RuntimePhase,
 ) -> lunco_core::RuntimeExecutionContext {
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(lunco_core::RuntimeRoute::application(
             lunco_core::RuntimeCycle::Presentation,
         )),

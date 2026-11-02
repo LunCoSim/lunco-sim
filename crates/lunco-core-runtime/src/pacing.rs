@@ -505,6 +505,8 @@ pub enum SimulationProgressOwner {
     UsdPhysicsAdmission,
     /// Authored terrain data and collider preparation.
     TerrainPreparation,
+    /// Declared data consumed by the current composed scene.
+    SceneDatasets,
     /// Resident collision support required by the active physical assemblies.
     TerrainColliderAdmission,
     /// Body-demanded planetary globe/collar collision support.
@@ -536,6 +538,14 @@ pub struct SimulationProgressKey {
 }
 
 impl SimulationProgressKey {
+    /// The selected scene owns one declaration-completeness gate.
+    pub const fn scene_datasets() -> Self {
+        Self {
+            owner: SimulationProgressOwner::SceneDatasets,
+            operation_id: 0,
+        }
+    }
+
     /// Key native physics admission to this World's single Avian integration owner.
     pub const fn physics_integration() -> Self {
         Self {

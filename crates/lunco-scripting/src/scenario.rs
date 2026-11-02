@@ -1132,6 +1132,7 @@ fn scenario_execution_context(
         (lunco_core::RuntimeClock::None, None, None)
     };
     lunco_core::RuntimeExecutionContext {
+        target_twin_id: None,
         route: Some(match (lease.twin, lease.scene) {
             (Some(twin), Some(generation)) => {
                 lunco_core::RuntimeRoute::twin_owned(cycle, generation, twin.raw())

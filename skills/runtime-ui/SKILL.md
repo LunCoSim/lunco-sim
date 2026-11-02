@@ -270,6 +270,10 @@ Declare every property that the bridge should write:
 ```
 
 Only bindings with `"css": true` also project `--ui-<property-name>` into CSS.
+For collection rows, explicitly list presentation fields in the collection's
+`css` array. Each row publishes its own `--ui-<field-name>` custom properties.
+Use these in Flair for dynamic layout, including collapsed details and hidden
+actions; HUI inline styles do not own rendered layout.
 Use that flag for authored CSS values, never labels, descriptions, or error
 messages. An omitted bindings map projects text only. Keep
 the manifest-owned outer rectangle separate from CSS-owned internal layout:
@@ -383,8 +387,8 @@ all cards; `TwinClosed` clears that Twin's cards. All three despawn their leases
 Stop hooks may clear existing content/actions idempotently; clears never create
 cards. New content, perspective declarations, and bindings reject during stop.
 HUI, dropdown, Escape, and native menu actions capture `RuntimeUiActionScope`
-at emission; validate it before interpreting the action, then retain the shared
-queue's execution-time scene check. Never resolve the next active Twin for an
+at emission; validate the exact owner and source lease again when executing.
+Scene-authored actions additionally retain their lifecycle generation. Never resolve the next active Twin for an
 old event. Named cards are scene-owned, so callback tools can update them independently of
 a scenario host. `ClearGuidedOverlay` clears the calling script's card and the
 active coach/spotlight presentation, preserving other cards. Inspect the admitted
@@ -395,19 +399,20 @@ on scene transition or owning Twin close; stop hooks cannot open menus. Each
 popup has its own widget identity and child callback leases. Replacement or
 dismissal retires unselected leases; selection transfers one `Invocation`
 binding to the queue, which releases it on execution or rejection. HUD rows
-use `Surface` retention. Scene transitions retire queued tools even while the
-interpreter is preparing. Never leave a selected popup endpoint unowned.
+use `Surface` retention. Scene transitions retire scene-bound queued work even
+while the interpreter is preparing; owner-bound application tools stay available. Never leave a selected popup endpoint unowned.
 Run `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` for the
 production popup/menu input, replacement, dismissal, reset, and Twin-replacement
 gate. Installed workbench menus bind provider-lifetime endpoints beneath a fresh
-installation root and the current input Twin/scene; disable input during scene
-transition. Selection creates a scene-bound invocation child. This keeps
-application menus reusable after scene reset while replacement revokes both
-held input and selected work. Every terminal admission/queue path releases the
+installation root and exact target Twin, independently of scene readiness.
+Selection creates an owner-bound invocation child. Menus remain usable during
+preparation and scene reset; provider or Twin replacement revokes old input
+and selected work. Every terminal admission/queue path releases the
 exact invocation lease, including overload with an omitted request owner.
 
 Nested deferred calls retain their typed caller context and capabilities through
-`CommandOrigin::Rhai`/`WorldScriptExecution`. Never rebuild a stopping caller as
+`CommandOrigin::Rhai`/`WorldScriptExecution`, including `target_twin_id` independently
+of the execution route. Never rebuild a stopping caller as
 UI/REPL evaluation. The gate stops `guided_hud_teardown.rhai`, then inspects the
 completed authored verdict from both deferred queues. The wrapper uses
 temporary application-source fixtures for the native asset watcher and removes
@@ -543,10 +548,20 @@ Useful diagnosis order:
   alone.
 
 For the dataset consent surface, trace `DatasetScope::id()` through
-`ListDatasets`, the row/action scope, and `assets::request_recommended`.
+`ListDatasets`, the row/action scope, and `assets::request_required`.
 Use `engine` or `twin:<name>`; never pass a display label as the selector.
-Retain downloading and processing rows, real byte progress, failure detail and
-retry/cancel actions. Dismissal means background work, and completion remains
+UI admission validates source/owner lifetime, independently of loading status.
+Application-owned exposure namespaces retain owner-scoped callbacks; scene
+namespaces pin the live scene lifecycle. Simulation admission stays in the
+shared progress gate. Native button callbacks use pointer events, including
+same-frame clicks and held presses. The data window is non-modal; its panel
+uses HUI's explicit `pickable` style without claiming the entire viewport.
+Validate Details, Download, Cancel, dismissal and application/Twin UI tools
+while data admission is held using
+`scripts/api/test_scene_asset_requirements.py --exercise-controls` with the
+measured 1280x720 native layout. Command-only tests do not prove button input.
+
+Retain retry/cancel actions. Dismissal means background work, and completion remains
 visible until dismissed. Run `test_download_policies.rhai` and the windowed
 `dataset_provisioning_surface.rhai` gate against a declared missing scope,
 including invalid-scope/request rejection. Check Recent Events for discrete
@@ -574,3 +589,27 @@ unavailable height with a world-Y value. Do not label these coordinates
 `MOON_ME` or `MOON_PA`: those require an explicit frame transform. In a scene
 without a site anchor the coordinate mode is explicitly world metres; an
 unresolvable or ambiguous site frame publishes coordinates as unavailable.
+
+The shared `asset-consent` view separates source verification and artifact
+preparation. Its `assets.provision` Rhai policy returns row `download_status`,
+`preparation_status`, `detail` and `source_url` fields in addition to semantic
+actions. Rust publishes the typed worker snapshots; templates never read files.
+`runtime_ui::on_action` routes `process` through the existing asset tool and
+`open_web_url` through the shell's validated `OpenWebUrl` browser adapter.
+Verify missing, downloaded/unprepared, failed and ready views with the production
+pipeline driver and inspect its actual captures before choosing click positions.
+Settings ▸ Data & libraries uses the same row policy with grouped, searchable
+entries. Verify Rebuild forces stage execution and Reload scene follows the
+shared readiness lifecycle. The dialog shows simulation holds/faults separately
+from artifact readiness; dismissing it must preserve a manual transport pause.
+
+The asset preparation surface receives `required_for_scene` separately from
+`recommended`. Only composed scene dependencies trigger its mandatory readiness
+flow. Queued operations offer cancellation; per-file progress names its source.
+Dismissing the window keeps missing scene data held and never starts transport.
+
+For scrollable collections, add a sibling authored track and set the collection's
+`scrollbar` to its node id. The runtime binds native Bevy ScrollArea/Scrollbar;
+verify visible thumb movement with wheel and pointer dragging in the real app,
+including a small viewport. Keep actions/status outside the scrolling list, use
+compact completed rows, and let Rhai order outstanding work before ready rows.

@@ -9,7 +9,15 @@
 #![warn(missing_docs)]
 #![allow(clippy::disallowed_methods)]
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "modelica-processing"))]
+mod modelica;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pds_img;
 #[cfg(not(target_arch = "wasm32"))]
+mod pipeline;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod process;
+#[cfg(not(target_arch = "wasm32"))]
+mod raster;
+#[cfg(all(not(target_arch = "wasm32"), feature = "shader-processing"))]
+mod shader;
