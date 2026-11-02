@@ -145,6 +145,12 @@ fn publish_engine_health_exposure(
         if let Some(fps) = modelica.fps {
             surface.property("modelica_fps", fps);
         }
+        if let Some(ms) = modelica.worker_ms_per_physics_step {
+            surface.property("modelica_worker_ms_per_physics_step", ms);
+        }
+        if let Some(steps) = modelica.sample_physics_steps {
+            surface.property("modelica_sample_physics_steps", steps.to_string());
+        }
         if let Some(ms) = modelica.worker_step_ms {
             surface.property("modelica_worker_step_ms", ms);
         }

@@ -24,21 +24,22 @@ fn on_tick(me, ctx) {
     if elapsed < 3.0 { return; }
     let value = health();
     if this.phase == 0 {
-        this.checks.push(t_true(value.modelica_fps != ()
-            && value.modelica_fps.is_finite() && value.modelica_fps > 0.0,
-            "running Modelica has no finite positive completion FPS"));
+        this.checks.push(t_true(value.modelica_worker_ms_per_physics_step != ()
+            && value.modelica_worker_ms_per_physics_step.is_finite() && value.modelica_worker_ms_per_physics_step > 0.0,
+            "running Modelica has no finite positive worker time per physics step"));
         this.checks.push(t_true(value.modelica_worker_step_ms != () && value.modelica_worker_step_ms > 0.0,
             "running Modelica worker has no measured service time"));
-        this.checks.push(t_true(value.modelica_sample_wall_secs != () && value.modelica_sample_wall_secs >= 1.0,
-            "Modelica FPS has no complete native wall-clock window"));
+        this.checks.push(t_true(value.modelica_sample_wall_secs != () && value.modelica_sample_wall_secs >= 1.0
+            && value.modelica_sample_physics_steps != () && value.modelica_sample_physics_steps != "0",
+            "Modelica timing has no complete wall-clock/physics-step window"));
         this.checks.push(t_true(value.modelica_participants == this.participants.to_string(),
             "Modelica performance participant count disagrees with the scene"));
         cmd("SetTimeTransport", #{playing: false, rate: 1.0});
         this.phase = 1;
         this.since = clock_snapshot().wall_elapsed_s;
     } else if this.phase == 1 {
-        this.checks.push(t_true(value.modelica_fps == 0.0,
-            "paused Modelica retains a running completion rate"));
+        this.checks.push(t_true(value.modelica_worker_ms_per_physics_step == (),
+            "paused physics retains a Modelica cost per step without completed physics steps"));
         this.checks.push(t_true(value.modelica_worker_step_ms == (),
             "an idle worker publishes a mean for an empty sample window"));
         cmd("ClearScene", #{});
@@ -48,8 +49,8 @@ fn on_tick(me, ctx) {
         let ready = query("GetReadiness", #{}).ready;
         if !ready && elapsed < 15.0 { return; }
         this.checks.push(t_true(ready, "cleared scene did not settle"));
-        this.checks.push(t_true(value.modelica_fps == (),
-            "negative empty-scene case retains Modelica FPS"));
+        this.checks.push(t_true(value.modelica_worker_ms_per_physics_step == (),
+            "negative empty-scene case retains Modelica time per physics step"));
         this.checks.push(t_true(value.modelica_worker_step_ms == (),
             "negative empty-scene case retains Modelica worker timing"));
         this.checks.push(t_true(value.modelica_participants == "0",

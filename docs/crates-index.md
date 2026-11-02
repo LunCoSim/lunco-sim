@@ -1197,7 +1197,7 @@ full vessel-control adapter.
 Reusable performance capability. It owns the persisted HUD preference, typed
 toggle command, Bevy frame-time diagnostics, and live `PerfStats`; the typed
 engine-health exposure supplies render FPS, physics timing, and Modelica
-completion FPS with worker service timing. The concrete workbench imports this
+worker service time per physics step. The concrete workbench imports this
 package for rendering, so status presentation changes do not make the shell the
 owner of diagnostics state.
 
@@ -1464,8 +1464,9 @@ by `lunco-modelica-runner`; source-library readiness and per-run routing remain
 Modelica-specific here. Compiler-only consumers do not inherit this host.
 It registers the lifecycle-notice queue with scene teardown so unread notices
 cannot repopulate cleared presentation state. It also owns the scene-registered
-Modelica performance window, publishing admitted completion FPS and mean worker
-service time through the shared typed health/exposure boundary.
+Modelica performance window, publishing total measured worker service per physics
+step, per-instance mean service time, and completion throughput through the shared
+typed health/exposure boundary.
 
 **`lunco-modelica-worker`**
 Stateful Modelica worker engine. It owns live solver construction and stepping,

@@ -53,7 +53,7 @@ pub struct PhysicsHealthSnapshot {
     pub revision: u64,
 }
 
-/// Completed Modelica communication steps measured against the native wall clock.
+/// Scene-scoped Modelica worker cost and completion-throughput measurements.
 #[derive(Resource, Reflect, Debug, Clone, Copy, Default, PartialEq)]
 #[reflect(Resource, Debug)]
 pub struct ModelicaHealthSnapshot {
@@ -62,6 +62,11 @@ pub struct ModelicaHealthSnapshot {
     pub fps: Option<f64>,
     /// Largest per-instance mean worker service time over this sample window.
     pub worker_step_ms: Option<f64>,
+    /// Summed worker service time divided by completed physics ticks in the window.
+    /// Parallel worker contributions overlap; this is work cost, not barrier latency.
+    pub worker_ms_per_physics_step: Option<f64>,
+    /// Exact physics-tick denominator for the measured window, absent without a clock.
+    pub sample_physics_steps: Option<u64>,
     pub participants: usize,
     pub sample_wall_secs: Option<f64>,
 }

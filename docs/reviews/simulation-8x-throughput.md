@@ -162,20 +162,21 @@ this excludes the rate-change presentation transient. The performance HUD is
 enabled in the measurement session. An optional Modelica HUD gate checks ten
 running, paused and cleared-scene assertions after the throughput window.
 
-The Modelica execution owner publishes the minimum per-instance completed-step
-FPS and maximum per-instance mean worker service time over a native one-second
+The Modelica execution owner publishes total worker service per physics step,
+per-instance mean service time, and completion throughput over a native one-second
 wall-clock window. Its window and typed `ModelicaHealthSnapshot` are registered
 scene resources. The shared engine-health exposure is their presentation
 boundary, consumed by the existing performance HUD. Worker counters and session
 identities remain owned by the existing admitted-receipt diagnostics; this
 presentation adds no participant receipt consumer or simulation clock.
 The continuous measurement math has no authored routing decision requiring a
-Rhai hook. Production runtime and visible-meter qualification remain pending.
+Rhai hook. Native qualification passes the ten running/paused/cleared HUD checks
+and the mixed-rate network's 44 clock checks. The captured single-engine and
+60/30 Hz two-model views show measured milliseconds per physics step. This
+qualifies the diagnostic display, independently of sustained 8x throughput.
 
-The visible status-bar meter appends Modelica completion FPS and reports its
-worker service mean in the tooltip. Its source health is a one-second,
-scene-scoped window over the existing admitted completion counters. Ten
-running/paused/cleared HUD checks passed in a production release candidate; the
-latest executor build's failure screenshot also shows the Modelica FPS readout.
-The paused/cleared HUD checks have not been rerun against that latest executor
-build.
+The status-bar meter displays measured Modelica worker milliseconds per physics
+step. The execution owner sums validated worker service during its wall-clock
+window and divides by completed physics ticks; the tooltip includes the largest
+per-instance mean service cost. Completion throughput remains available through
+the diagnostic exposure, independently of the visible cost readout.

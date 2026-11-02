@@ -111,6 +111,14 @@ actual rendered depth/noise and negative `SetCameraImageEffects` admissions;
 a successful allocation is not pixel evidence. UI draft/search state belongs
 to the scene resource. Camera selection/viewing never toggles physical power.
 
+The performance status bar consumes the execution owner's
+`engine-health.modelica_worker_ms_per_physics_step` and displays milliseconds per
+physics step. Keep completion throughput out of the cost readout. The metric
+sums measured worker service over the shared one-second window and normalizes by
+completed physics ticks; parallel contributions overlap. Exact sample counts,
+wall duration, and per-instance service stay available through the same exposure.
+Paused physics and cleared scenes have no per-step sample.
+
 ## Core Principles
 
 Render recovery warnings and terminal presentation failures belong in Recent

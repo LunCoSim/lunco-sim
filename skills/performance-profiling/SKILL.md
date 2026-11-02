@@ -1815,12 +1815,18 @@ it excludes asynchronous solver work and completion admission outside that
 interval. Do not label that number complete coupled-step time or use it alone
 to certify a coupled-step budget. Trace the causal worker critical path and
 response/commit boundary without adding overlapping worker spans.
-The performance HUD also shows `engine-health.modelica_fps`, the slowest
-instance's admitted completions per native wall-clock second. Its tooltip
-shows the largest per-instance mean worker service time. These come from the
-Modelica execution owner's scene-scoped health window. Inspect
-`modelica_sample_wall_secs` and `modelica_participants` when comparing the meter
-with a rate gate; the status-bar value updates over a one-second window.
+The performance HUD shows `engine-health.modelica_worker_ms_per_physics_step`:
+total validated worker service time divided by completed physics ticks in the
+latest one-second window. This includes all Modelica instances; parallel worker
+contributions overlap. It excludes queue waiting and render delay, so do not call
+it complete coupled-step latency. Its tooltip also reports the largest
+per-instance mean worker service time. The execution owner supplies both from
+existing receipts; HUDs do not add timers or calculate cost from completion FPS.
+Inspect `modelica_sample_physics_steps`, `modelica_sample_wall_secs`, and
+`modelica_participants` for the exact denominator and cohort. Paused physics and
+cleared scenes unpublish per-step cost. `modelica_fps` remains a diagnostic
+completion-throughput property; a 60 Hz communication clock naturally yields
+about 60 completions/s at real time.
 See [the health contract](../../docs/architecture/telemetry-subsystem.md).
 `SimulationCompletions` runs in `First`, after message
 rotation and before `ClockProjectionSet`, and in the native driver's bounded

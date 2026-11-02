@@ -1,8 +1,8 @@
-//! Wall-clock throughput of admitted Modelica worker completions.
+//! Windowed service cost and throughput of admitted Modelica worker completions.
 
 use bevy::{platform::time::Instant, prelude::*};
 use lunco_core::SceneResource;
-use lunco_core_runtime::ModelicaHealthSnapshot;
+use lunco_core_runtime::{ModelicaHealthSnapshot, SimTick};
 use lunco_modelica_runtime::ModelicaStepDiagnostics;
 use std::{collections::HashMap, time::Duration};
 
@@ -17,6 +17,7 @@ struct CompletionCounter {
 pub(super) struct ModelicaHealthWindow {
     started_at: Option<Instant>,
     counters: HashMap<Entity, CompletionCounter>,
+    physics_tick: Option<u64>,
 }
 
 impl SceneResource for ModelicaHealthWindow {}
@@ -34,11 +35,13 @@ pub(super) fn modelica_health_due(
 
 /// Publish the slowest instance's completed steps per real second and the
 /// largest per-instance mean worker cost over the same one-second window.
+/// Total worker service is normalized by the authoritative physics-tick delta.
 /// Cumulative counters come from the sole validated receipt consumer.
 pub(super) fn publish_modelica_health(
     diagnostics: Res<ModelicaStepDiagnostics>,
     mut window: ResMut<ModelicaHealthWindow>,
     mut health: ResMut<ModelicaHealthSnapshot>,
+    physics_tick: Option<Res<SimTick>>,
 ) {
     let now = Instant::now();
     let participants = diagnostics
@@ -51,8 +54,10 @@ pub(super) fn publish_modelica_health(
         }
         window.started_at = None;
         window.counters.clear();
+        window.physics_tick = None;
         return;
     }
+    let current_tick = physics_tick.as_ref().map(|tick| tick.0);
     let same_sessions = participants == window.counters.len()
         && diagnostics
             .participants()
@@ -70,7 +75,7 @@ pub(super) fn publish_modelica_health(
             participants,
             ..Default::default()
         };
-        window.capture(&diagnostics, now);
+        window.capture(&diagnostics, now, current_tick);
         return;
     }
     let elapsed = elapsed.expect("the initialized window has a start instant");
@@ -80,6 +85,7 @@ pub(super) fn publish_modelica_health(
     let seconds = elapsed.as_secs_f64();
     let mut fps: Option<f64> = None;
     let mut worker_ms: Option<f64> = None;
+    let mut worker_ns: u128 = 0;
     for (entity, counter) in diagnostics
         .participants()
         .filter(|(_, sample)| sample.samples > 0)
@@ -88,24 +94,40 @@ pub(super) fn publish_modelica_health(
         let steps = counter.samples - previous.steps;
         let rate = steps as f64 / seconds;
         fps = Some(fps.map_or(rate, |current| current.min(rate)));
+        let duration_ns = counter.total_worker_step_duration_ns - previous.worker_ns;
+        worker_ns += u128::from(duration_ns);
         if steps > 0 {
-            let mean_ms = (counter.total_worker_step_duration_ns - previous.worker_ns) as f64
-                / steps as f64
-                / 1_000_000.0;
+            let mean_ms = duration_ns as f64 / steps as f64 / 1_000_000.0;
             worker_ms = Some(worker_ms.map_or(mean_ms, |current| current.max(mean_ms)));
         }
     }
+    let physics_steps = current_tick.and_then(|tick| {
+        window
+            .physics_tick
+            .and_then(|previous| tick.checked_sub(previous))
+    });
+    let worker_ms_per_physics_step = physics_steps
+        .filter(|steps| *steps > 0)
+        .map(|steps| worker_ns as f64 / steps as f64 / 1_000_000.0);
     *health = ModelicaHealthSnapshot {
+        worker_ms_per_physics_step,
+        sample_physics_steps: physics_steps,
         fps,
         worker_step_ms: worker_ms,
         participants,
         sample_wall_secs: Some(seconds),
     };
-    window.capture(&diagnostics, now);
+    window.capture(&diagnostics, now, current_tick);
 }
 
 impl ModelicaHealthWindow {
-    fn capture(&mut self, diagnostics: &ModelicaStepDiagnostics, now: Instant) {
+    fn capture(
+        &mut self,
+        diagnostics: &ModelicaStepDiagnostics,
+        now: Instant,
+        physics_tick: Option<u64>,
+    ) {
+        self.physics_tick = physics_tick;
         self.started_at = Some(now);
         self.counters.clear();
         self.counters.extend(

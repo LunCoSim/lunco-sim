@@ -53,8 +53,8 @@ pub struct PerfStats {
     /// Wall-clock cost of the avian physics step, ms. `None` when no
     /// physics-aware plugin is publishing.
     pub physics_ms: Option<f32>,
-    /// Completed steps per real second of the slowest current Modelica instance.
-    pub modelica_fps: Option<f64>,
+    /// Total Modelica worker service time per physics tick, averaged over the health window.
+    pub modelica_ms_per_physics_step: Option<f64>,
     /// Largest per-instance mean worker service time in the same wall-clock window.
     pub modelica_worker_step_ms: Option<f64>,
 }
@@ -63,7 +63,7 @@ impl SceneResource for PerfStats {
     fn clear_scene(&mut self) {
         // Render/physics health belongs to the application; Modelica samples
         // belong to the retired scene's participant cohort.
-        self.modelica_fps = None;
+        self.modelica_ms_per_physics_step = None;
         self.modelica_worker_step_ms = None;
     }
 }
@@ -111,7 +111,7 @@ fn sync_perf_stats(
         if stats.fps != 0.0
             || stats.frame_ms != 0.0
             || stats.physics_ms.is_some()
-            || stats.modelica_fps.is_some()
+            || stats.modelica_ms_per_physics_step.is_some()
             || stats.modelica_worker_step_ms.is_some()
         {
             *stats = PerfStats::default();
@@ -123,7 +123,8 @@ fn sync_perf_stats(
         exposure_number(exposures.as_deref(), "frame_time_ms").unwrap_or_default() as f32;
     stats.physics_ms =
         exposure_number(exposures.as_deref(), "physics_step_ms").map(|value| value as f32);
-    stats.modelica_fps = exposure_number(exposures.as_deref(), "modelica_fps");
+    stats.modelica_ms_per_physics_step =
+        exposure_number(exposures.as_deref(), "modelica_worker_ms_per_physics_step");
     stats.modelica_worker_step_ms =
         exposure_number(exposures.as_deref(), "modelica_worker_step_ms");
 }
@@ -148,7 +149,7 @@ fn register_settings_submenu(world: &mut World) {
         ui.checkbox(&mut settings.enabled, "Show FPS / frame time in status bar")
             .on_hover_text(
                 "Bottom-right of the status bar shows live FPS, frame \
-                 time, physics step time, and Modelica completion FPS. \
+                 time, physics step time, and Modelica worker time per physics step. \
                  Persisted to the shared LunCoSim settings file.",
             );
         if settings != original {
