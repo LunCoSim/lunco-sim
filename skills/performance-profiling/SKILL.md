@@ -17,6 +17,12 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   the scene in a pre-existing session. Report concurrent GPU/CPU workloads and
   classify affected numbers as contention-affected, not clean acceptance. Do
   not use Tracy's instrumented number as acceptance evidence.
+  For a two-session target, record the companion process identity and workload.
+  `scripts/api/test_terrain_contact_visual.py --companion-pid <pid>` requires
+  that process to remain alive throughout the measured drive and records its
+  CPU activity. It does not certify that process's scene or capture mode;
+  record those separately. An offline video capture is a different workload
+  from two interactive sessions, even when the API port and process are shared.
   Record the admitted Twin source revision and require its expected authored
   verdict before comparing completed-mission windows. A tick threshold or zero
   process exit does not prove acceptance. Exclude source/API errors, and require
@@ -1838,6 +1844,8 @@ The native pipelined host also services ready completions and existing fixed
 debt during its render-frame handoff, before clock sampling. That service never
 adds wall time or waits for a solver; rendering readiness ends the handoff.
 See [the time owner](../../docs/architecture/19-unified-time-and-clock.md).
+Use `scripts/api/test_physical_presentation_time.py --windowed --port <free-port>
+--output <path>` for the native pause, single-step and physical easing-clock gate.
 Use `scripts/api/test_simulation_transport_rate.py --twin <root>
 --participants <count> --sample-seconds 30 --rates 8 --output <path> --port <free-port>`
 for a sustained rate gate. Both clocks must agree with the requested rate within

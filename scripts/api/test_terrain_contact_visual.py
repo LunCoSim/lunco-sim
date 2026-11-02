@@ -19,6 +19,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--no-vsync', action='store_true', help='diagnostic uncapped presentation')
     p.add_argument('--no-throttle', action='store_true', help='diagnostic continuous host updates')
+    p.add_argument('--companion-pid', type=int, help='require this concurrent process throughout the drive')
     args = p.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -26,6 +27,23 @@ def main():
     os.environ['LUNCOSIM_EPHEMERAL_SETTINGS'] = '1'
     rows = []
     log = out / 'runtime.log'
+    companion_start = None
+    def companion_snapshot():
+        nonlocal companion_start
+        if args.companion_pid is None:
+            return None
+        proc = Path(f'/proc/{args.companion_pid}')
+        stat = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+        if stat[0] in ('Z', 'X', 'T', 't'):
+            raise RuntimeError('the required companion process is no longer running')
+        start = int(stat[19])
+        if companion_start is not None and start != companion_start:
+            raise RuntimeError('the required companion process identity changed')
+        companion_start = start
+        return {'pid': args.companion_pid, 'start_ticks': start,
+                'cpu_ticks': int(stat[11]) + int(stat[12]),
+                'exe': str((proc / 'exe').resolve())}
+    initial_companion = companion_snapshot()
     extra_args = ['--scene', args.scene, '--window-pos', '1280x720+0+0']
     if args.no_vsync:
         extra_args.append('--no-vsync')
@@ -39,7 +57,7 @@ def main():
         if Path(f'/proc/{pid}/exe').resolve() != BINARY.resolve():
             raise RuntimeError('owned runtime executable does not match LUNCOSIM_BIN')
         cohort = {'pid': pid, 'binary': str(BINARY.resolve()), 'no_vsync': args.no_vsync,
-                  'no_throttle': args.no_throttle, 'phases': rows}
+                  'no_throttle': args.no_throttle, 'companion': initial_companion, 'phases': rows}
         def execute(command, **params):
             response = session.post({'type': 'ExecuteCommand', 'command': command, 'params': params})
             if response.get('error'):
@@ -96,8 +114,11 @@ def main():
         # Observe the production drive with the selected host flags and unchanged solver.
         frame_samples = {}
         first_frame = execute('EnginePerformance')['frame_sample_count']
-        drive_deadline = time.monotonic() + 15
+        companion_before = companion_snapshot()
+        drive_started = time.monotonic()
+        drive_deadline = drive_started + 15
         while time.monotonic() < drive_deadline:
+            companion_snapshot()
             performance = execute('EnginePerformance')
             count = performance['frame_sample_count']
             history = performance['frame_time_samples_ms']
@@ -106,16 +127,43 @@ def main():
                 if sample_id > first_frame:
                     frame_samples[sample_id] = value
             time.sleep(1)
-        position = execute('QueryEntity', id=body_id)['position']
+        drive_elapsed = time.monotonic() - drive_started
+        companion_after = companion_snapshot()
+        try:
+            position = execute('QueryEntity', id=body_id)['position']
+        except RuntimeError as error:
+            failure = {'error': str(error), 'body_id': body_id}
+            for name, params in [('RuntimeDiagnostics', {}),
+                    ('QueryUsdPrim', {'path': args.body_path, 'topology': True})]:
+                try:
+                    failure[name] = execute(name, **params)
+                except RuntimeError as diagnostic_error:
+                    failure[name] = {'error': str(diagnostic_error)}
+            body = failure.get('QueryUsdPrim', {})
+            if 'doc_id' in body:
+                failure['document'] = execute('InspectUsdDocument',
+                    doc_id=body['doc_id'], path=args.body_path)
+            (out / 'failure.json').write_text(json.dumps(failure, indent=2))
+            raise
         distance = math.dist(start_position, position)
         if distance < 2:
             raise RuntimeError(f'drive did not exercise tile boundaries: {distance} m')
         ordered = sorted(frame_samples.values())
+        if not ordered:
+            raise RuntimeError('the drive produced no frame-time samples')
+        if len(frame_samples) != max(frame_samples)-min(frame_samples)+1:
+            raise RuntimeError('the frame history overran between performance reads')
+        (out / 'drive-frame-times.json').write_text(json.dumps(sorted(frame_samples.items())))
         drive_metrics = {'distance_m': distance, 'sample_count': len(ordered),
             'first_sample_id': min(frame_samples), 'last_sample_id': max(frame_samples),
+            'frame_ms_mean': math.fsum(ordered)/len(ordered),
             'frame_ms_p50': ordered[len(ordered)//2],
             'frame_ms_p95': ordered[int(.95*(len(ordered)-1))],
             'frame_ms_max': ordered[-1]}
+        if companion_before is not None:
+            drive_metrics['companion_cpu_percent'] = 100 * (
+                companion_after['cpu_ticks']-companion_before['cpu_ticks']
+            ) / os.sysconf('SC_CLK_TCK') / drive_elapsed
         rows.append({'phase': 'drive-performance', **drive_metrics})
         print(json.dumps(drive_metrics), flush=True)
         session.capture_screenshot(out / 'driving.png')

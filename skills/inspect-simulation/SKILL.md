@@ -221,6 +221,8 @@ bursts; its one-second rate can differ from the requested pacing cadence.
 failed requested rate from a passing lower rate; retain the timing evidence for
 both. Native readiness, render handoff and fixed-service ownership are defined in
 [the time architecture](../../docs/architecture/19-unified-time-and-clock.md).
+Run `scripts/api/test_physical_presentation_time.py --windowed --port <free-port>
+--output <path>` for the native pause, single-step and physical easing-clock gate.
 
 For DEM terrain, read the typed `TerrainLodStatus` query as the authoritative
 geometry stream state. A settled visual terrain requires `wanted == resident`

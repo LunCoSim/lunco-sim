@@ -90,6 +90,9 @@ decision requiring a Rhai policy hook. The native window gate is
 completed time while unfocused, without `--no-throttle` or HTTP polling during
 measurement. `--twin` and `--participants` run the same authored gate on a Twin.
 Requested rates remain bounded by the cost of complete physical and solver cycles.
+`scripts/api/test_physical_presentation_time.py --windowed` exercises pause,
+single stepping, transport changes and bounded monotonic physical presentation
+in the native host; its default mode exercises the scene-test host.
 
 `ClockProjectionSet` projects `TimeTransport` and preparation/manual holds onto Bevy's
 virtual clock in `First`, before `TimeSystems` samples the next delta.
