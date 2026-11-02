@@ -35,6 +35,7 @@
 use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
 use crate::shader_material::{ShaderMaterial, build_shader_material, wesl_source};
 use bevy::asset::AssetId;
+use bevy::camera::{primitives::MeshAabb, visibility::VisibilitySystems};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
@@ -53,6 +54,77 @@ use std::sync::Arc;
 /// Sharing, the `unshared` bypass, and eviction all live in
 /// [`LookCache`](crate::look_cache::LookCache), shared with the PBR binder.
 pub type ShaderLookCache = LookCache<ShaderLook>;
+
+#[derive(Component)]
+struct DisplacedMeshBounds {
+    mesh: AssetId<Mesh>,
+    padding: f32,
+}
+
+/// Culling uses a conservative authored bound for vertex-displaced geometry.
+/// Always derive it from the original mesh, never an already expanded AABB.
+fn update_displaced_mesh_bounds(
+    mut commands: Commands,
+    meshes: Res<Assets<Mesh>>,
+    mut events: MessageReader<AssetEvent<Mesh>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    query: Query<(Entity, &Mesh3d, &ShaderLook, Option<&DisplacedMeshBounds>)>,
+) {
+    let changed: HashSet<_> = events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    for (entity, mesh, look, previous) in &query {
+        let padding = match look.values().get("displacement_bound_m") {
+            Some(lunco_materials::ParamValue::F32(value)) => *value,
+            _ => 0.0,
+        };
+        if padding == 0.0 && previous.is_none() {
+            continue;
+        }
+        if previous.is_some_and(|value| value.mesh == mesh.id() && value.padding == padding)
+            && !changed.contains(&mesh.id())
+        {
+            continue;
+        }
+        let Some(mut bounds) = meshes.get(mesh.id()).and_then(MeshAabb::get_aabb) else {
+            continue;
+        };
+        if !padding.is_finite() || padding < 0.0 {
+            let detail = format!(
+                "invalid displacement_bound_m on {entity:?}: {padding}; expected a finite nonnegative bound"
+            );
+            error!("[shader-render] {detail}");
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "shader-displacement-bounds-invalid",
+                    Some(entity),
+                    format!("entity {entity:?}"),
+                    &detail,
+                );
+            }
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "shader-displacement-bounds-invalid",
+                detail,
+            );
+            continue;
+        }
+        bounds.half_extents += bevy::math::Vec3A::splat(padding);
+        commands.entity(entity).try_insert(bounds);
+        if padding == 0.0 {
+            commands.entity(entity).try_remove::<DisplacedMeshBounds>();
+        } else {
+            commands.entity(entity).try_insert(DisplacedMeshBounds {
+                mesh: mesh.id(),
+                padding,
+            });
+        }
+    }
+}
 
 #[derive(Component)]
 struct ShaderLookSourcePending {
@@ -156,6 +228,7 @@ fn shader_material(
             TextureLayer::DetailAlbedo => &mut m.detail_albedo_map,
             TextureLayer::DetailNormal => &mut m.detail_normal_map,
             TextureLayer::DetailSurface => &mut m.detail_surface_map,
+            TextureLayer::Displacement => &mut m.displacement_map,
         };
         *slot = rasters.get(image).cloned();
     }
@@ -435,6 +508,7 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAs
         DetailAlbedo,
         DetailNormal,
         DetailSurface,
+        Displacement,
     ]
     .iter()
     .all(|layer| {
@@ -451,6 +525,7 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAs
             DetailAlbedo => &m.detail_albedo_map,
             DetailNormal => &m.detail_normal_map,
             DetailSurface => &m.detail_surface_map,
+            Displacement => &m.displacement_map,
         };
         slot.as_ref().map(Handle::id)
             == look
@@ -1022,6 +1097,12 @@ pub(crate) fn build(app: &mut App) {
             )
                 .after(bevy::asset::AssetEventSystems),
         )
+        .add_systems(
+            PostUpdate,
+            update_displaced_mesh_bounds
+                .after(VisibilitySystems::CalculateBounds)
+                .before(VisibilitySystems::CheckVisibility),
+        )
         .init_resource::<ShaderLookCache>()
         .add_observer(bind_shader_look)
         .add_observer(bind_added_skybox_shader_look)
@@ -1379,6 +1460,10 @@ fn material_texture_handles(material: &ShaderMaterial) -> impl Iterator<Item = &
         material.continuation_albedo_map.as_ref(),
         material.continuation_surface_map.as_ref(),
         material.surface_annotations.as_ref(),
+        material.detail_albedo_map.as_ref(),
+        material.detail_normal_map.as_ref(),
+        material.detail_surface_map.as_ref(),
+        material.displacement_map.as_ref(),
     ]
     .into_iter()
     .flatten()

@@ -1,6 +1,6 @@
 // Run on an admitted celestial DEM scene. Mission heights are the independent
 // reference for the generated exterior's entire native posting perimeter.
-const TEST_KIND = "graphics";
+const TEST_KIND = "render-contract";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],

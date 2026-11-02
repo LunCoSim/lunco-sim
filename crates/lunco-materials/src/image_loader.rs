@@ -114,7 +114,8 @@ impl ShaderTexture {
             | TextureLayer::DetailAlbedo => Some(Rgba8MipMode::SrgbColor),
             TextureLayer::Surface
             | TextureLayer::ContinuationSurface
-            | TextureLayer::DetailSurface => Some(Rgba8MipMode::Linear),
+            | TextureLayer::DetailSurface
+            | TextureLayer::Displacement => Some(Rgba8MipMode::Linear),
             TextureLayer::Normal | TextureLayer::DetailNormal => Some(Rgba8MipMode::Normal),
             TextureLayer::Height | TextureLayer::ShadowCache | TextureLayer::SurfaceAnnotations => {
                 None

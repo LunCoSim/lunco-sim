@@ -402,7 +402,22 @@ fn process_texture(
     match ext {
         "svg" => process_svg(source, output, tw, th),
         "jpg" | "jpeg" | "png" | "tiff" | "tif" | "bmp" | "webp" => {
-            process_image(source, output, tw, th)
+            let color_space = match config
+                .parameters
+                .get("color_space")
+                .map(|value| value.as_str())
+            {
+                None => "srgb",
+                Some(Some("srgb")) => "srgb",
+                Some(Some("linear")) => "linear",
+                Some(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "texture color_space must be \"srgb\" or \"linear\"",
+                    ));
+                }
+            };
+            process_image(source, output, tw, th, color_space)
         }
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -494,7 +509,13 @@ fn process_svg(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), std
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
-fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), std::io::Error> {
+fn process_image(
+    source: &Path,
+    output: &Path,
+    tw: u32,
+    th: u32,
+    color_space: &str,
+) -> Result<(), std::io::Error> {
     let img = image::open(source)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
@@ -509,7 +530,11 @@ fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), s
     // 16-bit ones LINEAR, so a 16-bit sRGB source (the LROC moon map) skips
     // gamma decode in the engine and renders washed-out white. 8 bits is
     // plenty for albedo, and it quarters the file.
-    let processed = image::DynamicImage::ImageRgb8(processed.to_rgb8());
+    let processed = if color_space == "srgb" {
+        image::DynamicImage::ImageRgb8(processed.to_rgb8())
+    } else {
+        processed
+    };
 
     processed
         .save(output)
@@ -1736,6 +1761,47 @@ fn tiff_io_err(e: tiff::TiffError) -> std::io::Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linear_texture_preserves_u16_samples_and_rejects_invalid_color_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("height.png");
+        let output = dir.path().join("prepared.png");
+        let samples = vec![1u16, 256, 20001, 65534];
+        let pixels =
+            image::ImageBuffer::<image::Luma<u16>, _>::from_raw(2, 2, samples.clone()).unwrap();
+        pixels.save(&source).unwrap();
+        let mut config: super::ProcessConfig = toml::from_str(
+            "kind='texture'\noutput='prepared.png'\ntarget_resolution=[2,2]\ncolor_space='linear'",
+        )
+        .unwrap();
+        super::process_texture(
+            &source,
+            &output,
+            &config,
+            &super::ProcessControl::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(
+            image::open(&output).unwrap().to_luma16().into_raw(),
+            samples
+        );
+        config.parameters.insert(
+            "color_space".into(),
+            toml::Value::String("height-ish".into()),
+        );
+        let error = super::process_texture(
+            &source,
+            &output,
+            &config,
+            &super::ProcessControl::unrestricted(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("color_space"));
+        assert_eq!(
+            image::open(&output).unwrap().to_luma16().into_raw(),
+            samples
+        );
+    }
     use super::*;
     use std::collections::BTreeMap;
     use std::io::Cursor;

@@ -66,12 +66,40 @@ pub struct GlobeLod {
 
 impl GlobeLod {
     /// Render shell intent. The material binder owns the corresponding Bevy markers.
-    pub(crate) fn render_look(&self) -> ShaderLook {
+    pub(crate) fn render_look(&self, handoff: Option<&GlobeHandoff>) -> ShaderLook {
         let mut look = self.look.clone();
+        // The mesh owner supplies the actual shell datum and canonical radius.
+        // Narrow only at the material/GPU boundary, just like mesh positions.
+        look.set_value(
+            "displacement_radius_m",
+            lunco_materials::ParamValue::F32(self.radius_m as f32),
+        );
+        look.set_value(
+            "displacement_datum_m",
+            lunco_materials::ParamValue::F32(
+                handoff.map_or(0.0, |value| value.radius_m - self.radius_m) as f32,
+            ),
+        );
         look.no_shadow_cast = true;
         look.no_shadow_receive = true;
         look
     }
+}
+
+/// Mesh density is authored with the body's displacement material.
+pub(crate) fn authored_globe_resolution(look: &ShaderLook) -> Result<u32, String> {
+    let Some(value) = look.values().get("globe_tile_resolution") else {
+        return Ok(32);
+    };
+    let lunco_materials::ParamValue::F32(value) = value else {
+        return Err("globe_tile_resolution must be a scalar integer from 8 through 128".into());
+    };
+    if !value.is_finite() || !(8.0..=128.0).contains(value) || value.fract() != 0.0 {
+        return Err(format!(
+            "invalid globe_tile_resolution {value}; expected an integer from 8 through 128"
+        ));
+    }
+    Ok(*value as u32)
 }
 
 /// The site's surface values relative to its render datum.
@@ -913,6 +941,7 @@ pub(crate) struct GlobeTiles {
     /// the desired set, so a site appearing/moving must re-open the gate even if
     /// the camera has not moved a millimetre.
     pub last_solve_handoff: Option<GlobeHandoff>,
+    last_solve_resolution: Option<u32>,
     /// Whether the prepared collar was visible and shader-ready for the last
     /// solved tile cover. A globe cutout is never installed ahead of its collar.
     last_solve_cutout_enabled: bool,
@@ -1385,7 +1414,7 @@ pub(crate) fn update_globe_lod(
     };
 
     for (body_ent, lod, mut tiles, handoff) in &mut bodies {
-        let render_look = lod.render_look();
+        let render_look = lod.render_look(handoff);
         // Camera relative to the body centre in the rotating frame the tiles
         // live in. This is an f64 cross-grid conversion through BigSpace's
         // authoritative cells. LOD identity must never be inferred from the
@@ -1415,7 +1444,8 @@ pub(crate) fn update_globe_lod(
         // A handoff changes the geometry of every resident tile that crosses its
         // boundary. Retire the old meshes before solving the new cover so a
         // cached uncut globe tile cannot survive under the local DEM.
-        let geometry_handoff_changed = tiles.last_solve_handoff.as_ref() != handoff;
+        let geometry_handoff_changed = tiles.last_solve_handoff.as_ref() != handoff
+            || tiles.last_solve_resolution != Some(lod.res);
         let collar_visible_and_ready = tiles.collar_entity.is_some_and(|entity| {
             collar_is_drawable(
                 material_ready.get(entity).is_ok(),
@@ -1932,6 +1962,7 @@ pub(crate) fn update_globe_lod(
         tiles.last_solve_cam = settled.then_some(camera_body_local);
         tiles.last_solve_camera = settled.then_some(camera_entity);
         tiles.last_solve_handoff = handoff.cloned();
+        tiles.last_solve_resolution = Some(lod.res);
         tiles.last_solve_cutout_enabled = cutout_enabled;
     }
 }

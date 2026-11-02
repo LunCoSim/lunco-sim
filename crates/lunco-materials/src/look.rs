@@ -102,6 +102,8 @@ pub enum TextureLayer {
     DetailNormal,
     /// Repeatable packed scalar detail: R=roughness, G=AO.
     DetailSurface,
+    /// Authored scalar displacement, separate from the runtime terrain shadow heightfield.
+    Displacement,
 }
 
 /// A custom-shader surface, stated as data.

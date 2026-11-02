@@ -2271,7 +2271,13 @@ pub(crate) fn sync_terrain_visual_continuations(
         With<Mesh3d>,
     >,
     changed_interfaces: Query<Entity, Changed<lunco_materials::ShaderLookSourceInterface>>,
-    changed_targets: Query<Entity, Changed<TerrainVisualContinuation>>,
+    changed_targets: Query<
+        Entity,
+        (
+            With<TerrainVisualContinuation>,
+            Or<(Changed<TerrainVisualContinuation>, Changed<ShaderLook>)>,
+        ),
+    >,
     changed_shader_ready: Query<Entity, Changed<ShaderLookReady>>,
     scene_transition: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,

@@ -162,6 +162,10 @@ pub struct ShaderMaterial {
     #[texture(21)]
     #[sampler(22)]
     pub detail_surface_map: Option<Handle<Image>>,
+    /// Authored displacement raster. Linear scalar values retain native precision.
+    #[texture(23)]
+    #[sampler(24)]
+    pub displacement_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -228,6 +232,7 @@ impl Default for ShaderMaterial {
             detail_albedo_map: None,
             detail_normal_map: None,
             detail_surface_map: None,
+            displacement_map: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),

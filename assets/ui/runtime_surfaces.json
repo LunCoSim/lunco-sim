@@ -63,6 +63,8 @@
     },
     {
       "id": "vehicle-control-left",
+      "setting": "ui.vehicle_controls",
+      "setting_default": true,
       "template": "ui/vehicle_control_compact.html",
       "stylesheet": "ui/vehicle_control_compact.css",
       "namespace": "vehicle-control-left",
@@ -91,6 +93,8 @@
     },
     {
       "id": "vehicle-control-right",
+      "setting": "ui.vehicle_controls",
+      "setting_default": true,
       "template": "ui/vehicle_control_compact.html",
       "stylesheet": "ui/vehicle_control_compact.css",
       "namespace": "vehicle-control-right",
