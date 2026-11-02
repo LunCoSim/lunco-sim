@@ -336,7 +336,9 @@ interval at the deepest level over a 1 km crop). The shared terrain kernel
 evaluates bump gradients analytically, filters each octave by its pixel
 footprint, and transfers unresolved slope variance into roughness. The
 `noise_continuity` GPU fixture checks fully resolved, partially resolved, and
-unresolved spectra in both 2D and 3D. Apply lunar
+unresolved spectra in both 2D and 3D, and equality of the planar terrain slice
+across five octave counts and four footprints. Native UV-backed terrain uses
+that same planar field without computing unused Y corners. Apply lunar
 photometry to the engine-selected Sun contribution only; putting it in
 `base_color` also changes fill and earthshine.
 

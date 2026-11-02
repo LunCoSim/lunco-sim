@@ -305,6 +305,11 @@ the same corner value, including at negative, high-frequency terrain coordinates
 rounding in the hash must not become a visible lattice boundary. Scalar noise and
 analytic-gradient noise share that owner. The `noise_continuity` graphics fixture
 checks both the 2D and 3D value/gradient contracts on the production GPU path.
+UV-backed terrain evaluates the exact Y=0 slice with the shared planar kernel:
+the integer lattice, octave rotation, values and XZ slopes match the 3D kernel,
+while unused Y corners are omitted. The fixture compares both paths across
+five octave counts and four pixel footprints. Non-UV native surfaces retain
+their three-dimensional field.
 
 ### Shadow ownership
 

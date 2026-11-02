@@ -8,18 +8,19 @@ import bevy_pbr::render::{
     pbr_types,
     shadows,
 };
-@if((LUNCO_NOISE_2D))
+@if((LUNCO_NOISE_2D || VERTEX_UVS_A))
 import super::lunco_noise::{fbm2d, fbm2d_gradient};
-@if((!(LUNCO_NOISE_2D)))
+@if((!(LUNCO_NOISE_2D || VERTEX_UVS_A)))
 import super::lunco_noise::{fbm_rot, fbm_rot_gradient};
 import super::lunco_noise::noise_footprint_weight;
 
 // Shared regolith SURFACE kernel for every terrain shader, via WESL import.
 //
 // This module is the single implementation of shared terrain surface operations.
-// The material pipeline selects the noise dimensionality for the target platform
-// with `LUNCO_NOISE_2D`; every terrain material then imports the same transfer,
-// anti-aliasing, map, and bump helpers.
+// UV-backed terrain has the exact planar input (x, 0, z), preserved by every
+// octave's rotation about Y. The 2D kernel hashes the same lattice corners and
+// yields the same height and XZ gradient without evaluating unused Y corners.
+// Non-UV native surfaces retain 3D noise; LUNCO_NOISE_2D selects the web kernel.
 
 
 
@@ -316,8 +317,8 @@ fn dem_normal_to_world(encoded: vec3<f32>, instance_index: u32) -> vec3<f32> {
 /// family and octave budget as the bump layers instead of calling `fbm`/`fbm2d`
 /// directly, keeping all terrain materials on the same noise family and budget.
 fn surface_fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
-    @if((LUNCO_NOISE_2D)) return fbm2d(p.xz, oct(octaves), gain);
-    @if((!(LUNCO_NOISE_2D))) return fbm_rot(p, oct(octaves), gain);
+    @if((LUNCO_NOISE_2D || VERTEX_UVS_A)) return fbm2d(p.xz, oct(octaves), gain);
+    @if((!(LUNCO_NOISE_2D || VERTEX_UVS_A))) return fbm_rot(p, oct(octaves), gain);
 }
 
 // Procedural terrain detail is anchored to the authored DEM frame, not to the
@@ -351,8 +352,8 @@ fn terrain_detail_normal_to_world(local_normal: vec3<f32>, instance_index: u32) 
 
 /// One ramped FBM layer sampled at terrain-stable position `p`.
 fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
-    @if((LUNCO_NOISE_2D)) return ramp(fbm2d(p.xz * scale, oct(octaves), gain), lo, hi);
-    @if((!(LUNCO_NOISE_2D))) return ramp(fbm_rot(p * scale, oct(octaves), gain), lo, hi);
+    @if((LUNCO_NOISE_2D || VERTEX_UVS_A)) return ramp(fbm2d(p.xz * scale, oct(octaves), gain), lo, hi);
+    @if((!(LUNCO_NOISE_2D || VERTEX_UVS_A))) return ramp(fbm_rot(p * scale, oct(octaves), gain), lo, hi);
 }
 
 /// Value and gradient of a smooth, bounded FBM relief layer. The cubic height
@@ -364,14 +365,14 @@ fn layer_gradient(
 ) -> vec4<f32> {
     var raw_height = 0.0;
     var raw_gradient = vec3<f32>(0.0);
-    @if((LUNCO_NOISE_2D)) let sample = fbm2d_gradient(p.xz * scale, oct(octaves), gain,
+    @if((LUNCO_NOISE_2D || VERTEX_UVS_A)) let sample = fbm2d_gradient(p.xz * scale, oct(octaves), gain,
         scale * pw, vec2(AA_CUT_PX, AA_RAMP_PX));
-    @if((LUNCO_NOISE_2D)) raw_height = sample.x;
-    @if((LUNCO_NOISE_2D)) raw_gradient = vec3(sample.y, 0.0, sample.z) * scale;
-    @if((!(LUNCO_NOISE_2D))) let sample = fbm_rot_gradient(p * scale, oct(octaves), gain,
+    @if((LUNCO_NOISE_2D || VERTEX_UVS_A)) raw_height = sample.x;
+    @if((LUNCO_NOISE_2D || VERTEX_UVS_A)) raw_gradient = vec3(sample.y, 0.0, sample.z) * scale;
+    @if((!(LUNCO_NOISE_2D || VERTEX_UVS_A))) let sample = fbm_rot_gradient(p * scale, oct(octaves), gain,
         scale * pw, vec2(AA_CUT_PX, AA_RAMP_PX));
-    @if((!(LUNCO_NOISE_2D))) raw_height = sample.x;
-    @if((!(LUNCO_NOISE_2D))) raw_gradient = sample.yzw * scale;
+    @if((!(LUNCO_NOISE_2D || VERTEX_UVS_A))) raw_height = sample.x;
+    @if((!(LUNCO_NOISE_2D || VERTEX_UVS_A))) raw_gradient = sample.yzw * scale;
     let t = ramp(raw_height, lo, hi);
     let height = t * t * (3.0 - 2.0 * t);
     let gradient = raw_gradient * (6.0 * t * (1.0 - t) / (hi - lo));

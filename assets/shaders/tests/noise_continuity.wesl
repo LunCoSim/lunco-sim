@@ -60,5 +60,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         && length(unresolved2 - vec3(0.5, 0.0, 0.0)) < 0.0001
         && abs(partial2.x - (0.5 + 0.5 * (base2.x - 0.5) / 1.75)) < 0.0001
         && length(partial2.yz - 0.5 * base2.yz / 1.75) < 0.0001;
+    // UV-backed terrain uses the exact Y=0 plane. Both kernels share the same
+    // integer lattice hash and XZ octave rotation. Specializing that plane must
+    // preserve its value, its two nonzero slopes and every footprint band.
+    let planar = vec3(p.x, 0.0, p.z);
+    for (var count = 1; count <= 5; count++) {
+        for (var band = 0; band < 4; band++) {
+            let footprint = f32(band) / 6.0;
+            let full = fbm_rot_gradient(planar, count, 0.5, footprint, filter_window);
+            let reduced = fbm2d_gradient(planar.xz, count, 0.5, footprint, filter_window);
+            valid = valid && length(full - vec4(reduced.x, reduced.y, 0.0, reduced.z)) < 0.00001
+                && abs(fbm_rot(planar, count, 0.5) - fbm2d(planar.xz, count, 0.5)) < 0.00001;
+        }
+    }
     return select(vec4(1.0, 0.0, 0.0, 1.0), vec4(0.0, 1.0, 0.0, 1.0), valid);
 }
