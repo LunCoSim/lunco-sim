@@ -4,9 +4,9 @@
 
 How LunCoSim represents planetary surfaces from orbit down to a rover wheel,
 with one analytic source that composes under **USD layering** and **scales to a
-whole solar system**. Visual rendering and physics are independent products:
-they may sample the same source, but neither product's quality or scheduling
-controls the other.
+whole solar system**. Camera-driven rendering consumes the physical terrain
+contract without changing physics quality or scheduling. Physical support stays
+independent of camera position, graphics settings and visual worker completion.
 
 This doc is the design narrative. Per-crate quick-starts live in
 [`lunco-terrain-core`](../../crates/lunco-terrain-core/README.md),
@@ -42,12 +42,41 @@ The composed source is the **single source of truth**. Both consumers sample it:
   receiving invented dimensions or a lift. The API path uses the explicit
   position supplied by the caller.
 
-Because they all call one function, they **converge on terrain facts** while
-remaining independent products. The visual product chooses its camera-driven
-sampling; the physics product chooses its authored collider lattice. A graphics
-quality change cannot add physics work or change contact geometry. Crater
-crispness is no longer bounded by a DEM mip; it is bounded by each product's
-own sampling contract.
+The physics product chooses its authored collider lattice; graphics quality
+cannot add physics work or change contact geometry. The visual cover reserves
+that same lattice on the physics ring's support footprint and build-ahead nodes.
+`Quadtree::constrain_selection` refines coarse ancestors and pins the required
+support leaves while preserving finer camera leaves and 2:1 neighbour seams. Contact tiles reuse
+`sample_heights_xz`, including the world-anchored 1 mm quantization and native
+grid triangle diagonal; only GPU positions narrow to f32. Finer camera tiles
+use `SampledContactSurface` to subdivide those exact canonical triangle planes,
+including their parent morph lattice, rather than evaluating extra relief that
+physical contact cannot represent. The ring resolution
+also supplies the streamed visual lattice so parent/child seams stay nested.
+
+The camera cover remains budgeted and is prepared off-thread; contact constraints
+are applied by that same worker after discretionary split/merge work. The worker also reserves the finest tile under every nearby active camera plus
+its edge neighbours, using the camera's real local clearance and configured
+near-detail radius. It builds the required restricted tree first and reserves
+its split cost before allocating the remaining budget to discretionary camera
+LOD. Required camera/support geometry takes precedence when that minimum tree
+alone exceeds the graphics budget.
+Moving support nodes participate in the selection signature and receive bake
+priority. Cached geometry distinguishes contact from visual-only tiles, and
+resident material morph windows update when nodes enter or leave support.
+Frozen cinematic selection applies only without active contact demands. Physics
+never waits for visual preparation. `TerrainLodStatus.contacts` reports support
+nodes (including finer render descendants), visible readiness, the physical
+lattice and the consumed morph pin. `camera_cover` reports the actual local
+camera pose, clearance, selected depth, readiness and pin.
+
+Routes and wheel marks are `SurfaceCurveAnnotation` material inputs indexed in
+terrain-local XZ. They inherit these triangles directly, without another raised
+mesh or height sampler. New tile looks retain the shared annotation texture;
+route overlays stay unlit, while physical wheel marks receive terrain lighting.
+Run `scripts/api/test_terrain_contact_visual.py` against a real Twin for the
+authored contact/route/trail verdict, including driving and a constrained visual
+budget.
 
 ### One committed-change contract, independent product caches
 
@@ -513,7 +542,7 @@ floor and retention band use the same distance. Camera poses are resolved in
 the terrain-local f64 frame through `lunco-spatial`'s shared-grid `big_space`
 conversion. Range factor comes from the canonical screen metric (`pixel_error`),
 and bounded deterministic split/merge edits retain an exact cover under the tile
-budget. Dynamic bodies drive the independent physics collider ring; **streaming** — off-thread tile bakes (budgeted per frame,
+budget. The physics collider ring additionally constrains the visual support cover; **streaming** — off-thread tile bakes (budgeted per frame,
 bounded in flight) keeps a root fallback queued first while refined tiles
 publish, then orders selected work by screen-space benefit weighted toward the
 camera heading, with a reveal morph settling each child onto its parent's lattice,

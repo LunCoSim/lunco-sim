@@ -19,12 +19,12 @@ use lunco_terrain_core::{HeightSource, QuadCoord, Square};
 
 use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
-use crate::tile_mesh::{TileMesh, bake_tile_mesh_with_boundary};
+use crate::tile_mesh::{TileMesh, bake_tile_mesh, bake_tile_mesh_with_boundary};
 
 /// Current geometry/layout contract for persisted visual tile bakes. Bump on
 /// changes to sampling math, boundary topology, normals, morphs, or blob layout.
 /// The revision is part of the content key; incompatible bakes cannot be read.
-const CACHE_FORMAT_VERSION: u64 = 14;
+const CACHE_FORMAT_VERSION: u64 = 16;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -34,6 +34,7 @@ struct TileBake<'a> {
     res: usize,
     dem_half_extent: f64,
     origin_xz: [f64; 2],
+    contact: Option<u8>,
 }
 
 impl lunco_precompute::Bake for TileBake<'_> {
@@ -48,6 +49,7 @@ impl lunco_precompute::Bake for TileBake<'_> {
         h.write_u64(self.coord.x as u64);
         h.write_u64(self.coord.z as u64);
         h.write_u64(self.res as u64);
+        h.write_u64(self.contact.map_or(0, |depth| u64::from(depth) + 1));
         // region/origin derive from (root extent, coord), but fold them anyway so
         // a root-extent change can never alias.
         h.write_u64(self.region.center[0].to_bits());
@@ -81,6 +83,50 @@ impl lunco_precompute::Bake for TileBake<'_> {
         let origin_y = self
             .oracle
             .height_at(self.region.center[0], self.region.center[1]);
+        if let Some(depth) = self.contact {
+            if self.coord.depth > depth {
+                let physical = crate::collider_ring::SampledContactSurface::prepare(
+                    self.oracle,
+                    self.region,
+                    margin,
+                    depth,
+                    self.res,
+                );
+                return bake_tile_mesh(
+                    &physical,
+                    &physical,
+                    self.region,
+                    self.res,
+                    self.dem_half_extent,
+                    self.origin_xz,
+                    origin_y,
+                );
+            }
+            // Use the collider owner's exact quantized postings. Both meshes use
+            // the same anti-diagonal grid triangles; only GPU positions narrow.
+            let heights = crate::collider_ring::sample_heights_xz(
+                self.oracle,
+                self.region,
+                self.res,
+                origin_y,
+                SurfaceBand::physics(step),
+            );
+            let mut mesh = bake_tile_mesh(
+                &limited,
+                &parent_limited,
+                self.region,
+                self.res,
+                self.dem_half_extent,
+                self.origin_xz,
+                origin_y,
+            );
+            for (x, column) in heights.iter().enumerate() {
+                for (z, &height) in column.iter().enumerate() {
+                    mesh.positions[z * self.res + x][1] = height as f32;
+                }
+            }
+            return mesh;
+        }
         bake_tile_mesh_with_boundary(
             &limited,
             &parent_limited,
@@ -112,6 +158,7 @@ pub fn bake_tile_mesh_cached(
     res: usize,
     dem_half_extent: f64,
     origin_xz: [f64; 2],
+    contact: Option<u8>,
 ) -> TileMesh {
     lunco_precompute::bake_or_load(
         &TileBake {
@@ -121,6 +168,7 @@ pub fn bake_tile_mesh_cached(
             res,
             dem_half_extent,
             origin_xz,
+            contact,
         },
         &lunco_assets_core::cache_dir(),
     )
@@ -137,6 +185,7 @@ pub async fn bake_tile_mesh_cached_async(
     res: usize,
     dem_half_extent: f64,
     origin_xz: [f64; 2],
+    contact: Option<u8>,
 ) -> TileMesh {
     use lunco_precompute::Bake;
 
@@ -147,6 +196,7 @@ pub async fn bake_tile_mesh_cached_async(
         res,
         dem_half_extent,
         origin_xz,
+        contact,
     };
     let key_hex = lunco_precompute::key_hex(bake.key());
     if let Some(blob) = lunco_storage::opfs_blob::read(TileBake::NAMESPACE, &key_hex).await {

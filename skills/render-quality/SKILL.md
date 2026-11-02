@@ -201,6 +201,19 @@ GPU acceptance still require the rendered fixture and a clean process log.
    run `celestial_terrain_clock.rhai` with the settled probe ID. Preserve physical
    fixed-step semantics and conservative bounds; do not raise quotas or fabricate
    sunlight to hide a traversal/certificate failure.
+   For wheels moving over visually flat ground, inspect
+   `TerrainLodStatus.contacts`: every physics support/build-ahead node must have a ready, drawn and pinned
+   visual cover, including finer descendants. Check `camera_cover` as well: a
+   nearby camera reserves its finest local patch independently of the bodies. The visual support cover uses the authored physical
+   lattice even when camera depth or discretionary tile budget is smaller. Do
+   not reduce collider detail or increase a global graphics preset to conceal
+   this mismatch. Run `scripts/api/test_terrain_contact_visual.py --scene <scene>
+   --body-path <body> --route-path <route> --port <free-port> --output <evidence>`.
+   It checks close/far cameras and finer camera tessellation, rendered triangles
+   against native rays within 1 mm, an explicit
+   2 cm negative case, route texture bindings on new contact tiles, physical
+   wheel marks after driving, and reduced graphics settings. Inspect its driving
+   captures and performance reads; another active simulator can affect timing.
 4. Compare a settled frame sequence, not one screenshot. Fast color changes
    usually indicate changing inputs, repeated derived bakes, missing asset
    readiness, or unstable lighting—not a reason to clamp the image in a
@@ -330,8 +343,9 @@ from the replaced `SurfaceOracle` into the shared visual invalidator, collider
 ring, static-collider debounce, and derived maps. Bounded reuse requires the
 consumer's cached source key to match the record's previous key; the collider
 ring also requires the immediately preceding revision. Reject static-collider
-jobs whose oracle key is stale. Keep visual and physics sampling bands and
-caches independent.
+jobs whose oracle key is stale. Physics owns contact sampling; presentation consumes that lattice on the
+support cover. Keep discretionary visual caches independent from collider
+residency and never make physics wait for presentation.
 
 Use `inspect-simulation`, `record-video`, or the API screenshot surface for
 visual evidence. Preserve authored DEM resolution, shadow ranges, BigSpace,

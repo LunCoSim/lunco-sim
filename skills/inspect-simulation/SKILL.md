@@ -235,6 +235,14 @@ terrain owner's visual-map lifecycle: full visual preparation requires
 of simulation readiness. Static USD DEM terrain keeps its `UsdShade`
 appearance intent on the terrain owner while the generated mesh is assembled.
 
+For rover/terrain contact, `TerrainLodStatus.contacts` reports the physics-owned
+support nodes and each matching visual tile's readiness, drawing and consumed
+morph pin. A settled camera cover alone does not prove support fidelity. Use
+`include_geometry` and `mesh_entity` to inspect the retained contact mesh, then
+compare interior triangle points with native `Raycast` contacts. Route and wheel
+marks must remain bound to these terrain tiles through the existing annotation
+texture; use `InspectUsdCurveView` and `InspectVehicleTrail` alongside captures.
+
 For an interactive USD edit, query `InspectUsdViewport` before describing or
 changing the visible item, then correlate its explicit view/preview handle with
 `CaptureScreenshot` and `ListOpenDocuments`. Use the returned document ID,

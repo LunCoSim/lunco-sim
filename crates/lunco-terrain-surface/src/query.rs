@@ -38,8 +38,8 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_spatial::coords::GridPos;
 use lunco_terrain_core::{
-    AspectField, BoundedHeightSource, ElevationField, SlopeField, Square, SurfaceField, field_map,
-    normal_at_bounded,
+    AspectField, BoundedHeightSource, ElevationField, HeightSource, SlopeField, Square,
+    SurfaceField, field_map, normal_at_bounded,
 };
 
 use crate::oracle::DemHeightField;
@@ -765,6 +765,63 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                     "uploads": stats.map(|stats| api_value!({ "batches": stats.batches, "bytes": stats.bytes,
                         "sequence": stats.sequence, "texture_allocations": stats.texture_allocations })) })
             }).collect::<Vec<_>>());
+        let camera_cover =
+            QueryState::<(Entity, &DemHeightField, &crate::stream_viz::LodTiles)>::try_new(world)
+                .map(|mut query| {
+                    let mut rows = Vec::new();
+                    for (terrain, field, tiles) in query.iter(world) {
+                        let Some((origin, rotation)) = poses.pose(world, terrain) else {
+                            continue;
+                        };
+                        for (raw, _, _, _, _) in demands.visual_focus_snapshot() {
+                            let Some((position, _)) = poses.pose(world, Entity::from_bits(raw))
+                            else {
+                                continue;
+                            };
+                            let local = rotation.0.inverse() * (position.0 - origin.0);
+                            let leaf = tiles.focus_tile([local.x, local.z]);
+                            let height = field.0.height_at(local.x, local.z);
+                            rows.push(api_value!({
+                                "source": terrain.to_bits(), "camera": raw,
+                                "position_local_m": local.to_array(), "clearance_m": local.y-height,
+                                "depth": leaf.map(|leaf| leaf.0),
+                                "ready": leaf.is_some_and(|leaf| leaf.1),
+                                "pinned": leaf.is_some_and(|leaf| leaf.2),
+                            }));
+                        }
+                    }
+                    rows
+                });
+        let contacts = QueryState::<(Entity,
+            &crate::collider_ring::TerrainColliderRing,
+            &crate::collider_ring::ColliderTiles,
+            &crate::stream_viz::LodTiles)>::try_new(world).map(|mut query| {
+            let mut rows = Vec::new();
+            for (terrain, ring, physical, visual) in query.iter(world) {
+                for coord in physical.contact_nodes() {
+                    let mut leaves = visual.contact_tiles(*coord).collect::<Vec<_>>();
+                    if leaves.is_empty() { leaves.push((*coord, None)); }
+                    for (coord, tile) in leaves {
+                    rows.push(api_value!({
+                        "source": terrain.to_bits(),
+                        "depth": coord.depth, "x": coord.x, "z": coord.z,
+                        "canonical_depth": ring.depth,
+                        "resolution": ring.res,
+                        "min_wavelength_m": ring.physics_band.min_wavelength,
+                        "entity": tile.map(|tile| tile.0.to_bits()),
+                        "ready": tile.is_some_and(|tile| tile.1),
+                        "drawn": tile.is_some_and(|tile| tile.2),
+                        "pinned": tile.is_some_and(|tile| tile.3 && world.get::<lunco_materials::ShaderLook>(tile.0)
+                            .is_some_and(|look| look.values().iter().any(|(name, value)|
+                                name == "morph_end" && value.as_floats().first().is_some_and(|end| *end >= 1.0e20)))),
+                    }));
+                    }
+                }
+            }
+            rows.sort_by_key(|row| (row.get("source").and_then(ApiValue::as_u64),
+                row.get("x").and_then(ApiValue::as_u64), row.get("z").and_then(ApiValue::as_u64)));
+            rows
+        });
         let mut continuations: Vec<_> = continuation_query.iter(world).map(|(entity, continuation, look, visibility, ready, mesh)| {
             let source = world.get::<lunco_materials::ShaderLook>(continuation.source);
             let source_reflection = world.get::<lunco_materials::ShaderLookSourceInterface>(continuation.source);
@@ -861,6 +918,8 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 .and_then(|viewport| viewport.active_camera)
                 .map(|entity| entity.to_bits()),
             "visual_foci": visual_foci,
+            "contacts": contacts,
+            "camera_cover": camera_cover,
             "continuations": continuations,
             "shadow_meshes": shadow_meshes,
             "shadow_caches": shadow_caches,

@@ -50,6 +50,6 @@ Inert until a DEM terrain is spawned (via `SpawnDemTerrain` or a USD
 collider ring and composable layer stack. Visual streaming is wired only by the
 presentation plugin. The design narrative — the
 height-oracle model, the three-channel layer taxonomy (height / carve / geometry),
-independent visual/physics sampling, authored collider parameters, error-driven
+camera refinement over canonical physical triangles, authored collider parameters, error-driven
 visual detail, and orbit→surface scaling — is in
 [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).

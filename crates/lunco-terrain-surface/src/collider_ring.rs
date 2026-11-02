@@ -191,6 +191,14 @@ pub struct ColliderTiles {
     last_ring_nodes: Vec<QuadCoord>,
 }
 
+impl ColliderTiles {
+    /// Canonical support footprint plus build-ahead, published by physics.
+    /// Presentation consumes these nodes without selecting or delaying physics.
+    pub(crate) fn contact_nodes(&self) -> &[QuadCoord] {
+        &self.last_ring_nodes
+    }
+}
+
 /// In-flight off-thread collider-tile bakes for a terrain. Sampling the oracle
 /// (65² points × craters/over-zoom) AND constructing the parry heightfield are
 /// both real work — doing them synchronously stalled the frame every time a
@@ -218,7 +226,7 @@ pub struct ColliderTileOf(pub Entity);
 /// `(side, 1, side)` scale — Parry centres it at the entity origin). It samples
 /// the physics-owned band and only quantizes to the deterministic 1 mm lattice;
 /// collision geometry is never selected by visual state.
-fn sample_heights_xz(
+pub(crate) fn sample_heights_xz(
     oracle: &SurfaceOracle,
     region: Square,
     res: usize,
@@ -257,6 +265,88 @@ fn sample_heights_xz(
         cols.push(col);
     }
     cols
+}
+
+/// A render bake's bounded view of the canonical physical triangles. Finer
+/// camera grids subdivide these planes rather than inventing another surface.
+pub(crate) struct SampledContactSurface {
+    tree: Quadtree,
+    res: usize,
+    tiles: std::collections::HashMap<QuadCoord, (Vec<Vec<f64>>, f64)>,
+}
+
+impl SampledContactSurface {
+    /// Prepare every canonical tile touched by vertex, normal and morph taps.
+    pub(crate) fn prepare(
+        oracle: &SurfaceOracle,
+        region: Square,
+        margin: f64,
+        depth: u8,
+        res: usize,
+    ) -> Self {
+        let half = f64::from(oracle.half_extent());
+        let tree = Quadtree::new(half, depth, 1.0, half);
+        let low = tree.node_containing(
+            depth,
+            [
+                region.center[0] - region.half - margin,
+                region.center[1] - region.half - margin,
+            ],
+        );
+        let high = tree.node_containing(
+            depth,
+            [
+                region.center[0] + region.half + margin,
+                region.center[1] + region.half + margin,
+            ],
+        );
+        let mut tiles = std::collections::HashMap::new();
+        for z in low.z..=high.z {
+            for x in low.x..=high.x {
+                let coord = QuadCoord { depth, x, z };
+                let square = tree.region(coord);
+                let origin = oracle.height_at(square.center[0], square.center[1]);
+                let band = SurfaceBand::physics(square.side() / (res - 1) as f64);
+                tiles.insert(
+                    coord,
+                    (sample_heights_xz(oracle, square, res, origin, band), origin),
+                );
+            }
+        }
+        Self { tree, res, tiles }
+    }
+}
+
+impl HeightSource for SampledContactSurface {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        let half = self.tree.root_half_extent;
+        let x = x.clamp(-half, half);
+        let z = z.clamp(-half, half);
+        let coord = self.tree.node_containing(self.tree.max_depth, [x, z]);
+        let square = self.tree.region(coord);
+        let (heights, origin) = self
+            .tiles
+            .get(&coord)
+            .expect("contact bake stays inside its prepared footprint");
+        let step = square.side() / (self.res - 1) as f64;
+        let fx = ((x - square.center[0] + square.half) / step).clamp(0.0, (self.res - 1) as f64);
+        let fz = ((z - square.center[1] + square.half) / step).clamp(0.0, (self.res - 1) as f64);
+        let ix = (fx.floor() as usize).min(self.res - 2);
+        let iz = (fz.floor() as usize).min(self.res - 2);
+        let tx = fx - ix as f64;
+        let tz = fz - iz as f64;
+        // Same anti-diagonal as Parry's heightfield and the shared grid mesh.
+        let height = if tx + tz <= 1.0 {
+            heights[ix][iz]
+                + tx * (heights[ix + 1][iz] - heights[ix][iz])
+                + tz * (heights[ix][iz + 1] - heights[ix][iz])
+        } else {
+            heights[ix + 1][iz + 1]
+                + (1.0 - tx) * (heights[ix][iz + 1] - heights[ix + 1][iz + 1])
+                + (1.0 - tz) * (heights[ix + 1][iz] - heights[ix + 1][iz + 1])
+        };
+        origin + height
+    }
 }
 
 /// Re-bake the resident ring when its shape is retuned.

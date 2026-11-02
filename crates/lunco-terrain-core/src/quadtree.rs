@@ -107,6 +107,22 @@ impl QuadCoord {
         })
     }
 
+    /// Same-depth edge neighbours, clipped to the root square.
+    pub fn edge_neighbours(self) -> impl Iterator<Item = QuadCoord> {
+        let side = 1i64 << self.depth;
+        [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)]
+            .into_iter()
+            .filter_map(move |(dx, dz)| {
+                let x = self.x as i64 + dx;
+                let z = self.z as i64 + dz;
+                (x >= 0 && z >= 0 && x < side && z < side).then_some(QuadCoord {
+                    depth: self.depth,
+                    x: x as u32,
+                    z: z as u32,
+                })
+            })
+    }
+
     /// The four children (depth + 1).
     pub fn children(self) -> [QuadCoord; 4] {
         let d = self.depth + 1;
@@ -298,96 +314,56 @@ impl Quadtree {
         }
     }
 
-    /// Force `sel` (a valid REPLACE-refinement cover, as read off
-    /// `evolve_cover`'s cover via [`selected`](Self::selected)) to include the **max-depth** node containing
-    /// `focus_xz` plus its 8 neighbours, splitting whatever coarser ancestors
-    /// currently cover them. The cover stays exact and disjoint.
-    ///
-    /// Why: visual selection is CAMERA-driven. A dynamic body may be far from
-    /// the camera, so its support area must be visually refined independently
-    /// of the camera cover to avoid an avoidable presentation gap. This changes
-    /// only the visual cover; the physics collider ring has its own authored
-    /// lattice and never reads this selection. Split-off siblings inherit
-    /// geomorph windows from the same `node_error` metric the visual walk used,
-    /// so visual bands stay consistent.
-    pub fn refine_selection_at(
+    /// Constrain an exact visual cover to explicit physical-support nodes.
+    /// Required nodes refine coarser ancestors and preserve finer camera leaves, keeping
+    /// full geometry at every camera distance. Other leaves retain their normal
+    /// morph windows. This operation never changes physics selection.
+    pub fn constrain_selection(
         &self,
         sel: &mut Vec<Selected>,
-        focus_xz: [f64; 2],
-        node_error: impl Fn(QuadCoord, Square) -> f64,
-    ) {
-        self.refine_selection_at_with(sel, focus_xz, &node_error, false)
-    }
-
-    /// As [`refine_selection_at`], but when `pin_morph` is true the max-depth
-    /// leaves covering the body's 3×3 footprint are emitted with
-    /// `morph_start = morph_end = ∞` — they never collapse onto the parent
-    /// lattice, so the ground a rover stands on renders at full detail from
-    /// **any** camera distance, not just when the camera is near.
-    ///
-    /// Pinning the morph window to ∞ makes the shader's
-    /// `smoothstep(start, end, dist)` return 0 for those tiles regardless of
-    /// `dist` (the same no-morph convention root tiles use). The whole 3×3
-    /// footprint (centre + 8 neighbours) is pinned, since all nine are
-    /// body-coverage tiles; the LOD seam therefore lands at the footprint
-    /// BOUNDARY — where these max-depth leaves meet the coarser cover outside —
-    /// one ring away from the rover's wheels, not under them.
-    ///
-    /// The shader is untouched: this is a CPU-side window assignment, not a
-    /// per-tile morph factor (which `terrain_geomorph.wesl`'s header warns would
-    /// crack same-depth seams). See `WHEEL_SINKING_ANALYSIS_v3.md` §4.4.
-    pub fn refine_selection_at_with(
-        &self,
-        sel: &mut Vec<Selected>,
-        focus_xz: [f64; 2],
+        required: &[QuadCoord],
         node_error: &impl Fn(QuadCoord, Square) -> f64,
-        pin_morph: bool,
     ) {
-        let nodes = 1i64 << self.max_depth;
-        let centre = self.node_containing(self.max_depth, focus_xz);
-        let (cx, cz) = (centre.x as i64, centre.z as i64);
-        // Index the cover by coord ONCE for the whole 3×3 footprint. The old
-        // shape linear-scanned the full cover (`iter().position(covers)`) per
-        // target — nine scans of hundreds of nodes per body per frame; against
-        // the map the covering node is found by walking the target's ancestor
-        // chain (O(depth)), because in an exact cover the node covering a
-        // region IS an ancestor-or-self.
+        if required.is_empty() {
+            return;
+        }
         let mut cover: std::collections::HashMap<QuadCoord, Selected> =
             sel.drain(..).map(|s| (s.coord, s)).collect();
-        for dz in -1..=1i64 {
-            for dx in -1..=1i64 {
-                let (nx, nz) = (cx + dx, cz + dz);
-                if nx < 0 || nz < 0 || nx >= nodes || nz >= nodes {
-                    continue;
-                }
-                let target = QuadCoord {
-                    depth: self.max_depth,
-                    x: nx as u32,
-                    z: nz as u32,
-                };
-                self.force_refine(&mut cover, target, node_error, pin_morph);
+        for &target in required {
+            let finer = cover.keys().any(|coord| {
+                coord.depth > target.depth
+                    && (coord.x >> (coord.depth - target.depth)) == target.x
+                    && (coord.z >> (coord.depth - target.depth)) == target.z
+            });
+            if !finer {
+                self.force_refine(&mut cover, target, node_error);
+            }
+        }
+        // Apply pins after all splits: a finer camera constraint can split a
+        // required physical leaf and every resulting child still owns contact.
+        for leaf in cover.values_mut() {
+            if required.iter().any(|target| {
+                leaf.coord.depth >= target.depth
+                    && (leaf.coord.x >> (leaf.coord.depth - target.depth)) == target.x
+                    && (leaf.coord.z >> (leaf.coord.depth - target.depth)) == target.z
+            }) {
+                leaf.morph_start = f64::INFINITY;
+                leaf.morph_end = f64::INFINITY;
             }
         }
         sel.extend(cover.into_values());
-        // Deterministic output. The map iterates in hash order, and the old
-        // `swap_remove` shape depended on the caller's input order anyway —
-        // emit the total (depth, x, z) order instead, the same load-bearing
-        // key the incremental cover walk sorts its edits by.
         sel.sort_unstable_by_key(|s| (s.coord.depth, s.coord.x, s.coord.z));
     }
 
     /// Split the selected ancestor of `target` (if coarser) down to
-    /// `target.depth`, pushing the split-off siblings at each level. When
-    /// `pin_morph` is true, the final target-depth leaf is emitted with an
-    /// infinite morph window (never collapses onto its parent); split-off
-    /// siblings at every level keep the normal error-derived band, so the LOD
-    /// seam lands one ring away from the body rather than under it.
+    /// `target.depth`, splitting coarser neighbours first to preserve 2:1 edges.
+    /// New leaves carry the normal error-derived morph window. The completed
+    /// required cover installs pins after every split has landed.
     fn force_refine(
         &self,
         cover: &mut std::collections::HashMap<QuadCoord, Selected>,
         target: QuadCoord,
         node_error: &impl Fn(QuadCoord, Square) -> f64,
-        pin_morph: bool,
     ) {
         fn covers(anc: QuadCoord, target: QuadCoord) -> bool {
             anc.depth <= target.depth
@@ -407,19 +383,26 @@ impl Quadtree {
             }
         };
         if covering.depth >= target.depth {
-            // Already at target depth. If pinning, ensure its morph window is ∞.
-            if pin_morph {
-                if let Some(s) = cover.get_mut(&covering) {
-                    s.morph_start = f64::INFINITY;
-                    s.morph_end = f64::INFINITY;
-                }
-            }
             return;
         }
         let mut cur = cover
             .remove(&covering)
             .expect("covering node was just found in the map");
         while cur.coord.depth < target.depth {
+            // Preserve the same 2:1 seam contract as discretionary selection.
+            // Any coarser edge neighbour must reach this node's depth before
+            // its children can become part of the cover. Recursion moves toward
+            // coarser ancestors, so it is bounded by the tree depth.
+            for neighbour in cur.coord.edge_neighbours() {
+                let mut ancestor = neighbour.parent();
+                while let Some(coord) = ancestor {
+                    if cover.contains_key(&coord) {
+                        self.force_refine(cover, neighbour, node_error);
+                        break;
+                    }
+                    ancestor = coord.parent();
+                }
+            }
             // Children's geomorph window ends where THIS node would refine —
             // the same band the error-driven walk would have assigned them.
             let refine_range = self.range_factor * node_error(cur.coord, cur.region).max(0.0);
@@ -436,25 +419,12 @@ impl Quadtree {
                     x: cur.coord.x * 2 + ox,
                     z: cur.coord.z * 2 + oz,
                 };
-                // The child that covers `target` is the path further down; it
-                // inherits the pinned window only when it IS the final leaf and
-                // pin_morph is set. Siblings always take the error-derived band.
                 let is_target_path = covers(cc, target);
-                let is_pinned_leaf = pin_morph && is_target_path && d == target.depth;
-                let s = if is_pinned_leaf {
-                    Selected {
-                        coord: cc,
-                        region: self.region(cc),
-                        morph_start: f64::INFINITY,
-                        morph_end: f64::INFINITY,
-                    }
-                } else {
-                    Selected {
-                        coord: cc,
-                        region: self.region(cc),
-                        morph_start,
-                        morph_end: refine_range,
-                    }
+                let s = Selected {
+                    coord: cc,
+                    region: self.region(cc),
+                    morph_start,
+                    morph_end: refine_range,
                 };
                 if is_target_path {
                     next = Some(s);
@@ -463,15 +433,6 @@ impl Quadtree {
                 }
             }
             cur = next.expect("exactly one child covers the target");
-        }
-        // `cur` is the target leaf (loop exited at `cur.coord.depth == target.depth`).
-        // When the original cover already had it at target depth the early-return
-        // branch above handled pinning; here the loop's last iteration either
-        // produced a pinned leaf (d == target.depth case) or `cur` is a non-pinned
-        // leaf from a cover that was already fine. Only re-pin if requested.
-        if pin_morph && cur.coord.depth == target.depth {
-            cur.morph_start = f64::INFINITY;
-            cur.morph_end = f64::INFINITY;
         }
         cover.insert(cur.coord, cur);
     }
@@ -585,193 +546,59 @@ mod tests {
     }
 
     #[test]
-    fn forced_refinement_reaches_max_depth_and_keeps_cover_exact() {
-        // A far/coarse selection forced to refine around a "rover" position
-        // must contain max-depth nodes there while staying an exact disjoint
-        // cover of the root (REPLACE refinement invariant).
+    fn support_constraints_preserve_finer_camera_cover_and_restricted_edges() {
         let q = qt();
-        let flat = |_c: QuadCoord, _r: Square| 0.05; // near-flat → coarse everywhere
-        // The coarsest legal cover — one root leaf. This is the shape `evolve_cover`
-        // starts from and reads off via `selected`, so forcing detail into it is
-        // exactly what production does under a rover.
-        let mut sel = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
+        let target = q.node_containing(3, [1234.5, -2345.6]);
+        let mut selected = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
+        q.constrain_selection(&mut selected, &[target], &|_, _| 0.05);
+        let contact = selected.iter().find(|s| s.coord == target).unwrap();
+        assert!(contact.morph_end.is_infinite());
+        let area: f64 = selected.iter().map(|s| s.region.side().powi(2)).sum();
+        assert!((area - (2.0 * q.root_half_extent).powi(2)).abs() < 1e-3);
+        let finer = q.node_containing(q.max_depth, q.region(target).center);
+        q.constrain_selection(&mut selected, &[finer], &|_, _| 0.05);
+        assert!(selected.iter().any(|s| s.coord == finer));
+        q.constrain_selection(&mut selected, &[target], &|_, _| 0.05);
         assert!(
-            sel.iter().all(|s| s.coord.depth < q.max_depth),
-            "precondition: coarse selection"
+            selected
+                .iter()
+                .any(|s| s.coord == finer && s.morph_end.is_infinite())
         );
-        let rover = [1234.5, -2345.6];
-        q.refine_selection_at(&mut sel, rover, flat);
-        // The node under the rover is now max depth.
-        let under = sel
-            .iter()
-            .find(|s| s.region.distance_to(rover) <= 1e-6)
-            .expect("cover contains the rover");
-        assert_eq!(
-            under.coord.depth, q.max_depth,
-            "ground under the body must be finest"
-        );
-        // Cover stays exact + disjoint.
-        let area: f64 = sel.iter().map(|s| s.region.side() * s.region.side()).sum();
-        let root_area = (2.0 * q.root_half_extent).powi(2);
-        assert!(
-            (area - root_area).abs() < 1e-3,
-            "area {area} vs {root_area}"
-        );
-        for gx in 0..40 {
-            for gz in 0..40 {
-                let p = [
-                    -8000.0 + (gx as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
-                    -8000.0 + (gz as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
-                ];
-                let hits = sel
-                    .iter()
-                    .filter(|s| s.region.distance_to(p) <= 1e-6)
-                    .count();
-                assert_eq!(hits, 1, "point {p:?} covered {hits} times");
+        let area: f64 = selected.iter().map(|s| s.region.side().powi(2)).sum();
+        assert!((area - (2.0 * q.root_half_extent).powi(2)).abs() < 1e-3);
+        for a in &selected {
+            for b in &selected {
+                let dx = (a.region.center[0] - b.region.center[0]).abs();
+                let dz = (a.region.center[1] - b.region.center[1]).abs();
+                let span = a.region.half + b.region.half;
+                let adjacent = ((dx - span).abs() < 1e-6 && dz < span - 1e-6)
+                    || ((dz - span).abs() < 1e-6 && dx < span - 1e-6);
+                assert!(
+                    !adjacent || a.coord.depth.abs_diff(b.coord.depth) <= 1,
+                    "unstitcheable seam between {:?} and {:?}",
+                    a.coord,
+                    b.coord
+                );
             }
         }
-        // Idempotent: forcing again changes nothing.
-        let n = sel.len();
-        q.refine_selection_at(&mut sel, rover, flat);
-        assert_eq!(sel.len(), n);
-    }
-
-    /// The refined output is a pure function of the cover CONTENT, not the
-    /// caller's input order. The old `swap_remove` shape reordered the vec
-    /// input-dependently; the map-based walk emits the total (depth, x, z)
-    /// order, so equal covers refine to EQUAL vecs.
-    #[test]
-    fn forced_refinement_output_order_is_input_independent() {
-        let q = qt();
-        let flat = |_c: QuadCoord, _r: Square| 0.05;
-        let rover = [1234.5, -2345.6];
-        let mut a = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
-        q.refine_selection_at(&mut a, rover, flat);
-        // Same cover, reversed input order — must refine to the identical vec.
-        let mut b = a.clone();
-        b.reverse();
-        q.refine_selection_at(&mut b, rover, flat);
-        let mut a2 = a.clone();
-        q.refine_selection_at(&mut a2, rover, flat);
-        assert_eq!(
-            a2.iter().map(|s| s.coord).collect::<Vec<_>>(),
-            b.iter().map(|s| s.coord).collect::<Vec<_>>(),
-            "output must not depend on input order"
-        );
-        // …and it is the total (depth, x, z) order.
+        let mut combined = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
+        q.constrain_selection(&mut combined, &[target, finer], &|_, _| 0.05);
         assert!(
-            a2.windows(2)
-                .all(|w| (w[0].coord.depth, w[0].coord.x, w[0].coord.z)
-                    < (w[1].coord.depth, w[1].coord.x, w[1].coord.z))
+            combined
+                .iter()
+                .filter(|leaf| leaf.coord.depth >= target.depth
+                    && (leaf.coord.x >> (leaf.coord.depth - target.depth)) == target.x
+                    && (leaf.coord.z >> (leaf.coord.depth - target.depth)) == target.z)
+                .all(|leaf| leaf.morph_end.is_infinite())
         );
-    }
-
-    /// `refine_selection_at_with(.., pin_morph: true)` emits the max-depth
-    /// leaves covering the body's 3×3 footprint with `morph_end = ∞`, so the
-    /// geomorph shader never collapses them onto the parent lattice regardless
-    /// of camera distance — the fix for wheels sinking into invisible physics
-    /// relief. SPLIT-OFF SIBLINGS (max-depth tiles that are neighbours of, but
-    /// not under, the body) keep the normal error-derived band, so the LOD seam
-    /// sits one ring away rather than cracking under the wheels. See
-    /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.4.
-    #[test]
-    fn pinned_refinement_freezes_morph_on_body_tiles_only() {
-        let q = qt();
-        let flat = |_c: QuadCoord, _r: Square| 0.05;
-        let rover = [1234.5, -2345.6];
-
-        // Unpinned baseline: the max-depth leaf under the rover gets a finite
-        // morph window inherited from its parent's refine range (the bug).
-        let mut unpinned = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
-        q.refine_selection_at(&mut unpinned, rover, flat);
-        let unpinned_under = unpinned
-            .iter()
-            .find(|s| s.region.distance_to(rover) <= 1e-6)
-            .expect("cover contains the rover");
+        let before = selected.iter().map(|s| s.coord).collect::<Vec<_>>();
+        selected.reverse();
+        q.constrain_selection(&mut selected, &[target], &|_, _| 0.05);
+        assert_eq!(before, selected.iter().map(|s| s.coord).collect::<Vec<_>>());
         assert!(
-            unpinned_under.morph_end.is_finite(),
-            "unpinned leaf morphs as usual"
-        );
-
-        // Pinned: same cover shape, but the body leaf is frozen.
-        let mut pinned = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
-        q.refine_selection_at_with(&mut pinned, rover, &flat, true);
-        assert_eq!(
-            pinned.len(),
-            unpinned.len(),
-            "pinning changes windows, not cover shape"
-        );
-        let pinned_under = pinned
-            .iter()
-            .find(|s| s.region.distance_to(rover) <= 1e-6)
-            .expect("cover contains the rover");
-        assert_eq!(pinned_under.coord, unpinned_under.coord);
-        assert!(
-            pinned_under.morph_end.is_infinite() && pinned_under.morph_start.is_infinite(),
-            "pinned body leaf must never morph (start={:?}, end={:?})",
-            pinned_under.morph_start,
-            pinned_under.morph_end
-        );
-
-        // The 3×3 footprint (centre node + 8 neighbours) is pinned — all nine
-        // are body-coverage tiles and must hold full detail. Compute the
-        // footprint's node coords the same way `refine_selection_at_with` does,
-        // then check exactly those leaves are frozen.
-        let nodes = 1i64 << q.max_depth;
-        let centre = q.node_containing(q.max_depth, rover);
-        let (ccx, ccz) = (centre.x as i64, centre.z as i64);
-        let in_footprint = |s: &Selected| {
-            s.coord.depth == q.max_depth
-                && (s.coord.x as i64 - ccx).abs() <= 1
-                && (s.coord.z as i64 - ccz).abs() <= 1
-        };
-        let footprint: Vec<_> = pinned.iter().filter(|s| in_footprint(s)).collect();
-        assert_eq!(
-            footprint.len(),
-            9,
-            "3×3 footprint → exactly 9 max-depth leaves"
-        );
-        for s in &footprint {
-            assert!(
-                s.morph_end.is_infinite() && s.morph_start.is_infinite(),
-                "footprint leaf {:?} must be pinned (end={:?})",
-                s.coord,
-                s.morph_end
-            );
-        }
-        // Max-depth leaves OUTSIDE the footprint are split-off siblings created
-        // by force-refining a coarse ancestor down to a footprint target — they
-        // are NOT body coverage and must keep their normal error-derived band.
-        // That band is where the morph seam sits, away from the rover's wheels.
-        let split_siblings: Vec<_> = pinned
-            .iter()
-            .filter(|s| s.coord.depth == q.max_depth && !in_footprint(s))
-            .collect();
-        assert!(
-            !split_siblings.is_empty(),
-            "split-off max-depth siblings exist (the seam)"
-        );
-        for s in &split_siblings {
-            assert!(
-                s.morph_end.is_finite(),
-                "split-off sibling {:?} must keep its morph band, got end={:?}",
-                s.coord,
-                s.morph_end
-            );
-        }
-        let _ = nodes;
-
-        // The same invariant holds when the cover ALREADY had the leaf at max
-        // depth (the early-return branch): re-pinning an existing finest leaf
-        // still freezes it.
-        q.refine_selection_at_with(&mut pinned, rover, &flat, true);
-        let re_under = pinned
-            .iter()
-            .find(|s| s.region.distance_to(rover) <= 1e-6)
-            .expect("cover still contains the rover");
-        assert!(
-            re_under.morph_end.is_infinite(),
-            "re-pinning an existing leaf freezes it too"
+            selected
+                .iter()
+                .any(|s| s.coord != target && s.morph_end.is_finite())
         );
     }
 }
