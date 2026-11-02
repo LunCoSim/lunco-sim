@@ -872,13 +872,39 @@ fn update_ribbon_view(doc, route, points, pending_command) {
         if material == () || material.attrs == () {
             return #{ok:false, retryable:true, error:"route ribbon material is not synchronized"};
         }
-        if !vector_equal(material.attrs["inputs:emissiveColor"], rgb) {
+        let curve_style = query("QueryUsdPrim", #{doc_id:doc, path:geometry,
+            attrs:["primvars:displayColor"]});
+        if curve_style == () || curve_style.attrs == () {
+            return #{ok:false, retryable:true, error:"route ribbon geometry style is not synchronized"};
+        }
+        let curve_colors = curve_style.attrs["primvars:displayColor"];
+        // Surface-conforming curve meshes consume the curve's display colour.
+        // Keep it consistent with the material used by the ordinary USD view.
+        let curve_matches = curve_colors != () && curve_colors.len() == 1
+            && vector_equal(curve_colors[0], rgb);
+        if !vector_equal(material.attrs["inputs:emissiveColor"], rgb) || !curve_matches {
             let painted = apply_view_ops(doc, "Update route ribbon color", [#{SetAttribute:#{
                 edit_target:"@view@", path:shader, name:"inputs:emissiveColor",
-                type_name:"color3f", value:point_literal(rgb)}}]);
+                type_name:"color3f", value:point_literal(rgb)}}, #{SetAttribute:#{
+                edit_target:"@view@", path:geometry, name:"primvars:displayColor",
+                type_name:"color3f[]", value:"["+point_literal(rgb)+"]"}}]);
             if !painted.ok || painted.pending == true { return painted; }
             return #{ok:true, pending:true};
         }
+        // The document commit precedes its projected material. A curve-view
+        // request captures PbrLook into an immutable terrain worker request;
+        // submitting before this handoff would retain the previous colour.
+        if execution_context().clock == "simulation" {
+            track_entity_read(curve_entity);
+        }
+        let projected_look = get(curve_entity, "PbrLook");
+        if projected_look == () { return #{ok:true, pending:true}; }
+        let projected_rgb = [
+            projected_look.base_color.red + projected_look.emissive.red,
+            projected_look.base_color.green + projected_look.emissive.green,
+            projected_look.base_color.blue + projected_look.emissive.blue,
+        ];
+        if !vector_equal(projected_rgb, rgb) { return #{ok:true, pending:true}; }
         let result = cmd("UpdateUsdCurveView", #{
             doc_id: doc,
             root_entity_id: root_entity,

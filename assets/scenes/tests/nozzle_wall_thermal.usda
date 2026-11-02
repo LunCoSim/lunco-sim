@@ -1,0 +1,80 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Scope "Wall" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/NozzleWallThermal.mo@
+        custom double inputs:propellant_flow_kgs = 0.0
+        custom double inputs:exit_temperature_k = 0.0
+        custom double inputs:stagnation_temperature_k = 0.0
+        custom double inputs:jet_power_w = 0.0
+        custom double outputs:wall_temperature_k = 0.0
+        custom double outputs:heating_w = 0.0
+        custom double outputs:radiation_w = 0.0
+        custom double outputs:conduction_w = 0.0
+        custom double outputs:stored_heat_rate_w = 0.0
+        custom double outputs:energy_residual_w = 0.0
+        custom float outputs:render_temperature_k = 0.0
+        custom float outputs:render_emissivity = 0.0
+    }
+    def Scope "Looks"
+    {
+        def Material "Thermal"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </World/Looks/Thermal/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom asset info:wesl:sourceAsset = @lunco://shaders/thermal_metal.wesl@
+                custom token outputs:surface = ""
+                custom float inputs:temperature_k = 293.1499938964844
+                custom float inputs:emissivity = 0.800000011920929
+                custom float inputs:roughness = 0.47999998927116394
+                custom float inputs:metallic = 0.8500000238418579
+                custom color3f inputs:base_color = (0.1599999964237213, 0.17000000178813934, 0.18000000715255737)
+            }
+        }
+    }
+    def Sphere "HotMetal" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double radius = 1.0
+        custom rel material:binding = </World/Looks/Thermal>
+        custom float inputs:temperature_k
+        float inputs:temperature_k.connect = </World/Wall.outputs:render_temperature_k>
+        custom float inputs:emissivity
+        float inputs:emissivity.connect = </World/Wall.outputs:render_emissivity>
+    }
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        custom double3 xformOp:translate = (3.0, 2.0, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        float2 clippingRange = (0.009999999776482582, 1000.0)
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000.0
+    }
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/nozzle_wall_thermal.rhai@
+    }
+}

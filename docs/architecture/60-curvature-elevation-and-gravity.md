@@ -86,7 +86,10 @@ before the build captures its oracle inputs. The DEM-to-globe handoff,
 appearance adoption, and globe LOD run in
 `RuntimeCycleSet::Visualization`, after terrain builds and UI commands. The
 material continuation hook reacts to handoff, map, look, and source-reflection
-changes; it does no per-frame Rhai polling.
+changes; it does no per-frame Rhai polling. It also observes the continuation's
+own deferred look update: rebinding an already-ready cached material can retain
+`ShaderLookReady`, so readiness alone cannot wake visibility admission. The globe
+cutout becomes drawable only with the matching admitted continuation.
 Raster loading and tile mesh generation run asynchronously. Visualization keeps
 at most one keyed collar preparation per globe, polls without waiting, rejects
 stale results, and installs a current handoff. Completed globe meshes retain their stable coarse-to-fine

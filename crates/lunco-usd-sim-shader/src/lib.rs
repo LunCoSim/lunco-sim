@@ -279,6 +279,32 @@ fn apply_usd_shader_material_read(
             ));
         }
     };
+    if let Some(ParamValue::F32(scale)) = values.get("displacement_scale_m")
+        && *scale > 0.0
+    {
+        let scalar = |name: &str| match values.get(name) {
+            Some(ParamValue::F32(value)) if value.is_finite() => Some(*value),
+            _ => None,
+        };
+        let offset = scalar("displacement_offset_m");
+        let bound = scalar("displacement_bound_m");
+        let valid = inputs
+            .iter()
+            .any(|(layer, _)| *layer == TextureLayer::Displacement)
+            && offset
+                .zip(bound)
+                .is_some_and(|(offset, bound)| bound >= offset.abs().max((offset + scale).abs()));
+        if !valid {
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "displacement-contract",
+                "positive displacement requires a displacement_map, finite offset and a bound covering its complete height range",
+            ));
+        }
+    }
     for (layer, identifier) in inputs {
         let path = match lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
             asset_server,
@@ -646,6 +672,7 @@ fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
         "detail_albedo_map" => Some(TextureLayer::DetailAlbedo),
         "detail_normal_map" => Some(TextureLayer::DetailNormal),
         "detail_surface_map" => Some(TextureLayer::DetailSurface),
+        "displacement_map" => Some(TextureLayer::Displacement),
         // `height_map` and `shadow_cache` are engine-filled (horizon system);
         // authoring them from USD would fight the engine writer, so they are
         // deliberately NOT addressable here.

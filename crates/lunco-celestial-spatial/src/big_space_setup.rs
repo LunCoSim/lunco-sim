@@ -129,12 +129,33 @@ pub(crate) fn adopt_authored_body_look(
         &crate::globe_lod::GlobeTiles,
     )>,
     mut commands: Commands,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     for (source, decl, look, authored_albedo) in &q_decl {
         for (globe, body, mut lod, tiles) in &mut q_globes {
             if body.ephemeris_id != decl.naif {
                 continue;
             }
+            let resolution = match crate::globe_lod::authored_globe_resolution(look) {
+                Ok(value) => value,
+                Err(detail) => {
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "globe-geometry-invalid",
+                            Some(source),
+                            format!("body {}", decl.naif),
+                            &detail,
+                        );
+                    }
+                    lunco_core::trigger_runtime_error(
+                        &mut commands,
+                        "globe-geometry-invalid",
+                        detail,
+                    );
+                    continue;
+                }
+            };
+            lod.res = resolution;
             lod.authored_look_source = Some(source);
             lod.look = if authored_albedo.is_none()
                 && !look
@@ -224,6 +245,7 @@ pub fn setup_big_space_hierarchy(
     body_looks: Query<(Entity, &crate::CelestialBodyDecl, &ShaderLook)>,
     subsystems: Option<ResMut<lunco_core_runtime::subsystems::SubsystemToggles>>,
     mut missing_look_reported: Local<bool>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     let Some((earth_source, earth_look)) = body_looks
         .iter()
@@ -252,6 +274,24 @@ pub fn setup_big_space_hierarchy(
         return;
     };
     *missing_look_reported = false;
+    let mut resolutions = Vec::with_capacity(2);
+    for (source, look) in [(earth_source, &earth_look), (moon_source, &moon_look)] {
+        match crate::globe_lod::authored_globe_resolution(look) {
+            Ok(value) => resolutions.push(value),
+            Err(detail) => {
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "globe-geometry-invalid",
+                        Some(source),
+                        "celestial material",
+                        &detail,
+                    );
+                }
+                lunco_core::trigger_runtime_error(&mut commands, "globe-geometry-invalid", detail);
+                return;
+            }
+        }
+    }
     let sun_profile = match quality.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
@@ -573,7 +613,7 @@ pub fn setup_big_space_hierarchy(
             surface_grid: earth_surface_grid,
             look: earth_look,
             authored_look_source: Some(earth_source),
-            res: 32,
+            res: resolutions[0],
             max_lod: 8,
             lod_distance_factor: 2.0,
         },
@@ -670,7 +710,7 @@ pub fn setup_big_space_hierarchy(
             surface_grid: moon_surface_grid,
             look: moon_look,
             authored_look_source: Some(moon_source),
-            res: 32,
+            res: resolutions[1],
             max_lod: 8,
             lod_distance_factor: 2.0,
         },

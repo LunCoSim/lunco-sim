@@ -362,7 +362,7 @@ pub(crate) fn adopt_authored_body_albedo(
 /// the render binder replace its material as soon as the image is ready, with
 /// no deferred despawn/respawn window and no dependence on LOD activity.
 pub(crate) fn apply_look_to_tiles(tiles: &GlobeTiles, lod: &GlobeLod, commands: &mut Commands) {
-    let look = lod.render_look();
+    let look = lod.render_look(tiles.last_solve_handoff.as_ref());
     for entity in tiles.resident.values() {
         commands.entity(*entity).try_insert(look.clone());
     }

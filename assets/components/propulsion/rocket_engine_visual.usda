@@ -193,19 +193,19 @@ def Xform "Engine"
             custom float inputs:emission_w_m3_4 = 0.0
             custom float inputs:flow_phase_sin = 0.0
             custom float inputs:flow_phase_cos = 1.0
-            def SphereLight "PlumeLight" (
-                prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
-            )
-            {
-                color3f inputs:color = (1.0, 0.4000000059604645, 0.03999999910593033)
-                float lunco:light:range = 25.0
-                bool inputs:shadow:enable = false
-                float inputs:light_intensity = 0.0
-                float inputs:light_radius = 0.0
-                float inputs:light_color_r = 0.0
-                float inputs:light_color_g = 0.0
-                float inputs:light_color_b = 0.0
-            }
+        }
+        def SphereLight "PlumeLight" (
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
+        )
+        {
+            color3f inputs:color = (1.0, 0.4000000059604645, 0.03999999910593033)
+            float lunco:light:range = 25.0
+            bool inputs:shadow:enable = false
+            float inputs:light_intensity = 0.0
+            float inputs:light_radius = 0.0
+            float inputs:light_color_r = 0.0
+            float inputs:light_color_g = 0.0
+            float inputs:light_color_b = 0.0
         }
     }
     def Scope "Looks"
@@ -221,6 +221,11 @@ def Xform "Engine"
                 color3f inputs:diffuseColor = (0.1599999964237213, 0.17000000178813934, 0.18000000715255737)
                 float inputs:metallic = 0.8500000238418579
                 float inputs:roughness = 0.47999998927116394
+                uniform token info:implementationSource = "sourceAsset"
+                custom asset info:wesl:sourceAsset = @lunco://shaders/thermal_metal.wesl@
+                custom color3f inputs:base_color = (0.1599999964237213, 0.17000000178813934, 0.18000000715255737)
+                custom float inputs:temperature_k = 293.1499938964844
+                custom float inputs:emissivity = 0.800000011920929
             }
         }
     }
@@ -229,5 +234,7 @@ def Xform "Engine"
     )
     {
         custom rel material:binding = </Engine/Looks/Nozzle_Mat>
+        custom float inputs:temperature_k = 293.1499938964844
+        custom float inputs:emissivity = 0.800000011920929
     }
 }

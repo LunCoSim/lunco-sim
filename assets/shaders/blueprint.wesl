@@ -49,6 +49,8 @@ import bevy_pbr::prepass::io as prepass_io;
     @location(1) world_normal: vec3<f32>,
     @if((VERTEX_UVS_A)) @location(2) uv: vec2<f32>,
     @location(5) globe_direction: vec3<f32>,
+    @location(8) globe_east_world: vec3<f32>,
+    @location(9) globe_north_world: vec3<f32>,
     @if((VERTEX_OUTPUT_INSTANCE_INDEX)) @location(6) @interpolate(flat) instance_index: u32,
     @if((VISIBILITY_RANGE_DITHER)) @location(7) @interpolate(flat) visibility_range_dither: i32,
 };
@@ -59,15 +61,18 @@ fn vertex(vertex: GlobeVertex) -> GlobeVertexOutput {
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(
         world_from_local,
-        vec4<f32>(vertex.position, 1.0),
+        vec4<f32>(displaced_globe_position(vertex), 1.0),
     );
     out.position = position_world_to_clip(out.world_position.xyz);
     out.world_normal = mesh_functions::mesh_normal_local_to_world(
-        vertex.normal,
+        displaced_globe_normal(vertex),
         vertex.instance_index,
     );
     @if((VERTEX_UVS_A)) out.uv = vertex.uv;
     out.globe_direction = vertex.globe_direction;
+    let basis = spherical_basis(normalize(vertex.globe_direction));
+    out.globe_east_world = mesh_functions::mesh_normal_local_to_world(basis[0], vertex.instance_index);
+    out.globe_north_world = mesh_functions::mesh_normal_local_to_world(basis[1], vertex.instance_index);
     @if((VERTEX_OUTPUT_INSTANCE_INDEX)) out.instance_index = vertex.instance_index;
     @if((VISIBILITY_RANGE_DITHER)) out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
         vertex.instance_index,
@@ -82,14 +87,14 @@ fn vertex(vertex: GlobeVertex) -> prepass_io::VertexOutput {
     var out: prepass_io::VertexOutput;
     let transform = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(
-        transform, vec4(vertex.position, 1.0));
+        transform, vec4(displaced_globe_position(vertex), 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);
     @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.unclipped_depth = out.position.z;
     @if((UNCLIPPED_DEPTH_ORTHO_EMULATION)) out.position.z = min(out.position.z, 1.0);
     @if((VERTEX_UVS_A)) out.uv = vertex.uv;
-    @if((NORMAL_PREPASS_OR_DEFERRED_PREPASS)) out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+    @if((NORMAL_PREPASS_OR_DEFERRED_PREPASS)) out.world_normal = mesh_functions::mesh_normal_local_to_world(displaced_globe_normal(vertex), vertex.instance_index);
     @if((MOTION_VECTOR_PREPASS)) out.previous_world_position = mesh_functions::mesh_position_local_to_world(
-        mesh_functions::get_previous_world_from_local(vertex.instance_index), vec4(vertex.position, 1.0));
+        mesh_functions::get_previous_world_from_local(vertex.instance_index), vec4(displaced_globe_position(vertex), 1.0));
     @if((VERTEX_OUTPUT_INSTANCE_INDEX)) out.instance_index = vertex.instance_index;
     @if((VISIBILITY_RANGE_DITHER)) out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
         vertex.instance_index, transform[3]);
@@ -154,6 +159,17 @@ fn vertex(vertex: GlobeVertex) -> prepass_io::VertexOutput {
 //!@default major_line_width 0.75
 //!@ui      minor_line_width 0 4   "Minor line width (px)"
 //!@default minor_line_width 0.4
+//!@ui displacement_scale_m 0 65535 "Displacement value range (m)"
+//!@default displacement_scale_m 0
+//!@default displacement_offset_m 0
+//!@engine displacement_datum_m
+//!@default displacement_datum_m 0
+//!@engine displacement_radius_m
+//!@default displacement_radius_m 1
+//!@default displacement_bound_m 0
+//!@default displacement_shadow_on 1
+//!@ui globe_tile_resolution 8 128 "Globe tile subdivisions"
+//!@default globe_tile_resolution 32
 struct Material {
     surface_color:      vec3<f32>,
     roughness:          f32,
@@ -180,6 +196,13 @@ struct Material {
     site_photometry: vec4<f32>,
     sun_dir_world: vec3<f32>,
     reflectance: f32,
+    displacement_scale_m: f32,
+    displacement_offset_m: f32,
+    displacement_datum_m: f32,
+    displacement_radius_m: f32,
+    displacement_bound_m: f32,
+    displacement_shadow_on: f32,
+    globe_tile_resolution: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
@@ -191,6 +214,80 @@ var<uniform> mat: Material;
 var albedo_tex: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3)
 var albedo_smp: sampler;
+
+@group(constants::MATERIAL_BIND_GROUP) @binding(23)
+var displacement_tex: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(24)
+var displacement_smp: sampler;
+
+@if((LUNCO_GLOBE_DIRECTION)) fn spherical_basis(d: vec3<f32>) -> mat2x3<f32> {
+    var east = vec3(d.z, 0.0, -d.x);
+    if (dot(east, east) < 1e-12) { east = vec3(1.0, 0.0, 0.0); }
+    east = normalize(east);
+    return mat2x3(east, normalize(cross(d, east)));
+}
+
+// Periodic longitude and clamped latitude preserve the equirectangular seam.
+// Explicit bilinear loads preserve native scalar image precision.
+@if((LUNCO_GLOBE_DIRECTION)) fn spherical_height(d: vec3<f32>) -> f32 {
+    let size = vec2<i32>(textureDimensions(displacement_tex));
+    let p = equirectangular_uv(d) * vec2<f32>(size) - vec2(0.5);
+    let base = vec2<i32>(floor(p));
+    let f = fract(p);
+    let x0 = ((base.x % size.x) + size.x) % size.x;
+    let x1 = (x0 + 1) % size.x;
+    let y0 = clamp(base.y, 0, size.y - 1);
+    let y1 = clamp(base.y + 1, 0, size.y - 1);
+    let a = mix(textureLoad(displacement_tex, vec2(x0,y0),0).r,
+                textureLoad(displacement_tex, vec2(x1,y0),0).r, f.x);
+    let b = mix(textureLoad(displacement_tex, vec2(x0,y1),0).r,
+                textureLoad(displacement_tex, vec2(x1,y1),0).r, f.x);
+    return mix(a,b,f.y) * mat.displacement_scale_m + mat.displacement_offset_m;
+}
+
+@if((LUNCO_GLOBE_DIRECTION)) fn displaced_globe_position(vertex: GlobeVertex) -> vec3<f32> {
+    if (mat.displacement_scale_m <= 0.0) { return vertex.position; }
+    var weight = 1.0;
+    @if((VERTEX_UVS_A)) weight -= mat.site_base_color.a * terrain_continuation_weight(
+        vertex.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
+    let d = normalize(vertex.globe_direction);
+    return vertex.position + d * (spherical_height(d) - mat.displacement_datum_m) * weight;
+}
+
+// Great-circle samples avoid the polar longitude singularity.
+@if((LUNCO_GLOBE_DIRECTION)) fn spherical_slopes(d: vec3<f32>, angle: f32) -> vec2<f32> {
+    let basis = spherical_basis(d);
+    let ca = cos(angle); let sa = sin(angle);
+    let east = spherical_height(normalize(d*ca+basis[0]*sa)) - spherical_height(normalize(d*ca-basis[0]*sa));
+    let north = spherical_height(normalize(d*ca+basis[1]*sa)) - spherical_height(normalize(d*ca-basis[1]*sa));
+    return vec2(east,north) / (2.0 * mat.displacement_radius_m * angle);
+}
+
+@if((LUNCO_GLOBE_DIRECTION)) fn displaced_globe_normal(vertex: GlobeVertex) -> vec3<f32> {
+    if (mat.displacement_scale_m <= 0.0) { return vertex.normal; }
+    let d = normalize(vertex.globe_direction);
+    let basis = spherical_basis(d);
+    let angle = 3.141592653589793 / f32(textureDimensions(displacement_tex).y);
+    let slopes = spherical_slopes(d, angle);
+    var weight = 1.0;
+    @if((VERTEX_UVS_A)) weight -= mat.site_base_color.a * terrain_continuation_weight(
+        vertex.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
+    return normalize(mix(vertex.normal,normalize(d-basis[0]*slopes.x-basis[1]*slopes.y),weight));
+}
+
+@if((LUNCO_GLOBE_DIRECTION)) fn spherical_sun_visibility(d: vec3<f32>, sun: vec3<f32>) -> f32 {
+    if (mat.displacement_shadow_on <= 0.0) { return 1.0; }
+    let origin = d * (mat.displacement_radius_m + spherical_height(d) + 1.0);
+    let posting = mat.displacement_radius_m * 3.141592653589793 / f32(textureDimensions(displacement_tex).y);
+    var distance = posting * 0.5;
+    for (var i=0; i<64; i+=1) {
+        let point = origin + distance * sun;
+        let radial = length(point);
+        if (radial < mat.displacement_radius_m + spherical_height(point/radial)) { return 0.0; }
+        distance += posting * (1.0 + 0.06*f32(i));
+    }
+    return 1.0;
+}
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(12)
 var continuation_albedo_tex: texture_2d<f32>;
@@ -231,7 +328,7 @@ fn rotate_by_quaternion(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
 }
 
 @if((!PREPASS_PIPELINE))
-fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f32> {
+fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>, surface_normal: vec3<f32>, globe_visibility: f32) -> vec4<f32> {
     var base = mat.surface_color;
     var grid_mask = 0.0;
     @if((LUNCO_GLOBE_DIRECTION)) let globe_direction_unit = normalize(globe_direction);
@@ -326,17 +423,17 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
             clamp(mat.site_weight_ao, 0.0, 1.0) * site_weight,
         );
     }
-    var sun_factor = 1.0;
+    var sun_factor = globe_visibility;
     if (dot(mat.sun_dir_world, mat.sun_dir_world) > 0.25 && continuation_weight > 0.0) {
         let n = select(-normalize(in.world_normal), normalize(in.world_normal), is_front);
         let v = pbr_functions::calculate_view(in.world_position, view.clip_from_view[3].w == 1.0);
-        sun_factor = mix(1.0, regolith_factor(n, normalize(mat.sun_dir_world), v,
+        sun_factor *= mix(1.0, regolith_factor(n, normalize(mat.sun_dir_world), v,
             mat.site_photometry.x, mat.site_photometry.y, mat.site_photometry.z), continuation_weight);
     }
     return lit_n_occluded_sun_response(
         in,
         is_front,
-        normalize(in.world_normal),
+        normalize(surface_normal),
         albedo,
         roughness,
         0.0,
@@ -348,9 +445,30 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f
 
 @if((LUNCO_GLOBE_DIRECTION) && (!PREPASS_PIPELINE)) @fragment
 fn fragment(in: GlobeVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    return shade(globe_pbr_input(in), is_front, in.globe_direction);
+    var n = normalize(in.world_normal);
+    var visibility = 1.0;
+    if (mat.displacement_scale_m > 0.0) {
+        let d = normalize(in.globe_direction);
+        let east = normalize(in.globe_east_world);
+        let north = normalize(in.globe_north_world);
+        let radial = normalize(cross(east,north));
+        let angle = max(3.141592653589793 / f32(textureDimensions(displacement_tex).y),
+            max(length(dpdx(d)),length(dpdy(d))));
+        let slopes = spherical_slopes(d, angle);
+        var weight = 1.0;
+        @if((VERTEX_UVS_A)) weight -= mat.site_base_color.a * terrain_continuation_weight(
+            in.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
+        n = normalize(mix(n, normalize(radial-east*slopes.x-north*slopes.y), weight));
+        if (dot(mat.sun_dir_world,mat.sun_dir_world)>0.25) {
+            let sun = normalize(mat.sun_dir_world);
+            let basis = spherical_basis(d);
+            let sun_body = d*dot(sun,radial)+basis[0]*dot(sun,east)+basis[1]*dot(sun,north);
+            visibility = mix(1.0,spherical_sun_visibility(d,sun_body),weight);
+        }
+    }
+    return shade(globe_pbr_input(in), is_front, in.globe_direction, n, visibility);
 }
 @if((!(LUNCO_GLOBE_DIRECTION)) && (!PREPASS_PIPELINE)) @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    return shade(in, is_front, vec3<f32>(0.0));
+    return shade(in, is_front, vec3<f32>(0.0), in.world_normal, 1.0);
 }

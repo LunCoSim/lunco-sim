@@ -3,6 +3,7 @@
     defaultPrim = "World"
     upAxis = "Y"
     metersPerUnit = 1.0
+    relocates = {  }
 )
 
 def Xform "World"
@@ -372,19 +373,19 @@ def Xform "World"
                 float inputs:flow_phase_sin.connect = </World/Engine/Photometry.outputs:flow_phase_sin>
                 custom float inputs:flow_phase_cos
                 float inputs:flow_phase_cos.connect = </World/Engine/Photometry.outputs:flow_phase_cos>
-                def "PlumeLight"
-                {
-                    custom float inputs:light_intensity
-                    float inputs:light_intensity.connect = </World/Engine/Photometry.outputs:intensity>
-                    custom float inputs:light_radius
-                    float inputs:light_radius.connect = </World/Engine/Photometry.outputs:radius>
-                    custom float inputs:light_color_r
-                    float inputs:light_color_r.connect = </World/Engine/Photometry.outputs:color_r>
-                    custom float inputs:light_color_g
-                    float inputs:light_color_g.connect = </World/Engine/Photometry.outputs:color_g>
-                    custom float inputs:light_color_b
-                    float inputs:light_color_b.connect = </World/Engine/Photometry.outputs:color_b>
-                }
+            }
+            over "PlumeLight"
+            {
+                float inputs:light_intensity
+                float inputs:light_intensity.connect = </World/Engine/Photometry.outputs:intensity>
+                float inputs:light_radius
+                float inputs:light_radius.connect = </World/Engine/Photometry.outputs:radius>
+                float inputs:light_color_r
+                float inputs:light_color_r.connect = </World/Engine/Photometry.outputs:color_r>
+                float inputs:light_color_g
+                float inputs:light_color_g.connect = </World/Engine/Photometry.outputs:color_g>
+                float inputs:light_color_b
+                float inputs:light_color_b.connect = </World/Engine/Photometry.outputs:color_b>
             }
         }
     }
