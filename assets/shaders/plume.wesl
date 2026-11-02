@@ -130,9 +130,15 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
     @if((!(!DEPTH_PREPASS))) let seed=f32(input.instance_index%97u)*17.31;
     @if((!(!DEPTH_PREPASS))) let phase=atan2(mat.flow_phase_sin,mat.flow_phase_cos)*1024.0/6.283185307179586;
     @if((!(!DEPTH_PREPASS))) var radiance=vec3<f32>(0.0);
+    @if((!(!DEPTH_PREPASS))) let metres_per_unit=length(ray*vec3<f32>(mat.bound_radius_m,mat.profile_length_m,mat.bound_radius_m));
+    @if((!(!DEPTH_PREPASS))) let radiant_to_luminous=mat.luminous_efficacy_lm_w/(4.0*3.14159265359);
+    @if((!(!DEPTH_PREPASS))) let energy_fraction=clamp(mat.energy_fraction,0.0,1.0);
     // March each axial station interval in its own tight bound. A single
     // final-radius box undersamples the small, bright nozzle region.
     @if((!(!DEPTH_PREPASS))) for(var station=0u;station<4u;station+=1u) {
+        let e0=emissivity[station];let e1=emissivity[station+1u];
+        if e0<=0.0 || e1<=0.0 {continue;}
+        let log_e0=log(e0);let log_e1=log(e1);
         let node0=f32(station*station)/16.0;
         let node1=f32((station+1u)*(station+1u))/16.0;
         let bound=1.15*max(radii[station],radii[station+1u])/mat.bound_radius_m;
@@ -143,7 +149,6 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         let entry=max(0.0,max(near.x,max(near.y,near.z)));
         let exit=min(scene_exit,min(far.x,min(far.y,far.z)));
         if exit<=entry {continue;}
-        let metres_per_unit=length(ray*vec3<f32>(mat.bound_radius_m,mat.profile_length_m,mat.bound_radius_m));
         let target_step=max(0.00001,radii[station]*downstream_sigma*0.08);
         let count=u32(clamp(ceil((exit-entry)*metres_per_unit/target_step),12.0,f32(maximum_samples)));
         let step=(exit-entry)/f32(count);
@@ -154,9 +159,7 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         let f=clamp((a-node0)/(node1-node0),0.0,1.0);
         let radius=mix(radii[station],radii[station+1u],f);
         let temperature=mix(temps[station],temps[station+1u],f);
-        let e0=emissivity[station];let e1=emissivity[station+1u];
-        if e0<=0.0 || e1<=0.0 {continue;}
-        let emission=exp(mix(log(e0),log(e1),f));
+        let emission=exp(mix(log_e0,log_e1,f));
         if length(p.xz)*mat.bound_radius_m>1.15*radius {continue;}
         let z=a*mat.profile_length_m;
         // Both layers leave the entire exit disk. A narrow rendering core is
@@ -174,7 +177,8 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         if radial>=1.0 {continue;}
         let n0=transported_noise(q+vec3<f32>(warp*1.5,0.0),1.7,0.45,seed);
         let n1=transported_noise(q,mat.flicker_scale,1.6,seed);
-        let intermittent=pow(smoothstep(0.25,0.75,0.7*n0+0.3*n1),3.0);
+        let noise_weight=smoothstep(0.25,0.75,0.7*n0+0.3*n1);
+        let intermittent=noise_weight*noise_weight*noise_weight;
         // An attached jet has a filled, coherent exit, with increasing
         // downstream structure. Noise attenuates, never creates radiant power.
         let texture=mix(1.0,intermittent,clamp(mat.flicker,0.0,1.0)*development);
@@ -182,15 +186,23 @@ fn fragment(input: VertexOutput,@builtin(front_facing) front: bool,
         // (45/32)*(1-r^8)^2 gives a broad exit with a smooth lip boundary;
         // 5*(1-r^2)^4 is the existing downstream core. Their convex mixture
         // preserves the Modelica power budget, including the width transform.
-        let exit_weight=(45.0/32.0)*pow(1.0-pow(radial,8.0),2.0);
-        let developed_weight=5.0*pow(1.0-radial*radial,4.0);
+        // These are integer-power polynomials, not general exponentials.
+        // Reuse radial powers without changing the integration or noise budget.
+        let radial2=radial*radial;
+        let radial4=radial2*radial2;
+        let radial8=radial4*radial4;
+        let exit_edge=1.0-radial8;
+        let core_edge=1.0-radial2;
+        let core_edge2=core_edge*core_edge;
+        let exit_weight=(45.0/32.0)*exit_edge*exit_edge;
+        let developed_weight=5.0*core_edge2*core_edge2;
         let radial_weight=mix(exit_weight,developed_weight,development)/(sigma*sigma);
         let tail=1.0-smoothstep(0.85,1.0,a);
         let hot=clamp(temperature/max(1.0,mat.temperature_k_0),0.0,1.0)*(1.0-radial*radial);
         let tint=mix(mat.edge_color*fuel,mat.core_color*mix(fuel,vec3<f32>(1.0),0.7),hot);
         let chroma=tint/max(0.000001,dot(tint,vec3<f32>(0.2126,0.7152,0.0722)));
-        let luminous_emission=emission*mat.luminous_efficacy_lm_w/(4.0*3.14159265359);
-        radiance+=chroma*luminous_emission*radial_weight*texture*tail*ds*clamp(mat.energy_fraction,0.0,1.0);
+        let luminous_emission=emission*radiant_to_luminous;
+        radiance+=chroma*luminous_emission*radial_weight*texture*tail*ds*energy_fraction;
     }
     }
     @if((!(!DEPTH_PREPASS))) return vec4<f32>(radiance*view.exposure,0.0);

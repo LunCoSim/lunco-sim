@@ -99,6 +99,14 @@ Pause and time scaling therefore apply to advection through the shared clock. Th
 raster illumination proxy; it is not an additional propulsive energy source or
 a volumetric lighting solver. Fuel colour remains a documented heuristic.
 
+The volume integration keeps station-constant logarithms outside its sample
+loop. Integer-power radial profiles and intermittency use explicit products;
+these are the same normalized polynomials, with no reduction in ray samples,
+noise octaves, station count or physical emission. The native perspective and
+orthographic depth fixture qualifies occlusion after shader changes. Arithmetic
+comparison is separate from native GPU acceptance and whole-frame FPS.
+
+
 The reusable rocket visual anchors this point-light proxy at the nozzle exit
 (the unscaled Exhaust frame), independently of the observation volume. Its world position therefore stays at the nozzle as the
 envelope length changes or intersects terrain during landing. Luminous power
