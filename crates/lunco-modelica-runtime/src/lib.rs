@@ -162,10 +162,123 @@ pub struct InFlightModelicaStep {
 pub struct ModelicaChannels {
     pub tx: Sender<ModelicaCommand>,
     pub rx: Receiver<ModelicaResult>,
+    pub preparation_rx: Receiver<ModelicaPreparationResult>,
     #[cfg(target_arch = "wasm32")]
     pub rx_cmd: Receiver<ModelicaCommand>,
     #[cfg(target_arch = "wasm32")]
-    pub tx_res: Sender<ModelicaResult>,
+    pub tx_res: ModelicaResponseSender,
+}
+
+impl ModelicaChannels {
+    /// Wake the preparation owner for either a queued reply or a terminal
+    /// transport disconnection, without consuming the request's result.
+    pub fn preparation_result_ready(&self) -> bool {
+        let mut select = crossbeam_channel::Select::new();
+        select.recv(&self.preparation_rx);
+        select.try_ready().is_ok()
+    }
+}
+
+/// Identity of one scene-owned preparation request, independent of ECS actors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ModelicaPreparationId {
+    pub scene_generation: u64,
+    pub sequence: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ModelicaInitializationOutcome {
+    /// Settled observations in exactly the requested probe order.
+    pub values: Vec<f64>,
+    /// Settled observations of the original DAE's named state coordinates.
+    /// These are joint-solution values, not start guesses or solver-chart slots.
+    pub state_values: Vec<(String, f64)>,
+    pub solver: Arc<ModelicaLiveSolverSnapshot>,
+    pub construction_profile: ModelicaConstructionProfile,
+}
+
+/// A source declaration preparation is bound to the exact requesting actor
+/// lease. It requires a checked DAE and creates no solver or participant.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ModelicaInterfaceOutcome {
+    pub entity: Entity,
+    pub session_id: u64,
+    pub doc_uri: String,
+    pub parameter_overrides: Vec<(String, f64)>,
+    pub authored_bindings: ModelicaAuthoredBindings,
+    pub interface: lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface,
+    pub library_revision: u64,
+}
+
+/// Source declarations accepted for this actor's exact source lease.
+#[derive(Component, Clone)]
+pub struct ModelicaResolvedInterface(pub Arc<ModelicaInterfaceOutcome>);
+
+#[derive(Serialize, Deserialize)]
+pub enum ModelicaPreparationOutcome {
+    Interface(ModelicaInterfaceOutcome),
+    Initialization(ModelicaInitializationOutcome),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ModelicaPreparationResult {
+    pub request_id: ModelicaPreparationId,
+    pub outcome: Result<ModelicaPreparationOutcome, String>,
+}
+
+/// Worker replies carry their owning lifecycle across every transport.
+#[derive(Serialize, Deserialize)]
+pub enum ModelicaWorkerResponse {
+    Participant(ModelicaResult),
+    Preparation(ModelicaPreparationResult),
+}
+
+impl From<ModelicaResult> for ModelicaWorkerResponse {
+    fn from(result: ModelicaResult) -> Self {
+        Self::Participant(result)
+    }
+}
+
+impl From<ModelicaPreparationResult> for ModelicaWorkerResponse {
+    fn from(result: ModelicaPreparationResult) -> Self {
+        Self::Preparation(result)
+    }
+}
+
+/// Route a worker response directly to its consumer. Native workers and the
+/// browser transport use the same typed boundary without a forwarding thread.
+#[derive(Clone)]
+pub struct ModelicaResponseSender {
+    participant: Sender<ModelicaResult>,
+    preparation: Sender<ModelicaPreparationResult>,
+}
+
+impl ModelicaResponseSender {
+    pub fn new(
+        participant: Sender<ModelicaResult>,
+        preparation: Sender<ModelicaPreparationResult>,
+    ) -> Self {
+        Self {
+            participant,
+            preparation,
+        }
+    }
+
+    pub fn send(
+        &self,
+        response: impl Into<ModelicaWorkerResponse>,
+    ) -> Result<(), crossbeam_channel::SendError<ModelicaWorkerResponse>> {
+        match response.into() {
+            ModelicaWorkerResponse::Participant(result) => self
+                .participant
+                .send(result)
+                .map_err(|error| crossbeam_channel::SendError(error.0.into())),
+            ModelicaWorkerResponse::Preparation(result) => self
+                .preparation
+                .send(result)
+                .map_err(|error| crossbeam_channel::SendError(error.0.into())),
+        }
+    }
 }
 
 /// The admitted actor's execution domain, retained through cached rebuilds.
@@ -183,9 +296,49 @@ pub struct ModelicaBatchArtifact {
     pub source_content: lunco_hash::content::Cid,
 }
 
+/// Instance bindings awaiting checked compiler classification.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct ModelicaAuthoredBindings {
+    pub values: Vec<(String, f64)>,
+    /// Names proven to have a distinct input owner on the same entity. The
+    /// compiler first admits its own declared inputs and parameters; a name
+    /// absent from that boundary may then remain with the external owner.
+    pub external_inputs: BTreeSet<String>,
+}
+
 /// Commands sent to the background simulation worker.
 #[derive(Serialize, Deserialize)]
 pub enum ModelicaCommand {
+    /// Compile the authored parameter intent and expose its checked scalar interface.
+    PrepareInterface {
+        request_id: ModelicaPreparationId,
+        entity: Entity,
+        session_id: u64,
+        model_name: String,
+        source: String,
+        doc_uri: String,
+        extra_sources: Vec<(String, String)>,
+        parameter_overrides: Vec<(String, f64)>,
+        authored_bindings: ModelicaAuthoredBindings,
+    },
+    /// Solve initial equations and observe selected probes without installing
+    /// an actor, a live integrator, or any telemetry publication.
+    Initialize {
+        request_id: ModelicaPreparationId,
+        model_name: String,
+        source: String,
+        doc_uri: String,
+        extra_sources: Vec<(String, String)>,
+        /// Compiler source-root revision admitted by interface preparation.
+        expected_library_revision: Option<u64>,
+        parameter_overrides: Vec<(String, f64)>,
+        authored_bindings: ModelicaAuthoredBindings,
+        initial_inputs: Vec<(String, f64)>,
+        probes: Vec<String>,
+    },
+    CancelPreparation {
+        request_id: ModelicaPreparationId,
+    },
     Step {
         entity: Entity,
         session_id: u64,
@@ -205,10 +358,21 @@ pub enum ModelicaCommand {
         realtime_safe: bool,
         doc_uri: String,
         extra_sources: Vec<(String, String)>,
+        /// Compiler source-root revision admitted by interface preparation.
+        expected_library_revision: Option<u64>,
         #[serde(default)]
         parameter_overrides: Vec<(String, f64)>,
+        /// Authored scalar bindings whose Modelica variability is resolved by
+        /// the checked compiler, including inherited declarations.
+        authored_bindings: ModelicaAuthoredBindings,
         /// Explicit finite input values admitted before solver initialization.
         initial_inputs: Vec<(String, f64)>,
+        /// Named source-state observations from a checked coupled initial
+        /// solution. None requests ordinary initialization; Some requires the
+        /// owner to validate completeness even when the vector is empty.
+        /// Accepted free-state coordinates become exact initialization
+        /// constraints, never numerical start guesses.
+        initial_state_values: Option<Vec<(String, f64)>>,
     },
     UpdateParameters {
         entity: Entity,
@@ -308,6 +472,9 @@ pub struct ModelicaResult {
     pub is_parameter_update: bool,
     pub is_reset: bool,
     pub detected_input_names: Vec<String>,
+    /// Parameter declarations from the checked DAE, independent of whether
+    /// their source binding was a literal or an inherited expression.
+    pub detected_parameter_names: Vec<String>,
     #[serde(default)]
     pub experiment_start_time: Option<f64>,
     #[serde(default)]
@@ -382,6 +549,7 @@ impl Default for ModelicaResult {
             is_parameter_update: false,
             is_reset: false,
             detected_input_names: Vec::new(),
+            detected_parameter_names: Vec::new(),
             experiment_start_time: None,
             experiment_stop_time: None,
             experiment_tolerance: None,
@@ -483,6 +651,9 @@ pub struct ModelicaSolverParameters {
 /// stepping does not copy parameter names or initial samples.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelicaLiveSolverSnapshot {
+    /// Compiler-owned source-root revision captured for this construction.
+    /// Absent only when the transport cannot provide that owner identity.
+    pub admitted_library_revision: Option<u64>,
     /// Canonical id of the registered backend selected for this model.
     pub solver_id: String,
     /// Capabilities declared by the selected backend.
@@ -495,6 +666,10 @@ pub struct ModelicaLiveSolverSnapshot {
     pub parameter_overrides: Vec<(String, f64)>,
     /// Sorted finite input samples admitted before initialization.
     pub initial_inputs: Vec<(String, f64)>,
+    /// Exact free-state constraints accepted by checked initialization
+    /// admission. This contains the applied constraints, not all candidate
+    /// source-state observations supplied by a coupled solution.
+    pub initial_state_constraints: Vec<(String, f64)>,
 }
 
 /// Bounded aggregate diagnostics for the live Modelica step handoff.
@@ -629,6 +804,8 @@ pub struct ModelicaModel {
     #[reflect(ignore)]
     pub compiled_input_names: BTreeSet<String>,
     #[reflect(ignore)]
+    pub compiled_parameter_names: BTreeSet<String>,
+    #[reflect(ignore)]
     pub last_error: Option<String>,
     #[reflect(ignore)]
     pub document: lunco_doc::DocumentId,
@@ -680,6 +857,7 @@ impl Default for ModelicaModel {
             inputs: Default::default(),
             pending_step_inputs: None,
             compiled_input_names: BTreeSet::new(),
+            compiled_parameter_names: BTreeSet::new(),
             last_error: None,
             document: lunco_doc::DocumentId::default(),
             is_stepping: false,
@@ -761,9 +939,60 @@ pub enum NoticeLevel {
     Error,
 }
 
+/// Exact participant installation acknowledged by a document compile request.
+#[derive(Clone, Debug)]
+pub struct ModelicaCompileReceipt {
+    pub entity: Entity,
+    pub session_id: u64,
+    pub generation: u64,
+}
+
+/// One terminal reply shared by cloned or coalesced compile intents.
+#[derive(Clone)]
+pub struct ModelicaCompileCompletion(
+    Arc<std::sync::Mutex<Option<Sender<Result<ModelicaCompileReceipt, String>>>>>,
+);
+
+pub struct ModelicaCompileReply(Receiver<Result<ModelicaCompileReceipt, String>>);
+
+impl ModelicaCompileCompletion {
+    pub fn channel() -> (Self, ModelicaCompileReply) {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        (
+            Self(Arc::new(std::sync::Mutex::new(Some(tx)))),
+            ModelicaCompileReply(rx),
+        )
+    }
+
+    pub fn complete(&self, result: Result<ModelicaCompileReceipt, String>) {
+        if let Some(sender) = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = sender.send(result);
+        }
+    }
+}
+
+impl ModelicaCompileReply {
+    /// Retirement of every request owner is a terminal cancellation.
+    pub fn try_take(&self) -> Option<Result<ModelicaCompileReceipt, String>> {
+        match self.0.try_recv() {
+            Ok(result) => Some(result),
+            Err(crossbeam_channel::TryRecvError::Empty) => None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Some(Err(
+                "Modelica compile request retired before completion".into(),
+            )),
+        }
+    }
+}
+
 /// Core request to compile a Modelica document.
 #[derive(Message, Clone)]
 pub struct CompileRequested {
+    pub completions: Vec<ModelicaCompileCompletion>,
     pub source: lunco_workspace::PinnedDocumentRuntimeOwner,
     /// Existing live participant when compilation is part of scene startup;
     /// `None` asks the document owner to reuse or create the document's model.

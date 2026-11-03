@@ -2,8 +2,9 @@
 //!
 //! Rumoca owns syntax and class identity. A source interface projects direct
 //! declarations of its selected runnable class; source-root discovery covers
-//! the complete definition. Checked DAE/FMI facts own inherited declarations,
-//! alias causality, evaluated defaults, and live variable metadata.
+//! the complete definition. The checked compiler interface owns inherited names,
+//! alias causality, scalarization and effective instance metadata. Numerical
+//! initialization owns evaluated defaults and live variable values.
 
 use rumoca_core::{Causality, ClassType, Variability};
 use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, StoredDefinition, TerminalType};

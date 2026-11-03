@@ -661,6 +661,33 @@ fn instance_declaration(class, name, bindings) {
     result
 }
 
+// Checked dimensions and scalar order come from the compiler owner.
+fn initial_array_value(dimensions, values, depth, offset) {
+    if depth == dimensions.len {
+        if offset >= values.len { throw("initial input array has too few scalar bindings"); }
+        return #{source: values[offset], next: offset + 1};
+    }
+    let source = "{";
+    let next = offset;
+    for index in 0..dimensions[depth] {
+        if index > 0 { source += ", "; }
+        let child = initial_array_value(dimensions, values, depth + 1, next);
+        source += child.source;
+        next = child.next;
+    }
+    #{source: source + "}", next: next}
+}
+
+fn initial_bindings(groups) {
+    let bindings = [];
+    for group in groups {
+        let value = initial_array_value(group.dimensions, group.values, 0, 0);
+        if value.next != group.values.len { throw("initial input array has excess scalar bindings"); }
+        bindings.push(#{name: group.name, value: value.source});
+    }
+    bindings
+}
+
 // The importer supplies the exact initial causal graph and source snapshot.
 fn initialize(plan) {
     if !valid_synthesis_context(runtime_context) {
@@ -668,7 +695,7 @@ fn initialize(plan) {
     }
     let text = "model " + plan.model_name + "\n";
     for member in plan.members {
-        text += "  " + instance_declaration(member.class, member.instance, member.bindings) + ";\n";
+        text += "  " + instance_declaration(member.class, member.instance, initial_bindings(member.bindings)) + ";\n";
     }
     for probe in plan.probes { text += "  output Real " + probe.name + ";\n"; }
     text += "equation\n";

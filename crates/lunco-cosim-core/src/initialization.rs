@@ -10,15 +10,28 @@ use lunco_port_core::ports::PortRegistry;
 #[reflect(Component)]
 pub struct PendingInputConnections(pub std::collections::BTreeSet<String>);
 
-/// One-shot connected inputs certified by the coupled initialization owner.
-/// These are solved values at the admitted initial coordinate, not port holds.
+/// One atomic initial-coordinate admission for a solver constructor.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InitialInputAdmission {
+    pub inputs: Vec<(String, f64)>,
+    /// Source-state observations from the admitted coupled solution. The
+    /// checked solver owner selects and constrains its free initial coordinates.
+    pub state_values: Option<Vec<(String, f64)>>,
+}
+
+/// One-shot values certified by the coupled initialization owner.
+/// These are solved initial values, not port holds or state start guesses.
 #[derive(Component, Debug)]
-pub struct ConsistentInitialInputs(pub Vec<(String, f64)>);
+pub struct ConsistentInitialInputs(pub InitialInputAdmission);
 
 /// Hold a prepared participant until the initialization importer certifies the
 /// connected live observations at t=0. This marker survives worker construction.
-#[derive(Component)]
-pub struct CoupledInitializationPending;
+#[derive(Component, Default)]
+pub struct CoupledInitializationPending {
+    /// The constructor admitted for this transaction. The compile owner fills
+    /// this once when it allocates a generated participant's successor session.
+    pub expected_session: Option<u64>,
+}
 
 /// Read a causal source through its registered backend. A missing sample is
 /// pending producer admission, never a numerical zero.
@@ -43,7 +56,7 @@ pub fn read_causal_sample(
 pub fn initialization_inputs(
     world: &mut World,
     target: Entity,
-) -> Result<Option<Vec<(String, f64)>>, String> {
+) -> Result<Option<InitialInputAdmission>, String> {
     if world.get::<SimComponent>(target).is_none()
         || world
             .get::<lunco_port_core::PortSurfacePending>(target)
@@ -61,7 +74,12 @@ pub fn initialization_inputs(
         .keys()
         .map(str::to_owned)
         .collect();
-    connected_initial_inputs(world, target, &input_names)
+    connected_initial_inputs(world, target, &input_names).map(|inputs| {
+        inputs.map(|inputs| InitialInputAdmission {
+            inputs,
+            state_values: None,
+        })
+    })
 }
 
 /// Read a complete target input transaction, including all fan-in sources and
@@ -189,7 +207,10 @@ mod tests {
             .hold(entity, "initial_input", value);
         assert_eq!(
             initialization_inputs(&mut world, entity),
-            Ok(Some(vec![("initial_input".into(), value)]))
+            Ok(Some(InitialInputAdmission {
+                inputs: vec![("initial_input".into(), value)],
+                state_values: None,
+            }))
         );
         world
             .resource_mut::<PortHolds>()
@@ -201,7 +222,7 @@ mod tests {
         world.entity_mut(entity).remove::<PendingInputConnections>();
         assert_eq!(
             initialization_inputs(&mut world, entity),
-            Ok(Some(Vec::new()))
+            Ok(Some(InitialInputAdmission::default()))
         );
     }
 }

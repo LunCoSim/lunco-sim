@@ -13,6 +13,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy.workspace = true
 crossbeam-channel.workspace = true
 lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-workspace = { path = "../lunco-workspace" }
@@ -32,6 +33,7 @@ lunco-time = { path = "../lunco-time" }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 rumoca-compile.workspace = true
 rumoca-core.workspace = true
+rumoca-ir-dae.workspace = true
 rumoca-ir-solve.workspace = true
 rumoca-sim.workspace = true
 serde.workspace = true

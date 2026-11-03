@@ -76,11 +76,12 @@ When composing a component with bound input defaults, supply replacements as
 instance modifiers. Follow the
 [declaration-scoped input contract](../../docs/architecture/20-domain-modelica.md#declaration-scoped-input-defaults)
 and validate the composed participant through its production scene gate.
-For numeric parameter overrides, the compiler host uses Rumoca's checked
-`is_tunable` declaration facts. Structural values enter the maintained typed
-root-modifier API before instantiation; tunable values enter solver lowering.
-The compiled artifact records structural values and the live owner verifies
-them before construction. Do not discard a structural override or mutate a
+Numeric parameter bindings enter the compiler before strict instance checking,
+so an authored value can satisfy an otherwise unbound parameter. Structural
+values use Rumoca's typed root-modifier API before instantiation; checked tunable
+scalar overlays enter solver lowering. Indexed structural bindings are rejected
+when the maintained modifier API cannot represent them. The compiled artifact
+records structural values and the live owner verifies them before construction. Do not discard a structural override or mutate a
 compiled DAE to bypass a recompilation diagnostic. Cache identities retain the
 exact authored override bits.
 
@@ -149,15 +150,14 @@ valid-source, missing-target, replacement, recovery and retirement cases.
 Its `CosimStatus.modelica_construction_profile` assertions also cover installed
 construction timings, compact readback and retirement of rejected profiles.
 
-While a coupled initializer is building, its coordinator waits on the native
-worker model's compiled/error state. It samples current physical providers again
-at result acceptance, preserving source, wiring and input fencing.
 For cyclic initial admission, run `modelica_initialization_network.usda` and
 the inconsistent `modelica_initialization_failure.usda` production gates.
-Inspect the scene-scoped `CosimStatus.last_coupled_initialization` receipt for
-the successful transient initializer's solver identity and construction timings
-after its actor retires. The positive gate observes that retained receipt.
-Missing measurements are unavailable; they do not block numerical admission.
+Inspect `CosimStatus.last_coupled_initialization` for the certified worker
+preparation's scene, solver identity and construction timings. This bounded
+initialization job has no live participant or telemetry publisher. See the
+[coupled admission guidance below](#omitted-library-inputs) for source fencing
+and state constraints. Missing diagnostic timings are unavailable; they do not
+block numerical admission.
 `scripts/api/test_modelica_initialization_receipt.py --output <evidence-directory>`
 requires both the initialization verdict and the receipt's retirement across a
 scene replacement in one owned production session.
@@ -707,8 +707,11 @@ retain the browser editor's deferred parsing contract.
 
 For Editor checkpoints, use `modelica_editor::inspect(doc)` to combine native
 source and compile facts, then `authoring_session::checkpoint("modelica", doc)`
-to require the current compiled model. `CompileModel` admits compile intent;
-`CompileStatus` reports completion. Exercise that path, invalid current source,
+to require the current compiled model. Await `CompileModel`'s terminal result:
+success means the exact requested session has installed its initialized state,
+even when it remains paused. In Rhai, resolve a returned pending command through
+`command_result(id)`; `CompileStatus` supplies current diagnostic facts.
+Exercise that path, invalid current source,
 and closed-document rejection with `modelica_editor_checkpoint.rhai`.
 
 Projection must remain responsive while a native package or inherited icon is
@@ -744,7 +747,9 @@ Two kinds of `command` share this envelope:
   command acknowledgement later on the same request; that acknowledgement is
   not necessarily completion of the domain work. In particular,
   `RunExperiment` returns its exact `experiment_id` once the run is registered,
-  while the numerical solve continues asynchronously.
+  while the numerical solve continues asynchronously. `CompileModel` instead
+  resolves after initialized session installation or terminal failure; retirement
+  and supersession reject the pending request. Paused success is complete.
 - **Query providers** (return data): return the payload directly, e.g.
   `{"runs":[...]}`. `ListRuns`, `GetExperimentResult`, `DescribeModel`,
   `SnapshotVariables`, `CompileStatus`, `GetDiagnostics`, `ListCompileCandidates`,
@@ -1044,7 +1049,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 **Compile & run**
 | command | params | effect |
 |---|---|---|
-| `CompileModel` | `{doc, class?, force?, resume_after_compile?}` | compile only (stays paused) |
+| `CompileModel` | `{doc, class?, force?, resume_after_compile?}` | terminal result after initialized session installation; paused unless resume requested |
 | `RunActiveModel` | `{doc, class?}` | compile-if-stale + play (live) |
 | `PauseActiveModel` / `ResumeActiveModel` / `ResetActiveModel` | `{doc}` | live stepping control |
 | `RestartActiveModel` | `{doc}` | reset t=0 then run |
@@ -1207,16 +1212,36 @@ Twin Modelica directories may use `.` to designate the admitted Twin root;
 the directory resolver preserves this manifest semantic without permitting
 parent traversal or using it as a concrete file address.
 
-For causal USD models, publish the selected source interface before waiting for
-connected samples. Acyclic inputs initialize from real finite producer samples;
-connected Modelica feedback uses the paused composite and certification boundary
-owned by `lunco-usd-sim-cosim`. Native initial algebraic relations remain typed
-port-owner facts. See [coupled initial admission](../../docs/architecture/20-domain-modelica.md#coupled-initial-admission)
-for the hook, lifecycle and FMI boundary. No interface placeholder is a numerical
-initial value. External environment sources consumed by an acausal collection
-must be wired through explicit network boundary inputs. Nested Modelica inputs
-with declaration bindings must receive connection overrides through instance
-modifiers. Authored integer parameters retain their integer type.
+For causal USD models, prepare the exact checked scalar interface before waiting
+for connected samples. USD admission batches the required source roots and
+waits for their operations to settle; the worker then compiles the authored
+binding intent without constructing a solver. Interface and initialization results share one scene-owned preparation
+mailbox; source, session, generation and library-cohort receipts fence publication.
+Live construction reuses that checked artifact and its exact binding intent.
+Acyclic inputs initialize from finite producer samples; feedback uses a bounded
+initialization-only worker job followed by live-participant certification.
+
+A readable Modelica constant, input or parameter is not a directional output port. Native
+outputs remain with their registered owners, including when a Modelica input on
+the same entity has the same name. Diagnose a stalled certificate through exact
+port ownership and samples, not just successful solver construction. Native
+initial algebraic relations remain typed owner facts. Coupled state admission
+constrains only compiler-owned free initial coordinates and preserves the
+original residual checks. Exact identity, duplicates and domains are validated
+before bit-identical constraints normalize to no change. Unsupported hybrid or
+history features reject nonredundant state constraints; ordinary initialization
+and matching coordinates still undergo post-initialization certification. This
+is not general hybrid-state transfer or a start-value override.
+
+See [coupled initial admission](../../docs/architecture/20-domain-modelica.md#coupled-initial-admission)
+for the owner contracts. External environment sources enter acausal collections
+through explicit network boundary inputs. Input binding replacements use valid
+whole-aggregate modifiers from checked shape and scalar order; partial arrays
+require checked static declaration defaults, never starts or fabricated zeros.
+Numeric parameters travel separately as exact qualified compiler overrides.
+Standard USD scalar-port authoring cannot name indexed scalars; the
+`modelica_initialization_arrays.rhai` gate exercises the shipped source policy
+with typed aggregate facts rather than authoring invalid USD property names.
 
 Verify connected initialization through both production scenes on a free owned
 port, using the already-built production binary:

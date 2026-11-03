@@ -12,6 +12,7 @@ pub mod diagram_model;
 pub mod icon_transform;
 pub mod lint_facts;
 pub mod pretty;
+pub mod resolved_interface;
 pub mod source_memo;
 
 /// Rumoca's parsed declaration classifications, exposed by the Modelica AST

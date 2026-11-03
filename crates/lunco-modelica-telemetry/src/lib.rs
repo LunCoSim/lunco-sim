@@ -58,24 +58,28 @@ fn modelica_telemetry_inputs_changed(
         )>,
     >,
     settings: Option<Res<TelemetrySettings>>,
+    signals: Option<Res<SignalRegistry>>,
     sessions: Res<RuntimeTelemetrySessions>,
 ) -> bool {
     sessions.refresh_pending
         || !models.is_empty()
         || settings.is_some_and(|settings| settings.is_changed())
+        || signals
+            .is_some_and(|signals| signals.active_scalar_count() != sessions.active_channel_count)
 }
 
 /// Runtime state retained for each Modelica participant.
 ///
 /// The session id is the solver's authoritative lifecycle boundary.  When it
-/// changes, histories from the previous solver session are cleared before the
-/// new initial state is retained.  Signal identity remains `(entity, name)` so
-/// UI and API consumers do not need a second Modelica-specific address scheme.
+/// changes, previous channels become archives. A channel admitted in the new
+/// session starts a fresh history; absent channels retain their archived samples
+/// until document or scene teardown. Signal identity remains `(entity, name)`.
 #[derive(Resource, Default)]
 pub struct RuntimeTelemetrySessions {
     sessions: HashMap<Entity, RuntimeTelemetrySession>,
     documents: HashMap<SignalRef, lunco_doc::DocumentId>,
     refresh_pending: bool,
+    active_channel_count: usize,
 }
 
 impl SceneResource for RuntimeTelemetrySessions {
@@ -112,8 +116,21 @@ fn retire_closed_document_signals(
 fn retire_modelica_runtime_session(
     event: On<Remove<ModelicaModel>>,
     mut sessions: ResMut<RuntimeTelemetrySessions>,
+    mut signals: ResMut<SignalRegistry>,
 ) {
-    sessions.sessions.remove(&event.entity);
+    if let Some(session) = sessions.sessions.remove(&event.entity) {
+        retire_session_signals(&session, &mut signals);
+    }
+}
+
+fn retire_session_signals(session: &RuntimeTelemetrySession, signals: &mut SignalRegistry) {
+    for cached in session.signals.values() {
+        if signals.scalar_history(&cached.signal).is_some() {
+            signals.deactivate_signal(&cached.signal);
+        } else {
+            signals.remove_signal(&cached.signal);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -125,6 +142,9 @@ struct RuntimeTelemetrySession {
     /// registry remains the final per-channel authority; this batch cursor
     /// only avoids rebuilding the same variable list between due samples.
     last_sample_time: Option<f64>,
+    /// A full live-channel budget may defer a paused solver's initial sample.
+    /// Retry when the registry's active count or telemetry settings change.
+    admission_pending: bool,
     /// The registry owns archived wire identity. This cursor admits reuse only
     /// while its catalog and the source's live owner remain unchanged.
     global_owner: Option<GlobalEntityId>,
@@ -162,6 +182,37 @@ pub fn retain_modelica_runtime_state(
     )>,
 ) {
     sessions.refresh_pending = false;
+    sessions.active_channel_count = signals
+        .as_ref()
+        .map_or(0, |signals| signals.active_scalar_count());
+    let Some(signals) = signals.as_deref_mut() else {
+        // The projection is optional for a host that intentionally does not
+        // install telemetry.  It must not fabricate a private fallback store.
+        return;
+    };
+
+    let RuntimeTelemetrySessions {
+        sessions,
+        documents,
+        active_channel_count,
+        ..
+    } = &mut *sessions;
+
+    // Retire every replaced session before admitting any new publishers. Query
+    // order must not let a retired session occupy another solver's capacity.
+    for (entity, model, ..) in &models {
+        let session = sessions.entry(entity).or_default();
+        if session.session_id != model.session_id {
+            retire_session_signals(session, signals);
+            *session = RuntimeTelemetrySession {
+                session_id: model.session_id,
+                ..Default::default()
+            };
+        }
+    }
+
+    // Publisher lifetime is independent of recording settings.
+    *active_channel_count = signals.active_scalar_count();
     let Some(settings) = settings else {
         return;
     };
@@ -175,35 +226,15 @@ pub fn retain_modelica_runtime_state(
         );
         return;
     }
-    let Some(signals) = signals.as_deref_mut() else {
-        // The projection is optional for a host that intentionally does not
-        // install telemetry.  It must not fabricate a private fallback store.
-        return;
-    };
 
-    // The registry owns the channel catalog. Snapshot its size once per pass;
-    // the registry provides this count without walking every retained history.
-    let mut channel_count = signals.scalar_count();
-    let RuntimeTelemetrySessions {
-        sessions,
-        documents,
-        ..
-    } = &mut *sessions;
-
+    let mut channel_count = signals.active_scalar_count();
     for (entity, model, variables, layout, global_owner, signal_source) in &models {
-        let session = sessions.entry(entity).or_default();
-        if session.session_id != model.session_id {
-            for cached in session.signals.values().filter(|cached| cached.retained) {
-                signals.clear_history(&cached.signal);
-            }
-            session.signals.clear();
-            session.session_id = model.session_id;
-            session.metadata = None;
-            session.last_sample_time = None;
-            session.global_owner = None;
-            session.owner_catalog_revision = None;
+        if !model.is_compiled || model.is_compiling || model.last_error.is_some() {
+            continue;
         }
-
+        let session = sessions
+            .get_mut(&entity)
+            .expect("session was registered above");
         let metadata_dirty = match (&session.metadata, &model.variable_metadata) {
             (Some(previous), Some(current)) => !Arc::ptr_eq(previous, current),
             (None, None) => false,
@@ -213,9 +244,11 @@ pub fn retain_modelica_runtime_state(
             session.metadata = model.variable_metadata.clone();
         }
 
-        let sample_due = session.last_sample_time.is_none_or(|last| {
-            model.current_time < last || model.current_time - last >= 1.0 / settings.default_rate_hz
-        });
+        let sample_due = session.admission_pending
+            || session.last_sample_time.is_none_or(|last| {
+                model.current_time < last
+                    || model.current_time - last >= 1.0 / settings.default_rate_hz
+            });
         if !sample_due && !metadata_dirty {
             continue;
         }
@@ -228,6 +261,7 @@ pub fn retain_modelica_runtime_state(
             }
         }
         let mut retained_any = false;
+        session.admission_pending = false;
         for (name, &value) in &variables.values {
             if !value.is_finite() || name.is_empty() {
                 continue;
@@ -238,8 +272,10 @@ pub fn retain_modelica_runtime_state(
                 None => {
                     let signal = SignalRef::new(entity, name.as_str());
                     if channel_count >= settings.max_channels
-                        && signals.scalar_history(&signal).is_none()
+                        && (signals.scalar_history(&signal).is_none()
+                            || !signals.is_active(&signal))
                     {
+                        session.admission_pending = true;
                         warn_once!(
                             "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
                             settings.max_channels
@@ -263,10 +299,12 @@ pub fn retain_modelica_runtime_state(
                 }
             };
             let signal = &cached.signal;
-            // Below the catalog limit every channel can record. Only a full
-            // catalog needs to distinguish existing histories from admissions;
-            // read its live count after append instead of hashing every path.
-            if channel_count >= settings.max_channels && signals.scalar_history(signal).is_none() {
+            // An archived identity requires live admission just like a new one.
+            // Existing active recorders continue if the setting is lowered.
+            if channel_count >= settings.max_channels
+                && (signals.scalar_history(signal).is_none() || !signals.is_active(signal))
+            {
+                session.admission_pending = true;
                 warn_once!(
                     "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
                     settings.max_channels
@@ -293,6 +331,9 @@ pub fn retain_modelica_runtime_state(
             // every runtime producer. Modelica histories are complete at the
             // recording rate; notification deadband must not remove elapsed
             // simulation-time samples from a graph.
+            if !cached.retained && model.current_time.is_finite() {
+                signals.clear_history(signal);
+            }
             let retained = signals.record_scalar_at_rate(
                 signal,
                 model.current_time,
@@ -303,7 +344,7 @@ pub fn retain_modelica_runtime_state(
             if retained {
                 cached.retained = true;
                 retained_any = true;
-                channel_count = signals.scalar_count();
+                channel_count = signals.active_scalar_count();
             }
         }
 
@@ -312,10 +353,11 @@ pub fn retain_modelica_runtime_state(
         if retained_any && signal_source.is_none() {
             commands.entity(entity).try_insert(SignalSource);
         }
-        if sample_due && model.current_time.is_finite() {
+        if sample_due && model.current_time.is_finite() && !variables.values.is_empty() {
             session.last_sample_time = Some(model.current_time);
         }
     }
+    *active_channel_count = signals.active_scalar_count();
 }
 
 fn model_signal_meta(
@@ -371,7 +413,8 @@ mod tests {
     use super::*;
     use bevy::app::Update;
 
-    fn app_with_model(model: ModelicaModel, variables: ModelicaVariables) -> (App, Entity) {
+    fn app_with_model(mut model: ModelicaModel, variables: ModelicaVariables) -> (App, Entity) {
+        model.is_compiled = true;
         let mut app = App::new();
         app.insert_resource(TelemetrySettings::default());
         app.insert_resource(SignalRegistry::default());
@@ -385,6 +428,44 @@ mod tests {
             .spawn((model, variables, ModelicaSignalLayout::default()))
             .id();
         (app, entity)
+    }
+
+    #[test]
+    fn compiling_session_cannot_republish_retained_snapshot() {
+        let (mut app, entity) = app_with_model(
+            ModelicaModel::default(),
+            ModelicaVariables {
+                values: [("x".into(), 4.0), ("y".into(), 5.0)].into_iter().collect(),
+            },
+        );
+        app.update();
+        {
+            let mut model = app.world_mut().get_mut::<ModelicaModel>(entity).unwrap();
+            model.session_id += 1;
+            model.is_compiled = false;
+            model.is_compiling = true;
+        }
+        app.update();
+        let y = SignalRef::new(entity, "y");
+        assert!(!app.world().resource::<SignalRegistry>().is_active(&y));
+        assert_eq!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .active_scalar_count(),
+            0
+        );
+        {
+            let world = app.world_mut();
+            world.get_mut::<ModelicaVariables>(entity).unwrap().values =
+                [("x".into(), 8.0)].into_iter().collect();
+            let mut model = world.get_mut::<ModelicaModel>(entity).unwrap();
+            model.is_compiled = true;
+            model.is_compiling = false;
+        }
+        app.update();
+        let signals = app.world().resource::<SignalRegistry>();
+        assert_eq!(signals.active_scalar_count(), 1);
+        assert!(!signals.is_active(&y));
     }
 
     #[test]
@@ -577,40 +658,67 @@ mod tests {
     }
 
     #[test]
-    fn a_new_solver_session_clears_previous_history() {
-        let model = ModelicaModel {
-            session_id: 1,
-            current_time: 1.0,
-            ..Default::default()
-        };
+    fn archived_histories_do_not_block_paused_admission_or_bypass_a_full_budget() {
         let mut variables = ModelicaVariables::default();
-        variables.values.insert("x".to_string(), 4.0);
-        let (mut app, entity) = app_with_model(model, variables);
-        let signal = SignalRef::new(entity, "x");
-        app.update();
-
+        variables.values.insert("x".into(), 1.0);
+        let (mut app, entity) = app_with_model(ModelicaModel::default(), variables);
+        app.world_mut()
+            .resource_mut::<TelemetrySettings>()
+            .max_channels = 1;
+        let archived = SignalRef::new(Entity::PLACEHOLDER, "archive");
+        let live = SignalRef::new(Entity::PLACEHOLDER, "live");
         {
-            let mut model = app.world_mut().entity_mut(entity);
-            let mut value = model.get_mut::<ModelicaModel>().unwrap();
-            value.session_id = 2;
-            value.current_time = 0.0;
-            drop(value);
-            model
-                .get_mut::<ModelicaVariables>()
-                .unwrap()
-                .values
-                .insert("x".to_string(), 8.0);
+            let mut registry = app.world_mut().resource_mut::<SignalRegistry>();
+            registry.push_scalar(archived.clone(), 0.0, 7.0);
+            registry.deactivate_signal(&archived);
+            registry.push_scalar(live.clone(), 0.0, 8.0);
         }
         app.update();
+        let signal = SignalRef::new(entity, "x");
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&signal)
+                .is_none()
+        );
 
-        let history = app
-            .world()
-            .resource::<SignalRegistry>()
-            .scalar_history(&signal)
-            .unwrap();
-        assert_eq!(history.len(), 1);
-        let sample = history.back().expect("new session sample");
-        assert_eq!((sample.time, sample.value), (0.0, 8.0));
+        // No model tick or edit: freeing a live slot wakes deferred admission.
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .deactivate_signal(&live);
+        app.update();
+        {
+            let registry = app.world().resource::<SignalRegistry>();
+            assert!(registry.is_active(&signal));
+            assert_eq!(registry.active_scalar_count(), 1);
+            assert_eq!(registry.scalar_count(), 3);
+            assert_eq!(
+                registry
+                    .scalar_history(&archived)
+                    .unwrap()
+                    .back()
+                    .unwrap()
+                    .value,
+                7.0
+            );
+        }
+
+        // Re-activating an archived identity must pass the same admission check
+        // as creating a channel, even when the producer has cached that identity.
+        {
+            let mut registry = app.world_mut().resource_mut::<SignalRegistry>();
+            registry.deactivate_signal(&signal);
+            registry.push_scalar(live.clone(), 1.0, 9.0);
+        }
+        app.world_mut()
+            .get_mut::<ModelicaModel>(entity)
+            .unwrap()
+            .current_time = 0.2;
+        app.update();
+        let registry = app.world().resource::<SignalRegistry>();
+        assert!(!registry.is_active(&signal));
+        assert_eq!(registry.active_scalar_count(), 1);
+        assert_eq!(registry.scalar_history(&signal).unwrap().len(), 1);
     }
 
     #[test]

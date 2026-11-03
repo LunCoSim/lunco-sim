@@ -976,6 +976,8 @@ pub struct PortInfo {
 /// more than one backend exposes the same public name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortOwnerInfo {
+    /// Opaque registration identity within this registry and its snapshots.
+    pub backend: PortBackendId,
     /// Public port name.
     pub name: String,
     /// Causality declared by the owner.
@@ -986,6 +988,11 @@ pub struct PortOwnerInfo {
     /// Owner-provided domain/backend description.
     pub metadata: PortMetadata,
 }
+
+/// Opaque process-local registration identity. It is meaningful only within
+/// the registry that issued it and snapshots cloned from that registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PortBackendId(usize);
 
 /// A process-local handle to one registered port backend.
 ///
@@ -1711,8 +1718,15 @@ impl PortRegistry {
     /// Precedence follows plugin add-order, which no plugin controls, so a backend
     /// must claim a name only when it genuinely owns it. One that would otherwise
     /// have to guess needs an authoritative set to answer from instead.
-    pub fn register(&mut self, backend: PortBackend) {
+    pub fn register(&mut self, backend: PortBackend) -> PortBackendId {
+        let id = PortBackendId(self.backends.len());
         Arc::make_mut(&mut self.backends).push(backend);
+        id
+    }
+
+    /// The generic authored-input storage installed with every registry.
+    pub const fn input_storage_backend(&self) -> PortBackendId {
+        PortBackendId(0)
     }
 
     /// Enumerate every entity owned by at least one registered port backend.
@@ -1891,6 +1905,7 @@ impl PortRegistry {
             for (name, (direction, slot)) in by_name {
                 let metadata = (backend.metadata)(world, entity, &name, direction, slot);
                 out.push(PortOwnerInfo {
+                    backend: PortBackendId(precedence),
                     name,
                     direction,
                     precedence,

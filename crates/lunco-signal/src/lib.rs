@@ -480,6 +480,9 @@ impl ScalarHistory {
 #[derive(Resource, Debug, Default)]
 pub struct SignalRegistry {
     scalar_history: HashMap<SignalRef, ScalarHistory>,
+    /// Live scalar publishers, excluding retained archives. Maintained at the
+    /// same lifecycle boundary as histories so admission does not scan them.
+    active_scalar_count: usize,
     types: HashMap<SignalRef, SignalType>,
     meta: HashMap<SignalRef, SignalMeta>,
     /// Stable wire owners captured while a producer is live.  The ECS component
@@ -529,6 +532,8 @@ impl SceneResource for SignalRegistry {
             }
             if outgoing.inactive.remove(signal) {
                 self.inactive.insert(signal.clone());
+            } else if self.scalar_history.contains_key(signal) {
+                self.active_scalar_count += 1;
             }
         }
     }
@@ -580,6 +585,7 @@ impl SignalRegistry {
             }
             history.push(sample);
             if self.inactive.remove(key) {
+                self.active_scalar_count += 1;
                 self.descriptor_changes.insert(key.clone());
                 self.catalog_revision = self.catalog_revision.wrapping_add(1);
             }
@@ -597,6 +603,7 @@ impl SignalRegistry {
         history.push(sample);
         let sig = sig.into_owned();
         self.scalar_history.insert(sig.clone(), history);
+        self.active_scalar_count += 1;
         self.types.entry(sig.clone()).or_insert(SignalType::Scalar);
         if !was_known || was_inactive {
             self.descriptor_changes.insert(sig);
@@ -769,6 +776,13 @@ impl SignalRegistry {
         self.scalar_history.len()
     }
 
+    /// Number of scalar channels with live publishers. Archived histories keep
+    /// their own bounded sample retention without consuming live admission.
+    #[inline]
+    pub fn active_scalar_count(&self) -> usize {
+        self.active_scalar_count
+    }
+
     pub fn signal_type(&self, sig: &SignalRef) -> Option<SignalType> {
         self.types.get(sig).copied()
     }
@@ -786,6 +800,9 @@ impl SignalRegistry {
     /// Keep all samples and metadata but mark one channel's live publisher gone.
     pub fn deactivate_signal(&mut self, sig: &SignalRef) {
         if self.types.contains_key(sig) && self.inactive.insert(sig.clone()) {
+            if self.scalar_history.contains_key(sig) {
+                self.active_scalar_count -= 1;
+            }
             self.descriptor_changes.insert(sig.clone());
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
@@ -796,6 +813,9 @@ impl SignalRegistry {
         let mut changed = false;
         for sig in self.types.keys().filter(|sig| sig.entity == entity) {
             if self.inactive.insert(sig.clone()) {
+                if self.scalar_history.contains_key(sig) {
+                    self.active_scalar_count -= 1;
+                }
                 self.descriptor_changes.insert(sig.clone());
                 changed = true;
             }
@@ -815,7 +835,15 @@ impl SignalRegistry {
         let changed = self.types.keys().any(|r| r.entity == entity);
         self.descriptor_changes
             .extend(self.types.keys().filter(|r| r.entity == entity).cloned());
-        self.scalar_history.retain(|r, _| r.entity != entity);
+        self.scalar_history.retain(|signal, _| {
+            if signal.entity != entity {
+                return true;
+            }
+            if !self.inactive.contains(signal) {
+                self.active_scalar_count -= 1;
+            }
+            false
+        });
         self.types.retain(|r, _| r.entity != entity);
         self.meta.retain(|r, _| r.entity != entity);
         self.global_owners.retain(|r, _| r.entity != entity);
@@ -832,8 +860,12 @@ impl SignalRegistry {
     /// its own entity, so when the CHANNEL dies the rover does not, and only that one signal
     /// should go.
     pub fn remove_signal(&mut self, sig: &SignalRef) {
-        let changed = self.scalar_history.remove(sig).is_some() | self.types.remove(sig).is_some();
-        self.meta.remove(sig);
+        let removed_history = self.scalar_history.remove(sig).is_some();
+        if removed_history && !self.inactive.contains(sig) {
+            self.active_scalar_count -= 1;
+        }
+        let changed =
+            removed_history | self.types.remove(sig).is_some() | self.meta.remove(sig).is_some();
         self.global_owners.remove(sig);
         self.inactive.remove(sig);
         self.application_signals.remove(sig);
@@ -958,6 +990,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn active_scalar_admission_tracks_archival_reactivation_and_removal() {
+        let mut registry = SignalRegistry::default();
+        let a = SignalRef::new(Entity::from_raw_u32(1).unwrap(), "a");
+        let b = SignalRef::new(a.entity, "b");
+        let c = SignalRef::new(Entity::from_raw_u32(2).unwrap(), "c");
+        for signal in [&a, &b, &c] {
+            registry.push_scalar(signal.clone(), 0.0, 1.0);
+        }
+        assert_eq!(registry.active_scalar_count(), 3);
+        registry.descriptor_changes.clear();
+        registry.deactivate_signal(&a);
+        registry.deactivate_signal(&a);
+        assert_eq!(registry.active_scalar_count(), 2);
+        assert!(registry.descriptor_changes.contains(&a));
+        assert_eq!(registry.scalar_history(&a).unwrap().len(), 1);
+
+        // A rejected sample cannot reactivate an archived publisher.
+        assert!(!registry.record_scalar_at_rate(&a, 0.0, 2.0, 5.0, 10));
+        assert_eq!(registry.active_scalar_count(), 2);
+        registry.descriptor_changes.clear();
+        assert!(registry.record_scalar_at_rate(&a, 0.2, 2.0, 5.0, 10));
+        assert_eq!(registry.active_scalar_count(), 3);
+        assert!(registry.descriptor_changes.contains(&a));
+
+        registry.deactivate_entity(a.entity);
+        registry.deactivate_entity(a.entity);
+        assert_eq!(registry.active_scalar_count(), 1);
+        assert_eq!(registry.scalar_count(), 3);
+        registry.remove_signal(&a);
+        registry.remove_signal(&a);
+        assert_eq!(registry.active_scalar_count(), 1);
+        registry.drop_entity(b.entity);
+        assert_eq!(registry.active_scalar_count(), 1);
+        registry.drop_entity(c.entity);
+        assert_eq!(registry.active_scalar_count(), 0);
+        assert_eq!(registry.scalar_count(), 0);
+
+        registry.push_scalar(c.clone(), 0.0, 1.0);
+        registry.remove_signal(&c);
+        assert_eq!(registry.active_scalar_count(), 0);
+        registry.update_meta(c.clone(), SignalMeta::default());
+        registry.descriptor_changes.clear();
+        registry.remove_signal(&c);
+        assert!(registry.descriptor_changes.contains(&c));
+    }
+
+    #[test]
     fn scene_lifecycle_retires_live_and_archived_signals_with_removal_notifications() {
         let mut app = App::new();
         app.add_plugins(SignalRegistryPlugin);
@@ -995,6 +1074,7 @@ mod tests {
             lunco_core::run_scene_teardown(app.world_mut());
             let registry = app.world().resource::<SignalRegistry>();
             assert_eq!(registry.scalar_count(), 1);
+            assert_eq!(registry.active_scalar_count(), 1);
             assert_eq!(registry.scalar_history(&application).unwrap().len(), 1);
             assert!(registry.catalog_revision() > revision);
             for signal in [&live, &archived, &metadata_only] {

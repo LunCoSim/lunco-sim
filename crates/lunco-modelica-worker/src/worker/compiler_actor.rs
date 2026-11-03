@@ -13,6 +13,10 @@ use std::num::NonZeroUsize;
 use std::thread::JoinHandle;
 
 pub(super) enum CompilerCompletion {
+    Interface {
+        id: u64,
+        artifact: BackendCompileResult,
+    },
     Batch {
         id: u64,
         reply: Sender<Result<lunco_modelica_runtime::ModelicaBatchArtifact, String>>,
@@ -49,6 +53,13 @@ pub(super) struct SourceRootCommit {
 }
 
 enum Request {
+    PrepareInterface {
+        id: u64,
+        model_name: String,
+        unit: CompileUnit,
+        doc_uri: String,
+        library_gen: u64,
+    },
     CompileBatch {
         id: u64,
         model_name: String,
@@ -103,6 +114,26 @@ impl CompilerActor {
             next_id: 1,
             thread: Some(thread),
         })
+    }
+
+    pub(super) fn submit_interface(
+        &mut self,
+        model_name: String,
+        unit: CompileUnit,
+        doc_uri: String,
+        library_gen: u64,
+    ) -> Result<u64, String> {
+        let id = self.allocate_id()?;
+        self.sender()
+            .send(Request::PrepareInterface {
+                id,
+                model_name,
+                unit,
+                doc_uri,
+                library_gen,
+            })
+            .map_err(|_| "Rumoca compiler actor is unavailable".to_owned())?;
+        Ok(id)
     }
 
     pub(super) fn submit_compile(
@@ -270,6 +301,31 @@ fn compiler_actor_loop(
                     return;
                 }
             }
+            Request::PrepareInterface {
+                id,
+                model_name,
+                unit,
+                doc_uri,
+                library_gen,
+            } => {
+                let artifact = compile_artifact(
+                    &mut compiler,
+                    &mut compiled_artifacts,
+                    &mut terminal_error,
+                    &model_name,
+                    unit,
+                    &doc_uri,
+                    library_gen,
+                );
+                if results
+                    .send(WorkerPreparationResult::Compiler(
+                        CompilerCompletion::Interface { id, artifact },
+                    ))
+                    .is_err()
+                {
+                    return;
+                }
+            }
             Request::CompileAsync {
                 id,
                 model_name,
@@ -387,7 +443,7 @@ fn compile_artifact(
             library_gen,
         );
         let diagnostics = if outcome.is_err() {
-            compiler.compile_diagnostics(model_name, doc_uri)
+            compiler.take_compile_diagnostics(model_name, doc_uri)
         } else {
             Vec::new()
         };
@@ -586,6 +642,8 @@ mod tests {
                     source: "model ActorCompileProbe\n  ActorLibrary.Rate rate;\n  Real x(start=0);\nequation\n  der(x) = rate.y;\nend ActorCompileProbe;\n".into(),
                     extras: Vec::new(),
                     parameter_overrides: Vec::new(),
+                    authored_bindings: Default::default(),
+                    expected_library_revision: None,
                 },
                 "ActorCompileProbe.mo".into(),
                 0,

@@ -21,7 +21,7 @@ pub fn on_remove_modelica(
     commands.queue(move |world: &mut World| {
         if let Ok(mut owner) = world.get_entity_mut(entity) {
             if !owner.contains::<ModelicaModel>() {
-                owner.remove::<ModelicaVariables>();
+                owner.remove::<(ModelicaVariables, super::compile::PendingCompileCompletion)>();
             }
         }
     });
@@ -189,6 +189,7 @@ pub fn request_modelica_compiles(
             }
         };
         compile_requests.write(CompileRequested {
+            completions: Vec::new(),
             source,
             entity: Some(entity),
             class: if model.model_name.is_empty() {
@@ -776,6 +777,8 @@ pub fn handle_modelica_responses(
         Option<&lunco_workspace::PinnedDocumentRuntimeOwner>,
         Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
         Option<&lunco_core::GlobalEntityId>,
+        Option<&mut lunco_cosim_core::SimComponent>,
+        Option<&mut super::compile::PendingCompileCompletion>,
     )>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
@@ -936,11 +939,20 @@ pub fn handle_modelica_responses(
                 fault.kind == "modelica-variables-missing" && fault.entity == Some(result.entity)
             })
         {
+            if let Ok((_, _, _, _, _, _, _, Some(mut completion))) = q_models.get_mut(result.entity)
+            {
+                completion.complete(Err("Modelica participant variable state is faulted".into()));
+            }
             continue;
         }
-        if let Ok((_, mut model, variables, source, epoch, global_id)) =
+        if let Ok((_, mut model, variables, source, epoch, global_id, component, mut completion)) =
             q_models.get_mut(result.entity)
         {
+            if let Some(completion) = completion.as_deref_mut()
+                && completion.session_id != model.session_id
+            {
+                completion.complete(Err("Modelica compile session was superseded".into()));
+            }
             // Terminal participants have no pending lifecycle operation. This
             // also protects participants beyond the first recorded scene fault.
             if lifecycle_result
@@ -948,6 +960,12 @@ pub fn handle_modelica_responses(
                 && !model.is_compiling
                 && !model.is_stepping
             {
+                if let Some(completion) = completion.as_deref_mut() {
+                    completion.complete(Err(model
+                        .last_error
+                        .clone()
+                        .expect("terminal error checked")));
+                }
                 continue;
             }
             if source.is_some_and(|source| {
@@ -955,8 +973,18 @@ pub fn handle_modelica_responses(
                     workspace.as_deref().map(|workspace| &workspace.0),
                     replication.as_ref(),
                 )
-            }) || epoch.is_some_and(|epoch| result.session_id < epoch.0)
-            {
+            }) {
+                if let Some(completion) = completion.as_deref_mut() {
+                    completion.complete(Err("Modelica compile source owner retired".into()));
+                }
+                continue;
+            }
+            if epoch.is_some_and(|epoch| result.session_id < epoch.0) {
+                if let Some(completion) = completion.as_deref_mut()
+                    && epoch.is_some_and(|epoch| completion.session_id < epoch.0)
+                {
+                    completion.complete(Err("Modelica compile session was retired".into()));
+                }
                 continue;
             }
             // ALWAYS check session ID before resetting is_stepping
@@ -972,6 +1000,9 @@ pub fn handle_modelica_responses(
             }
             let Some(mut variables) = variables else {
                 reject_missing_modelica_variables(result.entity, &mut model, faults.as_deref_mut());
+                if let Some(completion) = completion.as_deref_mut() {
+                    completion.complete(Err("Modelica participant has no variable state".into()));
+                }
                 continue;
             };
             let mut variables_changed = false;
@@ -996,6 +1027,9 @@ pub fn handle_modelica_responses(
                 model.is_compiled = false;
                 model.live_solver_snapshot = None;
                 model.variable_metadata = None;
+                if let Some(completion) = completion.as_deref_mut() {
+                    completion.complete(Err(detail.clone()));
+                }
                 model.last_error = Some(detail);
                 continue;
             }
@@ -1048,6 +1082,9 @@ pub fn handle_modelica_responses(
                     model.is_compiled = false;
                     model.paused = true;
                     model.resume_after_compile = false;
+                    if let Some(completion) = completion.as_deref_mut() {
+                        completion.complete(Err(detail.clone()));
+                    }
                     model.last_error = Some(detail);
                     continue;
                 };
@@ -1058,6 +1095,9 @@ pub fn handle_modelica_responses(
                         model.model_name, model.pending_generation, current_generation,
                     );
                     warn!("[Modelica] {detail}");
+                    if let Some(completion) = completion.as_deref_mut() {
+                        completion.complete(Err(detail.clone()));
+                    }
                     notices.write(ModelicaNotice {
                         level: NoticeLevel::Warn,
                         text: detail,
@@ -1485,6 +1525,26 @@ pub fn handle_modelica_responses(
                 // here would overwrite them on the first simulation step.
                 let ui_inputs = std::mem::take(&mut model.inputs);
                 model.compiled_input_names = result.detected_input_names.iter().cloned().collect();
+                model.compiled_parameter_names =
+                    result.detected_parameter_names.iter().cloned().collect();
+                let parameter_names = model.compiled_parameter_names.clone();
+                model
+                    .parameters
+                    .retain(|name, _| parameter_names.contains(name));
+                if let Some(snapshot) = &result.live_solver_snapshot {
+                    for (name, value) in &snapshot.parameter_overrides {
+                        model.parameters.insert(name.clone(), *value);
+                    }
+                }
+                if result.error.is_none()
+                    && let Some(mut component) = component
+                {
+                    component.parameters = model
+                        .parameters
+                        .iter()
+                        .map(|(name, value)| (name.clone(), *value))
+                        .collect();
+                }
                 for name in &result.detected_input_names {
                     if let Some(value) = ui_inputs.get(name).copied().or_else(|| {
                         result
@@ -1624,6 +1684,23 @@ pub fn handle_modelica_responses(
                 );
                 model.last_accepted_step = Some(sample);
             }
+            if result.is_new_model
+                && let Some(completion) = completion.as_deref_mut()
+                && completion.session_id == result.session_id
+            {
+                let outcome = match model.last_error.as_ref() {
+                    Some(error) => Err(error.clone()),
+                    None if model.is_compiled => {
+                        Ok(lunco_modelica_runtime::ModelicaCompileReceipt {
+                            entity: result.entity,
+                            session_id: model.session_id,
+                            generation: model.compiled_generation,
+                        })
+                    }
+                    None => Err("Modelica compile did not install a checked session".into()),
+                };
+                completion.complete(outcome);
+            }
             if result.is_new_model && result.error.is_none() && model.is_compiled {
                 session_starts.write(ModelicaSessionStarted {
                     entity: result.entity,
@@ -1665,7 +1742,10 @@ pub fn handle_modelica_responses(
                     error.clone(),
                 );
             }
-            for (entity, mut model, _, _, _, _) in &mut q_models {
+            for (entity, mut model, _, _, _, _, _, completion) in &mut q_models {
+                if let Some(mut completion) = completion {
+                    completion.complete(Err(error.clone()));
+                }
                 model.paused = true;
                 model.is_compiling = false;
                 model.is_compiled = false;
@@ -1700,7 +1780,7 @@ pub fn handle_modelica_responses(
     // A result landing is the only release edge for the coupling barrier.
     // Admission precedes clock projection; outstanding participants keep it held.
     if let Some(mut coupling) = coupling {
-        coupling.held = q_models.iter().any(|(entity, model, _, _, _, _)| {
+        coupling.held = q_models.iter().any(|(entity, model, _, _, _, _, _, _)| {
             let shared_clock_participant = participants
                 .as_deref()
                 .is_none_or(|participants| participants.requires_barrier(entity));
@@ -1742,6 +1822,7 @@ mod compile_fault_tests {
 
     fn test_solver_snapshot() -> Arc<lunco_modelica_runtime::ModelicaLiveSolverSnapshot> {
         Arc::new(lunco_modelica_runtime::ModelicaLiveSolverSnapshot {
+            admitted_library_revision: None,
             solver_id: "rk4".to_owned(),
             capabilities: lunco_modelica_runtime::ModelicaSolverCapabilities {
                 usable_live: true,
@@ -1761,6 +1842,7 @@ mod compile_fault_tests {
             },
             parameter_overrides: vec![("mass".to_owned(), 2.0)],
             initial_inputs: Vec::new(),
+            initial_state_constraints: Vec::new(),
         })
     }
 
@@ -1786,6 +1868,7 @@ mod compile_fault_tests {
             let (tx_result, rx_result) = crossbeam_channel::unbounded();
             let (tx_command, _rx_command) = crossbeam_channel::unbounded();
             app.insert_resource(ModelicaChannels {
+                preparation_rx: crossbeam_channel::never(),
                 tx: tx_command,
                 rx: rx_result,
             });
@@ -1868,6 +1951,7 @@ mod compile_fault_tests {
                 runtime: lunco_workspace::DocumentRuntimeOwner::Application,
             };
             app.world_mut().write_message(CompileRequested {
+                completions: Vec::new(),
                 source,
                 entity: Some(entity),
                 class: Some("Plant".into()),
@@ -1911,6 +1995,7 @@ mod compile_fault_tests {
         let (results, received) = crossbeam_channel::unbounded();
         let (commands, _requests) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
+            preparation_rx: crossbeam_channel::never(),
             tx: commands,
             rx: received,
         });
@@ -1995,6 +2080,7 @@ mod compile_fault_tests {
         let (results, received) = crossbeam_channel::unbounded();
         let (commands, _requests) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
+            preparation_rx: crossbeam_channel::never(),
             tx: commands,
             rx: received,
         });
@@ -2195,6 +2281,7 @@ mod compile_fault_tests {
         let (results, received) = crossbeam_channel::unbounded();
         let (commands, _requests) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
+            preparation_rx: crossbeam_channel::never(),
             tx: commands,
             rx: received,
         });
@@ -2276,6 +2363,7 @@ mod compile_fault_tests {
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
         let (tx_command, _rx_command) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
+            preparation_rx: crossbeam_channel::never(),
             tx: tx_command,
             rx: rx_result,
         });
@@ -2398,6 +2486,7 @@ mod compile_fault_tests {
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
         let (tx_command, _rx_command) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
+            preparation_rx: crossbeam_channel::never(),
             tx: tx_command,
             rx: rx_result,
         });
@@ -2485,6 +2574,7 @@ mod compile_fault_tests {
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
         let (tx_command, rx_command) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
+            preparation_rx: crossbeam_channel::never(),
             tx: tx_command,
             rx: rx_result,
         });
@@ -2650,7 +2740,11 @@ mod document_runtime_owner_tests {
             .add_systems(First, handle_modelica_responses);
         let (tx, rx) = crossbeam_channel::unbounded();
         let (results, result_rx) = crossbeam_channel::unbounded();
-        app.insert_resource(ModelicaChannels { tx, rx: result_rx });
+        app.insert_resource(ModelicaChannels {
+            tx,
+            rx: result_rx,
+            preparation_rx: crossbeam_channel::never(),
+        });
         let geometry = app
             .world_mut()
             .spawn((

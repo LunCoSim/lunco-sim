@@ -57,10 +57,23 @@ mod wasm {
 
     use js_sys::Uint8Array;
     use lunco_modelica_execution::worker_transport::{WireMessage, WireResult};
-    use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult};
+    use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult, ModelicaWorkerResponse};
 
     fn command_label(cmd: &ModelicaCommand) -> String {
         match cmd {
+            ModelicaCommand::Initialize {
+                model_name,
+                request_id,
+                ..
+            } => format!("Initialize {model_name} request={request_id:?}"),
+            ModelicaCommand::PrepareInterface {
+                request_id,
+                model_name,
+                ..
+            } => format!("PrepareInterface model={model_name} request={request_id:?}"),
+            ModelicaCommand::CancelPreparation { request_id } => {
+                format!("CancelPreparation request={request_id:?}")
+            }
             ModelicaCommand::Step {
                 model_name, entity, ..
             } => format!("Step {model_name} entity={entity:?}"),
@@ -240,8 +253,8 @@ mod wasm {
         }
     }
 
-    fn post_result(scope: &DedicatedWorkerGlobalScope, result: ModelicaResult) {
-        post_wire(scope, &WireResult::Result(result));
+    fn post_result(scope: &DedicatedWorkerGlobalScope, result: impl Into<ModelicaWorkerResponse>) {
+        post_wire(scope, &WireResult::Result(result.into()));
     }
 
     fn post_log(scope: &DedicatedWorkerGlobalScope, line: impl Into<String>) {

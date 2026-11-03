@@ -57,6 +57,14 @@ fn main() {
         &mut hasher,
     );
     hash_dir(
+        Path::new(&format!("{manifest}/../lunco-modelica-ast/src")),
+        &mut hasher,
+    );
+    hash_dir(
+        Path::new(&format!("{manifest}/../lunco-hash/src")),
+        &mut hasher,
+    );
+    hash_dir(
         Path::new(&format!("{manifest}/../lunco-experiments/src")),
         &mut hasher,
     );
