@@ -30,7 +30,7 @@ model SolarPanel
   input Real panel_normal_y "Panel illuminated-face normal in the panel local frame";
   input Real panel_normal_z "Panel illuminated-face normal in the panel local frame";
 
-  Pin p annotation(Placement(transformation(extent={{-110,-10},{-90,10}})));
+  Pin p annotation(Placement(transformation(origin={100,0}, extent={{-10,-10},{10,10}})));
   output Real power_out(unit="W") "Electrical power delivered to the bus after bus loading";
   output Real available_power_w(unit="W") "Electrical power available from incident sunlight before bus loading";
   output Real incident_irradiance_w_m2(unit="W/m2") "Direct irradiance on the collecting face after occlusion and incidence";

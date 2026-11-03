@@ -8,7 +8,7 @@ within LunCo.Mechanics;
 model AvianShaft
   extends LunCo.Icons.Mechanics;
   input Real speed(unit="rad/s") "Measured Avian shaft speed";
-  Flange flange;
+  Flange flange annotation(Placement(transformation(origin={-100,0}, extent={{-10,-10},{10,10}})));
   Real phi(start = 0.0, fixed = true) "Boundary shaft angle, rad";
   Real w(start = 0.0) "Boundary shaft angular velocity, rad/s";
   output Real torque(unit="N.m") "Torque delivered to the Avian shaft";

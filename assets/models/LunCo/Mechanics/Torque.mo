@@ -21,7 +21,7 @@ model Torque
   extends LunCo.Icons.Mechanics;
   input Real tau_ref "Commanded torque, N.m";
 
-  Flange flange;
+  Flange flange annotation(Placement(transformation(origin={100,0}, extent={{-10,-10},{10,10}})));
 equation
   flange.tau = -tau_ref;
 end Torque;

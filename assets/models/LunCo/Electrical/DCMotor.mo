@@ -22,7 +22,7 @@ model DCMotor
   input Real resistance_scale(unit="1") = 1.0
     "Winding resistance / nameplate resistance, supplied by an authored temperature/material law";
 
-  Pin p;
+  Pin p annotation(Placement(transformation(origin={-100,0}, extent={{-10,-10},{10,10}})));
 
   output Real electrical_power(unit="W") "Electrical power drawn by the motor drive";
   output Real heat(unit="W") "Electrical loss delivered to the thermal network";

@@ -118,7 +118,10 @@ inspect the projection diagnostic and test a fresh open as well as retained
 documents. A parsed AST and a ready world do not prove a completed diagram.
 The source-library indexer requests the same owner's `ClassInterface` scope;
 canvas projection requests `ComponentGraph`. Bulk indexing must not construct
-unused internal component graphs or icons. Missing or cyclic types
+unused internal component graphs or icons. Graphical ports must resolve to public
+connector-class instances; plain causal variables stay in the semantic interface
+and telemetry without gaining connector icons. Author actual terminal positions
+and sizes with Modelica `Placement` annotations. Missing or cyclic types
 reject projection visibly; indexed classes retain their diagnostic state. Wait for source-root admission
 and inspect the projection diagnostic; a type's spelling cannot supply ports,
 causality or an `Interfaces` package. Inherited icon bases use Rumoca's
