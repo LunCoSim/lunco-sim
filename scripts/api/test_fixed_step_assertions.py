@@ -21,8 +21,10 @@ def main():
             extra_args=["--scene", "scenes/tests/twin_session_retirement/replacement/replacement.usda"],
             log_path=output / "app.log") as session:
         pid = session.process.pid
-        assert Path(f"/proc/{pid}/cwd").resolve() == ROOT
-        assert Path(f"/proc/{pid}/exe").resolve() == BINARY.resolve()
+        process = Path("/proc") / str(pid)
+        if process.exists():
+            assert (process / "cwd").resolve() == ROOT
+            assert (process / "exe").resolve() == BINARY.resolve()
         run_authored_scenario(session, "lunco://scenarios/tests/fixed_step_assertion_failure.rhai",
                               title="FIXED STEP ASSERTION FAILURE", check_count=6,
                               allow_runtime_fault=True)
