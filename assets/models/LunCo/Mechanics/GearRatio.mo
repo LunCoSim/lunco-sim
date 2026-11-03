@@ -9,8 +9,8 @@ model GearRatio
   input Real eta(unit="1") = 0.85 "Mesh efficiency from an authored speed/temperature law, 0 < eta <= 1";
   parameter Real max_output_torque(unit="N.m") = 400.0 "Output-shaft torque rating";
 
-  Flange flange_a "Fast side";
-  Flange flange_b "Slow side";
+  Flange flange_a "Fast side" annotation(Placement(transformation(origin={-100,0}, extent={{-10,-10},{10,10}})));
+  Flange flange_b "Slow side" annotation(Placement(transformation(origin={100,0}, extent={{-10,-10},{10,10}})));
   output Real speed_a(unit="rad/s") "Fast-side shaft speed";
   output Real power_a_w(unit="W") "Mechanical power entering flange a";
   output Real power_b_w(unit="W") "Mechanical power entering flange b";

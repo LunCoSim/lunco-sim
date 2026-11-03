@@ -119,7 +119,12 @@ enum PendingOperation {
 }
 
 impl DatasetRuntime {
-    fn start(&mut self, entry: DatasetEntry, settings: lunco_settings::DownloadSettings) {
+    fn start(
+        &mut self,
+        entry: DatasetEntry,
+        settings: lunco_settings::DownloadSettings,
+        decode_budget: u64,
+    ) {
         let handle = DatasetOperation::new(entry.scope.clone(), self.commit_gate.clone());
         #[cfg(not(target_arch = "wasm32"))]
         let handle = {
@@ -131,6 +136,7 @@ impl DatasetRuntime {
                 handle.cancel.clone(),
                 handle.commit_gate.clone(),
                 self.processors.clone(),
+                decode_budget,
             ));
             handle
         };
@@ -149,7 +155,7 @@ impl DatasetRuntime {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn start_processing(&mut self, entry: DatasetEntry, force: bool) {
+    fn start_processing(&mut self, entry: DatasetEntry, force: bool, decode_budget: u64) {
         let mut handle = DatasetOperation::new(entry.scope.clone(), self.commit_gate.clone());
         handle.task = Some(spawn_processing(
             &entry,
@@ -158,6 +164,7 @@ impl DatasetRuntime {
             self.processors.clone(),
             handle.status.clone(),
             force,
+            decode_budget,
         ));
         self.operations.insert(entry.id, handle);
     }
@@ -326,6 +333,7 @@ fn spawn_download(
     cancel: Arc<std::sync::atomic::AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
     processors: lunco_assets_processing::process::ProcessorRegistry,
+    decode_budget: u64,
 ) -> bevy::tasks::Task<DatasetState> {
     use std::sync::atomic::Ordering;
 
@@ -349,6 +357,7 @@ fn spawn_download(
                 cancel.clone(),
                 commit_gate.clone(),
             )
+            .with_texture_decode_budget(decode_budget)
             .with_progress(move |step| {
                 if let Ok(mut slot) = step_status.lock() {
                     slot.state = Some(DatasetState::Processing {
@@ -454,6 +463,7 @@ fn spawn_processing(
     processors: lunco_assets_processing::process::ProcessorRegistry,
     status: StatusSlot,
     force: bool,
+    decode_budget: u64,
 ) -> bevy::tasks::Task<DatasetState> {
     let owned_entry = entry.clone();
     let spec = entry.spec.clone();
@@ -464,6 +474,7 @@ fn spawn_processing(
             let control =
                 lunco_assets_processing::process::ProcessControl::new(cancel.clone(), commit_gate)
                     .with_force(force)
+                    .with_texture_decode_budget(decode_budget)
                     .with_progress(move |step| {
                         if let Ok(mut slot) = status.lock() {
                             slot.state = Some(DatasetState::Processing {
@@ -676,6 +687,8 @@ fn drain_dataset_status(
 
 fn admit_dataset_operations(
     settings: Res<lunco_settings::DownloadSettings>,
+    processing_settings: Res<lunco_settings::AssetProcessingSettings>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut runtime: ResMut<DatasetRuntime>,
     mut registry: ResMut<DatasetRegistry>,
     mut commands: Commands,
@@ -693,6 +706,40 @@ fn admit_dataset_operations(
         if registry.state(&entry.id) != Some(&DatasetState::Queued) {
             continue;
         }
+        let decode_budget = (|| {
+            let manifest = match &entry.scope {
+                DatasetScope::Engine => None,
+                DatasetScope::Twin { root, .. } => {
+                    let twin = workspace
+                        .as_ref()
+                        .and_then(|w| {
+                            w.twins()
+                                .find(|(_, twin)| &twin.root == root)
+                                .map(|(_, twin)| twin)
+                        })
+                        .ok_or_else(|| {
+                            format!("dataset '{}' has no admitted owning Twin", entry.id)
+                        })?;
+                    twin.manifest.as_ref()
+                }
+            };
+            crate::settings::texture_decode_budget(
+                &processing_settings,
+                manifest.and_then(|m| m.setting(crate::settings::TWIN_TEXTURE_DECODE_MAX_BYTES)),
+            )
+        })();
+        let decode_budget = match decode_budget {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                apply_state(
+                    &mut registry,
+                    &entry.id,
+                    DatasetState::Failed(error),
+                    &mut commands,
+                );
+                continue;
+            }
+        };
         let state = match operation {
             PendingOperation::Download => DatasetState::Downloading {
                 source: entry.name.clone(),
@@ -712,9 +759,11 @@ fn admit_dataset_operations(
         };
         apply_state(&mut registry, &entry.id, state, &mut commands);
         match operation {
-            PendingOperation::Download => runtime.start(entry, settings.clone()),
+            PendingOperation::Download => runtime.start(entry, settings.clone(), decode_budget),
             #[cfg(not(target_arch = "wasm32"))]
-            PendingOperation::Process { force } => runtime.start_processing(entry, force),
+            PendingOperation::Process { force } => {
+                runtime.start_processing(entry, force, decode_budget)
+            }
         }
     }
 }
@@ -752,6 +801,8 @@ impl DatasetProvisioningPlugin {
 
 impl Plugin for DatasetProvisioningPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_settings::AppSettingsExt;
+        app.register_settings_section::<lunco_settings::AssetProcessingSettings>();
         #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(DatasetRuntime {
             processors: self.processors.clone(),

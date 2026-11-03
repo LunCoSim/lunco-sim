@@ -8,8 +8,8 @@ model SolarChargeController
   parameter Real pv_voltage_v(unit="V") = 48.0;
   parameter Real efficiency = 0.95 "Assumed conversion efficiency, 0..1";
   parameter Real minimum_bus_voltage_v(unit="V") = 18.0;
-  Pin pv "Input from the photovoltaic source";
-  Pin bus "Output to the battery and loads";
+  Pin pv "Input from the photovoltaic source" annotation(Placement(transformation(origin={-100,0}, extent={{-10,-10},{10,10}})));
+  Pin bus "Output to the battery and loads" annotation(Placement(transformation(origin={100,0}, extent={{-10,-10},{10,10}})));
   output Real input_power_w(unit="W");
   output Real output_power_w(unit="W");
   output Real heat_w(unit="W");

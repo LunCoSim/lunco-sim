@@ -1932,6 +1932,11 @@ are undoable and journalled like code-editor edits.
 - Connector graphics, color, causality, placement, and `flow` metadata come
   from the resolved connector AST. The renderer is not a battery/motor/solar
   palette.
+- Graphical terminals are public instances of resolved `connector` classes,
+  including short connector definitions and inherited connectors. Plain
+  `input`/`output` variables remain in the semantic interface and telemetry;
+  causality alone does not create a connector icon. Component libraries author
+  terminal positions and sizes through standard Modelica `Placement` annotations.
 - Authored connection `Line.color` takes precedence over the resolved
   connector `Icon` color; an omitted color uses the neutral theme wire token.
   Generated-network route annotations carry geometry only. The canvas legend

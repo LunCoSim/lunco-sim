@@ -10,6 +10,7 @@ lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-celestial-data = { path = "../lunco-celestial-data" }
 lunco-geotiff = { path = "../lunco-geotiff" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-settings = { path = "../lunco-settings" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }

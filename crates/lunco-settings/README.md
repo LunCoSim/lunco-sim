@@ -21,6 +21,9 @@ state, not user prefs.)
 - `SettingsSection` — trait a domain settings struct implements (`const KEY` and
   optional persisted-value migration).
 - `AppSettingsExt::register_settings_section::<S>()` — register a section.
+- `AssetProcessingSettings` — bounded texture decoding policy, default 1 GiB.
+  The native Data & libraries settings editor persists this value; dataset workers
+  resolve a Twin override before beginning a job.
 - `Settings` — the raw merged document (`raw(key)` / `iter()`).
 - `ProfileSettings` — built-in profile section.
 - `DownloadSettingsPlugin` / `ensure_download_settings` / `DownloadSettings` — the shared network policy

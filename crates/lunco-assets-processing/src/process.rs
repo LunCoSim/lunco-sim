@@ -36,6 +36,7 @@ pub struct ProcessControl {
     commit_gate: Arc<Mutex<()>>,
     progress: Option<Arc<dyn Fn(&str) + Send + Sync>>,
     force: bool,
+    texture_decode_max_bytes: u64,
 }
 
 impl ProcessControl {
@@ -46,6 +47,8 @@ impl ProcessControl {
             commit_gate,
             progress: None,
             force: false,
+            texture_decode_max_bytes:
+                lunco_settings::AssetProcessingSettings::DEFAULT_TEXTURE_DECODE_MAX_BYTES,
         }
     }
 
@@ -57,6 +60,13 @@ impl ProcessControl {
     /// Explicitly rebuild an artifact without removing its last valid bundle.
     pub fn with_force(mut self, force: bool) -> Self {
         self.force = force;
+        self
+    }
+
+    /// Snapshot the host/Twin texture budget for this processing attempt.
+    /// A per-texture `max_decode_bytes` declaration takes precedence.
+    pub fn with_texture_decode_budget(mut self, bytes: u64) -> Self {
+        self.texture_decode_max_bytes = bytes;
         self
     }
 
@@ -441,7 +451,7 @@ fn process_texture(
     source: &Path,
     output: &Path,
     config: &ProcessConfig,
-    _control: &ProcessControl,
+    control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     let [tw, th] = config.target_resolution.ok_or_else(|| {
         std::io::Error::new(
@@ -471,7 +481,30 @@ fn process_texture(
                     ));
                 }
             };
-            process_image(source, output, tw, th, color_space)
+            let max_decode_bytes = config
+                .parameters
+                .get("max_decode_bytes")
+                .map(|value| {
+                    value
+                        .as_integer()
+                        .filter(|bytes| *bytes > 0)
+                        .map(|bytes| bytes as u64)
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "texture max_decode_bytes must be a positive integer",
+                            )
+                        })
+                })
+                .transpose()?;
+            let max_decode_bytes = max_decode_bytes.unwrap_or(control.texture_decode_max_bytes);
+            if max_decode_bytes == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "texture decode allocation budget must be positive",
+                ));
+            }
+            process_image(source, output, tw, th, color_space, max_decode_bytes)
         }
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -569,8 +602,14 @@ fn process_image(
     tw: u32,
     th: u32,
     color_space: &str,
+    max_decode_bytes: u64,
 ) -> Result<(), std::io::Error> {
-    let img = image::open(source)
+    let mut reader = image::ImageReader::open(source)?.with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(max_decode_bytes);
+    reader.limits(limits);
+    let img = reader
+        .decode()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
     let (w, h) = img.dimensions();
@@ -1814,6 +1853,85 @@ fn tiff_io_err(e: tiff::TiffError) -> std::io::Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn texture_decode_budget_is_enforced_and_can_be_explicitly_increased() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("elevation.tif");
+        let output = dir.path().join("elevation.png");
+        let samples: Vec<u16> = (0..64).map(|i| 20000 + i * 17).collect();
+        image::ImageBuffer::<image::Luma<u16>, _>::from_raw(8, 8, samples.clone())
+            .unwrap()
+            .save(&source)
+            .unwrap();
+        let mut config: super::ProcessConfig = toml::from_str(
+            "kind='texture'\noutput='elevation.png'\ntarget_resolution=[8,8]\ncolor_space='linear'\nmax_decode_bytes=32",
+        ).unwrap();
+        assert!(
+            super::process_texture(
+                &source,
+                &output,
+                &config,
+                &super::ProcessControl::unrestricted()
+            )
+            .is_err()
+        );
+        assert!(!output.exists());
+        config
+            .parameters
+            .insert("max_decode_bytes".into(), toml::Value::Integer(65536));
+        super::process_texture(
+            &source,
+            &output,
+            &config,
+            &super::ProcessControl::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(
+            image::open(&output).unwrap().to_luma16().into_raw(),
+            samples
+        );
+        config.parameters.remove("max_decode_bytes");
+        super::process_texture(
+            &source,
+            &output,
+            &config,
+            &super::ProcessControl::unrestricted(),
+        )
+        .unwrap();
+        assert_eq!(
+            image::open(&output).unwrap().to_luma16().into_raw(),
+            samples
+        );
+        // The host/Twin policy actually reaches the decoder, while an authored
+        // per-asset limit remains the most specific policy.
+        let low_budget = super::ProcessControl::unrestricted().with_texture_decode_budget(32);
+        assert!(super::process_texture(&source, &output, &config, &low_budget).is_err());
+        config
+            .parameters
+            .insert("max_decode_bytes".into(), toml::Value::Integer(65536));
+        super::process_texture(&source, &output, &config, &low_budget).unwrap();
+        assert_eq!(
+            image::open(&output).unwrap().to_luma16().into_raw(),
+            samples
+        );
+        for value in [
+            toml::Value::Integer(0),
+            toml::Value::Integer(-1),
+            toml::Value::String("unlimited".into()),
+        ] {
+            config.parameters.insert("max_decode_bytes".into(), value);
+            let error = super::process_texture(
+                &source,
+                &output,
+                &config,
+                &super::ProcessControl::unrestricted(),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("max_decode_bytes"));
+        }
+    }
+
     #[test]
     fn linear_texture_preserves_u16_samples_and_rejects_invalid_color_space() {
         let dir = tempfile::tempdir().unwrap();

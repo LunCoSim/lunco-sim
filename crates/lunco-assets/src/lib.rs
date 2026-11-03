@@ -11,3 +11,5 @@
 #![allow(clippy::disallowed_methods)]
 
 pub mod datasets;
+
+pub mod settings;

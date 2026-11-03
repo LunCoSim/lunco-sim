@@ -216,7 +216,13 @@ impl DiagramSnapshot {
         &self,
         class: &DiagramClass,
     ) -> Vec<lunco_modelica_index::visual_diagram::PortDef> {
-        class.members.iter().filter(|member| self.is_port(member)).map(|member| {
+        // MLS 9.1: a graphical connector is an instance of a connector class.
+        // Plain causal variables remain in the semantic interface and telemetry,
+        // but have no connector icon to invent around the component artwork.
+        class.members.iter().filter(|member| {
+            !member.component.is_protected && self.class(&member.type_name)
+                .is_some_and(|definition| definition.class_type == ClassType::Connector)
+        }).map(|member| {
         let sub = &member.component;
         let (x, y, size_x, size_y, rotation_deg) = lunco_modelica_ast::annotations::extract_placement(&sub.annotation).map(|placement| {
             let (x, y, width, height) = placement.transformation.centre_size();
@@ -822,6 +828,45 @@ end Library;
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn graphical_ports_exclude_plain_causal_values_but_preserve_their_interface() {
+        let mut session = Session::default();
+        session.add_document("authored-connectors.mo", r#"
+package DiagramFixture
+  connector Pin
+    flow Real i;
+    Real v;
+  end Pin;
+  connector SignalInput = input Real;
+  model Base
+    Pin inherited_terminal annotation(Placement(
+      transformation(origin={-100,0}, extent={{-10,-10},{10,10}})));
+  end Base;
+  model Device
+    extends Base;
+    input Real command;
+    output Real measured;
+    SignalInput signal annotation(Placement(
+      transformation(origin={0,100}, extent={{-10,-10},{10,10}})));
+  protected
+    Pin private_terminal;
+  end Device;
+end DiagramFixture;
+"#).unwrap();
+        let snapshot = DiagramSnapshot::capture(&mut session,
+            "DiagramFixture.Device", DiagramScope::ClassInterface).unwrap();
+        let class = snapshot.class("DiagramFixture.Device").unwrap();
+        let ports = snapshot.class_ports(class);
+        assert_eq!(ports.len(), 2);
+        assert!(ports.iter().any(|p| p.name == "inherited_terminal" && p.x == -100.0));
+        assert!(ports.iter().any(|p| p.name == "signal" && p.y == 100.0));
+        for name in ["command", "measured"] {
+            let member = class.members.iter().find(|m| m.component.name == name).unwrap();
+            assert!(snapshot.is_port(member));
+            assert_eq!(snapshot.ports_for_component(member).len(), 1);
+        }
     }
 
     fn source_builder(source: &str, target: Option<&str>) -> ModelicaComponentBuilder {

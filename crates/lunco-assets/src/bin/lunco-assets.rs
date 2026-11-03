@@ -259,6 +259,27 @@ fn process_filtered(
         }
     }
 
+    let processing_settings =
+        lunco_settings::load_section_from_disk::<lunco_settings::AssetProcessingSettings>();
+    let twin_manifest = twin_root
+        .map(lunco_twin::TwinMode::open)
+        .transpose()
+        .map_err(|e| format!("Failed to read owning Twin settings: {e}"))?;
+    let twin_manifest = match twin_manifest {
+        Some(lunco_twin::TwinMode::Twin(twin) | lunco_twin::TwinMode::Folder(twin)) => {
+            twin.manifest
+        }
+        Some(lunco_twin::TwinMode::Orphan(_)) => {
+            return Err("Asset owner must be a Twin or folder".into());
+        }
+        None => None,
+    };
+    let decode_budget = lunco_assets::settings::texture_decode_budget(
+        &processing_settings,
+        twin_manifest
+            .as_ref()
+            .and_then(|m| m.setting(lunco_assets::settings::TWIN_TEXTURE_DECODE_MAX_BYTES)),
+    )?;
     let mut processed = 0;
     for (key, entry) in &manifest.assets {
         if only_key.is_some_and(|k| k != key) {
@@ -322,7 +343,9 @@ fn process_filtered(
                 &cfg,
                 &entry_cache_root(entry, twin_root),
                 twin_root,
-                &process::ProcessControl::unrestricted().with_force(force),
+                &process::ProcessControl::unrestricted()
+                    .with_force(force)
+                    .with_texture_decode_budget(decode_budget),
             )
             .map_err(|e| format!("Failed to process {}: {}", key, e))?;
             processed += 1;

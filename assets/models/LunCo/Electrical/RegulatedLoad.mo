@@ -7,7 +7,7 @@ partial model RegulatedLoad
     "Restart threshold above turn-off; illustrative 28 V equipment default";
   output Real powered "1 while the input converter is operating, otherwise 0";
   output Real power_draw_w(unit="W") "Actual electrical input power at the pin";
-  Pin p "Positive bus terminal relative to the network's electrical reference";
+  Pin p "Positive bus terminal relative to the network's electrical reference" annotation(Placement(transformation(origin={-100,0}, extent={{-10,-10},{10,10}})));
 protected
   Boolean operating(start=false, fixed=true);
   Real requested_power_w(unit="W") "On-state regulated input demand";
