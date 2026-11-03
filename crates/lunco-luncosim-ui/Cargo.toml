@@ -158,6 +158,8 @@ lunco-web = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-perf-ui = { path = "../lunco-workbench-perf-ui" }
 lunco-workbench-runtime-ui = { path = "../lunco-workbench-runtime-ui" }
+bevy_hui = { workspace = true }
+bevy_flair = { workspace = true }
 lunco-workbench-state = { path = "../lunco-workbench-state" }
 lunco-workbench-window = { path = "../lunco-workbench-window" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }

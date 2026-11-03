@@ -36,7 +36,7 @@ pub use commands::*;
 
 pub use big_space_setup::*;
 pub use globe_collision::GlobeCollisionSettings;
-pub use globe_lod::{GlobeLod, GlobeLodBudget};
+pub use globe_lod::{GlobeLod, GlobeLodBudget, GlobeVisualReadiness};
 pub use gravity::*;
 pub use link::*;
 pub use placement::*;

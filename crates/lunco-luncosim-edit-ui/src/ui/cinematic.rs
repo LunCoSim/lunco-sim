@@ -91,6 +91,36 @@ impl Default for CinematicViz {
     }
 }
 
+/// Camera trajectories are authoring affordances, not scene geometry.
+fn camera_guides_visible(requested: bool, editor: bool, recording: bool) -> bool {
+    requested && editor && !recording
+}
+
+#[cfg(test)]
+mod guide_visibility_tests {
+    use super::camera_guides_visible;
+
+    #[test]
+    fn viewing_and_recording_exclude_camera_paths_and_aim_crosses() {
+        assert!(
+            !camera_guides_visible(true, false, false),
+            "a normal mission view must be clean"
+        );
+        assert!(
+            !camera_guides_visible(true, true, true),
+            "recording must exclude editor guides"
+        );
+        assert!(
+            camera_guides_visible(true, true, false),
+            "the editor retains its requested guides"
+        );
+        assert!(
+            !camera_guides_visible(false, true, false),
+            "the author's checkbox remains authoritative"
+        );
+    }
+}
+
 /// Draw each [`CameraPath`]'s curve, its control points, and a live dot at the
 /// playhead.
 ///
@@ -111,6 +141,8 @@ impl Default for CinematicViz {
 /// math, no render-vs-grid frame bug by construction.
 pub fn draw_camera_paths(
     viz: Res<CinematicViz>,
+    interaction: Option<Res<lunco_interaction_core::SceneInteractionMode>>,
+    recording: Option<Res<lunco_workbench_runtime_ui::RuntimeUiCaptureState>>,
     viewport: Res<SceneViewport>,
     resolved: Res<lunco_time::ResolvedDomains>,
     q_paths: Query<(&CameraPath, &GlobalTransform)>,
@@ -118,7 +150,12 @@ pub fn draw_camera_paths(
     q_targets: Query<(Entity, &UsdPrimPath, &GlobalTransform), (With<CellCoord>, With<Transform>)>,
     mut gizmos: Gizmos,
 ) {
-    if !viz.show_paths {
+    if !camera_guides_visible(
+        viz.show_paths,
+        interaction
+            .is_some_and(|mode| *mode == lunco_interaction_core::SceneInteractionMode::Editor),
+        recording.is_some_and(|recording| recording.active),
+    ) {
         return;
     }
     // The viewport owns presentation selection. Do not rediscover it by
@@ -415,7 +452,7 @@ impl Panel for CinematicPanel {
             let mut show_mut = show;
             if ui
                 .checkbox(&mut show_mut, "Show camera paths")
-                .on_hover_text("Draw each animated camera's authored trajectory in the viewport")
+                .on_hover_text("Draw camera trajectories and aim guides while editing. Hidden in mission views and recordings.")
                 .changed()
             {
                 ctx.set_resource(CinematicViz {

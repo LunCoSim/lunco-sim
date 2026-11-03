@@ -9094,6 +9094,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-capture",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-cosim-core",
@@ -9253,6 +9254,8 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "bevy_flair",
+ "bevy_hui",
  "bevy_winit",
  "big_space",
  "image",

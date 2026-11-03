@@ -59,7 +59,10 @@ pub(crate) fn build(app: &mut App) {
                 Core3d,
                 draw.in_set(Core3dSystems::PostProcess).after(tonemapping),
             )
-            .add_systems(Render, mark_clean_presented.after(RenderSystems::Render));
+            .add_systems(
+                Render,
+                (mark_clean_presented, mark_scene_presented).after(RenderSystems::Render),
+            );
     }
 }
 fn sync_image_intent(
@@ -325,6 +328,82 @@ fn mark_clean_presented(
         receipt.0.mark_presented();
     }
 }
+/// Scene submission is separate from target allocation and image processing.
+/// A feed that explicitly requires geometry must not acknowledge a clear-only
+/// image while its material pipelines are still being prepared.
+fn mark_scene_presented(
+    views: Query<(&bevy::render::view::ExtractedView, &ImagePresentation), With<ViewTarget>>,
+    opaque: Res<
+        bevy::render::render_phase::ViewBinnedRenderPhases<bevy::core_pipeline::core_3d::Opaque3d>,
+    >,
+    masked: Res<
+        bevy::render::render_phase::ViewBinnedRenderPhases<
+            bevy::core_pipeline::core_3d::AlphaMask3d,
+        >,
+    >,
+    transparent: Res<
+        bevy::render::render_phase::ViewSortedRenderPhases<
+            bevy::core_pipeline::core_3d::Transparent3d,
+        >,
+    >,
+    pipelines: Res<PipelineCache>,
+) {
+    for (view, receipt) in &views {
+        let opaque_items = ready_scene_bins(
+            opaque.0.get(&view.retained_view_entity),
+            &pipelines,
+            |key| key.pipeline,
+        );
+        let masked_items = ready_scene_bins(
+            masked.0.get(&view.retained_view_entity),
+            &pipelines,
+            |key| key.pipeline,
+        );
+        let transparent_items =
+            transparent
+                .0
+                .get(&view.retained_view_entity)
+                .map_or(Some(0), |phase| {
+                    phase
+                        .items
+                        .values()
+                        .all(|item| pipelines.get_render_pipeline(item.pipeline).is_some())
+                        .then_some(phase.items.len())
+                });
+        let ready = opaque_items
+            .zip(masked_items)
+            .zip(transparent_items)
+            .map_or(0, |((opaque, masked), transparent)| {
+                opaque + masked + transparent
+            });
+        receipt.0.mark_scene_presented(ready);
+    }
+}
+
+/// Use Bevy's queued phase keys as the pipeline authority for both opaque
+/// and alpha-masked bins. No mesh-name assumptions or private pipeline list.
+fn ready_scene_bins<T: bevy::render::render_phase::BinnedPhaseItem>(
+    phase: Option<&bevy::render::render_phase::BinnedRenderPhase<T>>,
+    cache: &PipelineCache,
+    pipeline: impl Fn(&T::BatchSetKey) -> CachedRenderPipelineId,
+) -> Option<usize> {
+    let Some(phase) = phase else { return Some(0) };
+    let keys = phase
+        .multidrawable_meshes
+        .keys()
+        .chain(phase.batchable_meshes.keys().map(|(key, _)| key))
+        .chain(phase.unbatchable_meshes.keys().map(|(key, _)| key))
+        .chain(phase.non_mesh_items.keys().map(|(key, _)| key));
+    keys.into_iter()
+        .all(|key| cache.get_render_pipeline(pipeline(key)).is_some())
+        .then_some(
+            phase.multidrawable_meshes.len()
+                + phase.batchable_meshes.len()
+                + phase.unbatchable_meshes.len()
+                + phase.non_mesh_items.len(),
+        )
+}
+
 fn draw(
     view: ViewQuery<(
         &ViewTarget,

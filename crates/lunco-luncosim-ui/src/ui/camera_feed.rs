@@ -76,6 +76,7 @@ pub(super) fn draw_camera_feed(
     mut commands: Commands,
     selection: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
     presentations: Query<&lunco_render::camera_image::CameraImagePresentation>,
+    authored_images: Query<(&bevy_hui::prelude::Tags, &InheritedVisibility)>,
 ) {
     state
         .last_match_request
@@ -131,7 +132,16 @@ pub(super) fn draw_camera_feed(
             feeds.instances.contains_key(id)
         }
     });
+    let embedded: std::collections::BTreeSet<u64> = authored_images
+        .iter()
+        .filter(|(_, visibility)| visibility.get())
+        .filter_map(|(tags, _)| tags.tags().get("camera_feed")?.parse().ok())
+        .collect();
     for (index, (id, feed)) in feeds.instances.iter().enumerate() {
+        // An authored HUD owns presentation of this same native image.
+        if embedded.contains(id) {
+            continue;
+        }
         let target = feed.image.as_ref().and_then(|handle| {
             images.get(handle).map(|image| {
                 let texture = contexts.add_image(EguiTextureHandle::Weak(handle.id()));
@@ -206,7 +216,7 @@ pub(super) fn draw_camera_feed(
                             if previous.as_ref()!=Some(&owner){ui.separator();ui.strong(&owner);previous=Some(owner);}
                             if ui.selectable_label(feed.source==Some(*source),label).on_hover_text(path).clicked()
                                 && feed.source!=Some(*source) {
-                                commands.trigger(SetCameraFeed {feed:Some(*id),source:Some(*source),label:label.clone(),width:None,height:None});
+                                commands.trigger(SetCameraFeed {feed:Some(*id),source:Some(*source),label:label.clone(),width:None,height:None,minimum_scene_items:None});
                             }
                         }
                     }).response.on_hover_text(&title);

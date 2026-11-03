@@ -48,6 +48,9 @@ pub struct SetCameraFeed {
     pub label: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// Require submitted scene geometry before admitting the image. Zero also
+    /// permits intentional sky/empty observations. Omitted retains the view's policy.
+    pub minimum_scene_items: Option<u32>,
 }
 /// Set fixed pixels or follow the view's displayed image area. In match mode
 /// the UI supplies physical pixel measurements after resizing finishes.
@@ -62,6 +65,14 @@ pub struct SetCameraFeedResolution {
 #[Command(default)]
 pub struct InspectCameraFeeds {}
 
+/// Project an exact scene subject into a live feed's image coordinates.
+/// Frustum inclusion is reported; this does not claim geometric occlusion.
+#[Command]
+pub struct ProjectCameraFeedSubject {
+    pub feed: u64,
+    pub subject: GlobalEntityId,
+}
+
 pub struct CameraFeed {
     pub source: Option<GlobalEntityId>,
     pub label: String,
@@ -69,12 +80,18 @@ pub struct CameraFeed {
     pub width: u32,
     pub height: u32,
     pub match_window: bool,
+    pub minimum_scene_items: u32,
     pub resolution_error: Option<String>,
     pub effects: CameraImageEffects,
     pub(crate) camera: Option<Entity>,
     source_entity: Option<Entity>,
 }
 impl CameraFeed {
+    /// Exact render camera for a native image consumer. The source camera and
+    /// its projection remain owned by this feed.
+    pub fn render_camera(&self) -> Option<Entity> {
+        self.camera
+    }
     pub fn image_ready(
         &self,
         receipts: &Query<&lunco_render::camera_image::CameraImagePresentation>,
@@ -83,6 +100,7 @@ impl CameraFeed {
             .and_then(|camera| receipts.get(camera).ok())
             .is_some_and(|receipt| {
                 receipt.is_ready()
+                    && receipt.scene_items() >= self.minimum_scene_items as usize
                     && receipt.settings == self.effects
                     && receipt.dimensions == Some(UVec2::new(self.width, self.height))
             })
@@ -97,6 +115,7 @@ impl Default for CameraFeed {
             width: 480,
             height: 270,
             match_window: true,
+            minimum_scene_items: 0,
             resolution_error: None,
             effects: default(),
             camera: None,
@@ -172,7 +191,8 @@ impl Plugin for CameraFeedPlugin {
             .mark_client_local::<SetCameraFeed>()
             .mark_client_local::<SetCameraFeedResolution>()
             .mark_client_local::<RemoveCameraFeed>()
-            .mark_client_local::<InspectCameraFeeds>();
+            .mark_client_local::<InspectCameraFeeds>()
+            .mark_client_local::<ProjectCameraFeedSubject>();
         app.mark_client_local::<SetCameraImageEffects>()
             .mark_client_local::<InspectCameraImageEffects>();
         app.init_scene_resource::<CameraFeeds>()
@@ -226,6 +246,9 @@ fn set_camera_feed(
         ));
     }
     let existing = feeds.instances.get(&id);
+    let minimum_scene_items = request
+        .minimum_scene_items
+        .unwrap_or_else(|| existing.map_or(0, |feed| feed.minimum_scene_items));
     let effects = existing
         .map(|feed| feed.effects.clone())
         .unwrap_or_default();
@@ -294,6 +317,7 @@ fn set_camera_feed(
         width,
         height,
         match_window,
+        minimum_scene_items,
         effects: effects.clone(),
         ..default()
     };
@@ -382,6 +406,8 @@ fn inspect_camera_feeds(
     let views:Vec<_>=feeds.instances.iter().map(|(id,feed)|Ok(lunco_api_core::api_value!({
         "feed":*id,"source":feed.source.map(|id|id.get()),"label":&feed.label,"active":feed.camera.is_some(),
         "ready":feed.image_ready(&presentation),
+        "minimum_scene_items":feed.minimum_scene_items,
+        "submitted_scene_items":feed.camera.and_then(|camera| presentation.get(camera).ok()).map(|receipt| receipt.scene_items()),
         "width":feed.width,"height":feed.height,"match_window":feed.match_window,"error":feed.resolution_error.as_deref(),
         "effects":lunco_api_core::api_value_from_serializable(&feed.effects).map_err(|error|error.to_string())?
     }))).collect::<Result<_,String>>()?;
@@ -389,6 +415,48 @@ fn inspect_camera_feeds(
         OpId::new(),
         lunco_api_core::api_value!({"views":views,"limit":MAX_CAMERA_FEEDS,"max_pixels_per_view":MAX_FEED_PIXELS,"max_total_pixels":MAX_TOTAL_PIXELS}),
     ))
+}
+
+#[on_command(ProjectCameraFeedSubject)]
+fn project_camera_feed_subject(
+    trigger: On<ProjectCameraFeedSubject>,
+    feeds: Res<CameraFeeds>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    presentation: Query<&lunco_render::camera_image::CameraImagePresentation>,
+    cameras: Query<(&Camera, &GlobalTransform)>,
+    subjects: Query<&GlobalTransform>,
+) -> Result<Ack, Reject> {
+    let request = trigger.event();
+    let feed = feeds
+        .instances
+        .get(&request.feed)
+        .ok_or_else(|| Reject::InvalidOp("camera view is unavailable".into()))?;
+    if !feed.image_ready(&presentation) {
+        return Err(Reject::InvalidOp("camera view is not rendered yet".into()));
+    }
+    let camera_entity = feed
+        .camera
+        .ok_or_else(|| Reject::InvalidOp("camera view has no source".into()))?;
+    let (camera, transform) = cameras
+        .get(camera_entity)
+        .map_err(|_| Reject::InvalidOp("camera view has no live projection".into()))?;
+    let subject = registry
+        .resolve(&request.subject)
+        .and_then(|entity| subjects.get(entity).ok())
+        .ok_or_else(|| Reject::InvalidOp("subject has no live spatial transform".into()))?;
+    let size = camera
+        .logical_viewport_size()
+        .filter(|size| size.is_finite() && size.x > 0.0 && size.y > 0.0)
+        .ok_or_else(|| Reject::InvalidOp("camera view dimensions are not ready".into()))?;
+    let data = match camera.world_to_viewport(transform, subject.translation()) {
+        Ok(pixel) => lunco_api_core::api_value!({
+            "projected":true,"u":pixel.x/size.x,"v":pixel.y/size.y,
+            "inside_frame":pixel.x>=0.0 && pixel.y>=0.0 && pixel.x<=size.x && pixel.y<=size.y,
+            "width":feed.width,"height":feed.height
+        }),
+        Err(error) => lunco_api_core::api_value!({"projected":false,"reason":error.to_string()}),
+    };
+    Ok(Ack::with_data(OpId::new(), data))
 }
 
 fn source_entity(
@@ -502,6 +570,49 @@ register_commands!(
     set_camera_feed,
     set_camera_feed_resolution,
     inspect_camera_feeds,
+    project_camera_feed_subject,
     set_camera_image_effects,
     inspect_camera_image_effects
 );
+
+#[cfg(test)]
+mod scene_image_readiness_tests {
+    use super::*;
+    #[test]
+    fn an_allocated_image_does_not_satisfy_a_geometry_required_view() {
+        let mut world = World::new();
+        let receipt = lunco_render::camera_image::CameraImagePresentation::new(
+            CameraImageEffects::default(),
+            Some(UVec2::new(480, 270)),
+        );
+        let camera = world.spawn(receipt.clone()).id();
+        let mut state = bevy::ecs::system::SystemState::<
+            Query<&lunco_render::camera_image::CameraImagePresentation>,
+        >::new(&mut world);
+        let feed = CameraFeed {
+            camera: Some(camera),
+            minimum_scene_items: 1,
+            ..Default::default()
+        };
+        receipt.mark_presented();
+        assert!(
+            !feed.image_ready(&state.get(&world).expect("valid image receipt query")),
+            "a clear-only image must not start the Moon shot"
+        );
+        receipt.mark_scene_presented(4);
+        assert!(feed.image_ready(&state.get(&world).expect("valid image receipt query")));
+        receipt.mark_scene_presented(0);
+        assert!(
+            !feed.image_ready(&state.get(&world).expect("valid image receipt query")),
+            "losing scene submission invalidates readiness again"
+        );
+        let sky = CameraFeed {
+            minimum_scene_items: 0,
+            ..feed
+        };
+        assert!(
+            sky.image_ready(&state.get(&world).expect("valid image receipt query")),
+            "an explicitly empty/sky observation remains valid"
+        );
+    }
+}

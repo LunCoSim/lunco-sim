@@ -38,6 +38,14 @@ use lunco_terrain_globe::{
 use lunco_terrain_surface::SurfaceOracle;
 use lunco_viewport_core::SceneViewport;
 
+/// Material-ready, disjoint draw coverage owned by the globe reconciler.
+/// Fine refinement may continue after a complete cover is presentable.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GlobeVisualReadiness {
+    /// Every desired region has a material-ready drawable cover.
+    pub complete_cover: bool,
+}
+
 /// Per-body live-LOD context read by the runtime LOD system to stream
 /// cube-sphere tiles.
 #[derive(Component)]
@@ -1877,6 +1885,18 @@ pub(crate) fn update_globe_lod(
             .filter_map(|(coord, entity)| material_ready.contains(*entity).then_some(*coord))
             .collect();
         let draw = build_draw_cover(&desired, &tiles.resident, &ready);
+        let drawable: HashMap<_, _> = tiles
+            .resident
+            .iter()
+            .filter(|(coord, _)| draw.contains(coord))
+            .map(|(coord, entity)| (*coord, *entity))
+            .collect();
+        let coverage = self::resident_coverage(&drawable);
+        let complete_cover = !desired.is_empty()
+            && (0..6).all(|face| !branch_has_gap(&desired, &drawable, &coverage, face));
+        commands
+            .entity(body_ent)
+            .insert(GlobeVisualReadiness { complete_cover });
 
         // Visibility is one exact quadtree partition. This is the critical LOD
         // invariant: no coplanar parent/child overlap (z-fighting/brightness

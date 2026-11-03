@@ -132,6 +132,12 @@ control points and aim arrows, and shows the current playhead. It hides a path
 when the user is looking through that path's own camera because the trajectory is
 not legible from the eye it passes through.
 
+Camera-path control points and aim arrows are authoring guides. The overlay
+requires both the Cinematic visibility request and Editor interaction mode,
+and is suppressed during recording. A saved/default checkbox cannot leak
+these guides into normal mission views. Authored mission markers in native
+camera images are independent runtime UI and remain available to recordings.
+
 The overlay and `AddCameraHere` resolve the camera through
 `lunco_viewport_core::SceneViewport::active_camera`. They do not scan for the first active camera:
 render-to-texture and sensor cameras may be active for their own consumers, and

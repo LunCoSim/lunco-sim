@@ -972,6 +972,11 @@ pub struct RuntimeUiSurface {
     applied_placement: Option<ResolvedRuntimeUiPlacement>,
 }
 
+/// A domain image provider has not yet published the exact image requested by
+/// an authored runtime node. Recording must wait for this descendant too.
+#[derive(Component, Debug)]
+pub struct RuntimeUiImagePending(pub String);
+
 impl RuntimeUiSurface {
     /// Whether this retained surface covers scene labels in its layout rectangle.
     /// Modal roots cover their viewport. Other viewport roots are transparent
@@ -1297,6 +1302,7 @@ fn report_runtime_ui_readiness(
     contract: Res<RuntimeUiRecordingContract>,
     mut presentation_generation: ResMut<RuntimeUiPresentationGeneration>,
     mut roots: Query<(
+        Entity,
         &mut RuntimeUiSurface,
         &Visibility,
         Option<&TemplateProperties>,
@@ -1305,6 +1311,8 @@ fn report_runtime_ui_readiness(
         Option<&ComputedUiRenderTargetInfo>,
         Option<&ComputedNode>,
     )>,
+    pending_images: Query<(Entity, &RuntimeUiImagePending)>,
+    parents: Query<&ChildOf>,
     render_state: Option<Res<RuntimeUiRenderState>>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
@@ -1324,7 +1332,25 @@ fn report_runtime_ui_readiness(
     let mut ready = 0usize;
     let mut current_generation = 0u64;
     let mut pending_details = Vec::new();
+    let mut image_waits = HashMap::<Entity, Vec<String>>::new();
+    for (entity, pending) in &pending_images {
+        let mut current = entity;
+        loop {
+            if roots.contains(current) {
+                image_waits
+                    .entry(current)
+                    .or_default()
+                    .push(pending.0.clone());
+                break;
+            }
+            let Ok(parent) = parents.get(current) else {
+                break;
+            };
+            current = parent.parent();
+        }
+    }
     for (
+        entity,
         mut surface,
         visibility,
         properties,
@@ -1363,10 +1389,17 @@ fn report_runtime_ui_readiness(
             && surface.has_projected_exposure
             && target_ready
             && layout_ready;
-        surface.presentation_ready |= initial_presentation_ready;
+        surface.presentation_ready = !image_waits.contains_key(&entity)
+            && (surface.presentation_ready || initial_presentation_ready);
         let surface_ready =
             surface.presentation_ready && matches!(*visibility, Visibility::Visible);
         if !surface_ready {
+            if let Some(images) = image_waits.get(&entity) {
+                pending_details.push(format!(
+                    "{}: waiting for images {images:?}",
+                    surface.layout_id
+                ));
+            }
             pending_details.push(format!(
                 "{}: mounted={} placement={} properties={} projected={} target={} layout={}",
                 surface.layout_id,
@@ -3039,6 +3072,51 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pending_descendant_image_invalidates_a_previously_ready_surface() {
+        use super::*;
+        let mut app = App::new();
+        app.init_resource::<lunco_status_core::status_bus::StatusBus>();
+        app.init_resource::<RuntimeUiPresentationGeneration>();
+        let mut exposures = EngineExposures::default();
+        exposures.writer("camera-view").visible(true);
+        app.insert_resource(exposures);
+        app.insert_resource(RuntimeUiRecordingContract {
+            required_namespaces: HashSet::from(["camera-view".to_owned()]),
+            ..Default::default()
+        });
+        let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{
+            "id":"camera-view", "namespace":"camera-view", "template":"ui/a.html",
+            "stylesheet":"ui/a.css", "placement":{"mode":"viewport"}
+        }"#,
+        )
+        .unwrap();
+        let mut surface = RuntimeUiSurface::from_definition(
+            &definition,
+            Handle::default(),
+            Handle::default(),
+            None,
+        )
+        .unwrap();
+        surface.presentation_ready = true;
+        let root = app.world_mut().spawn((surface, Visibility::Visible)).id();
+        let container = app.world_mut().spawn(ChildOf(root)).id();
+        app.world_mut().spawn((
+            ChildOf(container),
+            RuntimeUiImagePending("camera view 1 has no source".into()),
+        ));
+        app.add_systems(Update, report_runtime_ui_readiness);
+        app.update();
+        assert!(
+            !app.world()
+                .get::<RuntimeUiSurface>(root)
+                .unwrap()
+                .presentation_ready,
+            "a ready latch must not admit a recording after a descendant image becomes unavailable"
+        );
+    }
+
     #[test]
     fn perspective_filter_accepts_one_or_many_and_rejects_ambiguous_lists() {
         use super::*;

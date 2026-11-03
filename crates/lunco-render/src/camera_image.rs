@@ -101,6 +101,7 @@ pub struct CameraImagePresentation {
     pub settings: CameraImageEffects,
     pub dimensions: Option<UVec2>,
     ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    scene_items: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 impl CameraImagePresentation {
     pub fn new(settings: CameraImageEffects, dimensions: Option<UVec2>) -> Self {
@@ -108,6 +109,7 @@ impl CameraImagePresentation {
             settings,
             dimensions,
             ready: Default::default(),
+            scene_items: Default::default(),
         }
     }
     pub fn is_ready(&self) -> bool {
@@ -115,5 +117,15 @@ impl CameraImagePresentation {
     }
     pub fn mark_presented(&self) {
         self.ready.store(true, std::sync::atomic::Ordering::Release);
+    }
+    /// Submitted scene bins whose render pipelines are ready for this view.
+    /// An allocated target or a completed image effect alone may still be empty.
+    pub fn scene_items(&self) -> usize {
+        self.scene_items.load(std::sync::atomic::Ordering::Acquire)
+    }
+    /// Publish only from the render world's completed scene pass.
+    pub fn mark_scene_presented(&self, items: usize) {
+        self.scene_items
+            .store(items, std::sync::atomic::Ordering::Release);
     }
 }

@@ -944,7 +944,30 @@ selection and persisted Twin preferences remain authored Rhai policy. See
 `assets/scenarios/tests/guided_hud_layout.rhai` for production admission and
 negative cases. Independent camera image windows are owned by
 [`lunco-capture`](render-decoupling.md#live-camera-observations), with exact
-camera selection and per-window render targets; they are not HUI image nodes.
+camera selection and per-view render targets. An admitted HUI surface may bind
+the same native GPU image using `<node tag:camera_feed="1">`. This suppresses
+the duplicate floating camera window while that authored image is visible.
+The app binds the existing image handle; there is no image-file round trip,
+additional renderer, camera pose writer or alternate hit-test system.
+
+A descendant `<node tag:camera_feed="1" tag:camera_marker="/World/Site">`
+projects one exact live prim path through that feed. HTML/CSS owns the marker's
+appearance; its parent owns image dimensions. Projection tests the frustum,
+not terrain occlusion. Missing, ambiguous or out-of-frame targets are pending,
+never substituted with a guessed position. These tags use HUI's snake_case
+attribute keys. They are an app adapter contract, not an HTML standard.
+
+`RuntimeUiImagePending` invalidates a previously ready surface until its source
+and marker can render. Visible missing sources publish a structured
+`camera-feed-runtime-ui` diagnostic. The recorder's existing visual admission
+waits for this surface readiness. `GetOfflineRecordingStatus` exposes
+`visual_preparation_ready` and `visual_pending_reasons`; the independent
+`ui_presentation_ready` flag describes the loading overlay acknowledgement.
+`SetCameraFeed.minimum_scene_items` defaults to zero for intentional empty/sky
+observations. Callers requiring scene content explicitly request a positive
+minimum; the render-world receipt counts queued items only after their
+pipelines are ready and the render schedule has submitted the view. Planetary
+geometry additionally requires its native complete resident draw cover.
 
 The shared asset-consent surface uses `assets.provision` for source/preparation
 status and semantic actions. Its source link routes through the generic

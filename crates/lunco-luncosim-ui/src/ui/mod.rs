@@ -21,6 +21,7 @@ use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::{MenuCtx, PanelCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
 
 mod camera_feed;
+mod camera_feed_images;
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
 mod code_panel;
@@ -178,6 +179,10 @@ pub struct LunCoSimUiPlugin {
 /// Bevy UI render pass and a scene camera, so authored HUDs must use the same
 /// HUI/Flair and exposure path in both modes.
 pub fn add_runtime_ui_layer(app: &mut App) {
+    if !app.is_plugin_added::<lunco_capture::camera_feed::CameraFeedPlugin>() {
+        app.add_plugins(lunco_capture::camera_feed::CameraFeedPlugin);
+    }
+    camera_feed_images::install(app);
     app.add_plugins(runtime_ui::RuntimeUiPlugin)
         .add_systems(Update, sync_runtime_ui_capture_state)
         .add_systems(

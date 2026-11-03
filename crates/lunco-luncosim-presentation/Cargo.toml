@@ -9,6 +9,7 @@ description = "LunCoSim application presentation bridges and streamed-terrain vi
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_camera"] }
 big_space = { workspace = true }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }

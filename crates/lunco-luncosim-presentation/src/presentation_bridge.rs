@@ -890,6 +890,10 @@ fn report_scene_spawn_status(
     awaiting: Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
     projecting: Query<(), With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>>,
     pending_meshes: Query<(), With<lunco_usd_bevy_scene::UsdSceneGeometryPending>>,
+    globes: Query<
+        Option<&lunco_celestial_spatial::GlobeVisualReadiness>,
+        With<lunco_celestial_spatial::GlobeLod>,
+    >,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
     // choice on a binary that still has the `ui` feature compiled in.
@@ -901,6 +905,10 @@ fn report_scene_spawn_status(
     let pending = awaiting.iter().count();
     let projecting = projecting.iter().count();
     let pending_meshes = pending_meshes.iter().count();
+    let pending_globes = globes
+        .iter()
+        .filter(|ready| ready.is_none_or(|ready| !ready.complete_cover))
+        .count();
     if matches!(
         coordinator.active(),
         Some(lunco_core::SceneTransition::Clear)
@@ -932,10 +940,10 @@ fn report_scene_spawn_status(
             0,
             0,
         );
-    } else if pending_meshes > 0 {
+    } else if pending_meshes > 0 || pending_globes > 0 {
         bus.set_progress(
             VISUAL_SOURCE,
-            format!("streaming scene visuals ({pending_meshes} meshes pending)"),
+            format!("streaming scene visuals ({pending_meshes} meshes, {pending_globes} planetary surfaces pending)"),
             0,
             0,
         );

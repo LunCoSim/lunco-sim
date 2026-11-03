@@ -2304,6 +2304,14 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
         let sampling = world.get_resource::<lunco_render::OfflineImageSampling>();
         let renderer = world.get_resource::<lunco_render::RendererStatus>();
         let failure = world.get_resource::<OfflineRecordingFailure>();
+        let bus = world.get_resource::<lunco_status_core::status_bus::StatusBus>();
+        let mut visual_pending_reasons: Vec<String> = bus
+            .into_iter()
+            .flat_map(|bus| bus.active_progress())
+            .filter(|event| VISUAL_BUSY_SOURCES.contains(&event.source))
+            .map(|event| format!("{}: {}", event.source, event.message))
+            .collect();
+        visual_pending_reasons.sort();
         Ok(Some(lunco_api_core::api_value!({
             "active": state.active,
             "frame_index": state.frame_index,
@@ -2313,6 +2321,8 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
             "pending": world.contains_resource::<PendingShotStart>(),
             "ui_presentation_required": ui.is_some(),
             "ui_presentation_ready": ui.is_none_or(|ui| ui.ready()),
+            "visual_preparation_ready": !visual_work_pending(bus),
+            "visual_pending_reasons": visual_pending_reasons,
             "render_samples": sampling.map(|sampling| sampling.completed_samples),
             "render_samples_ready": sampling.map(|sampling| sampling.ready),
             "render_sampling_error": sampling.and_then(|sampling| sampling.error.clone()),

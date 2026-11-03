@@ -87,6 +87,15 @@ Use stable `id` attributes and `#id` selectors for authored HUI nodes. Flair
 supports class selectors, but HUI 0.7 does not turn an HTML `class` attribute
 into a `ClassList`; it treats that attribute as an unknown style property.
 
+For a live camera inset, bind the existing feed with `tag:camera_feed="1"`
+inside an admitted surface. A descendant may project an exact subject path
+with `tag:camera_marker="/World/Site"`. Use snake_case tag keys, explicit
+feed selection and dimensions. Require `minimum_scene_items` when an empty
+view is invalid. Verify frame zero, missing-source capture blocking and source
+restoration; `visual_pending_reasons` reports that gate. See the native image
+contract in `docs/architecture/runtime-authored-ui.md`. Never replace it with
+periodic screenshots or world-space guide crosses.
+
 Project-owned visibility policy belongs in the active Twin manifest's generic
 `[settings]` table. A surface declares `setting` plus `setting_default` in
 `runtime_surfaces.json`; Rhai reads/writes the same scope with
