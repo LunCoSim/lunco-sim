@@ -557,6 +557,53 @@ Modelica-specific compile command. The backend owning the model interprets the
 revision and reports its own rebuild/reset/readiness result, so the same
 authoring pattern remains usable for Rhai, physics, or later tool backends.
 
+For Modelica, author numeric `inputs:k` values against actual scalar parameters
+or runtime inputs. Expression-bound and inherited parameters are supported; a
+source parser's literal-default map is not the parameter inventory. The compiler
+resolves parameter candidates before strict instantiation, so an authored Integer
+dimension can supply a parameter without a source default. Boolean values must be
+exactly zero or one and Integer values must be exactly representable integers.
+The checked DAE then validates all supplied scalar names and types. An unknown
+name is a terminal configuration error unless a distinct registered native input
+backend on that entity owns it; a matching output name alone is not proof.
+
+`PrepareInterface` compiles the checked DAE before connected numerical input
+admission. It publishes actual scalar inputs, parameters, readable observables,
+conditional presence and effective units without constructing a solver or
+inventing output samples. Declare USD ports for the intended contract, including
+inherited ports and exported local state values; they are validated against this
+checked interface and registered native owners. Constants, runtime inputs and parameters do
+not become participant outputs; a native output with the same name retains its
+registered owner. A local state exported for reading remains owned by its
+Modelica equations. Bounds awaiting initialization
+remain explicitly unresolved and must not be used as settled physical limits.
+
+Participant construction reuses the same checked DAE when source/root identity,
+unindexed root-bound parameter names and checked structural values match. Tunable changes are
+applied during solver preparation; changing the set of bound names or a
+structural value requires the corresponding variant. Indexed tunable parameter
+overlays are checked against actual scalar identities; indexed structural
+bindings are rejected. Runtime inputs use the initial-input transaction, and
+connected samples take precedence over unconnected authored values.
+
+For coupled initialization, parameter overrides stay on the typed compiler
+transaction under qualified participant names. Input arrays use whole-array
+modifiers emitted from checked aggregate dimensions and scalar order. An omitted
+array element may use only a checked static declaration-binding default; a start
+guess or an initialization-dependent value is insufficient. Incomplete groups
+and indexed aggregate modifier targets fail explicitly.
+
+The current USD scalar-port authoring API cannot name indexed Modelica scalar
+ports. Do not author bracketed `inputs:*` names or infer array wiring support
+from the compiler's indexed parameter-overlay capability. The aggregate policy
+emitter is tested directly; those tests do not establish indexed USD authoring.
+
+Validate overrides through an authored production scene: observe the resulting
+model output, cover an expression-bound and an inherited parameter, and require
+an unknown binding to fail without starting the participant. Inspect the admitted
+solver snapshot for actual override values rather than treating an Inspector
+draft as proof.
+
 USD has **no expressions**. A measured quantity and the transform encoding it are
 two authored numbers you must keep consistent by hand. Author both, and write the
 invariant in a comment — the measurement is the durable record, the transform is

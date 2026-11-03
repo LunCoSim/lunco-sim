@@ -619,6 +619,42 @@ pub(crate) fn render_compile_class_picker(
 
 // ─── on_compile_model ─────────────────────────────────────────────────────
 
+#[cfg(feature = "api")]
+#[derive(Resource, Default)]
+pub struct PendingCompileCommands(Vec<PendingCompileCommand>);
+
+#[cfg(feature = "api")]
+struct PendingCompileCommand {
+    command_id: Option<u64>,
+    correlation_id: Option<u64>,
+    reply: lunco_modelica_runtime::ModelicaCompileReply,
+}
+
+#[cfg(feature = "api")]
+fn finish_compile_commands(world: &mut World) {
+    let mut completed = Vec::new();
+    world
+        .resource_mut::<PendingCompileCommands>()
+        .0
+        .retain(|pending| {
+            if let Some(result) = pending.reply.try_take() {
+                completed.push((pending.command_id, pending.correlation_id, result));
+                false
+            } else {
+                true
+            }
+        });
+    for (command_id, correlation_id, result) in completed {
+        lunco_api::executor::finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            result.map(|_| Ack::new(OpId::new())),
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        );
+    }
+}
+
 #[on_command(CompileModel)]
 pub fn on_compile_model(
     trigger: On<CompileModel>,
@@ -629,61 +665,75 @@ pub fn on_compile_model(
     mut picker: ResMut<CompileClassPickerState>,
     model_tabs: Res<crate::model_tabs::ModelTabs>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    #[cfg(feature = "api")] active_id: Option<Res<ActiveCommandId>>,
+    #[cfg(feature = "api")] pending_request: Option<Res<PendingApiRequest>>,
+    #[cfg(feature = "api")] mut pending: ResMut<PendingCompileCommands>,
+    #[cfg(feature = "api")] mut commands: Commands,
 ) {
     let request = trigger.event();
-    let doc = if request.doc_id.is_unassigned() {
-        let Some(active) = workspace
-            .as_ref()
-            .and_then(|workspace| workspace.active_document)
-        else {
-            console.error("Compile failed: no active Modelica document".to_owned());
-            return;
+    #[cfg(feature = "api")]
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending_request
+        .as_ref()
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    #[cfg(feature = "api")]
+    let external = command_id.is_some() || correlation_id.is_some();
+    #[cfg(not(feature = "api"))]
+    let external = false;
+    let mut resolved_doc = None;
+    let admission = (|| -> Result<Option<lunco_modelica_runtime::CompileRequested>, String> {
+        let doc = if request.doc_id.is_unassigned() {
+            workspace
+                .as_ref()
+                .and_then(|workspace| workspace.active_document)
+                .ok_or("Compile failed: no active Modelica document")?
+        } else {
+            request.doc_id
         };
-        active
-    } else {
-        request.doc_id
-    };
-    let Some(host) = registry.host(doc) else {
-        let message = format!("Compile failed: Modelica document {doc} is not open");
-        compile_states.set_error_message(doc, message.clone());
-        console.error(message);
-        return;
-    };
-    let document = host.document();
-    if document.syntax_is_stale() || document.ast_is_stale() {
-        console.error(format!(
-            "Compile deferred: Modelica source analysis for document {doc} is still running"
-        ));
-        return;
-    }
-    let candidates = document.index().simulation_candidates();
-    let preferred_count = document.index().simulation_preferred_count();
-    let detected_first_class = candidates.first().cloned();
-    let drilled_in_class = model_tabs.drilled_class_for_doc(doc);
-    let chosen_via_explicit = if let Some(class) = request.class.as_ref() {
-        match crate::sim_target::resolve_requested_class(
-            class,
-            &candidates,
-            document.index().within_path.as_deref(),
-        ) {
-            Ok(class) => Some(class),
-            Err(error) => {
-                let message = format!(
-                    "Compile failed: class `{class}` {error}. Candidates: [{}]",
-                    candidates.join(", ")
-                );
-                compile_states.set_error_message(doc, message.clone());
-                console.error(message);
-                return;
-            }
+        resolved_doc = Some(doc);
+        let host = registry
+            .host(doc)
+            .ok_or_else(|| format!("Compile failed: Modelica document {doc} is not open"))?;
+        let document = host.document();
+        if document.syntax_is_stale() || document.ast_is_stale() {
+            return Err(format!(
+                "Compile rejected: Modelica source analysis for document {doc} is still running"
+            ));
         }
-    } else {
-        None
-    };
-
-    if chosen_via_explicit.is_none() && drilled_in_class.is_none() {
-        let need_picker = preferred_count != 1 && candidates.len() >= 2;
-        if need_picker {
+        let candidates = document.index().simulation_candidates();
+        let preferred_count = document.index().simulation_preferred_count();
+        let detected_first_class = candidates.first().cloned();
+        let drilled_in_class = model_tabs.drilled_class_for_doc(doc);
+        let chosen_via_explicit = request
+            .class
+            .as_ref()
+            .map(|class| {
+                crate::sim_target::resolve_requested_class(
+                    class,
+                    &candidates,
+                    document.index().within_path.as_deref(),
+                )
+                .map_err(|error| {
+                    format!(
+                        "Compile failed: class `{class}` {error}. Candidates: [{}]",
+                        candidates.join(", ")
+                    )
+                })
+            })
+            .transpose()?;
+        if chosen_via_explicit.is_none()
+            && drilled_in_class.is_none()
+            && preferred_count != 1
+            && candidates.len() >= 2
+        {
+            if external {
+                return Err(format!(
+                    "Compile requires an explicit class; choose one of [{}]",
+                    candidates.join(", ")
+                ));
+            }
             if picker.0.as_ref().map(|entry| entry.doc) != Some(doc) {
                 picker.0 = Some(CompileClassPickerEntry {
                     doc,
@@ -692,38 +742,62 @@ pub fn on_compile_model(
                     purpose: PickerPurpose::Compile,
                 });
             }
-            return;
+            return Ok(None);
+        }
+        let model_name = chosen_via_explicit
+            .or(drilled_in_class)
+            .or(detected_first_class)
+            .ok_or("Compile failed: Could not find a valid Modelica model declaration.")?;
+        let source = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+            doc,
+            workspace.as_deref().map(|workspace| &workspace.0),
+        )?;
+        Ok(Some(lunco_modelica_runtime::CompileRequested {
+            completions: Vec::new(),
+            source,
+            entity: None,
+            class: Some(model_name),
+            force: request.force,
+            resume_after_compile: request.resume_after_compile,
+        }))
+    })();
+    match admission {
+        Ok(Some(request)) => {
+            #[cfg(feature = "api")]
+            let request = {
+                let mut request = request;
+                if external {
+                    let (completion, reply) =
+                        lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+                    request.completions.push(completion);
+                    pending.0.push(PendingCompileCommand {
+                        command_id,
+                        correlation_id,
+                        reply,
+                    });
+                }
+                request
+            };
+            requests.write(request);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(doc) = resolved_doc {
+                compile_states.set_error_message(doc, error.clone());
+            }
+            console.error(error.clone());
+            #[cfg(feature = "api")]
+            commands.queue(move |world: &mut World| {
+                lunco_api::executor::finish_command_result(
+                    world,
+                    command_id,
+                    correlation_id,
+                    Err(error),
+                    lunco_api_core::ApiErrorCode::CommandRejected,
+                );
+            });
         }
     }
-
-    let Some(model_name) = chosen_via_explicit
-        .or(drilled_in_class)
-        .or(detected_first_class)
-    else {
-        let message =
-            "Compile failed: Could not find a valid Modelica model declaration.".to_owned();
-        compile_states.set_error_message(doc, message.clone());
-        console.error(message);
-        return;
-    };
-    let source = match lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
-        doc,
-        workspace.as_deref().map(|workspace| &workspace.0),
-    ) {
-        Ok(source) => source,
-        Err(error) => {
-            compile_states.set_error_message(doc, error.clone());
-            console.error(error);
-            return;
-        }
-    };
-    requests.write(lunco_modelica_runtime::CompileRequested {
-        source,
-        entity: None,
-        class: Some(model_name),
-        force: request.force,
-        resume_after_compile: request.resume_after_compile,
-    });
 }
 
 // ─── Run-control + FastRun typed commands & observers ────────────────────
@@ -1886,6 +1960,10 @@ impl Plugin for CompileCommandsPlugin {
         app.register_deferred_command::<RunExperiment>();
         #[cfg(feature = "api")]
         app.register_deferred_command::<ResetActiveModel>();
+        #[cfg(feature = "api")]
+        app.register_deferred_command::<CompileModel>()
+            .init_resource::<PendingCompileCommands>()
+            .add_systems(Update, finish_compile_commands);
     }
 }
 

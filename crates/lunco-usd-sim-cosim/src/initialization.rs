@@ -1,8 +1,8 @@
 //! Coupled t=0 admission for connected Modelica participants.
 //!
-//! A paused, transient Modelica composite solves the initial equations at one
-//! physical coordinate. The ordinary worker constructs live participants only
-//! after the result is certified against the exact source and wiring snapshot.
+//! An initialization-only worker job solves the initial equations at one
+//! physical coordinate. Its result admits live construction; the coordinator
+//! certifies the resulting participants against that source and wiring snapshot.
 
 use super::*;
 use lunco_cosim_core::initialization::{
@@ -30,11 +30,93 @@ struct Member {
     uri: String,
     source: String,
     class: String,
+    interface_revision: u64,
     outputs: BTreeSet<String>,
-    bindings: BTreeMap<String, String>,
+    bindings: Vec<InputBinding>,
+    parameters: BTreeMap<String, f64>,
     handle: Option<Handle<ModelicaSource>>,
     authored: BTreeMap<String, u64>,
     resume: bool,
+}
+
+/// One complete checked input aggregate. Policy owns array-literal syntax.
+#[derive(Clone, Debug, PartialEq)]
+struct InputBinding {
+    name: String,
+    dimensions: Vec<u32>,
+    values: Vec<String>,
+}
+
+fn input_bindings(
+    path: &str,
+    interface: &lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface,
+    mut values: BTreeMap<String, String>,
+) -> Result<Vec<InputBinding>, String> {
+    use lunco_modelica_ast::resolved_interface::{ModelicaInputDefaults, ModelicaScalarValue};
+    let mut bindings = Vec::new();
+    for group in &interface.input_groups {
+        if !group
+            .scalar_names
+            .iter()
+            .any(|name| values.contains_key(name))
+        {
+            continue;
+        }
+        if group.aggregate_name_is_indexed {
+            return Err(format!(
+                "{path}.{} requires an indexed aggregate modifier, which coupled initialization cannot represent",
+                group.name
+            ));
+        }
+        let count = group
+            .dimensions
+            .iter()
+            .try_fold(1usize, |count, size| count.checked_mul(*size as usize))
+            .ok_or_else(|| format!("{path}.{} input shape overflows", group.name))?;
+        if count != group.scalar_names.len() {
+            return Err(format!(
+                "{path}.{} checked input shape and scalar order disagree",
+                group.name
+            ));
+        }
+        let mut elements = Vec::with_capacity(count);
+        for (index, name) in group.scalar_names.iter().enumerate() {
+            if let Some(value) = values.remove(name) {
+                elements.push(value);
+                continue;
+            }
+            let Some(ModelicaInputDefaults::Known(defaults)) = &group.default_values else {
+                return Err(format!(
+                    "{path}.{name} has no admitted scalar binding or checked static declaration default; a partial array binding cannot replace its aggregate default"
+                ));
+            };
+            if defaults.len() != count {
+                return Err(format!(
+                    "{path}.{} checked default and scalar order disagree",
+                    group.name
+                ));
+            }
+            let kind = group
+                .scalar_type
+                .ok_or_else(|| format!("{path}.{name} has no checked primitive type"))?;
+            elements.push(
+                ModelicaScalarValue::from_numeric(kind, defaults[index])
+                    .map_err(|error| format!("{path}.{name}: {error}"))?
+                    .source(),
+            );
+        }
+        bindings.push(InputBinding {
+            name: group.name.clone(),
+            dimensions: group.dimensions.clone(),
+            values: elements,
+        });
+    }
+    if let Some((name, _)) = values.first_key_value() {
+        return Err(format!(
+            "{path}.{name} has no checked input aggregate owner"
+        ));
+    }
+    Ok(bindings)
 }
 
 // A unit definition can change without rewriting the edge. Certification must
@@ -59,13 +141,14 @@ struct Plan {
 }
 
 struct Job {
-    actor: Entity,
+    request_id: lunco_modelica_runtime::ModelicaPreparationId,
     plan: Plan,
 }
 
 struct Certificate {
     plan: Plan,
     values: BTreeMap<Entity, Vec<(String, f64)>>,
+    states: BTreeMap<Entity, Vec<(String, f64)>>,
     receipt: Option<CoupledInitializationReceipt>,
 }
 
@@ -86,6 +169,7 @@ pub fn last_coupled_initialization(world: &World) -> Option<&CoupledInitializati
 
 #[derive(Resource, Default)]
 pub(super) struct CoupledInitialization {
+    failed: bool,
     job: Option<Job>,
     certificate: Option<Certificate>,
     last_completed: Option<CoupledInitializationReceipt>,
@@ -148,10 +232,31 @@ impl Plan {
                                         member
                                             .bindings
                                             .iter()
-                                            .map(|(name, value)| {
+                                            .map(|binding| {
                                                 map([
-                                                    ("name", string(name)),
-                                                    ("value", string(value)),
+                                                    ("name", string(&binding.name)),
+                                                    (
+                                                        "dimensions",
+                                                        HookValue::Array(
+                                                            binding
+                                                                .dimensions
+                                                                .iter()
+                                                                .map(|size| {
+                                                                    HookValue::Int(i64::from(*size))
+                                                                })
+                                                                .collect(),
+                                                        ),
+                                                    ),
+                                                    (
+                                                        "values",
+                                                        HookValue::Array(
+                                                            binding
+                                                                .values
+                                                                .iter()
+                                                                .map(string)
+                                                                .collect(),
+                                                        ),
+                                                    ),
                                                 ])
                                             })
                                             .collect(),
@@ -321,7 +426,16 @@ impl InitialExpressions<'_> {
             .registry
             .initial_expression(self.world, entity, name, direction)?
         {
-            PortInitialSource::Pending => return Ok(None),
+            PortInitialSource::Pending => {
+                debug!(
+                    ?entity,
+                    name,
+                    input,
+                    symbolic = !self.members.is_empty(),
+                    "initialization port owner is pending"
+                );
+                return Ok(None);
+            }
             PortInitialSource::Sample => None,
             PortInitialSource::Expression(expression) => Some(expression),
         };
@@ -357,6 +471,13 @@ impl InitialExpressions<'_> {
             name,
             input,
         ) else {
+            debug!(
+                ?entity,
+                name,
+                input,
+                symbolic = !self.members.is_empty(),
+                "initialization port sample is pending"
+            );
             return Ok(None);
         };
         if !value.is_finite() {
@@ -439,8 +560,19 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
     let mut candidates = candidates;
     candidates.sort_by(|a, b| a.1.cmp(&b.1));
     let mut members = Vec::new();
+    let mut scalar_bindings = Vec::new();
     let mut input_names = BTreeMap::new();
-    for (entity, path, inputs, pending, generated, model) in candidates {
+    for (entity, path, _, pending, generated, model) in candidates {
+        let resolved = world
+            .get::<ResolvedUsdModelicaInterface>(entity)
+            .ok_or_else(|| format!("{path} has no admitted resolved Modelica interface"))?
+            .clone();
+        if !resolved.matches_authored(world.get::<UsdInputDefaults>(entity)) {
+            return Err(format!(
+                "{path} authored bindings changed after interface admission"
+            ));
+        }
+        let inputs = resolved.inputs.clone();
         if world.get::<ConsistentInitialInputs>(entity).is_some()
             || world
                 .get::<lunco_port_core::PortSurfacePending>(entity)
@@ -461,67 +593,66 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
         } else {
             (None, model.as_ref().is_some_and(|(_, _, resume)| *resume))
         };
-        let (uri, source, class, session, outputs, parameters) =
-            if let Some((handle, uri, session, _)) = pending {
-                let Some(source) = world.resource::<Assets<ModelicaSource>>().get(&handle) else {
-                    return Ok(None);
-                };
-                let Some(name) = source.interface.model_name.as_ref() else {
-                    return Ok(None);
-                };
-                let class = match source
-                    .interface
-                    .within
-                    .as_deref()
-                    .filter(|within| !within.is_empty())
-                {
-                    Some(within) if !name.starts_with(&format!("{within}.")) => {
-                        format!("{within}.{name}")
-                    }
-                    _ => name.clone(),
-                };
-                (
-                    uri,
-                    source.text.clone(),
-                    class,
-                    session,
-                    source.interface.outputs.clone(),
-                    source
-                        .interface
-                        .parameters
-                        .keys()
-                        .cloned()
-                        .collect::<BTreeSet<_>>(),
-                )
-            } else if let (Some(generated), Some((class, session, _))) = (generated, model.as_ref())
-            {
-                if let Some(error) = generated.projection_error {
-                    return Err(error);
-                }
-                let contract = world
-                    .get::<UsdModelicaPortContract>(entity)
-                    .ok_or_else(|| {
-                        format!("{path} has no required generated Modelica port contract")
-                    })?;
-                (
-                    generated.doc_uri,
-                    generated.source,
-                    class.clone(),
-                    *session,
-                    contract.outputs.clone(),
-                    BTreeSet::new(),
-                )
-            } else {
+        let (uri, source, class, session) = if let Some((handle, uri, session, _)) = pending {
+            let Some(source) = world.resource::<Assets<ModelicaSource>>().get(&handle) else {
                 return Ok(None);
             };
+            if !resolved.matches(session, &uri, &source.text) {
+                return Err(format!(
+                    "{path} source changed after resolved interface admission"
+                ));
+            }
+            (
+                uri,
+                source.text.clone(),
+                resolved.outcome.interface.model_name.clone(),
+                session,
+            )
+        } else if let (Some(generated), Some((class, session, _))) = (generated, model.as_ref()) {
+            if let Some(error) = generated.projection_error {
+                return Err(error);
+            }
+            if !resolved.matches(*session, &resolved.outcome.doc_uri, &generated.source)
+                || resolved.outcome.interface.model_name != *class
+            {
+                return Err(format!(
+                    "{path} generated source changed after resolved interface admission"
+                ));
+            }
+            (
+                resolved.outcome.doc_uri.clone(),
+                generated.source,
+                class.clone(),
+                *session,
+            )
+        } else {
+            return Ok(None);
+        };
+        let outputs = resolved.outputs.clone();
+        let parameters = &resolved.parameters;
         let mut bindings = BTreeMap::new();
+        let mut parameter_values = BTreeMap::new();
         if let Some(defaults) = world.get::<UsdInputDefaults>(entity) {
             for (name, value) in &defaults.0 {
                 if inputs.contains(name) || parameters.contains(name) {
-                    if !value.is_finite() {
-                        return Err(format!("{path}.{name} initial value is not finite"));
+                    let declaration = resolved
+                        .outcome
+                        .interface
+                        .declarations
+                        .get(name)
+                        .ok_or_else(|| format!("{path}.{name} lost its resolved declaration"))?;
+                    let binding = declaration
+                        .numeric_binding_source(*value)
+                        .map_err(|error| format!("{path}.{name}: {error}"))?;
+                    if parameters.contains(name) {
+                        parameter_values.insert(name.clone(), *value);
+                    } else {
+                        bindings.insert(name.clone(), binding);
                     }
-                    bindings.insert(name.clone(), value.to_string());
+                } else if !resolved.native_inputs.contains(name) {
+                    return Err(format!(
+                        "{path}.{name} has no Modelica or registered native input owner"
+                    ));
                 }
             }
         }
@@ -536,6 +667,7 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
                     .collect()
             })
             .unwrap_or_default();
+        scalar_bindings.push(bindings);
         members.push(Member {
             entity,
             path,
@@ -543,8 +675,10 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
             uri,
             source,
             class,
+            interface_revision: resolved.outcome.library_revision,
             outputs,
-            bindings,
+            bindings: Vec::new(),
+            parameters: parameter_values,
             handle,
             authored,
             resume,
@@ -610,14 +744,20 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
     }
     let mut probes = Vec::new();
     for ((index, name), terms) in sums {
-        members[index]
-            .bindings
-            .insert(name.clone(), terms.join(" + "));
+        scalar_bindings[index].insert(name.clone(), terms.join(" + "));
         probes.push((
             members[index].entity,
             name.clone(),
             format!("p{index}.{name}"),
         ));
+    }
+    for (member, values) in members.iter_mut().zip(scalar_bindings) {
+        let interface = &world
+            .get::<ResolvedUsdModelicaInterface>(member.entity)
+            .ok_or_else(|| format!("{} lost its checked interface", member.path))?
+            .outcome
+            .interface;
+        member.bindings = input_bindings(&member.path, interface, values)?;
     }
     let wires = wire_snapshot(world);
     Ok(Some(Plan {
@@ -629,6 +769,9 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
 }
 
 fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String> {
+    if !world.contains_resource::<ModelicaChannels>() {
+        return Err("Modelica construction channels retired during certification".into());
+    }
     if world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation)
@@ -637,7 +780,17 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
     {
         return Err("scene or wiring changed during coupled initialization".into());
     }
+    let mut waiting = false;
     for member in &certificate.plan.members {
+        if world
+            .get::<ResolvedUsdModelicaInterface>(member.entity)
+            .is_none_or(|interface| interface.outcome.library_revision != member.interface_revision)
+        {
+            return Err(format!(
+                "{} prepared interface retired during initialization",
+                member.path
+            ));
+        }
         let authored: BTreeMap<_, _> = world
             .get::<UsdInputDefaults>(member.entity)
             .map(|defaults| {
@@ -665,17 +818,70 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
             ));
         }
         let Some(model) = world.get::<ModelicaModel>(member.entity) else {
-            return Ok(false);
+            if world
+                .get::<PendingModelicaSource>(member.entity)
+                .is_some_and(|pending| {
+                    member.handle.as_ref() == Some(&pending.handle)
+                        && member.uri == pending.asset_path
+                        && member.session == pending.session_id
+                })
+            {
+                waiting = true;
+                continue;
+            }
+            return Err(format!(
+                "{} initialization participant retired before construction completed",
+                member.path
+            ));
         };
         if let Some(error) = &model.last_error {
             return Err(error.clone());
         }
         if !model.is_compiled {
-            return Ok(false);
+            waiting = true;
+            continue;
+        }
+        let expected_session = world
+            .get::<CoupledInitializationPending>(member.entity)
+            .and_then(|pending| pending.expected_session);
+        if expected_session != Some(model.session_id)
+            || member.handle.is_none() && model.model_name != member.class
+        {
+            return Err(format!(
+                "{} initialization participant was replaced before certification",
+                member.path
+            ));
         }
         if model.current_time != 0.0 {
             return Err("participant advanced before initialization certification".into());
         }
+        let snapshot = model
+            .live_solver_snapshot
+            .as_ref()
+            .ok_or_else(|| format!("{} initialized without a construction receipt", member.path))?;
+        if let Some(receipt) = &certificate.receipt {
+            if snapshot.admitted_library_revision != receipt.solver.admitted_library_revision {
+                return Err(format!(
+                    "{} source-root revision changed during initialization",
+                    member.path
+                ));
+            }
+        }
+        for (name, expected) in certificate.values.get(&member.entity).into_iter().flatten() {
+            if !snapshot
+                .initial_inputs
+                .iter()
+                .any(|(input, value)| input == name && value.to_bits() == expected.to_bits())
+            {
+                return Err(format!(
+                    "{}.{} constructor did not consume its admitted initial input",
+                    member.path, name
+                ));
+            }
+        }
+    }
+    if waiting {
+        return Ok(false);
     }
     let mut query = world.query::<&SimConnection>();
     let mut wires: Vec<_> = query.iter(world).cloned().collect();
@@ -700,6 +906,43 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
             .as_ref()
             .ok_or("initialized participant has no solver settings")?
             .parameters;
+        let states = certificate.states.get(&member.entity);
+        let snapshot = model
+            .live_solver_snapshot
+            .as_ref()
+            .ok_or("initialized participant has no construction receipt")?;
+        for (name, value) in &snapshot.initial_state_constraints {
+            if !states
+                .into_iter()
+                .flatten()
+                .any(|(state, expected)| state == name && expected.to_bits() == value.to_bits())
+            {
+                return Err(format!(
+                    "{}.{} constructor used an unadmitted state constraint",
+                    member.path, name
+                ));
+            }
+        }
+        let variables = world
+            .get::<ModelicaVariables>(member.entity)
+            .ok_or("initialized participant has no required state observation")?;
+        for (name, expected) in states.into_iter().flatten() {
+            let value = variables
+                .values
+                .get(name)
+                .copied()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| {
+                    format!("{}.{} has no finite reconstructed state", member.path, name)
+                })?;
+            let tolerance = parameters.atol + parameters.rtol * expected.abs().max(value.abs());
+            if !tolerance.is_finite() || tolerance < 0.0 || (value - expected).abs() > tolerance {
+                return Err(format!(
+                    "{}.{} initialized state differs: solved {expected}, observed {value}",
+                    member.path, name
+                ));
+            }
+        }
         for (name, expected) in certificate.values.get(&member.entity).into_iter().flatten() {
             // Resolve the actual wired sources through the same initial-equation
             // contract, including native derived outputs, at the settled t=0.
@@ -726,10 +969,18 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
 
 fn fail(world: &mut World, plan: &Plan, error: String) {
     error!("[usd-cosim] coupled initialization failed: {error}");
+    world.resource_mut::<CoupledInitialization>().failed = true;
     for member in &plan.members {
+        if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+            let _ = channels.tx.send(ModelicaCommand::Despawn {
+                entity: member.entity,
+            });
+        }
         if let Some(mut model) = world.get_mut::<ModelicaModel>(member.entity) {
             model.last_error = Some(error.clone());
             model.is_compiling = false;
+            model.is_stepping = false;
+            model.pending_step_inputs = None;
             model.resume_after_compile = false;
             model.paused = true;
         }
@@ -738,6 +989,8 @@ fn fail(world: &mut World, plan: &Plan, error: String) {
         }
         if let Ok(mut entity) = world.get_entity_mut(member.entity) {
             entity.remove::<PendingModelicaSource>();
+            entity.remove::<ConsistentInitialInputs>();
+            entity.remove::<CoupledInitializationPending>();
         }
     }
     if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
@@ -785,38 +1038,79 @@ pub(super) fn coordinate(world: &mut World) {
     }
     let job = world.resource_mut::<CoupledInitialization>().job.take();
     if let Some(job) = job {
-        let model = world.get::<ModelicaModel>(job.actor);
-        let outcome = model.and_then(|model| {
-            model
-                .last_error
-                .clone()
-                .map(Err)
-                .or_else(|| model.is_compiled.then(|| Ok(())))
-        });
-        let Some(outcome) = outcome else {
+        let Some(mut preparations) =
+            world.get_resource_mut::<super::preparations::ModelicaPreparations>()
+        else {
+            fail(
+                world,
+                &job.plan,
+                "Modelica preparation owner retired".into(),
+            );
+            return;
+        };
+        let Some(outcome) = preparations.take(job.request_id) else {
             world.resource_mut::<CoupledInitialization>().job = Some(job);
             return;
         };
+        let outcome = outcome.and_then(|outcome| match outcome {
+            lunco_modelica_runtime::ModelicaPreparationOutcome::Initialization(result) => {
+                Ok(result)
+            }
+            _ => Err("initialization request received a different preparation purpose".into()),
+        });
         // Source identity, parameters, current physical samples and every wire
         // are compared before accepting a worker result, including its order.
         match capture(world) {
             Ok(Some(current)) if current == job.plan => {
-                let values = world
-                    .get::<ModelicaVariables>(job.actor)
-                    .map(|vars| vars.values.clone());
-                let outcome = outcome.and_then(|()| {
-                    let receipt = world.get::<ModelicaModel>(job.actor).and_then(|model| {
-                        Some(CoupledInitializationReceipt {
-                            scene_generation: job.plan.generation,
-                            solver: model.live_solver_snapshot.clone()?,
-                            construction_profile: model.construction_profile?,
-                        })
+                let outcome = outcome.and_then(|result| {
+                    let expected_revision = job
+                        .plan
+                        .members
+                        .first()
+                        .map(|member| member.interface_revision);
+                    if expected_revision.is_none()
+                        || result.solver.admitted_library_revision != expected_revision
+                    {
+                        return Err(
+                            "initialization result belongs to a different source-root revision"
+                                .into(),
+                        );
+                    }
+                    if result.values.len() != job.plan.probes.len() {
+                        return Err(
+                            "initialization result probe count differs from its request".into()
+                        );
+                    }
+                    let receipt = Some(CoupledInitializationReceipt {
+                        scene_generation: job.plan.generation,
+                        solver: result.solver,
+                        construction_profile: result.construction_profile,
                     });
-                    let values = values.ok_or("initialization result has no observation")?;
+                    let mut states: BTreeMap<Entity, Vec<(String, f64)>> = BTreeMap::new();
+                    for (name, value) in result.state_values {
+                        if !value.is_finite() {
+                            return Err("initialization result contains a non-finite state".into());
+                        }
+                        let owner = job
+                            .plan
+                            .members
+                            .iter()
+                            .enumerate()
+                            .find_map(|(index, member)| {
+                                name.strip_prefix(&format!("p{index}."))
+                                    .filter(|relative| !relative.is_empty())
+                                    .map(|relative| (member.entity, relative.to_owned()))
+                            })
+                            .ok_or_else(|| {
+                                format!("initial state `{name}` has no admitted member owner")
+                            })?;
+                        states.entry(owner.0).or_default().push((owner.1, value));
+                    }
+                    let values = result.values;
                     let mut inputs: BTreeMap<Entity, Vec<(String, f64)>> = BTreeMap::new();
                     for (index, (entity, name, _)) in job.plan.probes.iter().enumerate() {
                         let value = values
-                            .get(&format!("initial_{index}"))
+                            .get(index)
                             .copied()
                             .filter(|value| value.is_finite())
                             .ok_or("initialization result has no finite input observation")?;
@@ -828,12 +1122,19 @@ pub(super) fn coordinate(world: &mut World) {
                     for member in &job.plan.members {
                         world
                             .entity_mut(member.entity)
-                            .insert(CoupledInitializationPending);
-                        if let Some(values) = inputs.get(&member.entity) {
-                            world
-                                .entity_mut(member.entity)
-                                .insert(ConsistentInitialInputs(values.clone()));
-                        }
+                            .insert(CoupledInitializationPending {
+                                expected_session: member.handle.as_ref().map(|_| member.session),
+                            });
+                        world
+                            .entity_mut(member.entity)
+                            .insert(ConsistentInitialInputs(
+                                lunco_cosim_core::initialization::InitialInputAdmission {
+                                    inputs: inputs.get(&member.entity).cloned().unwrap_or_default(),
+                                    state_values: Some(
+                                        states.get(&member.entity).cloned().unwrap_or_default(),
+                                    ),
+                                },
+                            ));
                         if let Some(mut model) = world.get_mut::<ModelicaModel>(member.entity) {
                             model.paused = true;
                         }
@@ -841,6 +1142,7 @@ pub(super) fn coordinate(world: &mut World) {
                     world.resource_mut::<CoupledInitialization>().certificate = Some(Certificate {
                         plan: job.plan.clone(),
                         values: inputs,
+                        states,
                         receipt,
                     });
                     Ok(())
@@ -854,13 +1156,13 @@ pub(super) fn coordinate(world: &mut World) {
                 debug!("[usd-cosim] discarded superseded coupled initialization");
             }
         }
-        world.despawn(job.actor);
         return;
     }
     let plan = match capture(world) {
         Ok(Some(plan)) => plan,
         Ok(None) => return,
         Err(error) => {
+            world.resource_mut::<CoupledInitialization>().failed = true;
             if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
                 faults.raise(
                     "modelica-initialization-failed",
@@ -914,33 +1216,66 @@ pub(super) fn coordinate(world: &mut World) {
         .iter()
         .map(|member| (member.uri.clone(), member.source.clone()))
         .collect();
-    let actor = world
-        .spawn(ModelicaModel {
-            model_name: "LunCoCoupledInitialization".into(),
-            source_uri: "generated://coupled-initialization.mo".into(),
-            session_id: 1,
-            paused: true,
-            is_compiling: true,
-            ..default()
-        })
-        .id();
+    let Some(first) = plan.members.first() else {
+        fail(world, &plan, "initialization plan has no members".into());
+        return;
+    };
+    let library_revision = first.interface_revision;
+    if plan
+        .members
+        .iter()
+        .any(|member| member.interface_revision != library_revision)
+    {
+        fail(
+            world,
+            &plan,
+            "initialization interfaces belong to different source-root revisions".into(),
+        );
+        return;
+    }
+    let request_id = match world
+        .resource_mut::<super::preparations::ModelicaPreparations>()
+        .allocate(plan.generation)
+    {
+        Ok(id) => id,
+        Err(error) => {
+            fail(world, &plan, error);
+            return;
+        }
+    };
     let sent = world
         .resource::<ModelicaChannels>()
         .tx
-        .send(ModelicaCommand::Compile {
-            entity: actor,
-            session_id: 1,
-            execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Scene,
+        .send(ModelicaCommand::Initialize {
+            request_id,
+            expected_library_revision: Some(library_revision),
             model_name: "LunCoCoupledInitialization".into(),
             source,
-            realtime_safe: false,
             doc_uri: "generated://coupled-initialization.mo".into(),
             extra_sources: sources.into_iter().collect(),
-            parameter_overrides: Vec::new(),
+            authored_bindings: Default::default(),
+            parameter_overrides: plan
+                .members
+                .iter()
+                .enumerate()
+                .flat_map(|(index, member)| {
+                    member
+                        .parameters
+                        .iter()
+                        .map(move |(name, value)| (format!("p{index}.{name}"), *value))
+                })
+                .collect(),
             initial_inputs: Vec::new(),
+            probes: (0..plan.probes.len())
+                .map(|index| format!("initial_{index}"))
+                .collect(),
         });
     if sent.is_err() {
-        world.despawn(actor);
+        world.resource_scope(
+            |world, mut preparations: Mut<super::preparations::ModelicaPreparations>| {
+                preparations.cancel(request_id, world.get_resource::<ModelicaChannels>());
+            },
+        );
         fail(world, &plan, "Modelica worker channel closed".into());
         return;
     }
@@ -948,7 +1283,7 @@ pub(super) fn coordinate(world: &mut World) {
         "[usd-cosim] solving coupled initialization for {} participant(s)",
         plan.members.len()
     );
-    world.resource_mut::<CoupledInitialization>().job = Some(Job { actor, plan });
+    world.resource_mut::<CoupledInitialization>().job = Some(Job { request_id, plan });
 }
 
 /// Admit initial capture, ready worker outcomes and pending certification.
@@ -957,13 +1292,14 @@ pub(super) fn needed(
     models: Query<&ModelicaModel, (With<UsdSourcedCosim>, With<GeneratedModelicaSource>)>,
     owner: Option<Res<CoupledInitialization>>,
     actors: Query<&ModelicaModel>,
+    preparations: Option<Res<super::preparations::ModelicaPreparations>>,
+    holds: Query<&CoupledInitializationPending>,
 ) -> bool {
+    if owner.as_ref().is_some_and(|owner| owner.failed) {
+        return false;
+    }
     if let Some(job) = owner.as_ref().and_then(|owner| owner.job.as_ref()) {
-        // The coordinator consumes physical observations only after the worker
-        // publishes an outcome; its acceptance boundary revalidates the plan.
-        return actors.get(job.actor).map_or(true, |model| {
-            model.is_compiled || model.last_error.is_some()
-        });
+        return preparations.is_none_or(|preparations| preparations.ready(job.request_id));
     }
     if let Some(certificate) = owner.as_ref().and_then(|owner| owner.certificate.as_ref()) {
         // Certification samples and revalidates once every participant has an
@@ -976,6 +1312,12 @@ pub(super) fn needed(
             if model.last_error.is_some() {
                 return true;
             }
+            if holds.get(member.entity).is_ok_and(|hold| {
+                hold.expected_session
+                    .is_some_and(|session| session != model.session_id)
+            }) {
+                return true;
+            }
             waiting |= !model.is_compiled;
         }
         return !waiting;
@@ -986,11 +1328,30 @@ pub(super) fn needed(
             .any(|model| !model.is_compiled && model.last_error.is_none())
 }
 
-/// Retire the transient worker participant with its owning scene.
+/// Cancel preparation with its owning scene before another scene can publish it.
 pub(super) fn retire(world: &mut World) {
     if let Some(mut owner) = world.remove_resource::<CoupledInitialization>() {
+        if let Some(certificate) = owner.certificate.take() {
+            for member in certificate.plan.members {
+                if let Ok(mut entity) = world.get_entity_mut(member.entity) {
+                    entity.remove::<ConsistentInitialInputs>();
+                    entity.remove::<CoupledInitializationPending>();
+                }
+            }
+        }
         if let Some(job) = owner.job.take() {
-            world.despawn(job.actor);
+            if world.contains_resource::<super::preparations::ModelicaPreparations>() {
+                world.resource_scope(
+                    |world, mut preparations: Mut<super::preparations::ModelicaPreparations>| {
+                        preparations
+                            .cancel(job.request_id, world.get_resource::<ModelicaChannels>());
+                    },
+                );
+            } else if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+                let _ = channels.tx.send(ModelicaCommand::CancelPreparation {
+                    request_id: job.request_id,
+                });
+            }
         }
     }
 }
@@ -999,6 +1360,63 @@ pub(super) fn retire(world: &mut World) {
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn checked_input_aggregate_bindings_preserve_order_and_default_authority() {
+        use lunco_modelica_ast::resolved_interface::{
+            ModelicaInputDefaults, ModelicaInputGroup, ModelicaScalarType,
+            ResolvedModelicaInterface,
+        };
+        let mut interface = ResolvedModelicaInterface {
+            model_name: "ArrayInput".into(),
+            declarations: BTreeMap::new(),
+            input_groups: vec![ModelicaInputGroup {
+                name: "u".into(),
+                dimensions: vec![2],
+                scalar_names: vec!["u[1]".into(), "u[2]".into()],
+                scalar_type: Some(ModelicaScalarType::Real),
+                aggregate_name_is_indexed: false,
+                default_values: Some(ModelicaInputDefaults::Known(vec![4.0, 8.0])),
+            }],
+        };
+        let partial = BTreeMap::from([("u[1]".into(), "p1.sample".into())]);
+        let binding = input_bindings("/Owner", &interface, partial.clone()).unwrap();
+        assert_eq!(
+            binding,
+            vec![InputBinding {
+                name: "u".into(),
+                dimensions: vec![2],
+                values: vec!["p1.sample".into(), "8.0".into()],
+            }]
+        );
+        interface.input_groups[0].default_values =
+            Some(ModelicaInputDefaults::InitializationDependent);
+        assert!(input_bindings("/Owner", &interface, partial.clone()).unwrap_err()
+            .contains("/Owner.u[2] has no admitted scalar binding or checked static declaration default"));
+        interface.input_groups[0].default_values = None;
+        assert!(input_bindings("/Owner", &interface, partial.clone()).is_err());
+        let full = BTreeMap::from([
+            ("u[2]".into(), "p1.second".into()),
+            ("u[1]".into(), "p1.first".into()),
+        ]);
+        assert_eq!(
+            input_bindings("/Owner", &interface, full.clone()).unwrap()[0].values,
+            vec!["p1.first", "p1.second"]
+        );
+        interface.input_groups[0].aggregate_name_is_indexed = true;
+        assert!(
+            input_bindings("/Owner", &interface, full.clone())
+                .unwrap_err()
+                .contains("indexed aggregate modifier")
+        );
+        interface.input_groups[0].aggregate_name_is_indexed = false;
+        interface.input_groups[0].dimensions = vec![2, 2];
+        assert!(
+            input_bindings("/Owner", &interface, full)
+                .unwrap_err()
+                .contains("checked input shape and scalar order disagree")
+        );
+    }
 
     #[test]
     fn certification_waits_for_participant_outcomes() {
@@ -1014,8 +1432,10 @@ mod tests {
                 uri: String::new(),
                 source: String::new(),
                 class: String::new(),
+                interface_revision: 0,
                 outputs: BTreeSet::new(),
-                bindings: BTreeMap::new(),
+                bindings: Vec::new(),
+                parameters: BTreeMap::new(),
                 handle: None,
                 authored: BTreeMap::new(),
                 resume: false,
@@ -1030,6 +1450,7 @@ mod tests {
                     wires: Vec::new(),
                 },
                 values: BTreeMap::new(),
+                states: BTreeMap::new(),
                 receipt: None,
             }),
             ..default()

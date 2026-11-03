@@ -310,12 +310,13 @@ impl Plugin for CoSimPlugin {
             )
                 .chain(),
         );
-        {
+        let participant_ports = {
             let mut registry = app
                 .world_mut()
                 .resource_mut::<lunco_port_core::ports::PortRegistry>();
-            ports::register_builtin_port_backends(&mut registry);
-        }
+            ports::register_builtin_port_backends(&mut registry)
+        };
+        app.insert_resource(participant_ports);
 
         // Avian state ports are detected by component presence through the
         // `AVIAN` spec table. Actuator components additionally publish the

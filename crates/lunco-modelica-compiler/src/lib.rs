@@ -7,8 +7,13 @@
 
 use rumoca_compile::{Session, SessionConfig};
 
+mod interface;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod compiler_heartbeat;
+
+#[cfg(test)]
+mod interface_tests;
 
 const SOURCE_SET_REVISION_VERSION: u32 = 1;
 
@@ -383,12 +388,20 @@ impl PreparedSourceRoot {
     }
 }
 
+/// Authored instance values classified by the compiler's admission owner.
+#[derive(Clone, Debug, Default)]
+pub struct AdmittedModelicaBindings {
+    pub parameter_overrides: Vec<(String, f64)>,
+    pub initial_inputs: Vec<(String, f64)>,
+}
+
 /// Compile Modelica models through one session-owned source-root admission
 /// boundary and one strict reachable-DAE call. Source roots are admitted from
 /// the parsed source before compilation; an unresolved dependency is a terminal
 /// compile error rather than a signal to run the DAE pipeline again.
 pub struct ModelicaCompiler {
     session: Session,
+    last_compile_diagnostics: Option<(String, String, Vec<lunco_doc::Diagnostic>)>,
     /// Top-level package names whose source root is seated in this session —
     /// `"Modelica"`, any structured package under the application search path,
     /// and any other shipped library.
@@ -432,6 +445,9 @@ pub struct ModelicaCompiler {
     /// because the two docs legitimately have different URIs; the session
     /// itself must hold only the active compile's user docs.
     seated_user_uris: std::collections::HashSet<String>,
+    /// Identity and selected class of the currently seated source unit. This
+    /// lets parameter admission and strict compilation share the same parse.
+    seated_source_unit: Option<(lunco_hash::content::Cid, String)>,
     /// Content revisions of the source roots admitted into this session.
     /// These are computed from bytes already read by the admission boundary;
     /// the prepared solve cache uses the aggregate without rescanning disk.
@@ -472,11 +488,13 @@ impl ModelicaCompiler {
     pub fn new() -> Self {
         Self {
             session: Session::new(SessionConfig::default()),
+            last_compile_diagnostics: None,
             installed_roots: std::collections::HashSet::new(),
             source_set_contributions: std::collections::HashMap::new(),
             source_set_order: Vec::new(),
             requested_source_roots: std::collections::HashSet::new(),
             seated_user_uris: std::collections::HashSet::new(),
+            seated_source_unit: None,
             library_revisions: std::collections::HashMap::new(),
             source_root_content_closures: std::collections::HashMap::new(),
             failed_source_roots: std::collections::HashMap::new(),
@@ -612,6 +630,7 @@ impl ModelicaCompiler {
         dae: &rumoca_compile::compile::Dae,
         values: &[(String, f64)],
     ) -> Result<Vec<(String, rumoca_compile::compile::StructuralOverride)>, String> {
+        use lunco_modelica_ast::resolved_interface::{ModelicaScalarType, ModelicaScalarValue};
         use rumoca_compile::compile::StructuralOverride;
         use rumoca_ir_dae::{ScalarType, VariableRole};
         let declarations = dae.inspect(|view| {
@@ -630,31 +649,223 @@ impl ModelicaCompiler {
             .iter()
             .filter_map(|(name, value)| {
                 declarations.get(name).map(|kind| {
-                    if !value.is_finite() {
-                        return Err(format!("structural parameter `{name}` must be finite"));
-                    }
-                    let literal = match kind {
-                        ScalarType::Real => StructuralOverride::Real(*value),
-                        ScalarType::Integer
-                            if *value >= i64::MIN as f64
-                                && *value < -(i64::MIN as f64)
-                                && value.fract() == 0.0 =>
-                        {
-                            StructuralOverride::Int(*value as i64)
-                        }
-                        ScalarType::Boolean if *value == 0.0 || *value == 1.0 => {
-                            StructuralOverride::Bool(*value == 1.0)
-                        }
+                    let kind = match kind {
+                        ScalarType::Real => ModelicaScalarType::Real,
+                        ScalarType::Integer => ModelicaScalarType::Integer,
+                        ScalarType::Boolean => ModelicaScalarType::Boolean,
                         _ => {
                             return Err(format!(
-                                "structural parameter `{name}` requires an exact {kind:?} literal"
+                                "structural parameter `{name}` has nonnumeric type {kind:?}"
                             ));
                         }
+                    };
+                    let literal = match ModelicaScalarValue::from_numeric(kind, *value)
+                        .map_err(|error| format!("structural parameter `{name}`: {error}"))?
+                    {
+                        ModelicaScalarValue::Real(value) => StructuralOverride::Real(value),
+                        ModelicaScalarValue::Integer(value) => StructuralOverride::Int(value),
+                        ModelicaScalarValue::Boolean(value) => StructuralOverride::Bool(value),
                     };
                     Ok((name.clone(), literal))
                 })
             })
             .collect()
+    }
+
+    /// Names whose scalar declaration bindings can be represented by Rumoca's
+    /// root-modification API. Indexed scalar values belong to checked lowering.
+    pub fn parameter_binding_names(values: &[(String, f64)]) -> Result<Vec<String>, String> {
+        let mut names = std::collections::BTreeSet::new();
+        for (name, _) in values {
+            let segments = rumoca_core::qualified_name_segments(name).collect::<Vec<_>>();
+            if segments.iter().any(|segment| segment.is_empty()) {
+                return Err(format!(
+                    "parameter binding `{name}` has an empty path segment"
+                ));
+            }
+            if !segments
+                .iter()
+                .any(|segment| rumoca_core::parse_scalar_name(segment).is_some())
+            {
+                names.insert(name.clone());
+            }
+        }
+        Ok(names.into_iter().collect())
+    }
+
+    fn parameter_root_bindings(
+        &mut self,
+        model_name: &str,
+        values: &[(String, f64)],
+    ) -> Result<Vec<(String, rumoca_compile::compile::StructuralOverride)>, String> {
+        use lunco_modelica_ast::resolved_interface::ModelicaScalarValue;
+        use rumoca_compile::compile::StructuralOverride;
+        let names = Self::parameter_binding_names(values)?;
+        let mut literals = Vec::with_capacity(names.len());
+        for (name, value) in values {
+            if names.binary_search(name).is_err() {
+                continue;
+            }
+            let target = self
+                .session
+                .class_component_reference_query(model_name, name)
+                .ok_or_else(|| {
+                    format!(
+                        "parameter binding `{name}` has no resolved declaration in `{model_name}`"
+                    )
+                })?;
+            if !matches!(
+                target.effective_variability,
+                rumoca_core::Variability::Parameter(_)
+            ) {
+                return Err(format!(
+                    "parameter binding `{name}` does not name a parameter"
+                ));
+            }
+            let literal = match Self::raw_parameter_value(&target, *value)
+                .map_err(|error| format!("parameter binding `{name}`: {error}"))?
+            {
+                ModelicaScalarValue::Real(value) => StructuralOverride::Real(value),
+                ModelicaScalarValue::Integer(value) => StructuralOverride::Int(value),
+                ModelicaScalarValue::Boolean(value) => StructuralOverride::Bool(value),
+            };
+            literals.push((name.clone(), literal));
+        }
+        Ok(literals)
+    }
+
+    /// Validate scalar overrides against the checked instance on cache hits and
+    /// fresh compiles. Indexed values are solver overlays and cannot claim an
+    /// unapplied structural modification.
+    pub fn validate_parameter_bindings(
+        dae: &rumoca_compile::compile::Dae,
+        values: &[(String, f64)],
+    ) -> Result<(), String> {
+        use lunco_modelica_ast::resolved_interface::{ModelicaScalarType, ModelicaScalarValue};
+        use rumoca_ir_dae::{ScalarType, VariableRole};
+        let declarations = dae.inspect(|view| {
+            view.variables()
+                .flat_map(|(_, variable)| {
+                    variable.scalar_names().map(move |name| {
+                        (
+                            name,
+                            (
+                                variable.role(),
+                                variable.value_type().scalar_type(),
+                                variable.is_tunable(),
+                            ),
+                        )
+                    })
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        });
+        let root_names = Self::parameter_binding_names(values)?;
+        for (name, value) in values {
+            let Some((VariableRole::Parameter, kind, tunable)) = declarations.get(name) else {
+                return Err(format!(
+                    "parameter binding `{name}` is not a scalar parameter of the checked model"
+                ));
+            };
+            if root_names.binary_search(name).is_err() && !*tunable {
+                return Err(format!(
+                    "indexed parameter `{name}` is structural; the root-modification API does not represent indexed structural bindings"
+                ));
+            }
+            let kind = match kind {
+                ScalarType::Real => ModelicaScalarType::Real,
+                ScalarType::Integer => ModelicaScalarType::Integer,
+                ScalarType::Boolean => ModelicaScalarType::Boolean,
+                _ => {
+                    return Err(format!(
+                        "parameter binding `{name}` has nonnumeric type {kind:?}"
+                    ));
+                }
+            };
+            ModelicaScalarValue::from_numeric(kind, *value)
+                .map_err(|error| format!("parameter binding `{name}`: {error}"))?;
+        }
+        Ok(())
+    }
+
+    /// Resolve only parameter candidates needed to construct the instance.
+    /// Inputs, native sinks and absent conditional declarations are classified
+    /// against the checked DAE after compilation, before numerical admission.
+    pub fn admit_authored_bindings_after_source_root_admission(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+        values: &[(String, f64)],
+        _external_inputs: &std::collections::BTreeSet<String>,
+    ) -> Result<AdmittedModelicaBindings, String> {
+        if values.is_empty() {
+            return Ok(AdmittedModelicaBindings::default());
+        }
+        let selected = self.seat_source_unit(model_name, source, filename, extras, true)?;
+        let mut admitted = AdmittedModelicaBindings::default();
+        for (name, value) in values {
+            if let Some(target) = self
+                .session
+                .class_component_reference_query(&selected, name)
+                && matches!(
+                    target.effective_variability,
+                    rumoca_core::Variability::Parameter(_)
+                )
+            {
+                Self::raw_parameter_value(&target, *value)
+                    .map_err(|error| format!("authored parameter `{name}`: {error}"))?;
+                admitted.parameter_overrides.push((name.clone(), *value));
+            }
+        }
+        Ok(admitted)
+    }
+
+    /// Admit values only against the actual scalar instance. Separate native
+    /// input ownership never turns a Modelica output into an input binding.
+    pub fn admit_authored_bindings_from_checked_dae(
+        dae: &rumoca_compile::compile::Dae,
+        values: &[(String, f64)],
+        external_inputs: &std::collections::BTreeSet<String>,
+    ) -> Result<AdmittedModelicaBindings, String> {
+        use lunco_modelica_ast::resolved_interface::ModelicaScalarValue;
+        use rumoca_ir_dae::VariableRole;
+        let declarations = dae.inspect(|view| {
+            view.variables()
+                .flat_map(|(_, variable)| {
+                    variable.scalar_names().map(move |name| {
+                        (name, (variable.role(), variable.value_type().scalar_type()))
+                    })
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        });
+        let mut admitted = AdmittedModelicaBindings::default();
+        for (name, value) in values {
+            if !value.is_finite() {
+                return Err(format!("authored binding `{name}` must be finite"));
+            }
+            match declarations.get(name) {
+                Some((role @ (VariableRole::Parameter | VariableRole::Input), kind)) => {
+                    let kind = Self::checked_scalar_type(*kind).ok_or_else(|| {
+                        format!("authored binding `{name}` requires a numeric scalar")
+                    })?;
+                    ModelicaScalarValue::from_numeric(kind, *value)
+                        .map_err(|error| format!("authored binding `{name}`: {error}"))?;
+                    if *role == VariableRole::Parameter {
+                        admitted.parameter_overrides.push((name.clone(), *value));
+                    } else {
+                        admitted.initial_inputs.push((name.clone(), *value));
+                    }
+                }
+                _ if external_inputs.contains(name) => {}
+                _ => {
+                    return Err(format!(
+                        "authored binding `{name}` is not a parameter or input of the checked model"
+                    ));
+                }
+            }
+        }
+        Ok(admitted)
     }
 
     /// Compile source after admitting its source-root dependencies. Rumoca owns
@@ -676,9 +887,9 @@ impl ModelicaCompiler {
         model_name: &str,
         source: &str,
         filename: &str,
-        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
+        parameter_bindings: &[(String, f64)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
-        self.compile_str_mode(model_name, source, filename, true, structural_overrides)
+        self.compile_str_mode(model_name, source, filename, true, parameter_bindings)
     }
 
     fn compile_str_mode(
@@ -687,7 +898,7 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
         source_roots_admitted: bool,
-        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
+        parameter_bindings: &[(String, f64)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         self.compile_str_multi_mode(
             model_name,
@@ -695,7 +906,7 @@ impl ModelicaCompiler {
             filename,
             &[],
             source_roots_admitted,
-            structural_overrides,
+            parameter_bindings,
         )
     }
 
@@ -712,6 +923,7 @@ impl ModelicaCompiler {
     /// [`Self::seated_user_uris`]. source library roots are installed via
     /// `replace_in_memory_source_set` (not tracked here), so they're untouched.
     fn evict_user_docs_except(&mut self, keep: &std::collections::HashSet<String>) {
+        self.seated_source_unit = None;
         let stale: Vec<String> = self
             .seated_user_uris
             .iter()
@@ -724,34 +936,24 @@ impl ModelicaCompiler {
         }
     }
 
-    /// Recompute **structured, located** diagnostics for a model that
-    /// just failed [`Self::compile_str`].
+    /// Start a new owner request, including requests rejected before compilation.
+    pub fn clear_compile_diagnostics(&mut self) {
+        self.last_compile_diagnostics = None;
+    }
 
-    ///
-    /// Where `compile_str`'s `Err(String)` is a flat human summary,
-    /// this returns one [`Diagnostic`](lunco_doc::Diagnostic) per
-    /// rumoca failure — each prefixed with the diagnostic code
-    /// (e.g. `[ED008]`) and, when the failure's primary span points
-    /// into the user's `model.mo`, carrying a 1-based (line, column)
-    /// so the Diagnostics panel can make the row click-to-source
-    /// (the same treatment parse + lint findings already get).
-    ///
-    /// Runs rumoca's report-returning strict compile
-    /// (`compile_model_strict_reachable_uncached_with_recovery`),
-    /// which reuses the session's already-resolved AST/source — so
-    /// this is a cheap second pass, taken only on the error path.
-    /// `user_uri` is the document URI the caller passed to
-    /// `compile_str` (`"model.mo"` for the workbench); only spans in
-    /// that file are made clickable.
-    pub fn compile_diagnostics(
+    /// Consume located diagnostics from the original failed compile attempt.
+    /// Source and requested class must match the exact request that produced it.
+    pub fn take_compile_diagnostics(
         &mut self,
         model_name: &str,
         user_uri: &str,
     ) -> Vec<lunco_doc::Diagnostic> {
-        let report = self
-            .session
-            .compile_model_strict_reachable_uncached_with_recovery(model_name);
-        diagnostics_from_strict_report(&report, user_uri)
+        match self.last_compile_diagnostics.take() {
+            Some((model, uri, diagnostics)) if model == model_name && uri == user_uri => {
+                diagnostics
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Like `compile_str`, but seats additional `(filename, source)`
@@ -769,8 +971,8 @@ impl ModelicaCompiler {
     /// hermetic — a prior compile of the same package under a different URI
     /// (e.g. the same model open in two tabs) can't linger and trip rumoca's
     /// `Duplicate class '…' found in '…' with non-identical definition`. The
-    /// seated docs are left resident on return (the error-path
-    /// `compile_diagnostics` re-reads them); they're pruned by the NEXT
+    /// seated docs are left resident on return for further source queries;
+    /// they're pruned by the NEXT
     /// compile, not removed here.
     pub fn compile_str_multi(
         &mut self,
@@ -790,7 +992,7 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
         extras: &[(String, String)],
-        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
+        parameter_bindings: &[(String, f64)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         self.compile_str_multi_mode(
             model_name,
@@ -798,8 +1000,45 @@ impl ModelicaCompiler {
             filename,
             extras,
             true,
-            structural_overrides,
+            parameter_bindings,
         )
+    }
+
+    /// Identity of the exact source unit and admitted compiler context.
+    /// The worker owns retention of checked DAE artifacts for this context.
+    pub fn source_unit_identity(
+        &self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+    ) -> Result<lunco_hash::content::Cid, String> {
+        let mut identity = b"LunCoModelicaSourceUnit\0\x01".to_vec();
+        source_content_field(&mut identity, model_name.as_bytes());
+        source_content_field(&mut identity, filename.as_bytes());
+        source_content_field(
+            &mut identity,
+            &self.admitted_compilation_identity()?.to_bytes(),
+        );
+        let mut sources = std::collections::BTreeMap::from([(
+            filename,
+            lunco_hash::content::cid(source.as_bytes()),
+        )]);
+        for (uri, text) in extras {
+            let content = lunco_hash::content::cid(text.as_bytes());
+            if let Some(previous) = sources.insert(uri, content) {
+                if previous != content {
+                    return Err(format!(
+                        "source URI `{uri}` has conflicting contents in one source unit"
+                    ));
+                }
+            }
+        }
+        for (uri, content) in sources {
+            source_content_field(&mut identity, uri.as_bytes());
+            source_content_field(&mut identity, &content.to_bytes());
+        }
+        Ok(lunco_hash::content::cid(&identity))
     }
 
     fn compile_str_multi_mode(
@@ -809,9 +1048,55 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
         source_roots_admitted: bool,
-        structural_overrides: &[(String, rumoca_compile::compile::StructuralOverride)],
+        parameter_bindings: &[(String, f64)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        self.clear_compile_diagnostics();
+        let selected =
+            self.seat_source_unit(model_name, source, filename, extras, source_roots_admitted)?;
+        let root_bindings = self.parameter_root_bindings(&selected, parameter_bindings)?;
+        if !root_bindings.is_empty() {
+            self.session.set_structural_overrides(&root_bindings);
+        }
+        let result = self.compile_loaded(&selected);
+        if !root_bindings.is_empty() {
+            self.session.set_structural_overrides(&[]);
+        }
+        let compiled = match result {
+            Ok(compiled) => compiled,
+            Err(failure) => {
+                self.last_compile_diagnostics = Some((
+                    model_name.to_owned(),
+                    filename.to_owned(),
+                    diagnostics_from_strict_failure(&failure, filename),
+                ));
+                return Err(failure.summary);
+            }
+        };
+        Self::validate_parameter_bindings(&compiled.dae, parameter_bindings)?;
+        Ok(compiled)
+    }
+
+    /// Seat the exact source unit through the shared parsed-document/root owner.
+    /// Parameter admission and DAE compilation use this same parsed input.
+    fn seat_source_unit(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+        source_roots_admitted: bool,
+    ) -> Result<String, String> {
         use rumoca_compile::compile::ParsedSourceDocument;
+        let identity = if source_roots_admitted {
+            Some(self.source_unit_identity(model_name, source, filename, extras)?)
+        } else {
+            None
+        };
+        if let (Some(identity), Some((seated, selected))) = (identity, &self.seated_source_unit)
+            && identity == *seated
+        {
+            return Ok(selected.clone());
+        }
         let primary = ParsedSourceDocument::parse(filename, source)
             .map_err(|error| format!("could not parse {filename}: {error}"))?;
         let selected = primary
@@ -883,14 +1168,8 @@ impl ModelicaCompiler {
         self.evict_user_docs_except(&keep);
         self.session.add_in_memory_parsed_batch(admitted);
         self.seated_user_uris = keep;
-        if structural_overrides.is_empty() {
-            self.compile_loaded(&selected)
-        } else {
-            self.session.set_structural_overrides(structural_overrides);
-            let result = self.compile_loaded(&selected);
-            self.session.set_structural_overrides(&[]);
-            result
-        }
+        self.seated_source_unit = identity.map(|identity| (identity, selected.clone()));
+        Ok(selected)
     }
 
     /// Whether a fully-qualified class name belongs to a durable source root
@@ -914,8 +1193,10 @@ impl ModelicaCompiler {
         &mut self,
         qualified: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        self.clear_compile_diagnostics();
         self.requested_source_roots.clear();
         self.compile_loaded(qualified)
+            .map_err(|failure| failure.summary)
     }
 
     /// Inner helper: heartbeat + session.compile + final timing log.
@@ -925,7 +1206,10 @@ impl ModelicaCompiler {
     fn compile_loaded(
         &mut self,
         model_name: &str,
-    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+    ) -> Result<
+        Box<rumoca_compile::compile::DaeCompilationResult>,
+        Box<rumoca_compile::compile::StrictCompileFailure>,
+    > {
         let t_total = web_time::Instant::now();
 
         // Native diagnostic progress is scoped to this exact compile. Its
@@ -943,7 +1227,7 @@ impl ModelicaCompiler {
 
         let result = self
             .session
-            .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
+            .compile_model_dae_strict_reachable_uncached_with_recovery_detailed(model_name);
 
         log::info!(
             "[ModelicaCompiler] compile `{}` finished in {:.2}s ({})",
@@ -1321,7 +1605,7 @@ impl ModelicaCompiler {
     }
 }
 
-/// Convert a rumoca [`StrictCompileReport`] into the Diagnostics
+/// Convert a rumoca [`StrictCompileFailure`] into the Diagnostics
 /// panel's [`Diagnostic`](lunco_doc::Diagnostic) form.
 ///
 /// A failure becomes *located* (click-to-source) only when its primary
@@ -1332,9 +1616,9 @@ impl ModelicaCompiler {
 /// diagnostic code when present (`ED008`, `EI001`, …) so the panel
 /// reads like a real compiler's output.
 ///
-/// [`StrictCompileReport`]: rumoca_compile::compile::StrictCompileReport
-fn diagnostics_from_strict_report(
-    report: &rumoca_compile::compile::StrictCompileReport,
+/// [`StrictCompileFailure`]: rumoca_compile::compile::StrictCompileFailure
+fn diagnostics_from_strict_failure(
+    report: &rumoca_compile::compile::StrictCompileFailure,
     user_uri: &str,
 ) -> Vec<lunco_doc::Diagnostic> {
     use lunco_doc::Diagnostic;
@@ -1346,12 +1630,9 @@ fn diagnostics_from_strict_report(
                 Some(code) if !code.is_empty() => format!("[{code}] {}", f.error),
                 _ => f.error.clone(),
             };
-            // Resolve the primary span against the report's source map.
-            // `source_map` is `None` only on malformed reports; spans in
-            // dummy/compiler-generated sources resolve to `None` here.
+            // Resolve the primary span against its original compilation source map.
             let resolved = f.primary_label.as_ref().and_then(|label| {
-                let sm = report.source_map.as_ref()?;
-                let (name, content) = sm.get_source(label.span.source)?;
+                let (name, content) = report.source_map.get_source(label.span.source)?;
                 Some((name.to_string(), content.to_string(), label.span.start.0))
             });
             match resolved {
@@ -2304,6 +2585,33 @@ end Controls;"
                 .files
                 .len(),
             2
+        );
+    }
+}
+
+#[cfg(test)]
+mod compile_diagnostic_receipts {
+    use super::*;
+
+    #[test]
+    fn failed_compile_retains_original_locations_without_seated_sources() {
+        let mut compiler = ModelicaCompiler::new();
+        let source = "model Broken\n Real x;\nequation\n x = missing;\nend Broken;";
+        assert!(compiler.compile_str("Broken", source, "broken.mo").is_err());
+        compiler.clear_user_documents();
+        let diagnostics = compiler.take_compile_diagnostics("Broken", "broken.mo");
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.message.contains("missing")
+                    && diagnostic.line == Some(4)
+                    && diagnostic.col.is_some()
+            }),
+            "original failure must retain its source location: {diagnostics:?}"
+        );
+        assert!(
+            compiler
+                .take_compile_diagnostics("Broken", "broken.mo")
+                .is_empty()
         );
     }
 }

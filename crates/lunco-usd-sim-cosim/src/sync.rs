@@ -9,7 +9,7 @@
 //! Changes to this exchange do not need to rebuild those owners.
 
 use bevy::prelude::*;
-use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};
+use lunco_cosim_core::{DeclaredOutputPorts, SimComponent, SimStatus, UsdSourcedCosim};
 use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_scripting::doc::ScriptedModel;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -74,6 +74,7 @@ pub fn sync_modelica_outputs(
             Ref<ModelicaModel>,
             Ref<ModelicaVariables>,
             Ref<UsdSourcedCosim>,
+            Ref<DeclaredOutputPorts>,
             Has<lunco_core::SimulationObjectPaused>,
             &mut SimComponent,
         ),
@@ -82,28 +83,44 @@ pub fn sync_modelica_outputs(
             Or<(
                 Changed<ModelicaModel>,
                 Changed<ModelicaVariables>,
+                Changed<DeclaredOutputPorts>,
                 Added<SimComponent>,
                 Added<UsdSourcedCosim>,
             )>,
         ),
     >,
 ) {
-    for (model, variables, source, suspended, mut comp) in &mut q {
+    for (model, variables, source, declared, suspended, mut comp) in &mut q {
+        let reconcile_outputs = declared.is_changed() || comp.is_added();
         let publish_outputs =
-            variables.is_changed() || model.is_added() || source.is_added() || comp.is_added();
+            variables.is_changed() || model.is_added() || source.is_added() || reconcile_outputs;
         let changed = {
             let comp = comp.bypass_change_detection();
-            let mut changed = if publish_outputs {
+            // Inspection and telemetry retain the full variable inventory.
+            // Public samples follow the checked directional port declaration.
+            let mut changed = false;
+            if reconcile_outputs {
+                let retired = comp
+                    .outputs
+                    .keys()
+                    .filter(|name| !declared.names.contains(*name))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                changed |= !retired.is_empty();
+                for name in retired {
+                    comp.outputs.remove(&name);
+                }
+            }
+            if publish_outputs {
                 let _span = bevy::log::info_span!("modelica_outputs_copy_variables").entered();
-                comp.outputs.upsert_samples(
+                changed |= comp.outputs.upsert_samples(
                     variables
                         .values
                         .iter()
+                        .filter(|(name, _)| declared.names.contains(*name))
                         .map(|(name, value)| (name.as_str(), value)),
-                )
-            } else {
-                false
-            };
+                );
+            }
             let input_span = bevy::log::info_span!("modelica_outputs_seed_inputs").entered();
             for (k, v) in &model.inputs {
                 if comp.inputs.get(k).is_none() {

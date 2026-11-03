@@ -45,11 +45,18 @@ impl Plugin for ModelicaExecutionPlugin {
         }
         let (tx_cmd, rx_cmd) = unbounded();
         let (tx_res, rx_res) = unbounded();
+        let (tx_initialization, rx_initialization) = unbounded();
+        let tx_res = lunco_modelica_runtime::ModelicaResponseSender::new(tx_res, tx_initialization);
         #[cfg(not(target_arch = "wasm32"))]
         let completion_lease = app
             .world_mut()
             .resource_mut::<lunco_core_runtime::SimulationCompletionSources>()
             .register(&rx_res);
+        #[cfg(not(target_arch = "wasm32"))]
+        let initialization_completion_lease = app
+            .world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationCompletionSources>()
+            .register(&rx_initialization);
         app.init_resource::<lunco_modelica_runtime::ModelicaCacheLimits>();
         let cache_limits = *app
             .world()
@@ -70,6 +77,7 @@ impl Plugin for ModelicaExecutionPlugin {
                 .name("modelica-worker".into())
                 .spawn(move || {
                     let _completion_lease = completion_lease;
+                    let _initialization_completion_lease = initialization_completion_lease;
                     let failure_sender = tx_res.clone();
                     if let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -106,6 +114,7 @@ impl Plugin for ModelicaExecutionPlugin {
         app.insert_resource(ModelicaChannels {
             tx: tx_cmd,
             rx: rx_res,
+            preparation_rx: rx_initialization,
         });
 
         #[cfg(target_arch = "wasm32")]
@@ -136,6 +145,7 @@ impl Plugin for ModelicaExecutionPlugin {
             app.insert_resource(ModelicaChannels {
                 tx: tx_cmd,
                 rx: rx_res,
+                preparation_rx: rx_initialization,
                 rx_cmd,
                 tx_res,
             });
@@ -261,7 +271,11 @@ mod tests {
             );
         let (results, rx) = unbounded();
         let (tx, _commands) = unbounded();
-        app.insert_resource(ModelicaChannels { tx, rx });
+        app.insert_resource(ModelicaChannels {
+            tx,
+            rx,
+            preparation_rx: crossbeam_channel::never(),
+        });
         let entity = app
             .world_mut()
             .spawn(ModelicaModel {

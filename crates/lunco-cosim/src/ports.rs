@@ -1283,13 +1283,17 @@ pub(crate) fn register_builtin_port_topology(app: &mut App) {
 /// single-value hardware [`Port`]. Called from [`crate::CoSimPlugin`]. Other
 /// crates (for example a script-defined component) register their own
 /// backends after these.
-pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
-    registry.register(SIMCOMPONENT_BACKEND);
+#[derive(Resource, Clone, Copy)]
+pub struct ParticipantPortBackend(pub lunco_port_core::ports::PortBackendId);
+
+pub fn register_builtin_port_backends(registry: &mut PortRegistry) -> ParticipantPortBackend {
+    let participant = ParticipantPortBackend(registry.register(SIMCOMPONENT_BACKEND));
     registry.register(AVIAN_BACKEND);
     registry.register(PORT_BACKEND);
     registry.register(PORT_SURFACE_BACKEND);
     registry.register(OUTPUT_PORTS_BACKEND);
     registry.register(PILOTED_BACKEND);
+    participant
 }
 
 #[cfg(test)]

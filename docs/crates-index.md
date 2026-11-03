@@ -1485,6 +1485,10 @@ artifacts, and the Bevy response/clock bridge. Keeping this package separate
 from the host transport lets worker changes and browser transport changes
 rebuild as independent production packages while both native and wasm paths
 use the same dispatch implementation.
+Initialization-only jobs share its compiler, checked DAE/prepared-artifact caches
+and bounded preparation lanes. Their request-scoped replies bypass participant
+installation and telemetry. Accepted free-state constraints derive a checked
+per-instance FMI component without mutating the shared prepared artifact.
 Deferred compile requests validate source and participant retirement before
 publishing worker failures or diagnostics; cancelled work cannot fault a successor.
 

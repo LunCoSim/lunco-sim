@@ -91,7 +91,9 @@ consumers must not reconstruct archived ownership from a missing entity or a dis
 Modelica runtime telemetry caches each session's `SignalRef` by solver variable name. Its
 `record_scalar_at_rate` path borrows that identity for existing channels, so steady samples do
 not rebuild or clone an owned signal path. The registry clones the key only when it first
-creates the channel; a new solver session clears the prior histories and cached identities.
+creates the channel. A new solver session archives the prior channel identities.
+Variables absent from the replacement remain inactive with their retained history;
+returning variables begin a fresh history when their first valid sample is admitted.
 Modelica reuses owner publication only for variables that have retained a scalar
 sample. Until that first admission, it continues to associate through the registry;
 preparing an owner or metadata alone does not establish a retained channel. A session
@@ -509,8 +511,11 @@ Three lanes, and they are not interchangeable:
 `CosimStatus`/`SnapshotVariables` expose the same state to agents and API clients. After a solver
 response lands, `lunco-modelica-telemetry` retains finite `ModelicaVariables::values` in the shared
 `SignalRegistry` at `TelemetrySettings::default_rate_hz`, subject to the shared deadband,
-retention, and channel cap. The projection clears a solver session's old history when the
-authoritative Modelica `session_id` changes, so reloads cannot mix time bases.
+retention, and active channel cap. The projection archives a solver session's channels when
+the authoritative Modelica `session_id` changes. Returning variables start fresh histories
+at admission, so reloads cannot mix time bases. Archived channels retain their bounded
+history until document or scene retirement and do not consume live channel admission.
+Publisher retirement runs independently of whether recording is enabled.
 
 This is runtime exploration, not authored schema: no USD output attribute and no per-variable
 `Parameter` is synthesized. Explicit `Parameter`/`lunco:telemetry` channels remain the right

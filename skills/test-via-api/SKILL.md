@@ -400,7 +400,12 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 After `Exit`, verify that the process and `:4101` listener are gone before
 starting another session. A queued command or a reachable socket is not proof
 that a scene is ready; `/api/ready` is the gate for scene load, Modelica compile
-and participant initialization.
+and participant initialization. For coupled Modelica admission, also inspect
+`CosimStatus.last_coupled_initialization` and the actual participant outputs.
+Successful constructors alone do not prove the connected initial coordinate was
+certified. The initialization-only worker preparation has no live actor or
+telemetry publisher. See [run-modelica](../run-modelica/SKILL.md#omitted-library-inputs)
+for checked-interface admission, state constraints and native port ownership.
 For scene replacements that change `ActivePhysicsFrame`, also query each new
 dynamic body with `QueryPhysicsState` and require `physics_pose_seeded == true`
 before declaring admission complete; this catches a physics clock blocked
@@ -419,7 +424,17 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"OpenClass","params":{"qualified":"Modelica.Blocks.Continuous.PID"}}'
 ```
 
-Successful fire-and-forget response: `{"data":{"accepted":true}}`. A result-returning typed command puts its command-specific payload in the same `data` envelope. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. A deferred command may resolve its acknowledgement on the same request, but that is not necessarily completion of the domain work. `RunExperiment` returns its exact `experiment_id` once registered; the numerical solve remains asynchronous and is read through `RunStatus` and `GetExperimentResult` using that id. Rhai's in-process `cmd` may expose a pending command id; `command_result(id)` resolves that deferred command acknowledgement only. There is no generic HTTP command-id polling endpoint, and callers must not guess the run from its label or newest position.
+Successful fire-and-forget response: `{"data":{"accepted":true}}`. Typed result
+commands place their payload in the same `data` envelope. Malformed envelopes
+reject at transport admission; invalid typed parameters return HTTP 422.
+Completion belongs to the command's owner: `RunExperiment` returns its exact
+`experiment_id` after registration, then `RunStatus` and `GetExperimentResult`
+report the asynchronous solve. `CompileModel` resolves only after the requested
+session installs initialized state or fails; a paused initialized session is a
+successful completion. Retirement or supersession rejects that pending compile.
+Rhai's `cmd` may return a pending command id; await `command_result(id)` for its
+terminal owner result. There is no generic HTTP command-id polling endpoint,
+and experiment callers must not infer run identity from a label or list order.
 
 Queued Rhai invocations publish `CommandOutcome::Pending` at admission and a
 terminal outcome only at execution or owner retirement. Test cancellation

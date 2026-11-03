@@ -8,6 +8,33 @@ type ModelicaDocuments =
 #[derive(Resource, Default)]
 pub struct PendingCompileAdmissions(Vec<CompileRequested>);
 
+/// Completion ownership follows the exact installed session. Replacing or
+/// despawning its component cancels every remaining listener.
+#[derive(Component)]
+pub struct PendingCompileCompletion {
+    pub(super) session_id: u64,
+    completions: Vec<lunco_modelica_runtime::ModelicaCompileCompletion>,
+}
+
+impl PendingCompileCompletion {
+    pub(super) fn complete(
+        &mut self,
+        result: Result<lunco_modelica_runtime::ModelicaCompileReceipt, String>,
+    ) {
+        for completion in self.completions.drain(..) {
+            completion.complete(result.clone());
+        }
+    }
+}
+
+impl Drop for PendingCompileCompletion {
+    fn drop(&mut self) {
+        self.complete(Err(
+            "Modelica compile session retired or superseded before completion".into(),
+        ));
+    }
+}
+
 /// Consume compile intent in the execution layer so headless and interactive
 /// hosts share one document-to-worker dispatch path.
 pub fn dispatch_modelica_compile_requests(
@@ -32,6 +59,7 @@ pub fn dispatch_modelica_compile_requests(
             && later.entity == earlier.entity
             && later.class == earlier.class
         {
+            earlier.completions.append(&mut later.completions);
             earlier.force |= later.force;
             earlier.resume_after_compile |= later.resume_after_compile;
             true
@@ -78,6 +106,7 @@ fn dispatch_one(
         .and_then(|failure| failure.0.clone())
     {
         fail_request(
+            &request.completions,
             world,
             doc,
             request.entity,
@@ -88,6 +117,7 @@ fn dispatch_one(
     }
     if doc.is_unassigned() {
         fail_request(
+            &request.completions,
             world,
             doc,
             request.entity,
@@ -98,6 +128,7 @@ fn dispatch_one(
     }
     let Some(documents) = world.get_resource::<ModelicaDocuments>() else {
         fail_request(
+            &request.completions,
             world,
             doc,
             request.entity,
@@ -117,6 +148,7 @@ fn dispatch_one(
         .is_some_and(|source| *source != request.source)
     {
         fail_request(
+            &request.completions,
             world,
             doc,
             None,
@@ -130,6 +162,7 @@ fn dispatch_one(
         .is_some_and(|model| model.document != doc)
     {
         fail_request(
+            &request.completions,
             world,
             doc,
             None,
@@ -140,6 +173,7 @@ fn dispatch_one(
     }
     let Some(host) = documents.host(doc) else {
         fail_request(
+            &request.completions,
             world,
             doc,
             request.entity,
@@ -149,15 +183,21 @@ fn dispatch_one(
         return;
     };
     let document = host.document();
-    // Editable documents publish their parsed index asynchronously. Automatic
-    // requests are re-admitted on the next lifecycle pass while this revision
-    // is pending; interactive callers reject the same stale snapshot before
-    // creating a request.
+    // Source analysis is asynchronous. Retain this current source owner's
+    // intent and completion listeners while analysis is pending, including
+    // requests that already acquired the initial-input admission hold.
+    // Once analysis settles, invalid source takes the terminal path below.
     if document.syntax_is_stale() || document.ast_is_stale() {
+        world.init_resource::<PendingCompileAdmissions>();
+        world
+            .resource_mut::<PendingCompileAdmissions>()
+            .0
+            .push(request);
         return;
     }
     let Some(ast) = document.strict_ast() else {
         fail_request(
+            &request.completions,
             world,
             doc,
             request.entity,
@@ -190,6 +230,7 @@ fn dispatch_one(
         Ok(model_name) => model_name,
         Err(error) => {
             fail_request(
+                &request.completions,
                 world,
                 doc,
                 request.entity,
@@ -221,16 +262,37 @@ fn dispatch_one(
     if let Err(error) =
         lunco_modelica_runtime::validate_communication_period_secs(communication_period)
     {
-        fail_request(world, doc, target_entity, &model_name, &error);
+        fail_request(
+            &request.completions,
+            world,
+            doc,
+            target_entity,
+            &model_name,
+            &error,
+        );
         return;
     }
     if !request.force
+        && target_entity
+            .and_then(|entity| world.get::<ModelicaModel>(entity))
+            .is_some_and(|model| model.model_name == model_name)
         && existing.as_ref().is_some_and(
             |(_, _, _, is_compiled, is_compiling, compiled_generation, _)| {
                 *is_compiled && !*is_compiling && *compiled_generation == generation
             },
         )
     {
+        let entity = target_entity.expect("compiled participant exists");
+        let model = world
+            .get::<ModelicaModel>(entity)
+            .expect("compiled participant exists");
+        for completion in &request.completions {
+            completion.complete(Ok(lunco_modelica_runtime::ModelicaCompileReceipt {
+                entity,
+                session_id: model.session_id,
+                generation,
+            }));
+        }
         return;
     }
 
@@ -242,15 +304,29 @@ fn dispatch_one(
         let entity = target_entity.expect("selected USD participant");
         // Physical providers sample the same admitted coordinate for this ordered
         // batch; initialization never advances their clocks or applies actuators.
-        let sampled = sampling.get_or_insert_with(|| {
-            world
-                .try_run_schedule(lunco_cosim_core::schedule::InitializationSampling)
-                .map_err(|error| format!("initial sampling schedule unavailable: {error}"))
-        });
-        let admission = sampled
-            .as_ref()
-            .map_err(Clone::clone)
-            .and_then(|()| lunco_cosim_core::initialization::initialization_inputs(world, entity));
+        let admission = if world
+            .get::<lunco_port_core::PortSurfacePending>(entity)
+            .is_some()
+            || world
+                .get::<lunco_cosim_core::SimComponent>(entity)
+                .is_none()
+        {
+            Ok(None)
+        } else if world
+            .get::<lunco_modelica_runtime::ModelicaResolvedInterface>(entity)
+            .is_none()
+        {
+            Err("Modelica source interface has not been admitted for this participant".to_owned())
+        } else {
+            let sampled = sampling.get_or_insert_with(|| {
+                world
+                    .try_run_schedule(lunco_cosim_core::schedule::InitializationSampling)
+                    .map_err(|error| format!("initial sampling schedule unavailable: {error}"))
+            });
+            sampled.as_ref().map_err(Clone::clone).and_then(|()| {
+                lunco_cosim_core::initialization::initialization_inputs(world, entity)
+            })
+        };
         match admission {
             Ok(Some(inputs)) => inputs,
             Ok(None) => {
@@ -266,17 +342,53 @@ fn dispatch_one(
                 return;
             }
             Err(error) => {
-                fail_request(world, doc, Some(entity), &model_name, &error);
+                fail_request(
+                    &request.completions,
+                    world,
+                    doc,
+                    Some(entity),
+                    &model_name,
+                    &error,
+                );
                 return;
             }
         }
     } else {
-        Vec::new()
+        Default::default()
+    };
+
+    let (expected_library_revision, parameter_overrides, authored_bindings) = if let Some(entity) =
+        target_entity.filter(|entity| {
+            world
+                .get::<lunco_cosim_core::UsdSourcedCosim>(*entity)
+                .is_some()
+        }) {
+        let Some(interface) =
+            world.get::<lunco_modelica_runtime::ModelicaResolvedInterface>(entity)
+        else {
+            fail_request(
+                &request.completions,
+                world,
+                doc,
+                Some(entity),
+                &model_name,
+                "Modelica source interface has not been admitted for this participant",
+            );
+            return;
+        };
+        (
+            Some(interface.0.library_revision),
+            interface.0.parameter_overrides.clone(),
+            interface.0.authored_bindings.clone(),
+        )
+    } else {
+        (None, Vec::new(), Default::default())
     };
 
     // Pending inputs return before copying source text or walking dependencies.
     let Some(documents) = world.get_resource::<ModelicaDocuments>() else {
         fail_request(
+            &request.completions,
             world,
             doc,
             target_entity,
@@ -287,6 +399,7 @@ fn dispatch_one(
     };
     let Some(host) = documents.host(doc) else {
         fail_request(
+            &request.completions,
             world,
             doc,
             target_entity,
@@ -364,6 +477,7 @@ fn dispatch_one(
     if !dependency_roots.is_empty() {
         if !world.contains_resource::<lunco_modelica_source_roots::SourceRootRegistry>() {
             fail_request(
+                &request.completions,
                 world,
                 doc,
                 request.entity,
@@ -380,6 +494,7 @@ fn dispatch_one(
         });
         if let Err(error) = admission {
             fail_request(
+                &request.completions,
                 world,
                 doc,
                 request.entity,
@@ -397,7 +512,8 @@ fn dispatch_one(
         .map(|(_, inputs, _, _, _, _, _)| inputs.clone())
         .unwrap_or_default();
 
-    inputs.extend(connected_inputs);
+    let initial_state_values = connected_inputs.state_values;
+    inputs.extend(connected_inputs.inputs);
     let initial_inputs = super::bridge::ordered_modelica_inputs(&inputs);
 
     let previous_session = existing
@@ -414,6 +530,7 @@ fn dispatch_one(
         );
     let Some(session_id) = previous_session.checked_add(1) else {
         fail_request(
+            &request.completions,
             world,
             doc,
             target_entity,
@@ -422,6 +539,13 @@ fn dispatch_one(
         );
         return;
     };
+    if let Some(mut admission) = target_entity.and_then(|entity| {
+        world.get_mut::<lunco_cosim_core::initialization::CoupledInitializationPending>(entity)
+    }) {
+        if admission.expected_session.is_none() {
+            admission.expected_session = Some(session_id);
+        }
+    }
     let entity = match target_entity {
         Some(entity) => entity,
         None => world
@@ -444,7 +568,14 @@ fn dispatch_one(
         ))
     };
     if let Some(error) = link_error {
-        fail_request(world, doc, Some(entity), &model_name, &error.to_string());
+        fail_request(
+            &request.completions,
+            world,
+            doc,
+            Some(entity),
+            &model_name,
+            &error.to_string(),
+        );
         return;
     }
     let resume_after_compile = request.resume_after_compile
@@ -470,6 +601,7 @@ fn dispatch_one(
         inputs,
         pending_step_inputs: None,
         compiled_input_names: BTreeSet::new(),
+        compiled_parameter_names: BTreeSet::new(),
         last_error: None,
         document: doc,
         is_stepping: true,
@@ -492,6 +624,13 @@ fn dispatch_one(
         entry.insert(Name::new(model_name.clone()));
     }
     entry.insert((model, super::ModelicaVariables::default()));
+    entry.remove::<PendingCompileCompletion>();
+    if !request.completions.is_empty() {
+        entry.insert(PendingCompileCompletion {
+            session_id,
+            completions: request.completions.clone(),
+        });
+    }
     if let Some(mut diagnostics) = world.get_resource_mut::<lunco_doc_bevy::DocumentDiagnostics>() {
         diagnostics.mark_started(doc);
     }
@@ -503,6 +642,7 @@ fn dispatch_one(
 
     let Some(channels) = world.get_resource::<ModelicaChannels>() else {
         fail_request(
+            &request.completions,
             world,
             doc,
             Some(entity),
@@ -528,13 +668,17 @@ fn dispatch_one(
             source,
             doc_uri: source_uri,
             extra_sources,
-            parameter_overrides: Vec::new(),
+            parameter_overrides,
+            authored_bindings,
+            expected_library_revision,
             initial_inputs,
+            initial_state_values,
             realtime_safe: false,
         })
         .is_err()
     {
         fail_request(
+            &request.completions,
             world,
             doc,
             Some(entity),
@@ -545,6 +689,7 @@ fn dispatch_one(
 }
 
 fn fail_request(
+    completions: &[lunco_modelica_runtime::ModelicaCompileCompletion],
     world: &mut World,
     doc: lunco_doc::DocumentId,
     entity: Option<Entity>,
@@ -552,7 +697,13 @@ fn fail_request(
     cause: &str,
 ) {
     let message = format!("Compile failed for '{model_name}': {cause}");
+    for completion in completions {
+        completion.complete(Err(message.clone()));
+    }
     if let Some(entity) = entity {
+        if let Some(mut completion) = world.get_mut::<PendingCompileCompletion>(entity) {
+            completion.complete(Err(message.clone()));
+        }
         if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
             model.paused = true;
             model.is_compiling = false;
@@ -613,7 +764,85 @@ mod tests {
     use lunco_doc::PathlessOrigin;
 
     #[test]
-    fn pending_compile_batch_samples_once_and_releases_retired_requests() {
+    fn compile_completion_retires_once_with_its_session_owner() {
+        let (completion, reply) = lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+        let duplicate = completion.clone();
+        let owner = PendingCompileCompletion {
+            session_id: 7,
+            completions: vec![completion],
+        };
+        drop(owner);
+        duplicate.complete(Ok(lunco_modelica_runtime::ModelicaCompileReceipt {
+            entity: Entity::from_raw_u32(1).unwrap(),
+            session_id: 7,
+            generation: 3,
+        }));
+        assert!(
+            reply
+                .try_take()
+                .unwrap()
+                .unwrap_err()
+                .contains("retired or superseded")
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn paused_compile_completion_requires_accepted_exact_session() {
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .add_message::<ModelicaSessionStarted>()
+            .add_systems(Update, super::super::handle_modelica_responses);
+        let (tx, _commands) = crossbeam_channel::unbounded();
+        let (results, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx,
+            rx,
+            preparation_rx: crossbeam_channel::never(),
+        });
+        let (completion, reply) = lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+        let entity = app
+            .world_mut()
+            .spawn((
+                ModelicaModel {
+                    model_name: "Plant".into(),
+                    session_id: 7,
+                    is_compiling: true,
+                    is_stepping: true,
+                    paused: true,
+                    ..Default::default()
+                },
+                ModelicaVariables::default(),
+                PendingCompileCompletion {
+                    session_id: 7,
+                    completions: vec![completion],
+                },
+            ))
+            .id();
+        for session_id in [6, 7] {
+            results
+                .send(ModelicaResult {
+                    entity,
+                    session_id,
+                    is_new_model: true,
+                    variable_metadata: Some(Default::default()),
+                    ..Default::default()
+                })
+                .unwrap();
+            app.world_mut().run_schedule(Update);
+            if session_id == 6 {
+                assert!(reply.try_take().is_none());
+            }
+        }
+        let receipt = reply.try_take().unwrap().unwrap();
+        assert_eq!(receipt.entity, entity);
+        assert_eq!(receipt.session_id, 7);
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert!(model.is_compiled && model.paused && !model.is_compiling);
+    }
+
+    #[test]
+    fn pending_compile_batch_defers_sampling_and_releases_retired_requests() {
         #[derive(Resource, Default)]
         struct SamplingCount(usize);
 
@@ -638,6 +867,7 @@ mod tests {
                 |mut count: ResMut<SamplingCount>| count.0 += 1,
             );
         let mut entities = Vec::new();
+        let mut replies = Vec::new();
         for _ in 0..2 {
             let entity = app
                 .world_mut()
@@ -650,7 +880,10 @@ mod tests {
                 ))
                 .id();
             entities.push(entity);
+            let (completion, reply) = lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+            replies.push(reply);
             app.world_mut().write_message(CompileRequested {
+                completions: vec![completion],
                 source: lunco_workspace::PinnedDocumentRuntimeOwner {
                     document: doc,
                     runtime: lunco_workspace::DocumentRuntimeOwner::Application,
@@ -661,17 +894,43 @@ mod tests {
                 resume_after_compile: true,
             });
         }
-        for count in 1..=2 {
+        for _ in 0..2 {
             app.world_mut().run_schedule(Update);
-            assert_eq!(app.world().resource::<SamplingCount>().0, count);
+            assert_eq!(app.world().resource::<SamplingCount>().0, 0);
             assert_eq!(
                 app.world().resource::<PendingCompileAdmissions>().0.len(),
                 2
             );
         }
+        // The pending owner must retain both intents after the document is
+        // edited while initial-input admission is still waiting.
+        app.world_mut()
+            .resource_mut::<Messages<CompileRequested>>()
+            .clear();
+        {
+            let mut documents = app.world_mut().resource_mut::<ModelicaDocuments>();
+            let host = documents.host_mut(doc).unwrap();
+            host.apply(lunco_modelica_document::ModelicaOp::ReplaceSource {
+                new: "model Plant Real x; equation der(x)=2; end Plant;".into(),
+            })
+            .unwrap();
+            assert!(host.document().syntax_is_stale() || host.document().ast_is_stale());
+        }
+        app.world_mut().run_schedule(Update);
+        assert_eq!(
+            app.world().resource::<PendingCompileAdmissions>().0.len(),
+            2
+        );
+        assert!(replies.iter().all(|reply| reply.try_take().is_none()));
+        assert!(entities.iter().all(|entity| {
+            app.world()
+                .get::<ModelicaModel>(*entity)
+                .unwrap()
+                .is_compiling
+        }));
         app.world_mut().despawn(entities[0]);
         app.world_mut().run_schedule(Update);
-        assert_eq!(app.world().resource::<SamplingCount>().0, 3);
+        assert_eq!(app.world().resource::<SamplingCount>().0, 0);
         assert_eq!(
             app.world().resource::<PendingCompileAdmissions>().0.len(),
             1
@@ -681,6 +940,29 @@ mod tests {
                 .resource::<Messages<ModelicaNotice>>()
                 .is_empty()
         );
+        assert!(replies[0].try_take().unwrap().is_err());
+        assert!(replies[1].try_take().is_none());
+        app.world_mut()
+            .resource_mut::<ModelicaDocuments>()
+            .host_mut(doc)
+            .unwrap()
+            .document_mut()
+            .refresh_ast_now();
+        app.world_mut().run_schedule(Update);
+        assert_eq!(
+            app.world().resource::<PendingCompileAdmissions>().0.len(),
+            1
+        );
+        assert!(replies[1].try_take().is_none());
+        app.world_mut().despawn(entities[1]);
+        app.world_mut().run_schedule(Update);
+        assert!(
+            app.world()
+                .resource::<PendingCompileAdmissions>()
+                .0
+                .is_empty()
+        );
+        assert!(replies[1].try_take().unwrap().is_err());
     }
 
     #[test]
@@ -711,7 +993,11 @@ mod tests {
                 .insert_resource(documents);
             let (tx, rx) = crossbeam_channel::unbounded();
             let (_result_tx, result_rx) = crossbeam_channel::unbounded();
-            app.insert_resource(ModelicaChannels { tx, rx: result_rx });
+            app.insert_resource(ModelicaChannels {
+                tx,
+                rx: result_rx,
+                preparation_rx: crossbeam_channel::never(),
+            });
             let entity = app
                 .world_mut()
                 .spawn(ModelicaModel {
@@ -723,6 +1009,7 @@ mod tests {
             dispatch_one(
                 app.world_mut(),
                 CompileRequested {
+                    completions: Vec::new(),
                     source: lunco_workspace::PinnedDocumentRuntimeOwner {
                         document: doc,
                         runtime: lunco_workspace::DocumentRuntimeOwner::Application,
@@ -785,6 +1072,7 @@ mod tests {
         app.insert_resource(ModelicaChannels {
             tx: tx_command,
             rx: rx_result,
+            preparation_rx: crossbeam_channel::never(),
         });
         let entity = app
             .world_mut()
@@ -799,6 +1087,7 @@ mod tests {
             .link(entity, doc)
             .expect("document link");
         app.world_mut().write_message(CompileRequested {
+            completions: Vec::new(),
             source: lunco_workspace::PinnedDocumentRuntimeOwner {
                 document: doc,
                 runtime: lunco_workspace::DocumentRuntimeOwner::Application,
@@ -858,7 +1147,11 @@ mod tests {
         )));
         let (tx, rx) = crossbeam_channel::unbounded();
         let (_results, result_rx) = crossbeam_channel::unbounded();
-        world.insert_resource(ModelicaChannels { tx, rx: result_rx });
+        world.insert_resource(ModelicaChannels {
+            tx,
+            rx: result_rx,
+            preparation_rx: crossbeam_channel::never(),
+        });
         let source = lunco_workspace::PinnedDocumentRuntimeOwner {
             document: doc,
             runtime: lunco_workspace::DocumentRuntimeOwner::LocalTwin(
@@ -868,6 +1161,7 @@ mod tests {
         dispatch_one(
             &mut world,
             CompileRequested {
+                completions: Vec::new(),
                 source,
                 entity: None,
                 class: Some("Plant".into()),
@@ -883,6 +1177,7 @@ mod tests {
         dispatch_one(
             &mut world,
             CompileRequested {
+                completions: Vec::new(),
                 source: lunco_workspace::PinnedDocumentRuntimeOwner {
                     document: doc,
                     runtime: lunco_workspace::DocumentRuntimeOwner::Application,
@@ -912,6 +1207,7 @@ mod tests {
         dispatch_one(
             &mut world,
             CompileRequested {
+                completions: Vec::new(),
                 source: lunco_workspace::PinnedDocumentRuntimeOwner {
                     document: doc,
                     runtime: lunco_workspace::DocumentRuntimeOwner::Application,

@@ -143,6 +143,18 @@ snapshots include the runtime owner, are retired on its `TwinClosed`, and cannot
 be republished by a cancelled worker. Native and wasm Fast Run compilers release
 user overlays after capturing compilation outcomes while retaining application libraries.
 
+`CompileModel` is a deferred command. `CompileRequested` carries typed one-shot
+completion tickets through input admission and request coalescing. Dispatch
+transfers those tickets to the exact participant session; the worker bridge
+answers only after accepting that session's source generation and initialized
+outputs, including a compile that remains paused. Admission errors, stale
+sources, worker failure, replacement and retirement terminate the tickets.
+An unchanged exact class/generation can acknowledge its existing checked
+session. The command adapter drains these replies through `finish_command_result`;
+queued work or a different compiled session cannot acknowledge the request.
+API calls requiring a class choice reject with the available candidates;
+interactive calls retain the class picker.
+
 Native worker, compiler actor, and solve-pool startup are fallible. A startup
 failure or unexpected worker disconnect travels through the typed worker-wide
 `ModelicaResult.worker_failure` boundary before participant routing. The bridge
@@ -341,16 +353,59 @@ subset of compilations. Browser profiles leave this native-only field absent.
 The native profile also counts evictions caused by that construction and records
 the shared cache's resident entries and key/artifact bytes at completion.
 
-Numeric instance overrides cross two maintained Rumoca boundaries. The compiler
-host reads checked DAE parameter roles and `is_tunable` facts; translation-time
-parameters become typed root modifiers through `Session::set_structural_overrides`.
-Integer and Boolean modifiers require exact representable literals. The shared
-compiler retains the base artifact for classification and caches structural
-variants by source/library identity and exact override bits. It clears root
-modifiers after each compile, including a rejected compile. Each artifact records
-its incorporated structural bindings; live-plan admission verifies those match
-the requested values and sends only tunable overrides to solver lowering.
+USD instance values reach the worker as typed `ModelicaAuthoredBindings`.
+Before numerical input admission, `PrepareInterface` uses the shared compilation
+pipeline to produce a checked DAE and its exact scalar interface. The compiler
+first resolves supplied parameter candidates through Rumoca's scoped declaration
+query so authored dimensions and conditions can be bound before strict
+instantiation. This query does not publish runtime ports. The checked DAE then
+classifies every supplied value as a scalar parameter or runtime input. A name
+outside that boundary is rejected unless USD captured a distinct registered
+input owner on that entity. That evidence uses opaque `PortBackendId` values,
+excluding generic authored-input storage and the co-simulation backend; matching
+output names and human-readable metadata labels do not establish ownership.
+Expression-bound and inherited parameters follow the same path. Literal source
+defaults are presentation data, not a declaration inventory.
+
+The first strict compilation applies representable parameter bindings through
+`Session::set_structural_overrides`, including parameters with no source default.
+Integer and Boolean bindings require exact representable literals. The compiler
+clears root modifiers after each attempt. Rumoca attaches current synthetic
+literal sources when resolving the requested closure, so reused planning trees
+cannot retain missing or outdated override provenance. Immutable variant reuse
+requires the same source/root identity and the same set of unindexed root-bound parameter
+names; every
+checked structural binding must also match its requested value bits. Checked DAE
+`is_tunable` facts own this distinction. A tunable value change can therefore
+reuse the DAE, while omitting a previously bound name cannot retain that binding.
+Indexed scalar tunables remain checked lowering overlays; indexed structural
+bindings receive an explicit diagnostic because root modifiers cannot represent
+them. Every requested tunable value is supplied again to solver lowering.
+
+The interface projects actual conditional presence, scalar input/parameter
+identities, numeric observables, descriptions and units from that DAE. Parameter-
+dependent bounds use admitted tunables through Rumoca's numeric evaluator;
+unsolved bounds are explicitly `InitializationDependent`, never an invented
+value or an absent bound. Initialization start guesses are not settled parameter
+bindings. Interface preparation constructs no solver, publishes no numerical
+samples, and shares its compiled artifact with subsequent participant preparation.
+The exact scene/source/session lease and admitted library revision fence reuse.
+
+`ResolvedModelicaInterface.input_groups` stores each checked runtime input once:
+its aggregate name, dimensions, ordered scalar names, primitive type, indexed-path
+eligibility and declaration-binding defaults. Group shape and scalar order come
+from the DAE, not scalar-name parsing. `Known` defaults are evaluated in the same
+admitted parameter context; an absent binding, `InitializationDependent` binding,
+and unsupported numeric evaluation remain distinct. Coupled capture replaces an
+array binding only with a complete aggregate. It fills an omitted element only
+from a checked `Known` default, validated against its scalar type. Missing elements
+otherwise fail admission. Start values never complete an array default.
+
 The full requested bindings remain in the solver snapshot and prepared-cache key.
+Connected initial samples take precedence over authored unconnected input values.
+The compiled parameter inventory drives USD contract validation and later edits.
+Accepted overrides update the model and shared participant parameter views at
+result admission; those views need not contain every value calculated by Modelica.
 No source text or checked DAE is patched to change parameter values.
 
 Prepared-solver reuse captures `ModelicaCompiler::compiled_source_content_identity`
@@ -467,14 +522,13 @@ linked Modelica document; `document_generation` and `document_source_matches`
 read its actual registry state. Missing document state is unavailable, and a
 source mismatch is false. Consumers must require a current document before
 running an experiment against a generated network.
-The projector carries the interface extracted while validating the generated
-source into installation, so validation and runtime setup share one Rumoca AST
-parse rather than independently recovering the same policy result.
-Its declaration interface is scoped to the exact validated root class through
-Rumoca's AST lookup; generated unit classes cannot contribute unrelated boundary
-ports or parameter bindings. File-backed sources scope their declaration facts
-to their selected runnable class. Compiler facts remain authoritative for
-inherited declarations, aliases, and evaluated runtime values.
+The projector carries parsed source facts from generated-source validation into
+installation, including the exact selected root class and dependency requirements.
+These syntax facts serve source discovery and editing. Runtime ports, parameters,
+units and observable identities come from `PrepareInterface` after strict DAE
+compilation. Authored USD contracts are checked against that actual scalar
+instance and registered native port owners before connected-input admission.
+Generated member classes cannot contribute unrelated root-boundary inputs.
 
 The generated-domain projector is lifecycle-driven. Its scheduler condition
 opens only for a newly projected prim or identity, a USD wiring edit, or a
@@ -483,12 +537,13 @@ stage and synthesizer query set. The system retains the same trigger guard for
 direct system invocation, while the production schedule owns the idle-frame
 skip.
 
-A selected file-backed participant queues its required source roots when its
-prepared declaration interface is published, in authored prim-path order. This
-uses the existing source-root registry and ordered preparation lane while scene
-projection and physical input admission settle; it publishes no solver state.
-Compile dispatch revalidates the current source requirements, so a source edit
-or failed/retired root cannot reuse an earlier preparation decision.
+Selected file-backed and generated participants queue their required source roots
+in authored prim-path order. Interface requests wait for the scene's root-admission
+batch to settle, then use the ordered compiler lane. Their checked scalar
+surfaces become available before numerical input admission. Subsequent live
+construction reuses the compiled artifact and verifies the retained library
+revision; source replacement or a failed/retired root cannot reuse an earlier
+interface decision.
 
 Before a live Modelica compile is submitted, its owner admits required roots
 through `lunco-modelica-source-roots` and sends each `LoadSourceRoot` before the
@@ -607,7 +662,8 @@ or construction blocking an owner from solver service and response admission.
 When an authored USD `inputs:*` value changes on a live participant, the USD
 projection advances the backend-neutral `lunco_core::ModelStateRevision`. It
 does not request a Modelica compile. The Modelica adapter compares that
-revision against its parsed parameter state: a changed `parameter Real` enters
+revision against its compiled parameter-name inventory and accepted values:
+a changed parameter enters
 the existing source-asset compile/session fence, while a changed `input Real`
 remains a runtime value. Other backends can observe the same revision and own
 different rebuild or reset policies without adding Modelica knowledge to USD
@@ -776,15 +832,18 @@ successful resolution state.
 is `!Send` — it can't cross threads. So we own it on a dedicated background
 worker thread; the main Bevy thread communicates via `crossbeam` channels:
 
-- `ModelicaCommand::Compile { entity, source, session_id }` — parse + build
-  DAE + instantiate stepper
+- `ModelicaCommand::PrepareInterface` — compile or reuse the checked DAE and
+  return scalar interface facts without numerical initialization
+- `ModelicaCommand::Compile { entity, source, session_id }` — reuse or compile
+  the checked DAE, admit numerical inputs, and construct the live stepper
 - `ModelicaCommand::UpdateParameters { entity, source, session_id }` —
-  substitute new parameter values, recompile
+  admit new parameter values, reuse a compatible DAE variant or compile it
 - `ModelicaCommand::Reset { entity, session_id }` — rebuild stepper from
   cached DAE, reset to initial conditions
 - `ModelicaCommand::Step { entity, inputs, dt }` — advance one timestep
 - `ModelicaResult { entity, session_id, outputs, variables, error, ... }`
-  — returned after each command
+  — participant command result; request-owned preparation replies use the typed
+  preparation channel and request identity
 
 The response bridge validates the session, step identity and communication
 endpoint before taking the in-flight transaction. Observable variables reuse
@@ -849,10 +908,13 @@ Worker replacement or configuration-post failure also terminates the pipeline
 and reports a worker-wide error; queued work cannot remain behind a dead slot.
 
 The native compiler actor persists source-closed strict compilation artifacts
-in `modelica/compiled-dae-v2` before the prepared-FMI stage. Its conservative
+in `modelica/compiled-dae-v3` before the prepared-FMI stage. Its conservative
 input CID includes all admitted source bytes, source-set identities and order,
-diagnostic URIs, the primary/extras unit, exact structural binding bits, clean
-Rumoca revision, OS/architecture and format version. Failed latest source
+diagnostic URIs, the primary/extras unit, every supplied parameter name and value
+bit pattern, clean Rumoca revision, OS/architecture and format version. The record
+also carries the bound-name schema and checked structural guards. In-memory
+variant lookup permits changed tunable values under those guards; persistent
+lookup uses the exact recorded parameter transaction. Failed latest source
 admission cannot authorize a hit. The participating-source CID retained with
 the result still owns prepared-FMI reuse. Native DAE deserialization validates
 the schema and reconstructs its branded graph; it does not admit unchecked IR.
@@ -1053,6 +1115,11 @@ snapshot changed. Regular development builds optimize `lunco-modelica-worker`
 at level 3 with assertions enabled. Causal wire ordering comes from the existing
 connection comparator, independently of the observable map's iteration order.
 
+USD-backed participants publish public samples only for their checked
+`DeclaredOutputPorts`. A declaration change retires removed public keys;
+inspection and telemetry retain their separate observable inventory. Copying a
+worker observation cannot introduce an undeclared public output.
+
 Production gates `modelica_variable_projection` and `modelica_variables_missing`
 cover retained publication while paused, resumed solver replacement,
 and the required-state fault. Exact multi-rover replay checks the fixed-step
@@ -1168,7 +1235,7 @@ Verb semantics:
 
 | Verb | Effect |
 |---|---|
-| `CompileModel` | Compile only, idempotent. Skips the worker dispatch when `is_compiled && !stale && !is_compiling` (logged at debug); pass `force: true` to override. A dispatched compile leaves the model paused/ready unless explicit Run intent is carried through it. |
+| `CompileModel` | Deferred terminal result after the exact checked session is accepted, or an explicit rejection/cancellation. An already compiled, unchanged exact class reuses its session; `force: true` dispatches again. Success leaves the model paused/ready unless explicit Run intent was requested. |
 | `RunActiveModel` | Compile-if-stale, then play. If already compiled & clean, just sets `paused = false` (no recompile); otherwise sets `resume_after_compile = true` and triggers `CompileModel`, which resumes on success. |
 | `ResumeActiveModel` | Unpause (`paused = false`); no compile. |
 | `PauseActiveModel` | Pause (`paused = true`). |
@@ -1457,9 +1524,12 @@ See
 
 ## 6. Modelica public ports
 
-Modelica `input` and `output` declarations define the external port surface.
-USD wires consume that declared interface; internal variables retain their
-Modelica equation and state ownership. See the
+Checked DAE runtime inputs define writable Modelica ports. Numeric observables,
+including authored outputs and local states, define readable values that USD may
+export. This inventory excludes constants, runtime inputs and parameters, which the bridge
+does not publish as participant output samples; a same-named native output keeps
+its registered owner. Reading a local state does not change its Modelica equation
+ownership or make it writable. See the
 [co-simulation public port contract](../../crates/lunco-cosim/README.md#modelica-public-ports)
 for initialization, runtime writes, and missing-sample admission.
 
@@ -1468,11 +1538,14 @@ in the ordered Update chain. Native `PendingModelicaSource` membership and the
 absence of `SceneLoadInFlight` admit its exclusive World boundary. A settled
 scene with no pending sources skips that boundary; deferred source insertion,
 recompile and scene replacement wake it through current component membership.
-Source arrival publishes the selected Modelica declaration before connected
-input admission, including outputs that USD consumes without redeclaring them.
-An unloaded source retains `PortSurfacePending`; declaration publication clears
-that marker without publishing unsolved output samples. Source replacement
-refreshes the declaration and metadata through the same owner.
+Source arrival queues `PrepareInterface`; its strict compilation uses symbolic
+runtime inputs and requires no connected numerical samples. The checked reply
+publishes scalar surfaces and effective metadata before input admission, including
+readable values that USD consumes without redeclaring them. `PortSurfacePending`
+remains until this exact source lease is admitted. Publication supplies no unsolved
+output samples. A terminal interface error faults the affected participant instead
+of leaving an unresolved readiness wait. Source replacement refreshes the same
+checked interface through its owner.
 
 Native port backends publish `PortSurfaceReady` when their declaring component
 is installed. This includes celestial `LinkNode` endpoints, whose outputs do not
@@ -1499,14 +1572,39 @@ including generated networks without a published participant. Independently
 initialized networks can still add wires to the complete certification snapshot.
 Their numerical preparation does not hold coupled capture once declarations
 and wiring are available. The owner invokes
-the required `synth.coupled-initialization` hook to emit a transient Modelica
+the required `synth.coupled-initialization` hook to emit a Modelica
 composite containing those instances, their input bindings and input probes.
-The existing Modelica worker compiles and solves the composite while paused;
-preparation neither advances simulation time nor blocks the live World on parsing
-or solver construction. While the transient worker has no outcome, the
+The Rust owner supplies complete input groups; Rhai emits nested array literals
+in their checked order as whole-input modifiers. Participant parameter values
+travel separately as qualified `Initialize.parameter_overrides` names such as
+`p0.k` or `p0.gains[2]`, through the shared compiler/lowering admission. They are
+not injected as member source modifiers. Indexed tunables retain scalar lowering
+semantics; indexed structural overrides remain unsupported by the root-modifier
+owner. A requested binding whose aggregate name itself contains an index is
+also rejected because the source modifier cannot represent that target.
+
+The current USD scalar-port authoring API cannot name indexed Modelica scalar
+ports. Aggregate metadata and policy emission do not extend that authoring API.
+The production `modelica_initialization_arrays` fixture exercises the shipped
+Rhai emitter directly with checked input groups and incomplete/excess negative
+cases; it does not claim indexed USD scene wiring coverage.
+
+The existing compiler and preparation pipeline compiles and initializes the
+composite as a request-owned job. Its identity contains the scene generation
+and a sequence within that generation. The worker returns checked finite
+observations, solver settings and preparation timings under that request identity, without
+installing a live session, attaching an integration plugin or publishing a
+scene model. It shares prepared artifacts and bounded worker lanes with live
+construction. Native and browser transports keep initialization replies
+separate from participant lifecycle results.
+Preparation neither advances simulation time nor blocks the live World on parsing
+or solver construction. While the job has no outcome, the
 coordinator's native readiness gate skips its World boundary and initial
-physical sampling. A compiled result or worker error wakes the same coordinator;
+physical sampling. A result, worker error or disconnected response channel wakes the coordinator;
 acceptance still samples the current providers and compares the complete plan.
+Scene retirement cancels the exact request; late replies cannot authorize a
+different generation. Failed admission revokes unconsumed solved inputs and
+participant holds, terminates pending member operations and raises the owner fault.
 
 The physics owner's initial joint-island membership includes joints temporarily
 disabled by its readiness freeze, using that freeze's exact ownership marker.
@@ -1532,24 +1630,51 @@ simulation clock. A missing policy, malformed result or unsatisfied initial syst
 raises `modelica-initialization-failed` and holds the affected participants.
 
 A worker result is accepted only against the captured scene, sources, authored
-values, physical samples and wiring. Its finite input observations enter live
-construction through one-shot `ConsistentInitialInputs`. All members remain paused
+values, physical samples and wiring. Its finite input and source-state observations
+enter live construction together through one-shot `ConsistentInitialInputs`.
+The worker validates the state inventory against the checked participant DAE.
+Rumoca identifies free initial state coordinates through the checked initialization
+owner; these have no authored given value, projection writer or update writer.
+Only these coordinates can receive an accepted-state constraint. Rumoca validates
+identity, domains and duplicate requests before comparing values bitwise with the
+checked prepared `initial_y`. Matching values require no new owner; an all-identity
+request preserves the original component, initialization and event program.
+Nonredundant constraints acquire given ownership only after the component passes
+the continuous-state capability guard. Every original initial residual remains
+checked. Per-instance constraints do not overwrite the shared cache or act as
+start guesses.
+Ordinary authored initialization carries no coupled state admission. A coupled
+admission with a missing required free coordinate is an error, including an
+explicitly empty supplied inventory.
+All members remain paused
 under `CoupledInitializationPending` until their own solvers are constructed at
 `t=0` and the actual connected observations agree with the composite within the
 active solver tolerances. Pending participant constructors close the coordinator's
-readiness gate until every member has an outcome; errors or missing actors wake
+readiness gate until every member has an outcome; errors or retired construction owners wake
 it immediately. Full certification then samples and validates the current graph
 before releasing the members together. A changed
 source or wire cannot release an old certificate; failed certification reports the
-same terminal runtime fault. Scene teardown retires the transient participant and
+same terminal runtime fault. Scene teardown cancels the preparation job and retires
 its admission state. Settled scenes skip the preparation coordinator.
+
+Nonredundant free-state constraints support continuous Real coordinates whose
+initialization has no event, pre/history, clock or chart-transfer requirement,
+and no initialization-owned parameter unknowns. Rumoca refuses unsupported
+changes with the coordinate name, requested value, prepared value and component
+capability facts. Identity requests require no feature transfer. Locally
+determined participants retain their initialization equations. This is a checked
+coordinate constraint contract, not cross-instance FMU snapshot import. The worker
+and coordinator verify every supplied state observation after initialization
+events, including normalized identities, as well as connected inputs before
+release. Preserving an event program never bypasses that final certification.
+Changed parameters or inputs that contradict an admitted initial solution require
+a fresh coupled admission; they cannot silently replace that solution on rebuild.
 
 Successful certification retains a scene-scoped diagnostic receipt in
 `CosimStatus.last_coupled_initialization`: scene generation, solver identity
 and worker construction timings. This is the last completed
 initialization, not a permit for a later graph. Failed or superseded work cannot
-publish a successful receipt; teardown removes it. Missing worker diagnostics
-leave the receipt unavailable and do not change numerical admission. The
+publish a successful receipt; teardown removes it. The
 `modelica_initialization_network` production Rhai gate checks the retained receipt
 alongside initial values, communication rates, pause/resume and clock behavior.
 

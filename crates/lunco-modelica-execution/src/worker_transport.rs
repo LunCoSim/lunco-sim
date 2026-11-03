@@ -3,7 +3,7 @@
 //! Why this module exists
 //! ----------------------
 //! On native, `lunco_modelica_worker::worker::modelica_worker` runs on its own OS thread and exchanges
-//! `ModelicaCommand` / `ModelicaResult` over crossbeam channels with the Bevy
+//! `ModelicaCommand` / `ModelicaWorkerResponse` over typed channels with the Bevy
 //! main loop. The blocking compile / step work never blocks the UI.
 //!
 //! On wasm32-unknown-unknown there are no OS threads. Modelica work therefore
@@ -22,7 +22,7 @@
 //! ---------
 //! 1. The main wasm instance constructs a `web_sys::Worker` from the worker
 //!    bundle URL and stores it via [`install_worker`] together with the
-//!    `Sender<ModelicaResult>` end of the existing channel. JS-side, the
+//!    `ModelicaResponseSender` routing boundary. JS-side, the
 //!    worker's `onmessage` is wired to a wasm-bindgen-exported callback that
 //!    pushes deserialized results into that sender.
 //! 2. A Bevy system [`pump_commands_to_worker`] drains the existing
@@ -30,7 +30,7 @@
 //!    `Worker::post_message(Uint8Array)`.
 //! 3. The worker bundle (`bin/lunica_worker.rs`) decodes the bytes, runs
 //!    `lunco_modelica_worker::worker::process_worker_command` against its local `ModelicaWorkerState`,
-//!    and posts each `ModelicaResult` back the same way.
+//!    and posts each `ModelicaWorkerResponse` back the same way.
 //!
 //! All wasm-only — `cfg(target_arch = "wasm32")` at the module level.
 
@@ -49,7 +49,10 @@ use wasm_bindgen::prelude::*;
 
 use lunco_core_runtime::LockExt;
 use lunco_modelica_library::worker_bridge::{WorkerParseDone, WorkerParseFailed};
-use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
+use lunco_modelica_runtime::{
+    ModelicaChannels, ModelicaCommand, ModelicaPreparationId, ModelicaPreparationResult,
+    ModelicaResponseSender, ModelicaResult, ModelicaWorkerResponse,
+};
 
 /// Wire-format envelope for the postMessage transport.
 ///
@@ -157,8 +160,8 @@ pub enum WireMessage {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum WireResult {
     ExperimentArtifact(lunco_experiments::artifact::ArtifactResponse),
-    /// A normal `ModelicaResult` produced by `process_worker_command`.
-    Result(ModelicaResult),
+    /// A typed worker reply carrying either participant or preparation identity.
+    Result(ModelicaWorkerResponse),
     /// The worker finished decoding the compressed source library bundle (from
     /// [`WireMessage::InstallParsedLibraryCompressed`]) into its own
     /// `GLOBAL_PARSED_SOURCE_BUNDLE`, and is ready to resolve `Modelica.*` references.
@@ -446,10 +449,9 @@ pub fn configure_cache_limits(
     Ok(())
 }
 
-/// Process-wide sender for `ModelicaResult` values arriving from the worker.
-/// Set once at startup; drained by the existing
-/// `worker::handle_modelica_responses` system through `ModelicaChannels.rx`.
-static RESULT_TX: OnceLock<Sender<ModelicaResult>> = OnceLock::new();
+/// Process-wide reply router. Participant responses reach the runtime bridge;
+/// initialization responses reach their scene-owned preparation coordinator.
+static RESULT_TX: OnceLock<ModelicaResponseSender> = OnceLock::new();
 /// Process-wide sender for `ModelicaCommand`s — same handle the Bevy
 /// systems write to via `ModelicaChannels.tx`. Used by the
 /// `__lc_test_dispatch_compile` JS bridge to fire commands without going
@@ -593,10 +595,10 @@ fn queue_parse_failure(doc_id: lunco_doc::DocumentId, generation: u64, error: im
 }
 
 /// Stash the result-side sender so the JS `onmessage` callback can push
-/// decoded results into the same crossbeam channel that
-/// `worker::handle_modelica_responses` drains. Called by the
+/// decoded responses into their typed participant or initialization channel.
+/// Called by the
 /// `ModelicaExecutionPlugin` setup; returns false if a sender is already installed.
-pub fn register_result_sender(tx_res: Sender<ModelicaResult>) -> bool {
+pub fn register_result_sender(tx_res: ModelicaResponseSender) -> bool {
     RESULT_TX.set(tx_res).is_ok()
 }
 
@@ -730,7 +732,15 @@ fn route_wire_result(idx: usize, data: JsValue) {
             }
         }
         Ok(WireResult::Result(result)) => {
-            if let Some(error) = &result.worker_failure {
+            if let ModelicaWorkerResponse::Preparation(preparation) = &result
+                && !PREPARATION_REQUESTS
+                    .with(|requests| requests.borrow_mut().remove(&preparation.request_id))
+            {
+                return;
+            }
+            if let ModelicaWorkerResponse::Participant(participant) = &result
+                && let Some(error) = &participant.worker_failure
+            {
                 fail_worker_pipeline(error.clone());
             }
             if let Some(tx) = RESULT_TX.get() {
@@ -838,6 +848,9 @@ fn route_wire_result(idx: usize, data: JsValue) {
         }
         Err(e) => {
             bevy::log::error!("[worker_transport] failed to decode result: {e}");
+            if idx == 0 {
+                fail_worker_pipeline(format!("cannot decode Modelica worker result: {e}"));
+            }
         }
     }
 }
@@ -938,6 +951,7 @@ fn handle_worker_error(idx: usize) {
     ARTIFACT_LEASES.with(|leases| leases.borrow_mut().retain(|_, lease| lease.worker != idx));
     if idx == 0 {
         fail_artifact_requests("artifact worker disconnected");
+        fail_preparation_requests("Modelica preparation worker disconnected");
     }
     if let Some(handle) = lunco_modelica_core::engine_resource::global_engine_handle() {
         handle.clear_all_pending();
@@ -966,6 +980,9 @@ fn handle_worker_error(idx: usize) {
 /// Replace the dead worker and admit the same immutable configuration before re-seeding.
 /// A failed replacement terminates the pipeline so queued work cannot wait on a dead slot.
 fn respawn_worker(idx: usize) {
+    if idx == 0 {
+        fail_preparation_requests("Modelica preparation worker retired");
+    }
     {
         let mut p = pool().lock_or_recover();
         let config = match cache_configuration_bytes(p.cache_limits) {
@@ -1102,6 +1119,23 @@ pub fn pump_commands_to_worker(channels: Res<ModelicaChannels>) {
 /// Re-queued commands leave on the next `LibraryReady` event; this cannot recurse
 /// because [`flush_pending_commands`] iterates a drained snapshot.
 fn post_command_or_queue(cmd: ModelicaCommand) {
+    match &cmd {
+        ModelicaCommand::Initialize { request_id, .. }
+        | ModelicaCommand::PrepareInterface { request_id, .. } => {
+            PREPARATION_REQUESTS.with(|requests| requests.borrow_mut().insert(*request_id));
+        }
+        ModelicaCommand::CancelPreparation { request_id } => {
+            PENDING_COMMANDS.with(|pending| {
+                pending
+                    .borrow_mut()
+                    .retain(|command| preparation_request_id(command) != Some(*request_id))
+            });
+            if !finish_preparation_request(*request_id, "preparation cancelled by its owner") {
+                return;
+            }
+        }
+        _ => {}
+    }
     if let Some(error) = pipeline_failure() {
         send_command_failure(&cmd, &format!("Modelica worker pipeline failed: {error}"));
         return;
@@ -1361,6 +1395,10 @@ pub fn __lc_test_worker_ping(tag: &str) {
 // `thread_local!` is enough — no `Mutex` needed.
 #[cfg(target_arch = "wasm32")]
 thread_local! {
+    /// The host owns terminal receipts even while a request waits for source
+    /// roots or its browser worker is no longer available.
+    static PREPARATION_REQUESTS: std::cell::RefCell<std::collections::BTreeSet<ModelicaPreparationId>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
     /// Terminal source library failure for this app lifetime. Generated source library artifacts are
     /// part of the runtime contract; once they fail, requests complete with a
     /// visible error instead of being retried or silently reparsed.
@@ -1372,13 +1410,55 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+fn preparation_request_id(command: &ModelicaCommand) -> Option<ModelicaPreparationId> {
+    match command {
+        ModelicaCommand::Initialize { request_id, .. }
+        | ModelicaCommand::PrepareInterface { request_id, .. } => Some(*request_id),
+        _ => None,
+    }
+}
+
+fn finish_preparation_request(request_id: ModelicaPreparationId, error: &str) -> bool {
+    if !PREPARATION_REQUESTS.with(|requests| requests.borrow_mut().remove(&request_id)) {
+        return false;
+    }
+    if let Some(tx) = RESULT_TX.get() {
+        let _ = tx.send(ModelicaPreparationResult {
+            request_id,
+            outcome: Err(error.into()),
+        });
+    }
+    true
+}
+
+fn fail_preparation_requests(error: &str) {
+    let requests =
+        PREPARATION_REQUESTS.with(|requests| std::mem::take(&mut *requests.borrow_mut()));
+    PENDING_COMMANDS.with(|pending| {
+        pending
+            .borrow_mut()
+            .retain(|command| preparation_request_id(command).is_none())
+    });
+    if let Some(tx) = RESULT_TX.get() {
+        for request_id in requests {
+            let _ = tx.send(ModelicaPreparationResult {
+                request_id,
+                outcome: Err(error.into()),
+            });
+        }
+    }
+}
+
 /// Commands that depend on a populated source library index in the worker (compile-path
 /// commands). Sent before source library install lands → silent "unresolved Modelica.*"
 /// failures. Gate them; drain on the worker's source library-ready event.
 fn command_needs_library(cmd: &ModelicaCommand) -> bool {
     matches!(
         cmd,
-        ModelicaCommand::Compile { .. } | ModelicaCommand::UpdateParameters { .. }
+        ModelicaCommand::Compile { .. }
+            | ModelicaCommand::UpdateParameters { .. }
+            | ModelicaCommand::Initialize { .. }
+            | ModelicaCommand::PrepareInterface { .. }
     )
 }
 
@@ -1389,6 +1469,11 @@ fn pipeline_failure() -> Option<String> {
 
 #[cfg(target_arch = "wasm32")]
 fn send_command_failure(cmd: &ModelicaCommand, error: &str) {
+    if let Some(request_id) = preparation_request_id(cmd) {
+        PREPARATION_REQUESTS.with(|requests| requests.borrow_mut().remove(&request_id));
+    } else if matches!(cmd, ModelicaCommand::CancelPreparation { .. }) {
+        return;
+    }
     if let Some(tx) = RESULT_TX.get() {
         let _ = tx.send(lunco_modelica_worker::worker::failed_result_for_command(
             cmd, error,
@@ -1430,6 +1515,7 @@ pub fn fail_worker_pipeline(error: String) {
     for cmd in pending_commands {
         send_command_failure(&cmd, &error);
     }
+    fail_preparation_requests(&error);
     let pending_runs = PENDING_RUN_FAST.with(|q| q.borrow_mut().drain(..).collect::<Vec<_>>());
     for msg in pending_runs {
         if let WireMessage::RunFast { run_id, .. } = msg {
@@ -1530,7 +1616,10 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         doc_uri: "model.mo".to_string(),
         extra_sources: Vec::new(),
         parameter_overrides: Vec::new(),
+        authored_bindings: Default::default(),
+        expected_library_revision: None,
         initial_inputs: Vec::new(),
+        initial_state_values: None,
         // A transport smoke-test compile drives no predicted body.
         realtime_safe: false,
     };

@@ -1,9 +1,8 @@
 //! Native worker command scheduling.
 
-use super::{CompileWork, cmd_entity, cmd_session, is_squashable, result_ok};
+use super::{PreparationWork, cmd_entity, cmd_session, is_squashable, result_ok};
 use bevy::prelude::Entity;
-use crossbeam_channel::Sender;
-use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult};
+use lunco_modelica_runtime::{ModelicaCommand, ModelicaResponseSender};
 use std::collections::{HashMap, VecDeque};
 
 /// The worker's two-lane command scheduler.
@@ -39,7 +38,7 @@ pub(super) fn enqueue_command(
     cmd: ModelicaCommand,
     compile_lane: &mut VecDeque<ModelicaCommand>,
     step_lane: &mut VecDeque<ModelicaCommand>,
-    tx: &Sender<ModelicaResult>,
+    tx: &ModelicaResponseSender,
 ) {
     let is_step = matches!(cmd, ModelicaCommand::Step { .. });
     if is_step {
@@ -58,7 +57,9 @@ pub(super) fn enqueue_command(
     // latest, acking the dropped one (see `is_squashable`).
     if let Some(last) = compile_lane.back_mut() {
         if is_squashable(last, &cmd) && cmd_session(last) == cmd_session(&cmd) {
-            let _ = tx.send(result_ok(cmd_entity(last), cmd_session(last)));
+            if let (Some(entity), Some(session)) = (cmd_entity(last), cmd_session(last)) {
+                let _ = tx.send(result_ok(entity, session));
+            }
             *last = cmd;
             return;
         }
@@ -94,10 +95,11 @@ pub(super) fn promote_unblocked_steps(
 /// but whose live stepper has not yet been committed by the worker thread.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn pending_preparation_entities(
-    pending_compile_works: &HashMap<u64, CompileWork>,
+    pending_compile_works: &HashMap<u64, PreparationWork>,
 ) -> std::collections::HashSet<Entity> {
     pending_compile_works
         .values()
+        .filter_map(PreparationWork::participant)
         .filter(|work| !work.cancelled)
         .map(|work| work.entity)
         .collect()
@@ -114,7 +116,7 @@ pub(super) fn take_runnable_steps(
     let mut runnable = Vec::with_capacity(step_lane.len());
     let mut blocked = VecDeque::new();
     for command in step_lane.drain(..) {
-        if pending_entities.contains(&cmd_entity(&command)) {
+        if cmd_entity(&command).is_some_and(|entity| pending_entities.contains(&entity)) {
             blocked.push_back(command);
         } else {
             runnable.push(command);
@@ -138,7 +140,9 @@ pub(super) fn take_runnable_compile_command(
 ) -> Option<ModelicaCommand> {
     let command = compile_lane.front()?;
     let runnable = match command {
-        ModelicaCommand::CompileBatch { .. } => {
+        ModelicaCommand::CompileBatch { .. }
+        | ModelicaCommand::Initialize { .. }
+        | ModelicaCommand::PrepareInterface { .. } => {
             preparation_capacity_available && !source_root_preparation_pending
         }
         ModelicaCommand::Compile { entity, .. } => {
@@ -156,7 +160,9 @@ pub(super) fn take_runnable_compile_command(
         ModelicaCommand::LoadSourceRoot { .. } => {
             !preparation_pending && preparation_capacity_available
         }
-        ModelicaCommand::UnloadSourceRoot { .. } => true,
+        ModelicaCommand::UnloadSourceRoot { .. } | ModelicaCommand::CancelPreparation { .. } => {
+            true
+        }
         ModelicaCommand::Step { entity, .. } => !pending_entities.contains(entity),
     };
     runnable.then(|| compile_lane.pop_front().expect("front command exists"))
@@ -224,6 +230,7 @@ mod tests {
     use super::*;
     use crossbeam_channel::Receiver;
     use lunco_modelica_runtime::LoadSourceRootPayload;
+    use lunco_modelica_runtime::ModelicaResult;
 
     #[test]
     fn independent_preparations_advance_while_live_publication_stays_ordered() {
@@ -297,7 +304,10 @@ mod tests {
             doc_uri: "doc.mo".into(),
             extra_sources: Vec::new(),
             parameter_overrides: Vec::new(),
+            authored_bindings: Default::default(),
+            expected_library_revision: None,
             initial_inputs: Vec::new(),
+            initial_state_values: None,
         }
     }
 
@@ -315,13 +325,15 @@ mod tests {
     struct Lanes {
         compile: VecDeque<ModelicaCommand>,
         step: VecDeque<ModelicaCommand>,
-        tx: Sender<ModelicaResult>,
+        tx: ModelicaResponseSender,
         rx: Receiver<ModelicaResult>,
     }
 
     impl Lanes {
         fn new() -> Self {
             let (tx, rx) = crossbeam_channel::unbounded();
+            let (initialization_tx, _preparation_rx) = crossbeam_channel::unbounded();
+            let tx = ModelicaResponseSender::new(tx, initialization_tx);
             Self {
                 compile: VecDeque::new(),
                 step: VecDeque::new(),
@@ -377,7 +389,7 @@ mod tests {
         assert!(l.step.is_empty());
 
         let front = l.compile.pop_front().expect("front compile");
-        assert_eq!(cmd_entity(&front), ent(1));
+        assert_eq!(cmd_entity(&front), Some(ent(1)));
         promote_unblocked_steps(&mut l.compile, &mut l.step);
         assert_eq!(l.step.len(), 1);
         assert_eq!(l.compile.len(), 1);
@@ -405,9 +417,12 @@ mod tests {
         let runnable = take_runnable_steps(&mut steps, &pending);
 
         assert_eq!(runnable.len(), 1);
-        assert_eq!(cmd_entity(&runnable[0]), ent(2));
+        assert_eq!(cmd_entity(&runnable[0]), Some(ent(2)));
         assert_eq!(steps.len(), 1);
-        assert_eq!(cmd_entity(steps.front().expect("blocked step")), ent(1));
+        assert_eq!(
+            cmd_entity(steps.front().expect("blocked step")),
+            Some(ent(1))
+        );
     }
 
     #[test]
@@ -424,7 +439,7 @@ mod tests {
         let command =
             take_runnable_compile_command(&mut compile_lane, &pending, false, false, true)
                 .expect("front compile becomes runnable after preparation commits");
-        assert_eq!(cmd_entity(&command), ent(1));
+        assert_eq!(cmd_entity(&command), Some(ent(1)));
     }
 
     #[test]

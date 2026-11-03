@@ -4,12 +4,11 @@
 //! `connectionPaths` from USD prims after the bounded USD visual projection
 //! has spawned the entity, and drives the full cosim lifecycle end-to-end:
 //!
-//! - **Modelica**: opens the source file, inserts a `ModelicaModel`
-//!   stub, dispatches `ModelicaCommand::Compile` directly to the
-//!   worker channel, and publishes the `SimComponent` — the entity's
-//!   port interface — immediately from the parsed declaration, so wires
-//!   into the model resolve before the solver has answered
-//!   (`SimStatus::Compiling` until `ModelicaVariables.values` populates).
+//! - **Modelica**: resolves the loaded class interface asynchronously through
+//!   the compiler's admitted source set before publishing causal ports. Initial
+//!   inputs and authored bindings are admitted against that exact source lease
+//!   before the worker constructs a participant (`SimStatus::Compiling` until
+//!   `ModelicaVariables.values` populates).
 //! - **Python**: opens the script, registers a `ScriptDocument`,
 //!   attaches `ScriptedModel`, and creates the matching `SimComponent`.
 //! - **Wiring**: [`rewire_usd_connections`] derives one `SimConnection`
@@ -61,7 +60,10 @@ use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, Usd
 pub struct UsdSimCosimPlugin;
 
 mod initialization;
+mod interfaces;
+mod preparations;
 pub use initialization::{CoupledInitializationReceipt, last_coupled_initialization};
+use interfaces::{ResolvedUsdModelicaInterface, publish_loaded_modelica_interfaces};
 pub mod readiness;
 pub mod sync;
 mod wiring;
@@ -413,6 +415,10 @@ fn reset_standalone_modelica_projection(
                 UsdSourcedCosim,
                 ModelicaModel,
                 PendingModelicaSource,
+                interfaces::PendingInterface,
+                interfaces::QueuedInterface,
+                ResolvedUsdModelicaInterface,
+                lunco_modelica_runtime::ModelicaResolvedInterface,
                 SimComponent,
                 UsdSimProcessed,
                 UsdInputDefaults,
@@ -1633,6 +1639,7 @@ fn modelica_port_contract_error(
     contract: &UsdModelicaPortContract,
     model: &ModelicaModel,
     variables: &ModelicaVariables,
+    resolved: Option<&ResolvedUsdModelicaInterface>,
 ) -> Option<String> {
     let missing_inputs: Vec<_> = contract
         .inputs
@@ -1640,23 +1647,17 @@ fn modelica_port_contract_error(
         // An unconnected USD `inputs:` value is also the authored parameter
         // boundary for a Modelica participant. Parameters are compile-time
         // values, not causal solver inputs, so the compiler correctly omits
-        // them from `compiled_input_names`. Keep the contract check about
-        // actual runtime wires; parameter admission is handled by the shared
-        // USD-default projection below.
-        .filter(|name| !model.parameters.contains_key(*name))
-        // A single USD prim may be both a Modelica program and a physical
-        // endpoint. In that shape `inputs:force_y` is the Avian body sink,
-        // while `output Real force_y` is the Modelica actuator source. The
-        // USD input is intentionally absent from the Modelica DAE; a same-
-        // named compiled output proves this is the cross-domain loop rather
-        // than a typo in a Modelica input name.
-        .filter(|name| !variables.values.contains_key(*name))
+        // them from `compiled_input_names`. The checked parameter inventory is
+        // independent of the availability of a numeric presentation value.
+        .filter(|name| !model.compiled_parameter_names.contains(*name))
+        .filter(|name| !resolved.is_some_and(|surface| surface.native_inputs.contains(*name)))
         .cloned()
         .collect();
     let actual_outputs: BTreeSet<_> = variables.values.keys().cloned().collect();
     let missing_outputs: Vec<_> = contract
         .outputs
         .difference(&actual_outputs)
+        .filter(|name| !resolved.is_some_and(|surface| surface.native_outputs.contains(*name)))
         .cloned()
         .collect();
     if missing_inputs.is_empty() && missing_outputs.is_empty() {
@@ -1692,10 +1693,11 @@ fn validate_usd_modelica_port_contracts(
         &mut ModelicaModel,
         &ModelicaVariables,
         Option<&ValidatedUsdModelicaPortContract>,
+        Option<&ResolvedUsdModelicaInterface>,
     )>,
     mut notices: MessageWriter<lunco_modelica_runtime::ModelicaNotice>,
 ) {
-    for (entity, contract, mut model, variables, validated) in &mut q {
+    for (entity, contract, mut model, variables, validated, resolved) in &mut q {
         if model.is_compiling || !model.is_compiled {
             continue;
         }
@@ -1703,7 +1705,7 @@ fn validate_usd_modelica_port_contracts(
             continue;
         }
 
-        if let Some(error) = modelica_port_contract_error(contract, &model, variables) {
+        if let Some(error) = modelica_port_contract_error(contract, &model, variables, resolved) {
             model.paused = true;
             model.last_error = Some(error.clone());
             notices.write(lunco_modelica_runtime::ModelicaNotice {
@@ -1727,6 +1729,11 @@ fn validate_usd_modelica_port_contracts(
 /// pending while its source or physical producers are preparing. Native run
 /// conditions admit this exclusive boundary only after scene projection settles
 /// and while a source remains pending.
+struct LoadedModelicaAdmission {
+    inputs: Result<Option<lunco_cosim_core::initialization::InitialInputAdmission>, String>,
+    external_inputs: BTreeSet<String>,
+}
+
 pub(crate) fn dispatch_loaded_modelica_sources(
     world: &mut World,
     mut pending: Local<QueryState<Entity, With<PendingModelicaSource>>>,
@@ -1736,115 +1743,22 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         .into_iter()
         .map(|entity| {
             let inputs = lunco_cosim_core::initialization::initialization_inputs(world, entity);
-            (entity, inputs)
+            let external_inputs = world
+                .get::<ResolvedUsdModelicaInterface>(entity)
+                .map(|surface| surface.native_inputs.clone())
+                .unwrap_or_default();
+            (
+                entity,
+                LoadedModelicaAdmission {
+                    inputs,
+                    external_inputs,
+                },
+            )
         })
         .collect();
     if let Err(error) = world.run_system_cached_with(dispatch_admitted_modelica_sources, admissions)
     {
         error!("[usd-cosim] Modelica initialization admission failed: {error}");
-    }
-}
-
-/// Publish every loaded source's declaration before admitting connected inputs.
-/// Modelica owns ports even when USD only authors a wire to them. Declaration
-/// availability never publishes an unsolved numerical sample.
-fn publish_loaded_modelica_interfaces(
-    mut commands: Commands,
-    mut pending: Query<
-        (
-            Entity,
-            &PendingModelicaSource,
-            &UsdPrimPath,
-            &mut SimComponent,
-            Option<&DeclaredOutputPorts>,
-            Option<&ModelicaSignalLayout>,
-            Option<&lunco_port_core::ScalarPortContracts>,
-            Option<&UsdModelicaPortContract>,
-        ),
-        With<lunco_port_core::PortSurfacePending>,
-    >,
-    sources: Res<Assets<ModelicaSource>>,
-    channels: Option<Res<ModelicaChannels>>,
-    mut source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
-    mut notices: MessageWriter<lunco_modelica_runtime::ModelicaNotice>,
-) {
-    let mut pending: Vec<_> = pending.iter_mut().collect();
-    pending
-        .sort_unstable_by(|(_, _, a, _, _, _, _, _), (_, _, b, _, _, _, _, _)| a.path.cmp(&b.path));
-    for (
-        entity,
-        pending,
-        _,
-        mut component,
-        declared,
-        current_layout,
-        current_contracts,
-        contract,
-    ) in pending
-    {
-        let Some(source) = sources.get(&pending.handle) else {
-            continue;
-        };
-        if source.interface.model_name.is_none() {
-            continue;
-        }
-        // Source dependencies need no physical sample. Queue their existing
-        // preparation lane while scene projection and input admission settle.
-        // Compile dispatch validates the then-current source requirements again.
-        if let (Some(roots), Some(channels)) = (source_roots.as_deref_mut(), channels.as_deref()) {
-            if let Err(error) = lunco_modelica_source_roots::admit_compile_roots(
-                roots,
-                source.interface.required_source_roots.iter().cloned(),
-                channels,
-            ) {
-                reject_modelica_source(
-                    &mut commands,
-                    &mut notices,
-                    entity,
-                    &mut component,
-                    format!("could not admit Modelica source roots: {error}"),
-                );
-                continue;
-            }
-        }
-        for name in &source.interface.inputs {
-            if !component.inputs.contains_key(name) {
-                component.inputs.declare(name.clone());
-            }
-        }
-        let mut outputs = DeclaredOutputPorts::default();
-        if let Some(contract) = contract {
-            outputs.names.extend(contract.outputs.iter().cloned());
-        }
-        outputs
-            .names
-            .extend(source.interface.outputs.iter().cloned());
-        if declared.is_none_or(|declared| declared.names != outputs.names) {
-            commands.entity(entity).try_insert(outputs);
-        }
-        let mut layout = current_layout.cloned().unwrap_or_default();
-        layout.metadata = source
-            .interface
-            .variable_metadata
-            .iter()
-            .map(|(name, metadata)| (name.clone(), metadata.clone()))
-            .collect();
-        let port_contracts = match layout.port_contracts() {
-            Ok(contracts) => contracts,
-            Err(error) => {
-                reject_modelica_source(&mut commands, &mut notices, entity, &mut component, error);
-                continue;
-            }
-        };
-        if current_contracts != Some(&port_contracts) {
-            commands.entity(entity).try_insert(port_contracts);
-        }
-        if current_layout.is_none_or(|current| current.metadata != layout.metadata) {
-            commands.entity(entity).try_insert(layout);
-        }
-        commands
-            .entity(entity)
-            .remove::<lunco_port_core::PortSurfacePending>();
     }
 }
 
@@ -1886,7 +1800,7 @@ fn reject_modelica_source(
 }
 
 fn dispatch_admitted_modelica_sources(
-    In(admissions): In<HashMap<Entity, Result<Option<Vec<(String, f64)>>, String>>>,
+    In(admissions): In<HashMap<Entity, LoadedModelicaAdmission>>,
     mut commands: Commands,
     mut q: Query<(
         Entity,
@@ -1895,6 +1809,7 @@ fn dispatch_admitted_modelica_sources(
         &mut SimComponent,
         Option<&UsdInputDefaults>,
         Option<&UsdModelicaSchedule>,
+        Option<&ResolvedUsdModelicaInterface>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
@@ -1920,9 +1835,9 @@ fn dispatch_admitted_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending.sort_unstable_by(|(_, _, a, _, _, _), (_, _, b, _, _, _)| a.path.cmp(&b.path));
+    pending.sort_unstable_by(|(_, _, a, _, _, _, _), (_, _, b, _, _, _, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, prim_path, mut component, usd_defaults, schedule) in pending {
+    for (entity, pending, _prim_path, mut component, usd_defaults, schedule, resolved) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -1937,53 +1852,37 @@ fn dispatch_admitted_modelica_sources(
             continue;
         };
 
-        let Some(model_name) = src.interface.model_name.clone() else {
-            let error = format!(
-                "Modelica source `{}` contains no runnable model, block, or class",
-                pending.asset_path
-            );
-            reject_modelica_source(&mut commands, &mut notices, entity, &mut component, error);
+        let Some(resolved) = resolved else {
             continue;
         };
+        if !resolved.matches(pending.session_id, &pending.asset_path, &src.text)
+            || !resolved.matches_authored(usd_defaults)
+        {
+            reject_modelica_source(
+                &mut commands,
+                &mut notices,
+                entity,
+                &mut component,
+                "Modelica source changed after interface admission".into(),
+            );
+            continue;
+        }
+        let model_name = resolved.outcome.interface.model_name.clone();
 
-        let (connected_inputs, admission_error) = match admissions.get(&entity) {
+        let (connected_inputs, admission_error) = match admissions.get(&entity).map(|a| &a.inputs) {
             Some(Ok(Some(inputs))) => (inputs.clone(), None),
             Some(Ok(None)) => continue,
-            Some(Err(error)) => (Vec::new(), Some(error.clone())),
+            Some(Err(error)) => (Default::default(), Some(error.clone())),
             None => (
-                Vec::new(),
+                Default::default(),
                 Some("missing Modelica initialization admission".to_owned()),
             ),
         };
 
-        // The source asset loader prepares this interface on Bevy's async
-        // compute pool. `ModelicaModel::inputs` is a write buffer seeded from
-        // the authored interface, which
-        // `wrap_modelica_into_simcomponent` copies into `SimComponent::inputs` —
-        // the port surface a wire writes to.
-        let mut parameters = src.interface.parameters.clone();
-        let input_names = &src.interface.inputs;
+        // Evaluated defaults are published only by checked worker construction.
+        let parameters = HashMap::new();
+        let input_names = &resolved.inputs;
         let mut inputs = HashMap::new();
-        // USD is the instance-authoring boundary. Apply its unconnected
-        // scalar values to the correct Modelica variability class before the
-        // first compile: parameters stay compile-time parameters, while
-        // `input Real` values remain live solver inputs. This classification
-        // is source-driven and reusable for every Modelica asset; it does not
-        // encode sensor- or vehicle-specific names.
-        if let Some(defaults) = usd_defaults {
-            for (name, value) in &defaults.0 {
-                if let Some(parameter) = parameters.get_mut(name) {
-                    *parameter = *value;
-                } else if input_names.contains(name) {
-                    inputs.insert(name.clone(), *value);
-                } else {
-                    warn!(
-                        "[usd-cosim] {}: `inputs:{}` is authored but the Modelica source ({}) declares no parameter or input — the value is ignored",
-                        prim_path.path, name, model_name,
-                    );
-                }
-            }
-        }
         // DISPATCH FIRST, then stub. NOT `let _ = send(..)`: a closed worker
         // channel means the compile is never attempted, and a `ModelicaModel`
         // with no `last_error` and no `variables` projects `SimStatus::Compiling`
@@ -2002,28 +1901,23 @@ fn dispatch_admitted_modelica_sources(
             continue;
         };
 
-        let parameter_overrides = usd_defaults
-            .map(|defaults| {
-                defaults
-                    .0
-                    .iter()
-                    .filter(|(name, _)| parameters.contains_key(*name))
-                    .map(|(name, value)| (name.clone(), *value))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let mut initial_inputs: std::collections::BTreeMap<String, f64> = usd_defaults
-            .map(|defaults| {
-                defaults
-                    .0
-                    .iter()
-                    .filter(|(name, _)| input_names.contains(*name))
-                    .map(|(name, value)| (name.clone(), *value))
-                    .collect()
-            })
-            .unwrap_or_default();
-        initial_inputs.extend(connected_inputs);
-        let initial_inputs: Vec<_> = initial_inputs.into_iter().collect();
+        let authored_bindings = lunco_modelica_runtime::ModelicaAuthoredBindings {
+            values: usd_defaults
+                .map(|defaults| {
+                    defaults
+                        .0
+                        .iter()
+                        .map(|(name, value)| (name.clone(), *value))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            external_inputs: admissions
+                .get(&entity)
+                .map(|admission| admission.external_inputs.clone())
+                .unwrap_or_default(),
+        };
+        let initial_state_values = connected_inputs.state_values;
+        let initial_inputs = connected_inputs.inputs;
         inputs.extend(initial_inputs.iter().cloned());
         let root_admission = match source_roots.as_deref_mut() {
             Some(source_roots) => lunco_modelica_source_roots::admit_compile_roots(
@@ -2054,8 +1948,11 @@ fn dispatch_admitted_modelica_sources(
                         // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
                         doc_uri: pending.asset_path.to_string(),
                         extra_sources: Vec::new(),
-                        parameter_overrides,
+                        expected_library_revision: Some(resolved.outcome.library_revision),
+                        parameter_overrides: Vec::new(),
+                        authored_bindings,
                         initial_inputs,
+                        initial_state_values,
                         // Declared, never inferred. A program without the promise is
                         // authoritative live co-simulation, not client prediction.
                         realtime_safe: q_realtime_safe.contains(entity),
@@ -2252,30 +2149,9 @@ pub fn dispatch_loaded_python_sources(
     }
 }
 
-/// On-model-BIND: publish the `SimComponent` — the entity's port interface —
-/// as soon as a `ModelicaModel` exists, i.e. from the parse, not from the
-/// compile.
-///
-/// A model's INTERFACE (`input Real …`, parameters) is a declaration; only its
-/// SOLUTION (`variables`, the outputs) needs the solver. `dispatch_loaded_
-/// modelica_sources` already extracts inputs+parameters from the AST when it
-/// dispatches the compile, so the interface is known several hundred
-/// milliseconds before the worker answers.
-///
-/// This used to wait for `variables` to populate before creating the
-/// `SimComponent` at all. In that window the prim existed with NO ports, so
-/// every wire into it (`sun_azimuth`, `panel_yaw`, `vehicle_throttle` on the
-/// solar rover) hit `write_port` → `false` and the propagation master reported
-/// a *dangling wire* — a diagnostic that means "this wire is wrong", raised for
-/// wiring that was entirely correct. Worse, that master dedups its report per
-/// PORT NAME for the process lifetime, so a load-time false positive
-/// permanently silenced the real report for that name.
-///
-/// Publishing at bind time removes the window instead of tolerating it: the
-/// ports exist for the first propagation tick, values land in
-/// `SimComponent.inputs`, and `sync_modelica_inputs` hands them to the solver
-/// for its first step. `SimStatus::Compiling` marks the interface as declared
-/// but not yet solving, and `can_step()` already refuses to step it.
+/// Expose generated or existing Modelica actors through the shared co-simulation
+/// surface. Checked interface preparation owns readiness; this wrapper keeps the
+/// surface pending and seeds outputs only from accepted worker observations.
 pub(crate) fn wrap_modelica_into_simcomponent(
     mut commands: Commands,
     q_new: Query<
@@ -2332,10 +2208,10 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         });
         // Generated domain roots publish their ModelicaModel one Update before
         // this wrapper can expose the shared SimComponent port surface. Keep
-        // telemetry and connection diagnostics in typed assembly-pending state
-        // for that real lifecycle interval; the wrapper owns readiness once it
-        // has been inserted.
-        entity_commands.remove::<lunco_port_core::PortSurfacePending>();
+        // telemetry and connection diagnostics in typed assembly-pending state.
+        // Resolved interface preparation owns readiness after this wrapper
+        // exposes the participant for the compiler's source lease.
+        entity_commands.insert(lunco_port_core::PortSurfacePending);
         if let Some(contract) = contract {
             entity_commands.try_insert(DeclaredOutputPorts {
                 names: contract.outputs.iter().cloned().collect(),
@@ -2358,7 +2234,7 @@ pub struct UsdInputDefaults(pub HashMap<String, f64>);
 /// Let the Modelica backend react when an authored model state revision changes.
 ///
 /// The authoring layer publishes only the generic revision. This backend then
-/// compares its own parsed parameter state and, only when a compile-time value
+/// compares its checked parameter inventory and, only when a compile-time value
 /// changed, sends the participant through the same pending-source/compile
 /// boundary as initial admission. Generated network roots are deliberately
 /// excluded because their `GeneratedModelicaSource` projection owns that
@@ -2384,10 +2260,11 @@ pub(crate) fn request_modelica_parameter_recompile(
 ) {
     for (entity, defaults, mut model, mut variables, mut component) in &mut q {
         let parameter_changed = defaults.0.iter().any(|(name, value)| {
-            model
-                .parameters
-                .get(name)
-                .is_some_and(|current| current.to_bits() != value.to_bits())
+            model.compiled_parameter_names.contains(name)
+                && model
+                    .parameters
+                    .get(name)
+                    .is_none_or(|current| current.to_bits() != value.to_bits())
         });
         if !parameter_changed || model.source_uri.is_empty() {
             continue;
@@ -2418,6 +2295,7 @@ pub(crate) fn request_modelica_parameter_recompile(
         model.in_flight_step = None;
         model.next_step_id = 1;
         model.compiled_input_names.clear();
+        model.compiled_parameter_names.clear();
         model.last_error = None;
         model.paused = true;
         model.resume_after_compile = resume_after_compile;
@@ -2429,6 +2307,10 @@ pub(crate) fn request_modelica_parameter_recompile(
         commands
             .entity(entity)
             .try_insert(lunco_port_core::PortSurfacePending);
+        commands.entity(entity).try_remove::<(
+            ResolvedUsdModelicaInterface,
+            lunco_modelica_runtime::ModelicaResolvedInterface,
+        )>();
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(load_path),
             asset_path,
@@ -2440,13 +2322,12 @@ pub(crate) fn request_modelica_parameter_recompile(
 
 /// Seed a model's inputs from the constants USD authored on its unconnected ports.
 ///
-/// This is the ONLY path from USD to a model's parameters. Runs when the model
-/// appears (`Added<SimComponent>`) and when the authored values change (a live edit
-/// re-runs the wiring pass, which re-publishes [`UsdInputDefaults`]) — never on a
+/// Runs when the model appears (`Added<SimComponent>`) and when authored values
+/// change (a live edit re-publishes [`UsdInputDefaults`]) — never on a
 /// plain re-derive, so a value written by a script or the network is not undone.
 ///
-/// A key the model does not declare is dropped by the port backend, so a typo'd
-/// parameter is not a silent no-op: it is named here.
+/// Modelica input and parameter identities come from checked preparation.
+/// An unknown authored name is a terminal error unless a native backend owns it.
 pub(crate) fn seed_usd_input_defaults(
     mut q: Query<
         (
@@ -2455,6 +2336,7 @@ pub(crate) fn seed_usd_input_defaults(
             &UsdPrimPath,
             Option<&mut ModelicaModel>,
             Option<&UsdModelicaPortContract>,
+            Option<&ResolvedUsdModelicaInterface>,
         ),
         Or<(
             Added<SimComponent>,
@@ -2463,27 +2345,38 @@ pub(crate) fn seed_usd_input_defaults(
         )>,
     >,
 ) {
-    for (defaults, mut sim, prim_path, model, modelica_contract) in q.iter_mut() {
+    for (defaults, mut sim, prim_path, model, modelica_contract, resolved) in q.iter_mut() {
         let mut model = model;
         for (port, value) in &defaults.0 {
             if let Some(model) = model.as_deref_mut() {
-                if model.parameters.contains_key(port) {
-                    model.parameters.insert(port.clone(), *value);
-                    sim.parameters.insert(port.clone(), *value);
-                } else if sim.inputs.contains_key(port) {
+                // Initial authored values belong to the checked worker
+                // transaction. Placeholder USD ports cannot classify them.
+                if !model.is_compiled {
+                    continue;
+                }
+                if model.compiled_parameter_names.contains(port) {
+                    // Parameter changes use the recompile admission above;
+                    // mutating a display value cannot update the solver.
+                    continue;
+                } else if model.compiled_input_names.contains(port) {
                     model.inputs.insert(port.clone(), *value);
                     sim.inputs.insert(port.clone(), *value);
-                } else {
-                    warn!(
-                        "[usd-cosim] {}: `inputs:{}` is authored but the Modelica model ({}) declares no parameter or input — the value is ignored",
-                        prim_path.path, port, sim.model_name,
+                } else if !resolved.is_some_and(|surface| surface.native_inputs.contains(port)) {
+                    let error = format!(
+                        "{}: authored input `{port}` has no Modelica parameter, input, or registered native owner",
+                        prim_path.path
                     );
+                    model.last_error = Some(error.clone());
+                    model.paused = true;
+                    model.is_stepping = false;
+                    sim.status = SimStatus::Error(error.clone());
+                    warn!("[usd-cosim] {error}");
                 }
             } else if modelica_contract.is_some() {
                 // The Modelica source has not arrived yet. The USD-declared
                 // placeholder interface intentionally does not decide whether
-                // a name is a parameter or a runtime input; dispatch applies
-                // the value once the parsed source contract is authoritative.
+                // a name is a parameter or a runtime input; the worker admits
+                // the value against checked compiler declarations.
                 continue;
             } else if sim.inputs.contains_key(port) {
                 // Non-Modelica solvers retain the generic USD input surface.
@@ -2545,6 +2438,15 @@ fn tag_cosim_opaque(
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 impl Plugin for UsdSimCosimPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_core::AppSceneExt;
+        app.init_scene_resource::<preparations::ModelicaPreparations>();
+        app.add_observer(interfaces::cancel_removed_interface);
+        app.add_observer(interfaces::cancel_removed_source::<PendingModelicaSource>);
+        app.add_observer(interfaces::cancel_removed_source::<GeneratedModelicaSource>);
+        app.add_observer(interfaces::invalidate_inserted_source::<PendingModelicaSource>);
+        app.add_observer(interfaces::invalidate_inserted_source::<GeneratedModelicaSource>);
+        app.add_observer(interfaces::invalidate_preparing_bindings);
+        app.add_systems(lunco_core::SceneTeardown, preparations::retire);
         app.init_schedule(lunco_cosim_core::schedule::InitializationSampling);
         if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
@@ -2865,8 +2767,11 @@ impl Plugin for UsdSimCosimPlugin {
                 rewire_usd_connections.run_if(wiring_due),
                 request_modelica_parameter_recompile,
                 seed_usd_input_defaults,
+                interfaces::invalidate_changed_source_assets
+                    .run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<ModelicaSource>>),
+                preparations::pump.run_if(preparations::pump_needed),
                 publish_loaded_modelica_interfaces
-                    .run_if(any_with_component::<PendingModelicaSource>),
+                    .run_if(any_with_component::<lunco_port_core::PortSurfacePending>),
                 initialization::coordinate
                     .run_if(initialization::needed)
                     .run_if(not(resource_exists::<SceneLoadInFlight>)),
@@ -2959,76 +2864,6 @@ mod tests {
     };
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
-
-    #[test]
-    fn source_dispatch_preserves_deferred_admission_and_scene_hold() {
-        #[derive(Resource, Default)]
-        struct InitializationRuns(usize);
-
-        fn count_initializations(mut runs: ResMut<InitializationRuns>) {
-            runs.0 += 1;
-        }
-
-        fn queue_source(mut commands: Commands) {
-            commands.spawn(PendingModelicaSource {
-                handle: Handle::default(),
-                asset_path: String::new(),
-                session_id: 1,
-                resume_after_compile: false,
-            });
-        }
-
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<ModelicaSource>()
-            .add_message::<lunco_modelica_runtime::ModelicaNotice>()
-            .init_resource::<InitializationRuns>()
-            .init_schedule(lunco_cosim_core::schedule::InitializationSampling)
-            .add_systems(
-                lunco_cosim_core::schedule::InitializationSampling,
-                count_initializations,
-            );
-        app.add_systems(
-            Update,
-            dispatch_loaded_modelica_sources
-                .run_if(any_with_component::<PendingModelicaSource>)
-                .run_if(not(resource_exists::<SceneLoadInFlight>)),
-        );
-        app.update();
-        assert_eq!(app.world().resource::<InitializationRuns>().0, 0);
-
-        // Source admission is deferred before the exclusive boundary, just as
-        // it is in the production wiring chain.
-        app.add_systems(
-            Update,
-            queue_source
-                .run_if(run_once)
-                .before(dispatch_loaded_modelica_sources),
-        );
-        app.update();
-        assert_eq!(app.world().resource::<InitializationRuns>().0, 1);
-
-        app.insert_resource(SceneLoadInFlight {
-            transition_id: lunco_core::SceneTransitionCoordinator::default()
-                .start(lunco_core::SceneTransition::Clear),
-            path: String::new(),
-            stage_id: Handle::<UsdStageAsset>::default().id(),
-        });
-        app.update();
-        assert_eq!(app.world().resource::<InitializationRuns>().0, 1);
-        app.world_mut().remove_resource::<SceneLoadInFlight>();
-        app.update();
-        assert_eq!(app.world().resource::<InitializationRuns>().0, 2);
-
-        let pending = app
-            .world_mut()
-            .query_filtered::<Entity, With<PendingModelicaSource>>()
-            .single(app.world())
-            .unwrap();
-        app.world_mut().despawn(pending);
-        app.update();
-        assert_eq!(app.world().resource::<InitializationRuns>().0, 2);
-    }
 
     fn count_wiring_runs(mut runs: ResMut<WiringRuns>, mut dirty: ResMut<UsdWiringDirty>) {
         runs.0 += 1;
@@ -3534,8 +3369,7 @@ mod tests {
         }));
     }
 
-    /// A model that has been parsed and dispatched but not yet solved:
-    /// declared inputs, no variables.
+    /// A participant awaiting interface and solver preparation.
     fn dispatched_but_unsolved() -> ModelicaModel {
         let mut m = ModelicaModel {
             model_name: "GeneratedNetwork".into(),
@@ -3547,65 +3381,42 @@ mod tests {
     }
 
     #[test]
-    fn declared_inputs_are_exposed_before_the_solver_answers() {
-        let model = dispatched_but_unsolved();
-
-        let mut app = App::new();
-        let e = app.world_mut().spawn((UsdSourcedCosim, model)).id();
-        app.init_resource::<PendingModelicaWrapWork>().add_systems(
-            Update,
-            wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
-        );
-        app.update();
-
-        let comp = app
-            .world()
-            .get::<SimComponent>(e)
-            .expect("the interface must be published at bind, not at compile-complete");
-        assert!(
-            comp.inputs.contains_key("drive_left") && comp.inputs.contains_key("drive_right"),
-            "a wire into a declared input must resolve while the model still compiles; \
-             got inputs {:?}",
-            comp.inputs.keys().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            comp.status,
-            SimStatus::Compiling,
-            "declared but unsolved is `Compiling` — outputs are not trustworthy yet"
-        );
-    }
-
-    #[test]
-    fn generated_wrapper_declares_member_outputs_before_first_snapshot() {
-        let model = dispatched_but_unsolved();
+    fn generated_wrapper_keeps_its_surface_pending_for_checked_preparation() {
         let contract = UsdModelicaPortContract::new(
             ["drive_left".to_string(), "drive_right".to_string()],
-            [
-                "soc".to_string(),
-                "__member_Rig_x2f_Battery_terminal_voltage_v".to_string(),
-            ],
+            ["state".to_string(), "member_output".to_string()],
         );
         let mut app = App::new();
         let entity = app
             .world_mut()
-            .spawn((UsdSourcedCosim, model, contract))
+            .spawn((UsdSourcedCosim, dispatched_but_unsolved(), contract))
             .id();
         app.init_resource::<PendingModelicaWrapWork>().add_systems(
             Update,
             wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
         );
-
         app.update();
 
-        let declared = app
+        let component = app
             .world()
-            .get::<DeclaredOutputPorts>(entity)
-            .expect("the generated wrapper must publish its complete output contract");
-        assert!(declared.names.contains("soc"));
+            .get::<SimComponent>(entity)
+            .expect("the wrapper provides the pending participant identity");
+        assert_eq!(component.status, SimStatus::Compiling);
         assert!(
-            declared
-                .names
-                .contains("__member_Rig_x2f_Battery_terminal_voltage_v")
+            component.outputs.is_empty(),
+            "an unsolved wrapper has no numerical output samples"
+        );
+        assert!(
+            app.world()
+                .get::<lunco_port_core::PortSurfacePending>(entity)
+                .is_some(),
+            "publishing a wrapper cannot authorize unresolved declarations"
+        );
+        assert!(
+            app.world()
+                .get::<lunco_modelica_runtime::ModelicaResolvedInterface>(entity)
+                .is_none(),
+            "only checked preparation may publish an interface receipt"
         );
     }
 
@@ -3707,7 +3518,7 @@ mod tests {
             values: [("mass".to_owned(), 1.0)].into_iter().collect(),
         };
 
-        let error = modelica_port_contract_error(&contract, &model, &variables)
+        let error = modelica_port_contract_error(&contract, &model, &variables, None)
             .expect("a USD port the DAE does not expose must fail projection");
         assert!(error.contains("typo"));
         assert!(error.contains("thrust"));
@@ -3726,7 +3537,7 @@ mod tests {
         };
 
         assert_eq!(
-            modelica_port_contract_error(&contract, &model, &variables),
+            modelica_port_contract_error(&contract, &model, &variables, None),
             None
         );
     }
@@ -3739,18 +3550,18 @@ mod tests {
         };
         let mut model = dispatched_but_unsolved();
         model
-            .parameters
-            .insert("filter_time_constant_s".into(), 0.02);
+            .compiled_parameter_names
+            .insert("filter_time_constant_s".into());
         let variables = ModelicaVariables::default();
 
         assert_eq!(
-            modelica_port_contract_error(&contract, &model, &variables),
+            modelica_port_contract_error(&contract, &model, &variables, None),
             None
         );
     }
 
     #[test]
-    fn compiled_output_can_share_a_usd_input_name_for_a_physical_sink() {
+    fn compiled_output_does_not_prove_a_native_input_owner() {
         let contract = UsdModelicaPortContract {
             inputs: ["force_y".to_string()].into_iter().collect(),
             outputs: BTreeSet::new(),
@@ -3761,10 +3572,9 @@ mod tests {
             values: [("force_y".to_owned(), 42.0)].into_iter().collect(),
         };
 
-        assert_eq!(
-            modelica_port_contract_error(&contract, &model, &variables),
-            None,
-            "a same-prim USD physics sink must not be reported as a Modelica input"
+        assert!(
+            modelica_port_contract_error(&contract, &model, &variables, None).is_some(),
+            "a same-named Modelica output does not prove a registered native input owner"
         );
     }
 
@@ -3801,14 +3611,24 @@ mod tests {
             ..Default::default()
         };
         let variables = ModelicaVariables {
-            values: [("force_y".to_owned(), 4.0)].into_iter().collect(),
+            values: [("force_y".to_owned(), 4.0), ("internal".to_owned(), 7.0)]
+                .into_iter()
+                .collect(),
         };
         let component = SimComponent {
             status: SimStatus::Running,
             ..Default::default()
         };
         let entity = world
-            .spawn((model, variables, component, UsdSourcedCosim))
+            .spawn((
+                model,
+                variables,
+                component,
+                UsdSourcedCosim,
+                DeclaredOutputPorts {
+                    names: ["force_y".to_owned()].into_iter().collect(),
+                },
+            ))
             .id();
 
         world
@@ -3822,6 +3642,16 @@ mod tests {
                 .outputs
                 .get("force_y"),
             Some(&4.0)
+        );
+        assert!(
+            world
+                .entity(entity)
+                .get::<SimComponent>()
+                .unwrap()
+                .outputs
+                .get("internal")
+                .is_none(),
+            "inspection values must not create undeclared public output ports"
         );
 
         world.clear_trackers();

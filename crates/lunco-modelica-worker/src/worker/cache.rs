@@ -35,8 +35,21 @@ impl CompiledArtifactCache {
         }
     }
 
-    pub(super) fn get(&mut self, key: &u64) -> Option<&super::CompiledModelArtifact> {
-        self.entries.get(key)
+    pub(super) fn compatible_variant(
+        &mut self,
+        binding_schema: &lunco_hash::content::Cid,
+        values: &[(String, f64)],
+    ) -> Option<super::CompiledModelArtifact> {
+        let key = self.entries.ordered_entries().find_map(|(key, artifact)| {
+            (artifact.binding_schema == *binding_schema
+                && artifact.structural_overrides.iter().all(|(name, value)| {
+                    values.iter().any(|(requested_name, requested)| {
+                        requested_name == name && requested.to_bits() == value.to_bits()
+                    })
+                }))
+            .then_some(*key)
+        })?;
+        self.entries.get(&key).cloned()
     }
 
     pub(super) fn insert(&mut self, key: u64, artifact: super::CompiledModelArtifact) {
@@ -63,13 +76,14 @@ struct CompiledArtifactDiskRecord<C> {
     version: u32,
     input: String,
     source_content: String,
+    binding_schema: String,
     structural_overrides: Vec<(String, u64)>,
     compiled: C,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl CompiledArtifactCache {
-    const DISK_VERSION: u32 = 2;
+    const DISK_VERSION: u32 = 3;
 
     pub(super) fn enable_disk(&mut self, limits: ModelicaArtifactDiskLimits) {
         self.disk_limits = Some(limits);
@@ -126,7 +140,7 @@ impl CompiledArtifactCache {
         let first = lunco_hash::fnv1a64(&bytes);
         let second = lunco_hash::fnv1a64(key.input.to_string().as_bytes());
         modelica_dir()
-            .join("compiled-dae-v2")
+            .join("compiled-dae-v3")
             .join(format!("{first:016x}-{second:016x}.bin.zst"))
     }
 
@@ -168,16 +182,28 @@ impl CompiledArtifactCache {
         let Some(record) = decoded else {
             return Ok(None);
         };
-        if record.version != Self::DISK_VERSION
-            || record.input != key.input.to_string()
-            || record.structural_overrides
-                != numeric
-                    .iter()
-                    .map(|(name, value)| (name.clone(), value.to_bits()))
-                    .collect::<Vec<_>>()
-        {
+        if record.version != Self::DISK_VERSION || record.input != key.input.to_string() {
             return Err(ModelicaCacheReadError::Identity);
         }
+        let checked_structural =
+            super::ModelicaCompiler::structural_parameter_overrides(&record.compiled.dae, numeric)
+                .map_err(|_| ModelicaCacheReadError::Identity)?;
+        let expected_structural = numeric
+            .iter()
+            .filter(|(name, _)| {
+                checked_structural
+                    .iter()
+                    .any(|(structural, _)| structural == name)
+            })
+            .map(|(name, value)| (name.clone(), value.to_bits()))
+            .collect::<Vec<_>>();
+        if record.structural_overrides != expected_structural {
+            return Err(ModelicaCacheReadError::Identity);
+        }
+        let binding_schema = record
+            .binding_schema
+            .parse::<lunco_hash::content::Cid>()
+            .map_err(|_| ModelicaCacheReadError::Identity)?;
         if !record.compiled.dae.external_tables().is_empty() {
             return Err(ModelicaCacheReadError::Identity);
         }
@@ -191,8 +217,18 @@ impl CompiledArtifactCache {
         Ok(Some(super::CompiledModelArtifact {
             compiled: record.compiled,
             prepared_source_key: super::prepared_source_key(source_content),
-            structural_overrides: numeric.to_vec(),
+            structural_overrides: numeric
+                .iter()
+                .filter(|(name, _)| {
+                    checked_structural
+                        .iter()
+                        .any(|(structural, _)| structural == name)
+                })
+                .cloned()
+                .collect(),
+            authored_bindings: Default::default(),
             source_content,
+            binding_schema,
         }))
     }
 
@@ -240,6 +276,7 @@ impl CompiledArtifactCache {
             version: Self::DISK_VERSION,
             input: key.input.to_string(),
             source_content: artifact.source_content.to_string(),
+            binding_schema: artifact.binding_schema.to_string(),
             structural_overrides: artifact
                 .structural_overrides
                 .iter()
@@ -287,7 +324,6 @@ impl<K: Eq + Hash, V> BoundedReuseCache<K, V> {
         self.entries.pop_front().map(|(_, value)| value)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn ordered_entries(&self) -> impl Iterator<Item = (&K, &V)> {
         self.entries.iter()
     }
@@ -1393,7 +1429,10 @@ mod tests {
         let (result_tx, result_rx) = crossbeam_channel::unbounded();
         super::super::modelica_worker(
             command_rx,
-            result_tx,
+            lunco_modelica_runtime::ModelicaResponseSender::new(
+                result_tx,
+                crossbeam_channel::unbounded().0,
+            ),
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
             super::super::ModelicaWorkerLimits::default(),
@@ -1637,7 +1676,10 @@ mod tests {
         let (result_tx, result_rx) = crossbeam_channel::unbounded();
         super::super::modelica_worker(
             command_rx,
-            result_tx,
+            lunco_modelica_runtime::ModelicaResponseSender::new(
+                result_tx,
+                crossbeam_channel::unbounded().0,
+            ),
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
             super::super::ModelicaWorkerLimits::default(),
@@ -1792,7 +1834,10 @@ mod reuse_tests {
         let (result_tx, result_rx) = crossbeam_channel::unbounded();
         super::super::modelica_worker(
             command_rx,
-            result_tx,
+            lunco_modelica_runtime::ModelicaResponseSender::new(
+                result_tx,
+                crossbeam_channel::unbounded().0,
+            ),
             ModelicaArtifactDiskLimits::default(),
             ModelicaCacheLimits {
                 compiled_artifact_entries: 0,
