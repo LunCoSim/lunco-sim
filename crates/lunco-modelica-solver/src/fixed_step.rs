@@ -16,7 +16,7 @@ use rumoca_solver::fmi_me::{
     session::{MeRetainedComponent, MeSimulationSession},
 };
 
-/// A continuous, event-free session whose component lifecycle has one owner.
+/// A continuous fixed-step session with parameter-only event partitions.
 pub struct FixedStepSession {
     session: MeSimulationSession<'static, 'static>,
     input_names: Vec<String>,
@@ -45,7 +45,7 @@ impl FixedStepSession {
         if !fixed_dt.is_finite() || fixed_dt <= 0.0 {
             return Err(solver_error("fixed-rk4 requires a finite positive dt"));
         }
-        reject_unsupported_constructs(component.runtime_view().model())?;
+        validate_fixed_step_component(component)?;
         let config = MeInstanceConfig::new(
             "luncosim-fixed-rk4",
             options.rtol,
@@ -305,56 +305,18 @@ fn stage_state(state: &[f64], derivative: &[f64], scale: f64) -> Vec<f64> {
         .collect()
 }
 
-fn reject_unsupported_constructs(
-    model: &rumoca_ir_solve::SolveModel,
+fn validate_fixed_step_component(
+    component: &FmiComponent,
 ) -> Result<(), SimulationDiagnosticError> {
-    let problem = &model.problem;
-    let unsupported = [
-        (!problem.events.root_conditions.is_empty(), "root events"),
-        (
-            !problem.events.scheduled_root_conditions.is_empty(),
-            "scheduled root events",
-        ),
-        (
-            !problem.events.scheduled_time_events.is_empty(),
-            "scheduled time events",
-        ),
-        (
-            !problem.events.dynamic_time_event_names.is_empty()
-                || !problem.events.dynamic_time_event_rhs.is_empty(),
-            "dynamic time events",
-        ),
-        (
-            !problem.events.action_conditions.is_empty(),
-            "event actions",
-        ),
-        (!problem.events.actions.is_empty(), "event actions"),
-        (
-            !problem.discrete.runtime_assignment_rhs.is_empty()
-                || !problem.discrete.runtime_assignment_targets.is_empty()
-                || !problem.discrete.rhs.is_empty()
-                || !problem.discrete.update_targets.is_empty()
-                || !problem.discrete.pre_modes.is_empty()
-                || !problem.discrete.observation_refresh.is_empty(),
-            "discrete assignments",
-        ),
-        (
-            !problem.clocks.periodic_event_schedules.is_empty(),
-            "clock schedules",
-        ),
-        (!model.external_tables.is_empty(), "external tables"),
-    ];
-    let unsupported = unsupported
-        .into_iter()
-        .filter_map(|(present, name)| present.then_some(name))
-        .collect::<Vec<_>>();
-    if unsupported.is_empty() {
-        return Ok(());
+    if !component.runtime_view().model().external_tables.is_empty() {
+        return Err(solver_error("fixed-rk4 does not support external tables"));
     }
-    Err(SimulationDiagnosticError::Solver(format!(
-        "fixed-rk4 only supports continuous event-free models; unsupported constructs: {}",
-        unsupported.join(", "),
-    )))
+    component
+        .runtime_view()
+        .validate_parameter_only_events()
+        .map_err(|error| solver_error(format!(
+            "fixed-rk4 cannot start this model: {error}. Its event partitions must depend only on parameters and constants"
+        )))
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

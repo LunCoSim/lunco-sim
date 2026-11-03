@@ -53,7 +53,7 @@ uniform bool lunco:program:realtimeSafe = true
 | Examples | chassis, contacts, joints, wheels, a lander's flight-control law — anything the player feels frame-to-frame | thermal, power/battery, chemistry, ECLSS, aero, orbital, a supervisory script, a cosmetic effect |
 | Solver requirement | **must be fixed-step deterministic** (explicit / semi-implicit, bounded step = sim tick) | an adaptive "proper" solver is **fine** |
 | Networking | client-predicted + rollback: both peers run the same stepper | server computes; **outputs replicated as wires**, clients never predict them (or purely local, and nothing crosses the wire) |
-| Modelica fit | the restricted **fixed-rk4** profile is available for continuous, event-free, external-table-free models; broader semantics remain explicitly unsupported | **sweet spot** — adaptive solvers belong here; precedent already exists (gravity Shape A, [`22-domain-cosim.md`](22-domain-cosim.md)) |
+| Modelica fit | the restricted **fixed-rk4** profile is available for continuous models with parameter-only event partitions and no external tables; broader semantics remain explicitly unsupported | **sweet spot** — adaptive solvers belong here; precedent already exists (gravity Shape A, [`22-domain-cosim.md`](22-domain-cosim.md)) |
 
 Most "custom physics" a user wants to author never touches a predicted body — and that
 is exactly where adaptive Modelica solvers are *safe*, because clients **receive**
@@ -77,7 +77,7 @@ What is actually in the code:
 | Acausal connection/island | **not accepted by the causal fabric**; it requires a typed backend island and partition before stepping |
 | `lunco:replication` → always-on `Replication` metadata (§5, §"declared in USD") | **not implemented** — no code reads it |
 | Promise ↔ solver/caps validation | **implemented** (2026-07-27) — `lunco_experiments::solver` resolves by capability and refuses an incapable pairing at stepper construction |
-| A fixed-step deterministic Modelica solver good enough to honour the promise | **implemented as `fixed-rk4`** for the restricted continuous profile; construction rejects events, discrete assignments, clocks, and external tables |
+| A fixed-step deterministic Modelica solver good enough to honour the promise | **implemented as `fixed-rk4`** for the restricted continuous profile; construction uses Rumoca's parameter-only event proof and rejects dynamic events, discrete updates, clocks, delays, and external tables |
 | Effect of the promise on live solver choice | **enforced** — `solver::resolve` admits prediction only for a backend declaring both `fixed_step` and `deterministic`; `fixed-rk4` is selected for qualified predicted Modelica programs while `rk45` remains authoritative-live only |
 
 ### Solver selection and numerical ownership
@@ -128,8 +128,9 @@ The master supplies the exact communication target through
   communication points.
 - `fixed-rk4` uses the configured internal lattice. A communication point must
   lie on that lattice; the backend validates the complete target before
-  applying its fixed RK4 steps. It rejects unsupported events, discrete state,
-  clocks and external tables at construction.
+  applying its fixed RK4 steps. Rumoca's shared proof admits parameter-only
+  event partitions; dynamic events, discrete updates, clocks, delays and external
+  tables are rejected at construction.
 
 Live construction supplies explicit tolerance and an internal step setting;
 offline experiment annotations do not change the realtime solver profile. The
@@ -354,8 +355,8 @@ per configured internal step. Its communication target is validated against
 that lattice before any internal steps run. Determinism comes from the
 fixed operation sequence, fixed algebraic solve budget, fixed evaluation order,
 and the simulation clock—not from turning an adaptive session's nominal `dt` into
-a promise. The profile currently requires continuous, event-free,
-external-table-free models. Stability and bounded-state analysis are still model
+a promise. The profile requires continuous models with parameter-only event
+partitions and no external tables. Stability and bounded-state analysis are still model
 responsibilities; a future linearly-implicit backend may extend the profile for
 stiffer systems. Rumoca's Model Exchange host owns initialization, component
 input transactions, algebraic refresh and observations. The fixed solver is a

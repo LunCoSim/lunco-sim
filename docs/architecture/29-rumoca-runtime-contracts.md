@@ -203,7 +203,7 @@ errors abort publication with the source identity.
 
 `solver_backends` registers BDF for offline implicit integration, RK45 for
 adaptive authoritative live integration, and fixed RK4 for deterministic
-prediction of qualified continuous, event-free models. A requested solver must
+prediction of qualified continuous models with parameter-only event partitions. A requested solver must
 resolve to a registered capability; unsupported selections are terminal errors.
 
 Live sessions have no stop time. Their finite options span supplies the
@@ -216,8 +216,16 @@ Explicit slower exchanges are validated integer multiples. The worker receives
 derived start/stop seconds and returns its actual accepted solver coordinate;
 transaction validation never fabricates a corrected output timestamp. See
 [architecture 19](19-unified-time-and-clock.md) for pause, reset and speed semantics.
-Fixed RK4 applies exactly the configured step lattice and rejects models
-with unsupported event, discrete, clock, or external-table constructs.
+Fixed RK4 applies exactly the configured step lattice. It uses
+`FmiRuntimeView::validate_parameter_only_events` to admit parameter-dependent
+assertions and settled parameter-only discrete equations through Rumoca's shared
+ME-EVENT-003 proof. Assertions remain executable at initialization and parameter
+changes. State-, input- or time-dependent error assertions, dynamic discrete
+updates, clocks and delays remain rejected; external tables are also rejected.
+The focused `lunco-modelica-solver` `fixed_step` integration target verifies
+admission, retained assertion failures, rejected dynamic predicates and the
+fixed-step numerical contract. Vehicle startup and native controls are verified
+through the production Twin scenarios and window-input API.
 
 A scoped cancellation guard is observed by the evaluator and ME session loop.
 A scoped output budget admits grid dimensions before allocation and every
@@ -270,7 +278,7 @@ endpoint substitution.
 | Live scalar units, descriptions, and bounds | `FmiComponent::variables()` and `FmiVariable::scalar_names()` | Carry exact compiled facts through worker admission; keep USD provenance and channel retention at their application owners. |
 | Retained trajectory units and descriptions | `SimResult::variable_meta` and `rumoca_sim::build_variable_meta` | Store exact per-run series facts with completed artifacts; graphs consume retained facts. |
 | Component initialization, input transactions, algebraic refresh and observations | Rumoca Model Exchange host (`MeRetainedComponent` / `MeSimulationSession`) | Both adaptive and fixed sessions use this owner. Fixed RK4 supplies its numerical plugin through the retained derivative capability; initial equations run before the first observation. |
-| Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps and reject unsupported event/discrete/clock/table models. |
+| Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps, use Rumoca's parameter-only event proof, and reject external tables. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
 | Co-simulation and lifecycle | LunCoSim cosim/worker owners | Admit causal samples in stable wire order, retain typed execution identity, and retire Twin-owned work. |
 

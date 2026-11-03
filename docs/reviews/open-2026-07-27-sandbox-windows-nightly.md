@@ -327,7 +327,7 @@ Smaller items in the same category:
 
 ## Not bugs, but worth a decision
 
-- **`rk45` on client-predicted models** (`08:36:38.069`) — the run exposed that non-fixed-step integration cannot serve prediction. The runtime now rejects that solver/profile pairing; `rk45` remains authoritative-live only. Qualified continuous, event-free Modelica programs use the fixed-lattice `fixed-rk4` backend instead, so peers cannot silently diverge through an adaptive stepper.
+- **`rk45` on client-predicted models** (`08:36:38.069`) — the run exposed that non-fixed-step integration cannot serve prediction. The runtime now rejects that solver/profile pairing; `rk45` remains authoritative-live only. Qualified continuous Modelica programs with parameter-only event partitions use the fixed-lattice `fixed-rk4` backend instead, so peers cannot silently diverge through an adaptive stepper.
 - **The balloon's feedback path** (`08:36:37.253`) — `1285v0 ↔ 1823v0` (`RedBalloon` body ↔ its `Plant`) is an explicit causal state-feedback path, not an algebraic loop. The runtime no longer fabricates a loop warning or safety fault for it; true acausal equations remain a backend-island concern.
 - **Journal persistence is off by default** (`08:36:35.514`) — session-only unless `[journal] persist = true` in `twin.toml`. Reasonable default, but it means a tester who hits something interesting cannot hand us the history. Consider enabling it in nightly builds specifically.
 

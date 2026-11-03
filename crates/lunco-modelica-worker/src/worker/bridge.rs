@@ -1423,12 +1423,11 @@ pub fn handle_modelica_responses(
                     }
                 }
                 warn!("[Modelica] {err}");
-                // Classify for the console: compile-time errors are
-                // distinct from solver blowups during Step. Both are
-                // Error-level; the prefix tells the user where it came
-                // from at a glance.
+                // Starting a model includes compilation, solver construction
+                // and its initial observation. Keep that failure distinct from
+                // a failed step of an already-running model in Recent Events.
                 let prefix = if result.is_new_model {
-                    "Compile error"
+                    "Model startup failed"
                 } else if result.is_parameter_update {
                     "Parameter update error"
                 } else if result.is_reset {

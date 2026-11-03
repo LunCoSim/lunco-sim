@@ -330,8 +330,10 @@ visible to the resolver, the reference closure, and packaging.
 
 Continuous equations belong in Modelica. Rumoca 0.10 compiles conditional
 expressions and events; the selected solver validates its supported model
-contract. Client prediction selects fixed RK4 and requires continuous,
-event-free models. Smooth clamps remain useful when the authored physical law
+contract. Client prediction selects fixed RK4 and requires continuous models
+with parameter-only event partitions. Parameter assertions remain active;
+dynamic events and discrete updates need an event-capable solver.
+Smooth clamps remain useful when the authored physical law
 requires a transition band. Rhai owns events and mission glue; production
 scenarios use events, while authored tests may sample ticks for verdicts.
 

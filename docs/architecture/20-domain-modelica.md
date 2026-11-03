@@ -333,6 +333,9 @@ lowering, cache reuse, and measured preparation duration. The bridge validates
 the participant session and source generation before publishing lifecycle
 notices, then returns without consuming these messages as solver transactions.
 The UI mirrors all notice severities into Recent status as discrete entries.
+New-participant failures identify the model and report startup failure across
+compilation, solver construction and the initial observation; the model remains
+stopped and the owning diagnostic retains the actual cause.
 Preparation notifications do not change simulation time, outputs, compile
 completion, or the required participant admission hold.
 Successful construction also reports a typed `ModelicaConstructionProfile`:

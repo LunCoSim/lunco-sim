@@ -1536,6 +1536,7 @@ Both session types use Rumoca's Model Exchange host for initialization, input
 transactions and observations. The fixed-step adapter supplies only its RK4
 numerical plugin through the host's derivative capability and obtains its
 opaque native execution handle from `rumoca_sim::fmi_execution_backend`.
+Its qualification consumes Rumoca's shared parameter-only event admission proof.
 It consumes the pure experiment solver registry with host features disabled,
 so a standalone solver build has no Bevy dependency.
 

@@ -187,7 +187,9 @@ SysML identities by Rhai policy. See
 source facts to the reloadable `lint.modelica` Rhai policy. Parse failures and
 declaration conflicts remain visible. Conditional expressions and events are
 checked by compilation and the selected solver; preflight does not prove
-runtime behavior. Prediction's fixed RK4 backend requires event-free models.
+runtime behavior. Prediction's fixed RK4 backend admits parameter-only event
+partitions through Rumoca's checked proof; parameter assertions still execute.
+Dynamic events and discrete updates remain outside that solver's contract.
 
 `info` carries `{model, params, inputs, input_defaults, outputs:null}`. `inputs`
 lists declared names; `input_defaults` contains only literal numeric source

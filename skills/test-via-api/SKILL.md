@@ -750,3 +750,11 @@ For terminal runtime failures, inspect `GetReadiness.fault` even when
 negative fixture must also show the first fault's subject and kind as a
 `Simulation stopped` Error in Recent Events. The presentation bridge publishes
 once per scene and resets with scene history.
+
+`python3 scripts/api/test_fixed_step_assertions.py --port <free-port> --output <directory>`
+checks six authored failure assertions in a windowed production session and
+captures Recent Events. It supplies an invalid parameter to the shared rover
+guidance model with fixed RK4: the original Modelica assertion must reach the
+startup diagnostic, the failed participant must stay at time zero, and the
+application must remain available. Pair it with the solver's focused
+`fixed_step` integration target and the affected Twin's loading/control gates.

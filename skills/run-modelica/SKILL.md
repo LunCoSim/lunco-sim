@@ -48,6 +48,13 @@ failures; those errors must leave the application available for inspection.
 Rust panic handling alone cannot contain a native access violation. See the
 [native execution contract](../../docs/architecture/20-domain-modelica.md).
 
+Predicted participants retain fixed RK4. Its admission uses Rumoca's shared
+parameter-only event proof: parameter assertions execute at initialization and
+after parameter changes, while dynamic error predicates, discrete updates,
+clocks, delays and external tables remain rejected. Inspect the model's startup
+failure in Recent Events and `GetReadiness.fault`; do not switch a predicted
+participant to an adaptive solver to hide a rejection.
+
 For a participant that stays `Compiling` without a compiler outcome, inspect
 its connected producers and input admission before diagnosing compiler work.
 `PendingInputConnections` also holds compilation while a USD source is being

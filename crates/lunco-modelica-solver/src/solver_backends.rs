@@ -56,7 +56,8 @@ pub fn ensure_builtin_solvers() {
         // This is not Rumoca's adaptive RkLike session. The live construction
         // boundary dispatches this capability to lunco-modelica-solver's explicit RK4
         // loop over Rumoca's lowered derivative runtime. Its qualified model
-        // contract is continuous, event-free, and external-table-free.
+        // contract is continuous with parameter-only event partitions and no
+        // external tables. Rumoca owns the event-dependency proof.
         solver::register(SolverSpec {
             id: SolverId::from("fixed-rk4"),
             caps: SolverCaps {

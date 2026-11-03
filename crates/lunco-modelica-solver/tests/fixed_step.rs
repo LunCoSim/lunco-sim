@@ -37,6 +37,52 @@ fn options() -> SimOptions {
 }
 
 #[test]
+fn fixed_rk4_admits_parameter_assertions_without_disabling_them() {
+    for gain in [1.0, -1.0] {
+        let source = format!(
+            "model CheckedRamp parameter Real gain = {gain}; Real x(start=0, fixed=true); equation der(x)=gain; assert(gain > 0, \"gain must be positive\"); end CheckedRamp;"
+        );
+        let compiled = compile("CheckedRamp", &source, "checked_ramp.mo").unwrap();
+        let result = FixedStepSession::new(&compiled.dae, options());
+        if gain > 0.0 {
+            let mut session = result.expect("parameter-only assertion is admitted");
+            session.step(0.01).unwrap();
+            assert!((session.state().unwrap().values["x"] - 0.01).abs() < 1.0e-12);
+        } else {
+            let error = result
+                .err()
+                .expect("invalid parameter must fail initialization");
+            assert!(
+                error.to_string().contains("gain must be positive"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fixed_rk4_rejects_assertions_that_need_continuous_event_handling() {
+    for predicate in ["time < 0.1", "x < 0.1", "u > 0"] {
+        let source = format!(
+            "model DynamicAssertion input Real u = 1; Real x(start=0, fixed=true); equation der(x)=u; assert({predicate}, \"dynamic assertion\"); end DynamicAssertion;"
+        );
+        let compiled = compile("DynamicAssertion", &source, "dynamic_assertion.mo").unwrap();
+        let error = FixedStepSession::new(&compiled.dae, options())
+            .err()
+            .expect("dynamic assertion needs an event-capable backend");
+        let detail = error.to_string();
+        assert!(
+            detail.contains("fixed-rk4 cannot start this model"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("must depend only on parameters and constants"),
+            "{detail}"
+        );
+    }
+}
+
+#[test]
 fn fixed_rk4_reads_inputs_and_algebraic_values_from_checked_runtime() {
     let compiled = compile("Coupled", "model Coupled input Real u = 2; Real x(start=0); output Real y; equation y=3*u+x; der(x)=y; end Coupled;", "coupled.mo").unwrap();
     let mut session = FixedStepSession::new(&compiled.dae, options()).unwrap();
