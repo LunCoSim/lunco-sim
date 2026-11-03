@@ -865,19 +865,10 @@ pub(crate) fn sync_globe_handoffs(
                     None
                 }
             }
-            [] => {
-                replace_terrain_diagnostic(
-                    &mut diagnostics,
-                    producer,
-                    Some(terrain_diagnostic(
-                        producer,
-                        "flat-surface-missing",
-                        "SiteAnchor".to_string(),
-                        "site-anchored non-DEM terrain requires exactly one terrain prim with lunco:terrain:surfaceRole=\"flat-site\"".to_string(),
-                    )),
-                );
-                None
-            }
+            // A site anchor defines a coordinate frame, not a local surface.
+            // An orbital view can use that frame with the body's own terrain.
+            // Only an authored DEM or flat-site surface requests a handoff.
+            [] => None,
             _ => {
                 replace_terrain_diagnostic(
                     &mut diagnostics,

@@ -352,6 +352,14 @@ their residency is driven by bodies independently of these visual/shadow flags.
 
 Terrain shadow production and filtered regolith detail follow the
 [terrain material contract](terrain-layered-rendering.md#shadow-ownership).
+The High Graphics preset resolves close vehicle and contact shadows with 8192 px
+maps, four cascades, narrow Hardware 2×2 filtering, 0.005 m depth bias and
+2.0-texel normal bias. Its first/maximum bounds remain 30/3000 m. The explicit
+5 GiB logical ceiling covers the configured caster limits; actual storage
+follows admitted lights. Balanced and Low retain their smaller budgets.
+Saved custom values remain authoritative; reselect High to apply that profile.
+Do not sharpen shadows by changing physical Sun diameter or terrain geometry.
+
 Scatter boulders share meshes and a linear-reflectance `PbrLook`, and cast
 shadows to provide contact and scale cues.
 

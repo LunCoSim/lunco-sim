@@ -1946,24 +1946,17 @@ fn bridge_dem_prim_read<R: UsdRead>(
             project_flat_site_surface(reader, entity, prim_path, sdf, commands);
         }
         Some("flat-site") if asset_mode.is_none() => {
-            warn!(
-                "[usd-dem] prim {} authors flat-site surfaceRole without LunCoTerrainAPI",
-                prim_path.path
-            );
+            reject_local_surface(commands, prim_path, "flat-site requires LunCoTerrainAPI");
             return;
         }
         Some("flat-site") => {
-            warn!(
-                "[usd-dem] prim {} authors flat-site surfaceRole together with assetMode={:?}; one terrain source must own the surface",
-                prim_path.path, asset_mode
-            );
+            reject_local_surface(commands, prim_path,
+                &format!("flat-site conflicts with assetMode={asset_mode:?}; one terrain source must own the surface"));
             return;
         }
         Some(role) => {
-            warn!(
-                "[usd-dem] prim {} has unsupported lunco:terrain:surfaceRole={role:?}; expected \"flat-site\"",
-                prim_path.path
-            );
+            reject_local_surface(commands, prim_path,
+                &format!("unsupported lunco:terrain:surfaceRole={role:?}; expected flat-site"));
             return;
         }
         None => {}
@@ -2292,6 +2285,23 @@ fn bridge_dem_prim_read<R: UsdRead>(
 /// globe handoff and makes the physical horizon look like a straight tile edge.
 /// `UsdGeomPlane` supplies exactly the finite surface that is rendered and the
 /// terrain physics bridge gives it the corresponding zero-thickness collider.
+fn reject_local_surface(
+    commands: &mut Commands,
+    prim_path: &lunco_usd_bevy_scene::UsdPrimPath,
+    reason: &str,
+) {
+    let message = format!("{}: {reason}", prim_path.path);
+    warn!("[usd-terrain] {message}");
+    let subject = prim_path.path.clone();
+    let detail = reason.to_owned();
+    commands.queue(move |world: &mut World| {
+        world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise("usd-local-surface-invalid", None, subject, detail);
+    });
+    lunco_core::trigger_runtime_error(commands, "usd-local-surface-invalid", message);
+}
+
 fn project_flat_site_surface<R: UsdRead>(
     reader: &R,
     entity: Entity,
@@ -2300,10 +2310,7 @@ fn project_flat_site_surface<R: UsdRead>(
     commands: &mut Commands,
 ) {
     let Some(type_name) = reader.type_name(sdf) else {
-        warn!(
-            "[usd-dem] flat-site prim {} has no composed USD typeName",
-            prim_path.path
-        );
+        reject_local_surface(commands, prim_path, "flat-site has no composed USD typeName");
         return;
     };
     let Some(ShapeDims::Plane {
@@ -2312,32 +2319,20 @@ fn project_flat_site_surface<R: UsdRead>(
         axis,
     }) = read_shape_dims(reader, sdf, &type_name)
     else {
-        warn!(
-            "[usd-dem] flat-site prim {} must be a valid UsdGeomPlane",
-            prim_path.path
-        );
+        reject_local_surface(commands, prim_path, "flat-site must be a valid UsdGeomPlane");
         return;
     };
     let Ok(transform) = read_transform_from_usd(reader, sdf) else {
-        warn!(
-            "[usd-dem] flat-site prim {} has an invalid local xform",
-            prim_path.path
-        );
+        reject_local_surface(commands, prim_path, "flat-site has an invalid local xform");
         return;
     };
     let scale = transform.scale;
     if !scale.is_finite() || scale.x <= 0.0 || scale.y <= 0.0 || scale.z <= 0.0 {
-        warn!(
-            "[usd-dem] flat-site prim {} requires finite positive local scale",
-            prim_path.path
-        );
+        reject_local_surface(commands, prim_path, "flat-site requires finite positive local scale");
         return;
     }
     if axis != UsdGeomAxis::Y {
-        warn!(
-            "[usd-dem] flat-site prim {} must author UsdGeomPlane axis=\"Y\"",
-            prim_path.path
-        );
+        reject_local_surface(commands, prim_path, "flat-site must author UsdGeomPlane axis=Y");
         return;
     }
     let east = transform.rotation * bevy::math::Vec3::X;
@@ -2346,10 +2341,7 @@ fn project_flat_site_surface<R: UsdRead>(
     // is a different authored surface type and must be modelled explicitly,
     // rather than silently changing the globe clip axes.
     if east.dot(bevy::math::Vec3::X) < 1.0 - 1.0e-5 || up.dot(bevy::math::Vec3::Y) < 1.0 - 1.0e-5 {
-        warn!(
-            "[usd-dem] flat-site prim {} must be an ENU-aligned, unrotated Plane",
-            prim_path.path
-        );
+        reject_local_surface(commands, prim_path, "flat-site must be an ENU-aligned, unrotated Plane");
         return;
     }
     let surface = lunco_terrain_surface::FlatSiteSurface {
@@ -2360,10 +2352,7 @@ fn project_flat_site_surface<R: UsdRead>(
         top_y_m: transform.translation.y as f64,
     };
     if !surface.is_valid() {
-        warn!(
-            "[usd-dem] flat-site prim {} produced non-finite or non-positive footprint",
-            prim_path.path
-        );
+        reject_local_surface(commands, prim_path, "flat-site produced a non-finite or non-positive footprint");
         return;
     }
     commands.entity(entity).try_insert(surface);

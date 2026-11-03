@@ -161,3 +161,11 @@ position, guessed grid parent, or fallback for missing ephemeris data.
 
 The production scene gate exercises authored double-precision USD animation,
 its BigSpace cell split, and its physical-clock pause behavior.
+
+## Site frames and terrain ownership
+
+A geodetic site anchor defines a coordinate frame. An orbital scene can use
+that frame with the body surface alone. A local DEM or an explicitly authored
+`flat-site` surface requests a local-to-globe handoff; no local surface means
+no handoff. Multiple local surface owners still produce the structured
+`flat-surface-cardinality` diagnostic.
