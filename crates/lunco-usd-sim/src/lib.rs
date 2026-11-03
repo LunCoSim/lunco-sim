@@ -1886,6 +1886,16 @@ fn collect_vehicle_output_ports(
             .filter(|path| !path.is_property())
             .map(|path| path.as_str().to_owned()),
     );
+    // The composed executor owns its outputs before a live participant exists.
+    // Invalid program selection stays with the program diagnostic owner; it
+    // cannot create an imperative producer for those same declared outputs.
+    if reader.has_api_schema(root, "LunCoProgramAPI") {
+        match lunco_usd_bevy_core::program::resolve_program(reader, root) {
+            Ok(program)
+                if lunco_usd_bevy_core::program::is_generic_program_backend(program.backend) => {}
+            _ => return (Vec::new(), source_paths),
+        }
+    }
     let mut port_names = Vec::new();
     for attr in &root_attributes {
         let Some(name) = attr.strip_prefix("outputs:") else {
@@ -2570,11 +2580,9 @@ fn process_usd_sim_prim_read(
     // 1. Detect PhysxVehicleContextAPI (the mobility root)
     // Stamps the generic mobility/selectable boundary from the PhysX schema. Numeric
     // outputs authored on the vehicle root become runtime actuator ports only when
-    // they are not owned by a generated Modelica network. Outputs owned by that
-    // network remain on its `SimComponent`; duplicating them into child `Port`s
-    // would create a second, unwritten producer and make a cross-domain connection
-    // read zero. The vehicle's command and drive behaviour therefore remains an
-    // authored USD/Modelica contract; Rust does not fabricate a steering model.
+    // they are not owned by a direct solver program or generated Modelica network.
+    // Solver observations remain on `SimComponent`. The vehicle's command and
+    // drive behaviour remains an authored USD/Modelica contract.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
         info!(
             "Intercepted PhysxVehicleContextAPI for {}, initializing vessel control surface",
@@ -2609,7 +2617,7 @@ fn process_usd_sim_prim_read(
 
         if port_names.is_empty() {
             debug!(
-                "USD vehicle {} has no external numeric outputs:* ports; authored generated network owns its actuator outputs",
+                "USD vehicle {} has no imperative numeric outputs:* ports",
                 prim_path.path
             );
         } else {
@@ -3941,7 +3949,7 @@ mod physical_wheel_geometry_tests {
                 DVec3::new(-0.125, 0.34, 0.34),
                 DVec3::new(0.125, 0.34, -0.34),
             ];
-            let mesh = Collider::convex_hull(vertices.to_vec()).unwrap();
+            let mesh = Collider::convex_hull(&vertices).unwrap();
             let bounds = mesh.shape_scaled().compute_local_aabb();
             let oriented = oriented_wheel_collider(mesh, DQuat::IDENTITY);
             assert_eq!(oriented.shape_scaled().compute_local_aabb(), bounds);
@@ -5383,6 +5391,49 @@ mod topology_index_tests {
     use super::*;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
+
+    #[test]
+    fn vehicle_output_projection_respects_program_ownership() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "outputs.usda",
+            r#"#usda 1.0
+def Xform "Imperative" (prepend apiSchemas = ["PhysxVehicleContextAPI"]) {
+    double outputs:sample = 0
+}
+def Xform "Modelica" (prepend apiSchemas = ["PhysxVehicleContextAPI", "LunCoProgramAPI"]) {
+    token info:implementationSource = "sourceAsset"
+    asset info:sourceAsset = @program.mo@
+    double outputs:sample = 0
+}
+def Xform "Python" (prepend apiSchemas = ["PhysxVehicleContextAPI", "LunCoProgramAPI"]) {
+    token info:implementationSource = "sourceAsset"
+    asset info:sourceAsset = @program.py@
+    double outputs:sample = 0
+}
+def Xform "Invalid" (prepend apiSchemas = ["PhysxVehicleContextAPI", "LunCoProgramAPI"]) {
+    double outputs:sample = 0
+}
+"#,
+        ))
+        .expect("program ownership fixture composes");
+        for (path, expected) in [
+            ("/Imperative", vec!["sample".to_owned()]),
+            ("/Modelica", vec![]),
+            ("/Python", vec![]),
+            ("/Invalid", vec![]),
+        ] {
+            let (ports, sources) =
+                collect_vehicle_output_ports(&stage.view(), &SdfPath::new(path).unwrap());
+            assert_eq!(
+                ports, expected,
+                "{path} must retain its authoritative output owner"
+            );
+            assert!(
+                sources.contains(path),
+                "program changes must invalidate the prepared output fact"
+            );
+        }
+    }
 
     const WHEEL_STAGE: &str = r#"#usda 1.0
 def Xform "Rover" {

@@ -916,12 +916,12 @@ impl PortMetadata {
         }
         if let Some(min) = self.min {
             if value < min {
-                return Err(format!("value must be ≥ {min}"));
+                return Err(format!("value must be ≥ {min:?}"));
             }
         }
         if let Some(max) = self.max {
             if value > max {
-                return Err(format!("value must be ≤ {max}"));
+                return Err(format!("value must be ≤ {max:?}"));
             }
         }
         Ok(())
@@ -1430,14 +1430,14 @@ impl fmt::Display for PortWriteError {
                 reason,
             } => {
                 let range = match (min, max) {
-                    (Some(min), Some(max)) => format!("; allowed range {min}..={max}"),
-                    (Some(min), None) => format!("; allowed minimum {min}"),
-                    (None, Some(max)) => format!("; allowed maximum {max}"),
+                    (Some(min), Some(max)) => format!("; allowed range {min:?}..={max:?}"),
+                    (Some(min), None) => format!("; allowed minimum {min:?}"),
+                    (None, Some(max)) => format!("; allowed maximum {max:?}"),
                     (None, None) => String::new(),
                 };
                 write!(
                     formatter,
-                    "value {value}{} for input port `{}` was rejected{owner}{range}: {reason}",
+                    "value {value:?}{} for input port `{}` was rejected{owner}{range}: {reason}",
                     unit.as_deref()
                         .map(|unit| format!(" {unit}"))
                         .unwrap_or_default(),

@@ -115,7 +115,7 @@ fn report_runtime_fault_status(
         "Simulation",
         lunco_status_core::status_bus::StatusLevel::Error,
         format!(
-            "Simulation stopped: {} [{}]\n{}",
+            "Simulation stopped: {} [{}]: {}",
             fault.subject, fault.kind, fault.detail
         ),
     );
@@ -1237,7 +1237,7 @@ mod simulation_lifecycle_status_tests {
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].message,
-            "Simulation stopped: continuous contact solve [contact-invalid]\nnative geometry unavailable"
+            "Simulation stopped: continuous contact solve [contact-invalid]: native geometry unavailable"
         );
         lunco_core::run_scene_teardown(app.world_mut());
         app.world_mut()
@@ -1256,7 +1256,7 @@ mod simulation_lifecycle_status_tests {
         assert_eq!(bus.history().count(), 1);
         assert_eq!(
             bus.history().next().unwrap().message,
-            "Simulation stopped: joint admission [joint-invalid]\ninvalid endpoints"
+            "Simulation stopped: joint admission [joint-invalid]: invalid endpoints"
         );
     }
 

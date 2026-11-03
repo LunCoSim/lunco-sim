@@ -155,6 +155,19 @@ pub(crate) fn reject_connection_contract(
     detail: String,
     dropped_value: Option<f64>,
 ) {
+    let endpoint_name = |entity| {
+        world
+            .get::<Name>(entity)
+            .map(|name| name.as_str().to_owned())
+            .unwrap_or_else(|| format!("{entity:?}"))
+    };
+    let detail = format!(
+        "connection {}.{} -> {}.{}: {detail}",
+        endpoint_name(spec.start_element),
+        spec.start_connector,
+        endpoint_name(spec.end_element),
+        spec.end_connector,
+    );
     crate::failure::reject_input(
         world,
         "cosim-connection-contract-invalid",

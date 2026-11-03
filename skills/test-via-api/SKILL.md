@@ -747,9 +747,9 @@ idempotent transport requests must not create additional lifecycle events.
 
 For terminal runtime failures, inspect `GetReadiness.fault` even when
 `RuntimeDiagnostics.errors` is zero: they are distinct owners. A windowed
-negative fixture must also show the first fault's subject and kind as a
-`Simulation stopped` Error in Recent Events. The presentation bridge publishes
-once per scene and resets with scene history.
+negative fixture must also show the first fault's subject, kind, and original
+cause in the visible `Simulation stopped` Error in Recent Events. The presentation
+bridge publishes once per scene and resets with scene history.
 
 `python3 scripts/api/test_fixed_step_assertions.py --port <free-port> --output <directory>`
 checks six authored failure assertions in a windowed production session and
@@ -758,3 +758,12 @@ guidance model with fixed RK4: the original Modelica assertion must reach the
 startup diagnostic, the failed participant must stay at time zero, and the
 application must remain available. Pair it with the solver's focused
 `fixed_step` integration target and the affected Twin's loading/control gates.
+
+`python3 scripts/api/test_vehicle_program_outputs.py --port <free-port> --output <directory>`
+checks eleven authored assertions on a mobility root with a direct Modelica
+program. Its declared output starts at zero in USD while the checked solver
+produces positive inertia. Require the wire to retain the program prim and port,
+and physics to receive the solver observation. The negative case deliberately
+produces zero inertia: binding must reject it with source/sink context, preserve
+the body's previous inertia, and keep the application available. Pair this gate
+with the affected Twin's reopen/control acceptance.

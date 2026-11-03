@@ -598,10 +598,9 @@ pub(super) fn rewire_usd_connections(
     let mut environment_probe_entities = HashSet::new();
     let mut direction_requirements_already_required = HashMap::new();
     let mut declared_probe_outputs = HashMap::new();
-    let mut port_surfaces = HashMap::new();
     {
         let _span = bevy::log::info_span!("usd_cosim_wiring_index_live_endpoints").entered();
-        for (e, p, _, generated, is_probe, direction_requirements, declared, surface) in
+        for (e, p, _, generated, is_probe, direction_requirements, declared, _) in
             live_endpoints.iter().copied()
         {
             if is_probe {
@@ -610,9 +609,6 @@ pub(super) fn rewire_usd_connections(
                 if let Some(requirements) = direction_requirements {
                     direction_requirements_already_required.insert(e, requirements.clone());
                 }
-            }
-            if let Some(surface) = surface {
-                port_surfaces.insert(e, surface);
             }
             let instance = instance_of(e);
             let key = (p.stage_handle.id(), instance, p.path.as_str());
@@ -908,9 +904,7 @@ pub(super) fn rewire_usd_connections(
                         })
                         .flatten()
                         .copied();
-                    let generated_alias_present = generated_alias.is_some();
-                    let (mut start_element, mut src_conn) = if let Some((wrapper, alias)) =
-                        generated_alias
+                    let (start_element, src_conn) = if let Some((wrapper, alias)) = generated_alias
                     {
                         (wrapper, alias.to_string())
                     } else {
@@ -974,38 +968,9 @@ pub(super) fn rewire_usd_connections(
                         }
                     }
 
-                    // ── The SOURCE side of the runtime-output indirection ────────
-                    // A vessel's `outputs:drive_left` is not stored on the vessel
-                    // prim: `OutputPorts` realises it as a child `Port` entity, and
-                    // that is where the authored controller writes. The sink side above has
-                    // always redirected onto that child; reading one had no such hop,
-                    // so a wire whose SOURCE is a vessel actuator port resolved to the
-                    // vessel entity, found no port of that name, and delivered its
-                    // default forever.
-                    //
-                    // MEASURED on `scenes/tests/solar_domain_nested_ref.usda`: the
-                    // rover's `throttle` reached 1.0 and the authored controller wrote both
-                    // bank ports, while the rover-root drive input — wired from
-                    // `</RockerBogie.outputs:drive_left>` — stayed at 0.0 for the whole
-                    // run. Every motor drew no current, so a driving rover's battery
-                    // never discharged and its bus was solved as if parked. Silent:
-                    // the island compiled, published, and stepped.
-                    if !generated_alias_present && !start_is_input {
-                        if let Some(port_entity) = port_surfaces
-                            .get(&start_element)
-                            .and_then(|surface| surface.get(&src_conn))
-                            .or_else(|| {
-                                wiring
-                                    .outputs
-                                    .get(start_element)
-                                    .ok()
-                                    .and_then(|outputs| outputs.get(&src_conn))
-                            })
-                        {
-                            start_element = port_entity;
-                            src_conn = lunco_port_core::PORT_NAME.to_string();
-                        }
-                    }
+                    // Keep the source's declared identity. The port registry
+                    // selects its live producer, including native child-backed
+                    // ports, and withholds a preparing solver's own samples.
 
                     // ── The realtime gate ───────────────────────────────────────
                     // A program may only push a client-predicted `Dynamic` body around

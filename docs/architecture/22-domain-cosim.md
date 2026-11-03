@@ -381,11 +381,23 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   Modelica drivetrain.
   A mobility root is identified separately by `lunco_core::MobilityRoot`;
   `OutputPorts` is never used as a vehicle marker.
-  Generated Modelica outputs remain on `SimComponent` and are not copied into
-  `OutputPorts`.
+  Direct Modelica/Python programs and generated Modelica outputs remain on
+  `SimComponent` and are not copied into `OutputPorts`. Mobility output
+  preparation classifies the composed program with the shared USD program
+  resolver before asynchronous source loading; an invalid selected program
+  cannot acquire an imperative output producer while its owner reports the error.
 - **`PortSurface`** — a USD component's authored input/output names, directions,
   and scalar runtime endpoints. The component projector publishes the surface;
   the generic port registry validates reads and writes against its direction.
+  Source wires retain the authored prim and port identity. The registry selects
+  the declared output owner and reads its current sample, including native child
+  endpoints. Wiring does not redirect a source around that ownership decision.
+  Connection rejections include the source and sink names alongside the invalid
+  sample or contract, and hold simulation before the write commits.
+  The first-fault status event includes that cause on its visible summary line;
+  additional diagnostic lines remain available in the event details. Port
+  diagnostics use Rust's compact, lossless float representation for samples and
+  bounds, so extreme limits use scientific notation.
 - **Avian as a cosim participant** — Avian physics is wired in through a typed-port
   spec table (`AvianGroup`/`AvianPort`) plus a `PendingForces` component, not a
   bespoke `AvianSim` struct.
@@ -772,7 +784,7 @@ For authored simulation signals, use the complementary rule: a command enters
 a producer through `inputs:<name>`, and a produced setpoint leaves through
 `outputs:<name>`. The USD connection is the topology authority. `OutputPorts`
 only stores values for an imperative producer; it is not a second signal graph
-and must not shadow a generated Modelica output.
+and must not shadow a solver-owned output.
 
 ### USD telemetry projection lifecycle
 
@@ -1189,7 +1201,7 @@ When an authored source prim is present but its port surface is preparing,
 the wiring owner publishes `PendingInputConnections` on the sink. A native source
 also remains pending until its `UsdSimProcessed` projection boundary; identity or
 an earlier partial surface does not establish complete native port publication.
-That boundary invalidates wiring so child endpoint indirection is rebuilt.
+That boundary invalidates wiring so endpoint contracts are reconciled.
 Initialization waits for those connections unless an authored hold supplies the input. Wiring
 clears the pending names when it publishes the actual edges. This preserves the
 distinction between an unconnected input and a connection awaiting projection.

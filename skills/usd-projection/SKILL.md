@@ -19,6 +19,14 @@ cutover: update the authored source and all readers, delete the superseded spell
 and compatibility branch, regenerate schema artifacts, and add a negative
 test. Never make the ECS projection a second source of truth.
 
+Mobility roots with a direct Modelica/Python program publish solver outputs on
+`SimComponent`; only imperative producers allocate `OutputPorts`. Classify the
+composed source through `lunco-usd-bevy-core::program::resolve_program` during
+immutable topology preparation, independently of executor loading order. Source
+wires retain the prim and named port so the shared registry selects its owner;
+do not redirect them to an actuator child. Verify initial mass/inertia with
+`test_vehicle_program_outputs.py`, including its rejected-zero case.
+
 Use `MoveProperty` through `ApplyUsdOp(s)` to rename authored properties while
 preserving metadata, samples, and namespace-dependent connections. Inspect the
 exact source document and property authorship before editing; composed values

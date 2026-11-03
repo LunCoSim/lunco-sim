@@ -1078,7 +1078,11 @@ USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,
 wiring, readiness, telemetry projection, and the Modelica/script participant
 exchange independently from vehicle realization. Wiring facts are cached by
 composed generation and instance, with unchanged runtime edges retained across
-unrelated endpoint arrivals. Cosim prim source discovery and Python readiness
+unrelated endpoint arrivals. Source edges preserve the authored prim and named
+port; the shared port registry selects the producer, including child-backed
+imperative outputs. Vehicle output preparation in `lunco-usd-sim` uses the shared
+composed program classifier and excludes solver-owned outputs from imperative
+port allocation. Cosim prim source discovery and Python readiness
 share a lifecycle-coalesced pending-prim set. Pending Modelica source admission
 reuses Bevy's system-local query state across updates and scene replacements.
 Loaded source declarations are published before causal input admission. The same
