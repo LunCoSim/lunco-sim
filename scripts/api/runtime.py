@@ -36,7 +36,7 @@ def assert_render_log_clean(path: Path) -> None:
     """GPU callback failures are not part of the domain diagnostics query."""
     text = path.read_text(encoding="utf-8", errors="replace")
     failure = re.search(
-        r"wgpu validation error|wgpu device lost|failed to process shader|"
+        r"wgpu validation error|w?gpu device lost|wgpu out of memory|failed to process shader|"
         r"failed to create shader module|Encountered a panic|thread .*panicked",
         text, re.IGNORECASE,
     )
