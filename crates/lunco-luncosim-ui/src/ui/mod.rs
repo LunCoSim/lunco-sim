@@ -1381,6 +1381,23 @@ fn register_downloadable_assets_settings(world: &mut World) {
             );
             ui.add_space(8.0);
         });
+        if let Some(mut processing) = ctx.resource::<lunco_settings::AssetProcessingSettings>().cloned() {
+            let original = processing.clone();
+            egui::CollapsingHeader::new("Texture preparation").show(ui, |ui| {
+                let mut mib = processing.texture_decode_max_bytes as f64 / 1048576.0;
+                ui.horizontal(|ui| {
+                    ui.label("Decoder memory limit:");
+                    if ui.add(egui::DragValue::new(&mut mib).speed(64.0).range(1.0..=8796093022207.0).suffix(" MiB")).changed() {
+                        processing.texture_decode_max_bytes = (mib * 1048576.0).round() as u64;
+                    }
+                    if ui.small_button("1 GiB").clicked() { processing.texture_decode_max_bytes = 1 << 30; }
+                    if ui.small_button("2 GiB").clicked() { processing.texture_decode_max_bytes = 2 << 30; }
+                });
+                ui.label("Default: 1 GiB per decoder. Applies to new preparation jobs; resampling uses additional memory.");
+                ui.label("Twin override: assets.texture_decode_max_bytes in Twin settings (bytes). An asset's max_decode_bytes takes precedence.");
+            });
+            if processing != original { ctx.set_resource(processing); }
+        }
         ui.label("Data required by the active scene must be ready before simulation can run. Other Twin data can be downloaded later.");
         ui.add_space(8.0);
         if settings != original_settings {

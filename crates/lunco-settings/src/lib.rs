@@ -571,6 +571,38 @@ impl SettingsSection for TerrainSettings {
     const KEY: &'static str = "terrain";
 }
 
+/// Persistent allocation policy for native texture preparation.
+#[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct AssetProcessingSettings {
+    /// Decoder allocation budget in bytes; resampling allocations are separate.
+    pub texture_decode_max_bytes: u64,
+}
+
+impl AssetProcessingSettings {
+    pub const DEFAULT_TEXTURE_DECODE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+    pub const TEXTURE_DECODE_MAX_BYTES_RANGE: std::ops::RangeInclusive<u64> = 1..=i64::MAX as u64;
+}
+
+impl Default for AssetProcessingSettings {
+    fn default() -> Self {
+        Self {
+            texture_decode_max_bytes: Self::DEFAULT_TEXTURE_DECODE_MAX_BYTES,
+        }
+    }
+}
+
+impl SettingsSection for AssetProcessingSettings {
+    const KEY: &'static str = "asset_processing";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if !Self::TEXTURE_DECODE_MAX_BYTES_RANGE.contains(&self.texture_decode_max_bytes) {
+            return Err("texture_decode_max_bytes must be a positive integer number of bytes representable in Twin settings".into());
+        }
+        Ok(())
+    }
+}
+
 /// Persistent settings for asset downloading.
 #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]

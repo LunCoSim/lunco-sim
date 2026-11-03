@@ -22,6 +22,20 @@ read back the authored value. Do not patch `.usd*` text directly; if the
 available command surface cannot author a required standard field, add the
 smallest typed operation at the owning USD layer first.
 
+The native texture decoder defaults to a bounded 1 GiB allocation budget.
+Users can edit Settings > Data & libraries > Texture preparation, or author
+`"assets.texture_decode_max_bytes" = 2147483648` in a Twin's `[settings]`
+for 2 GiB. Existing Twin values are editable in the native Twin settings panel.
+Precedence is explicit asset `max_decode_bytes`, owning Twin setting, then
+application setting. Changes affect the next job; Rebuild reruns cached output.
+For a large ordinary texture source that fails decoding with `Memory limit
+exceeded`, author a larger bounded positive `max_decode_bytes` in that entry's
+`[asset.process]` recipe, then rebuild through native `ProcessDataset`. For the
+506 MiB LOLA unsigned TIFF, 1 GiB is the declared decode budget. Preserve
+`color_space = "linear"` for elevation and verify the prepared output remains
+16-bit. Never retry with unlimited allocation or silently substitute a smaller
+source. See the bounded texture decoding section in the processing contract.
+
 For distance-dependent missing tiles after asset readiness, use `render-quality`.
 `TerrainLodStatus` describes CPU cover readiness; native GPU buffer layout and
 actual drawing still require visual acceptance. The visual metric uses each

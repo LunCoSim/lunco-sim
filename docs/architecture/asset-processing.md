@@ -125,6 +125,30 @@ An authored compile error, thrown exception or malformed result is a terminal
 job failure. The shared hook interpreter rejects filesystem imports; helper
 functions may live in the declared source. Cancellation interrupts evaluation.
 
+### Bounded texture decoding
+
+A `kind = "texture"` recipe may set `max_decode_bytes` to a positive integer
+number of bytes. This sets the native image decoder's allocation budget before
+decoding the source; it does not reduce the image or change its sample encoding.
+Without an asset override, the worker snapshots the owning Twin's
+`[settings]."assets.texture_decode_max_bytes"`; when absent it uses the
+persistent Settings > Data & libraries > Texture preparation value
+(`asset_processing.texture_decode_max_bytes`), whose default is 1 GiB.
+The owning Twin is selected by the dataset's root, independently of UI focus.
+Both application preparation paths and the CLI use this policy. Changes apply
+to the next job, not to an already running decoder. A budget change does not
+alter pixels or invalidate a valid cached artifact; Rebuild explicitly reruns
+preparation. A source that
+exceeds its budget fails preparation with the decoder error; zero, negative and
+non-integer values fail configuration. There is no unlimited retry.
+
+Large scientific rasters may require both an output buffer and temporary decoder
+storage. Griffin's 530,934,146-byte LOLA source explicitly uses
+the Twin setting `assets.texture_decode_max_bytes = 1073741824` (1 GiB), `color_space = "linear"`, and
+`target_resolution = [16384, 8192]` to preserve 16-bit elevation samples within
+the renderer's texture dimension limit. This is a decoder budget, not a cap on
+all later resampling or application allocations.
+
 ### WESL image steps
 
 Native desktop composition enables `shader-processing`; standalone CLI builds
