@@ -53,7 +53,7 @@ use lunco_usd_bevy_stage::{
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use lunco_usd_sim_core::{PendingDifferential, PendingEntityWork, UsdSimProcessed, UsdSimSet};
+use lunco_usd_sim_core::{PendingDifferential, PendingEntityWork, UsdSimSet};
 use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule};
 
 /// Installs USD-authored co-simulation participant and connection projection.
@@ -420,7 +420,6 @@ fn reset_standalone_modelica_projection(
                 ResolvedUsdModelicaInterface,
                 lunco_modelica_runtime::ModelicaResolvedInterface,
                 SimComponent,
-                UsdSimProcessed,
                 UsdInputDefaults,
                 DeclaredOutputPorts,
                 UsdModelicaSchedule,
@@ -1244,7 +1243,6 @@ fn process_usd_cosim_prim_read(
     // documents) has no `connectors:` at all, so the old gate handed it exactly
     // that second solver.
     if network_members.contains(&prim_path.path) {
-        commands.entity(entity).try_insert(UsdSimProcessed);
         return;
     }
     // …and the converse. A part with an acausal pin that NO network owns cannot
@@ -1266,7 +1264,6 @@ fn process_usd_cosim_prim_read(
                 prim_path.path
             );
         }
-        commands.entity(entity).try_insert(UsdSimProcessed);
         return;
     }
 
@@ -1325,7 +1322,6 @@ fn process_usd_cosim_prim_read(
             prim_path.path
         );
         commands.entity(entity).try_insert((
-            UsdSimProcessed,
             lunco_core_session::NotPredictable,
             SimComponent {
                 model_name,
@@ -1397,7 +1393,6 @@ fn process_usd_cosim_prim_read(
                 .as_deref()
                 .map_or_else(|| "Modelica".to_string(), |path| format!("Modelica:{path}"));
             commands.entity(entity).try_insert((
-                UsdSimProcessed,
                 lunco_core_session::NotPredictable,
                 SimComponent {
                     model_name,
@@ -1443,7 +1438,6 @@ fn process_usd_cosim_prim_read(
                 format!("Python runtime unavailable; cannot run `{asset_path}` in this binary");
             python_unavailable.paths.insert(prim_path.path.clone());
             commands.entity(entity).try_insert((
-                UsdSimProcessed,
                 lunco_core_session::NotPredictable,
                 SimComponent {
                     model_name: format!("Python:{asset_path}"),
@@ -1473,14 +1467,6 @@ fn process_usd_cosim_prim_read(
             return;
         }
     }
-
-    // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
-    //
-    // NB: this stamps `UsdSimProcessed`, which makes `process_usd_sim_prims` skip this
-    // prim — fine, because link/celestial projection is now its OWN system
-    // (`project_celestial_comms_prims`), gated by its OWN marker, so a cosim antenna
-    // still gets its `LinkNode`. The two concerns no longer race on one flag.
-    commands.entity(entity).try_insert(UsdSimProcessed);
 
     // NOTE: there is no possessable/vessel tag to stamp. A prim's command CAPABILITY
     // comes from its `Controls` scope → `ControlBinding` + `InputPorts`, stamped in

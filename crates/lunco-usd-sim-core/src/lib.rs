@@ -31,7 +31,9 @@ pub enum UsdSimSet {
     ActivateDynamicBodies,
 }
 
-/// Marks a USD prim after its simulation projection has completed.
+/// Marks completion of the native vehicle/physics facet projection.
+/// Co-simulation source discovery uses its own `UsdSourcedCosim` marker;
+/// admitting a program does not complete this native owner's work.
 #[derive(Component)]
 pub struct UsdSimProcessed;
 

@@ -1065,8 +1065,8 @@ registered through the generic live-edit owner in `lunco-usd-bevy-core`.
 **`lunco-usd-sim-core`**
 Small production contract package shared by the vehicle and USD cosim
 projectors and scene readiness. It owns `UsdSimSet` (including the shader
-projection-preparation boundary), `UsdSimProcessed`, the coalesced
-`PendingEntityWork` lifecycle queue, `PendingDifferential` (explicit hinge paths
+projection-preparation boundary), native projection's `UsdSimProcessed`, the
+coalesced `PendingEntityWork` lifecycle queue, `PendingDifferential` (explicit hinge paths
 and the `lunco-physics` stable identity contract), and
 `GroundColliderPending`, keeping shared contracts out of either large
 implementation crate and allowing scene runners to avoid the full vehicle
@@ -1082,8 +1082,9 @@ unrelated endpoint arrivals. Source edges preserve the authored prim and named
 port; the shared port registry selects the producer, including child-backed
 imperative outputs. Vehicle output preparation in `lunco-usd-sim` uses the shared
 composed program classifier and excludes solver-owned outputs from imperative
-port allocation. Cosim prim source discovery and Python readiness
-share a lifecycle-coalesced pending-prim set. Pending Modelica source admission
+port allocation. Cosim prim source discovery and Python readiness share a
+lifecycle-coalesced pending-prim set and the `UsdSourcedCosim` discovery marker,
+independently of native projection completion. Pending Modelica source admission
 reuses Bevy's system-local query state across updates and scene replacements.
 Loaded source declarations are published before causal input admission. The same
 owner captures stalled Modelica feedback, synthesizes its initial composite through

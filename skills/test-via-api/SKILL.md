@@ -767,3 +767,10 @@ and physics to receive the solver observation. The negative case deliberately
 produces zero inertia: binding must reject it with source/sink context, preserve
 the body's previous inertia, and keep the application available. Pair this gate
 with the affected Twin's reopen/control acceptance.
+
+For co-located Modelica and native vehicle facets, run
+`python3 scripts/api/test_native_vehicle_projection.py --port <free-port> --twin <path> --subject-path <prim> --minimum-support-contacts <count> --output <directory>`.
+Its six authored checks require clear readiness, an advancing model, complete
+native body admission, real wheel-support probes, and current support samples.
+Require the footprint count appropriate to the authored raycast vehicle; model
+startup alone does not prove the native facet was projected.

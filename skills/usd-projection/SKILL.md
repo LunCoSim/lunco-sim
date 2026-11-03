@@ -27,6 +27,14 @@ wires retain the prim and named port so the shared registry selects its owner;
 do not redirect them to an actuator child. Verify initial mass/inertia with
 `test_vehicle_program_outputs.py`, including its rejected-zero case.
 
+Keep projection completion owner-specific: `UsdSourcedCosim` belongs to source
+discovery; only the native projector sets or clears `UsdSimProcessed`. A source
+facet, source error, or source reset must not suppress native mobility/physics
+work on the same prim. Check the real consumer with
+`test_native_vehicle_projection.py --twin <path> --subject-path <prim> --minimum-support-contacts <count>`:
+ready source-backed raycast vehicles must expose their wheel-support footprint
+and current support samples through `QueryPhysicsState`.
+
 Use `MoveProperty` through `ApplyUsdOp(s)` to rename authored properties while
 preserving metadata, samples, and namespace-dependent connections. Inspect the
 exact source document and property authorship before editing; composed values

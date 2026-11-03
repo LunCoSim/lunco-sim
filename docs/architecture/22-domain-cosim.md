@@ -992,6 +992,15 @@ vehicle projector owns a separate instance of the same contract, so each
 projection domain drains only its own work. Scene teardown clears each
 scene-owned set.
 
+Completion markers follow the same ownership split. `UsdSourcedCosim` records
+source-facet discovery; only `lunco-usd-sim` publishes `UsdSimProcessed` after
+native vehicle/physics projection. Co-simulation discovery, terminal source
+errors, and source resets neither set nor clear the native marker. A program
+and native facets on the same prim must both project, including mobility-root
+identity and the wheel-support footprint consumed by terrain/body admission.
+The `native_vehicle_projection` production observer checks native support
+geometry and current contact samples alongside an advancing Modelica vehicle.
+
 Modelica wrapper admission has its own owner-scoped set as well. Model and
 cosim-owner additions queue an entity that lacks `SimComponent`; removing that
 surface reopens wrapping, while removal of either owner component retires its
