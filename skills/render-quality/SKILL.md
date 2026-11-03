@@ -67,9 +67,15 @@ GPU acceptance still require the rendered fixture and a clean process log.
    For regular grain ripples, verify that DEM UVs and their derivatives use
    `terrain_half_extent`, independently of the shadow heightfield's `hf_size`.
    Compare settled frames with procedural relief and native shadow reception
-   isolated separately. The High Gaussian filter uses normal bias 4.0,
-   scaled by cascade texel size; keep its metre-valued depth bias and the
-   physical Sun unchanged.
+   isolated separately. High uses 8192-pixel directional maps, a narrow
+   Hardware 2×2 filter, a 0.005 m depth bias and a 2.0-texel normal bias.
+   The normal offset must cover the selected filter footprint; test grazing
+   sunlight for acne and wheel/ground separation before changing it.
+   The 5 GiB logical ceiling covers all declared caster limits (including
+   spot layers at directional-map resolution), not an unconditional GPU
+   allocation. Keep physical solar angle, direction and terrain unchanged.
+   Balanced retains its smaller budget and smoother filter. Existing custom
+   saved values remain authoritative; select High to apply the new defaults.
    Inspect the live light bias as well as the preset: saved Graphics values
    override changed preset defaults. For diagonal boundaries in close grain,
    isolate the raw procedural noise from lighting and geometry. Shared lattice
@@ -283,6 +289,10 @@ The globe's resident mesh cap defaults to 72 MiB. A Twin can override it in
 The application applies the override when the active Twin settings change,
 not in the frame loop. An invalid value is reported and holds globe LOD
 reconciliation; correct the Twin setting before diagnosing a coverage failure.
+A geodetic site frame without an authored local surface uses the body terrain
+directly and requests no local handoff. Validate this and duplicate-surface
+diagnostics with `scenarios/tests/site_frame_without_local_terrain.rhai` on a
+settled site-only scene, passing its exact `root` path.
 For a terrain-to-globe join, use the crop that already backs the local terrain.
 Its retained DEM data stays unchanged, and its border datum sets the render-only
 globe shell radius; celestial placement and physics keep the canonical radius.

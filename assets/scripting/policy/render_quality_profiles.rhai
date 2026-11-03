@@ -149,14 +149,14 @@ fn render_quality_profile(id) {
     }
     if id == "high" {
         return #{
-            directional_shadow_map_size: 4096,
+            directional_shadow_map_size: 8192,
             point_shadow_map_size: 2048,
             directional_cascades: 4,
-            shadow_filtering_quality: "gaussian",
+            shadow_filtering_quality: "hardware2x2",
             max_directional_shadow_casters: 2,
             max_point_shadow_casters: 8,
             max_spot_shadow_casters: 8,
-            shadow_budget_bytes: 2 * 1024 * 1024 * 1024,
+            shadow_budget_bytes: 5 * 1024 * 1024 * 1024,
             horizon_shadow_cache_enabled: true,
             horizon_shadow_cache_sun_threshold_deg: 0.02,
             horizon_march_steps: 96,
@@ -165,10 +165,10 @@ fn render_quality_profile(id) {
             shadow_first_cascade_far_bound: 30.0,
             shadow_maximum_distance: 3000.0,
             shadow_cascade_overlap: 0.1,
-            shadow_depth_bias: 0.03,
-            // Gaussian PCF reaches beyond the centre texel. Its normal offset
-            // must clear that footprint on terrain under grazing sunlight.
-            shadow_normal_bias: 4.0,
+            shadow_depth_bias: 0.005,
+            // A narrow filter and 8K cascades resolve contact/mesh detail without
+            // the wide Gaussian footprint. Bias still clears a full 2x2 footprint.
+            shadow_normal_bias: 2.0,
             camera_tone_map: "agx",
             camera_msaa: "x2",
             camera_exposure_ev100: 16.0,
