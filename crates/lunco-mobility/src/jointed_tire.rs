@@ -31,12 +31,14 @@ pub struct JointedWheelTire {
     pub radius: f64,
     /// Complete authored tire and drivetrain assembly inertia, kg m².
     pub axle_inertia: f64,
-    /// Longitudinal slip stiffness, N/m.
+    /// Longitudinal force per dimensionless slip, N.
     pub slip_stiffness: f64,
     /// Standard PhysX lateral stiffness graph evaluated at contact load.
     pub lateral_stiffness_graph: TireLateralStiffnessGraph,
     /// Lower edge of the authored measured cornering-speed envelope, m/s.
     pub min_validated_speed: f64,
+    /// Standard vehicle-level minimum longitudinal slip denominators, m/s.
+    pub longitudinal_slip_denominators: crate::LongitudinalSlipDenominators,
     /// Authored tire Coulomb coefficient.
     pub friction_mu: f64,
     /// Axle bearing damping, N m s.
@@ -310,8 +312,12 @@ pub fn apply_jointed_tire_forces(
 
             let patch = |contact: &TireContact, w: f64| {
                 tire_patch_force(
-                    tire.slip_stiffness * (w * tire.radius - contact.v_long) * contact.normal_force
-                        / total_normal_force,
+                    tire.slip_stiffness * contact.normal_force / total_normal_force,
+                    w * tire.radius - contact.v_long,
+                    contact.v_long.abs().max((w * tire.radius).abs()).max(
+                        tire.longitudinal_slip_denominators
+                            .minimum(drive_torque != 0.0 || (braking && motor.brake_torque > 0.0)),
+                    ),
                     contact
                         .v_long
                         .abs()

@@ -336,7 +336,9 @@ pub fn ack_with_string_field(
     )
 }
 
-fn emit_command_response(world: &mut World, correlation_id: Option<u64>, id: u64) {
+/// Publish an already-recorded command outcome to its originating transport.
+/// Delegating owners retain the parent identity until their child finishes.
+pub fn emit_command_response(world: &mut World, correlation_id: Option<u64>, id: u64) {
     let Some(correlation_id) = correlation_id else {
         return;
     };

@@ -413,6 +413,8 @@ pub enum ModelicaCommand {
     Reset {
         entity: Entity,
         session_id: u64,
+        /// Exact installed instance whose cached context may be rebuilt.
+        target: ModelicaResetTarget,
         /// Current admitted inputs, including writes made while paused.
         initial_inputs: Vec<(String, f64)>,
     },
@@ -443,6 +445,15 @@ pub enum ModelicaCommand {
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         reply: Sender<Result<ModelicaBatchArtifact, String>>,
     },
+}
+
+/// Cached instance authority retained across a reset transaction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelicaResetTarget {
+    pub session_id: u64,
+    pub model_name: String,
+    pub library_revision: u64,
 }
 
 /// Source-root payload carried to the compiler worker.
@@ -981,32 +992,32 @@ pub enum NoticeLevel {
     Error,
 }
 
-/// Exact participant installation acknowledged by a document compile request.
+/// Exact participant installation acknowledged by a document compile or reset.
 #[derive(Clone, Debug)]
-pub struct ModelicaCompileReceipt {
+pub struct ModelicaLifecycleReceipt {
     pub entity: Entity,
     pub session_id: u64,
     pub generation: u64,
 }
 
-/// One terminal reply shared by cloned or coalesced compile intents.
+/// One terminal reply shared by cloned or coalesced lifecycle listeners.
 #[derive(Clone)]
-pub struct ModelicaCompileCompletion(
-    Arc<std::sync::Mutex<Option<Sender<Result<ModelicaCompileReceipt, String>>>>>,
+pub struct ModelicaLifecycleCompletion(
+    Arc<std::sync::Mutex<Option<Sender<Result<ModelicaLifecycleReceipt, String>>>>>,
 );
 
-pub struct ModelicaCompileReply(Receiver<Result<ModelicaCompileReceipt, String>>);
+pub struct ModelicaLifecycleReply(Receiver<Result<ModelicaLifecycleReceipt, String>>);
 
-impl ModelicaCompileCompletion {
-    pub fn channel() -> (Self, ModelicaCompileReply) {
+impl ModelicaLifecycleCompletion {
+    pub fn channel() -> (Self, ModelicaLifecycleReply) {
         let (tx, rx) = crossbeam_channel::bounded(1);
         (
             Self(Arc::new(std::sync::Mutex::new(Some(tx)))),
-            ModelicaCompileReply(rx),
+            ModelicaLifecycleReply(rx),
         )
     }
 
-    pub fn complete(&self, result: Result<ModelicaCompileReceipt, String>) {
+    pub fn complete(&self, result: Result<ModelicaLifecycleReceipt, String>) {
         if let Some(sender) = self
             .0
             .lock()
@@ -1018,14 +1029,14 @@ impl ModelicaCompileCompletion {
     }
 }
 
-impl ModelicaCompileReply {
+impl ModelicaLifecycleReply {
     /// Retirement of every request owner is a terminal cancellation.
-    pub fn try_take(&self) -> Option<Result<ModelicaCompileReceipt, String>> {
+    pub fn try_take(&self) -> Option<Result<ModelicaLifecycleReceipt, String>> {
         match self.0.try_recv() {
             Ok(result) => Some(result),
             Err(crossbeam_channel::TryRecvError::Empty) => None,
             Err(crossbeam_channel::TryRecvError::Disconnected) => Some(Err(
-                "Modelica compile request retired before completion".into(),
+                "Modelica lifecycle request retired before completion".into(),
             )),
         }
     }
@@ -1034,7 +1045,7 @@ impl ModelicaCompileReply {
 /// Core request to compile a Modelica document.
 #[derive(Message, Clone)]
 pub struct CompileRequested {
-    pub completions: Vec<ModelicaCompileCompletion>,
+    pub completions: Vec<ModelicaLifecycleCompletion>,
     pub source: lunco_workspace::PinnedDocumentRuntimeOwner,
     /// Existing live participant when compilation is part of scene startup;
     /// `None` asks the document owner to reuse or create the document's model.

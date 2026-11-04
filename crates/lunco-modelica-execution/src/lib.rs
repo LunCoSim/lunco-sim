@@ -23,6 +23,8 @@ use std::thread;
 #[cfg(target_arch = "wasm32")]
 pub mod worker_transport;
 
+pub use lunco_modelica_worker::worker::reset_modelica_document;
+
 /// Make the built-in solver descriptors available to query and UI surfaces.
 ///
 /// Registration is owned by the execution package because these descriptors

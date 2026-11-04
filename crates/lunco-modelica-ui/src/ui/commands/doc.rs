@@ -462,39 +462,285 @@ pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
     });
 }
 
-#[on_command(SaveActiveDocument)]
-pub fn on_save_active_document(trigger: On<SaveActiveDocument>, mut commands: Commands) {
-    let raw = trigger.event().doc_id;
+fn queue_active_document_save(
+    raw: DocumentId,
+    path: Option<String>,
+    workspace: &lunco_workspace::Workspace,
+    context: lunco_core::ActiveCommandId,
+    correlation_id: Option<u64>,
+    commands: &mut Commands,
+) {
+    let doc = if raw.is_unassigned() {
+        workspace.active_document
+    } else {
+        Some(raw)
+    };
+    let source = doc
+        .ok_or_else(|| "Save requires a selected document".to_owned())
+        .and_then(|doc| {
+            lunco_workspace::PinnedDocumentRuntimeOwner::for_document(doc, Some(workspace))
+        });
+    let modelica = doc
+        .and_then(|doc| workspace.document(doc))
+        .is_some_and(|entry| entry.kind.as_str() == "modelica");
     commands.queue(move |world: &mut World| {
-        let doc = if raw.is_unassigned() {
-            super::resolve_active_doc(world)
-        } else {
-            Some(raw)
-        };
-        let Some(doc) = doc else {
-            bevy::log::warn!("[SaveActiveDocument] no active document");
-            return;
-        };
-        world.commands().trigger(SaveDocument { doc_id: doc });
+        let command_id = context.get();
+        let admission = source.and_then(|source| {
+            let workspace = world
+                .get_resource::<lunco_workspace::WorkspaceResource>()
+                .map(|workspace| &workspace.0);
+            let replication = lunco_core_session::current_replication_owner_in(world);
+            if !source.is_current(workspace, replication.as_ref()) {
+                return Err("Save document source owner retired before dispatch".to_owned());
+            }
+            if modelica
+                && !world
+                    .get_resource::<ModelicaDocuments>()
+                    .is_some_and(|documents| documents.host(source.document).is_some())
+            {
+                return Err("Save Modelica document closed before dispatch".to_owned());
+            }
+            Ok(source.document)
+        });
+        match admission {
+            Ok(doc) => {
+                let previous = std::mem::replace(
+                    &mut *world.resource_mut::<lunco_core::ActiveCommandId>(),
+                    context,
+                );
+                match path {
+                    Some(path) => world.trigger(SaveAsDocument { doc_id: doc, path }),
+                    None => world.trigger(SaveDocument { doc_id: doc }),
+                }
+                *world.resource_mut::<lunco_core::ActiveCommandId>() = previous;
+                #[cfg(feature = "api")]
+                if let Some(id) = command_id {
+                    world.commands().queue(move |world: &mut World| {
+                        lunco_api::executor::emit_command_response(world, correlation_id, id);
+                    });
+                }
+            }
+            Err(message) => {
+                world.commands().trigger(lunco_core::RuntimeError {
+                    name: "modelica-save-failed".into(),
+                    message: message.clone(),
+                });
+                warn!("[Modelica save] {message}");
+                #[cfg(feature = "api")]
+                lunco_api::executor::finish_command_result(
+                    world,
+                    command_id,
+                    correlation_id,
+                    Err(message),
+                    lunco_api_core::ApiErrorCode::CommandRejected,
+                );
+                #[cfg(not(feature = "api"))]
+                if let Some(id) = command_id {
+                    world
+                        .resource_mut::<lunco_core::CommandResults>()
+                        .record(id, Err(message));
+                }
+            }
+        }
+        #[cfg(not(feature = "api"))]
+        let _ = correlation_id;
     });
 }
 
+#[on_command(SaveActiveDocument)]
+pub fn on_save_active_document(
+    trigger: On<SaveActiveDocument>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    active: Res<lunco_core::ActiveCommandId>,
+    mut commands: Commands,
+    #[cfg(feature = "api")] pending: Option<Res<lunco_api::executor::PendingApiRequest>>,
+) {
+    #[cfg(feature = "api")]
+    let correlation_id = pending
+        .as_ref()
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
+    queue_active_document_save(
+        trigger.event().doc_id,
+        None,
+        &workspace.0,
+        (*active).clone(),
+        correlation_id,
+        &mut commands,
+    );
+}
+
 #[on_command(SaveActiveDocumentAs)]
-pub fn on_save_active_document_as(trigger: On<SaveActiveDocumentAs>, mut commands: Commands) {
-    let ev = trigger.event().clone();
-    commands.queue(move |world: &mut World| {
-        let doc = if ev.doc_id.is_unassigned() {
-            super::resolve_active_doc(world)
-        } else {
-            Some(ev.doc_id)
-        };
-        let Some(doc) = doc else {
-            bevy::log::warn!("[SaveActiveDocumentAs] no active document");
-            return;
-        };
-        world.commands().trigger(SaveAsDocument {
-            doc_id: doc,
-            path: ev.path,
+pub fn on_save_active_document_as(
+    trigger: On<SaveActiveDocumentAs>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    active: Res<lunco_core::ActiveCommandId>,
+    mut commands: Commands,
+    #[cfg(feature = "api")] pending: Option<Res<lunco_api::executor::PendingApiRequest>>,
+) {
+    #[cfg(feature = "api")]
+    let correlation_id = pending
+        .as_ref()
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
+    queue_active_document_save(
+        trigger.event().doc_id,
+        Some(trigger.event().path.clone()),
+        &workspace.0,
+        (*active).clone(),
+        correlation_id,
+        &mut commands,
+    );
+}
+
+#[cfg(test)]
+mod save_context_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn save_app() -> (App, DocumentId, DocumentId) {
+        let mut documents = ModelicaDocuments::default();
+        let mut workspace = lunco_workspace::Workspace::default();
+        let target = lunco_modelica_core::doc_ops::allocate_scratch_document(
+            &mut documents,
+            Some(&mut workspace),
+            None,
+            "model Target end Target;".into(),
+            "Target".into(),
+        );
+        let other = lunco_modelica_core::doc_ops::allocate_scratch_document(
+            &mut documents,
+            Some(&mut workspace),
+            None,
+            "model Other end Other;".into(),
+            "Other".into(),
+        );
+        workspace.active_document = Some(target);
+        let mut app = App::new();
+        app.insert_resource(documents)
+            .insert_resource(lunco_workspace::WorkspaceResource(workspace))
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core::CommandResults>();
+        (app, target, other)
+    }
+
+    #[test]
+    fn active_save_retains_admitted_target_and_command_context() {
+        let (mut app, target, other) = save_app();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&observations);
+        app.add_observer(
+            move |trigger: On<SaveDocument>,
+                  active: Res<lunco_core::ActiveCommandId>,
+                  mut results: ResMut<lunco_core::CommandResults>| {
+                sink.lock()
+                    .unwrap()
+                    .push((trigger.event().doc_id, active.get(), active.origin()));
+                results.record(
+                    active.get().expect("retained command identity"),
+                    Ok(Ack::new(OpId::new())),
+                );
+            },
+        );
+        let mut original = lunco_core::ActiveCommandId::default();
+        original.set_with_origin(77, Some(lunco_core::CommandOrigin::ApiTransport));
+        app.world_mut().resource_scope(
+            |world, workspace: Mut<lunco_workspace::WorkspaceResource>| {
+                queue_active_document_save(
+                    DocumentId::default(),
+                    None,
+                    &workspace.0,
+                    original,
+                    None,
+                    &mut world.commands(),
+                );
+            },
+        );
+        app.world_mut()
+            .resource_mut::<lunco_workspace::WorkspaceResource>()
+            .active_document = Some(other);
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(Some(99));
+        app.world_mut().flush();
+        assert_eq!(
+            observations.lock().unwrap().as_slice(),
+            &[(
+                target,
+                Some(77),
+                Some(lunco_core::CommandOrigin::ApiTransport)
+            )]
+        );
+        assert_eq!(
+            app.world().resource::<lunco_core::ActiveCommandId>().get(),
+            Some(99)
+        );
+        assert!(matches!(
+            app.world().resource::<lunco_core::CommandResults>().get(77),
+            Some(lunco_core::CommandOutcome::Succeeded(_))
+        ));
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn active_save_emits_transport_result_after_queued_child_completion() {
+        let (mut app, _, _) = save_app();
+        app.add_observer(
+            |_: On<SaveDocument>,
+             active: Res<lunco_core::ActiveCommandId>,
+             mut results: ResMut<lunco_core::CommandResults>,
+             mut commands: Commands| {
+                let id = active.get().expect("retained parent command identity");
+                results.insert(id, lunco_core::CommandOutcome::Pending);
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<lunco_core::CommandResults>().record(
+                        id,
+                        Ok(Ack::with_data(
+                            OpId::new(),
+                            lunco_hooks::HookValue::map([(
+                                "saved",
+                                lunco_hooks::HookValue::Bool(true),
+                            )]),
+                        )),
+                    );
+                });
+            },
+        );
+        let responses = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&responses);
+        app.add_observer(move |trigger: On<lunco_api::executor::ApiResponseEvent>| {
+            let terminal = match &trigger.event().response {
+                lunco_api_core::ApiResponse::Ok { data: Some(data) } => {
+                    data == &lunco_hooks::HookValue::map([(
+                        "saved",
+                        lunco_hooks::HookValue::Bool(true),
+                    )])
+                }
+                _ => false,
+            };
+            sink.lock()
+                .unwrap()
+                .push((trigger.event().correlation_id, terminal));
         });
-    });
+        let mut original = lunco_core::ActiveCommandId::default();
+        original.set_with_origin(77, Some(lunco_core::CommandOrigin::ApiTransport));
+        app.world_mut().resource_scope(
+            |world, workspace: Mut<lunco_workspace::WorkspaceResource>| {
+                queue_active_document_save(
+                    DocumentId::default(),
+                    None,
+                    &workspace.0,
+                    original,
+                    Some(991),
+                    &mut world.commands(),
+                );
+            },
+        );
+        app.world_mut().flush();
+        assert_eq!(responses.lock().unwrap().as_slice(), &[(991, true)]);
+    }
 }

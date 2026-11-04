@@ -1334,14 +1334,44 @@ impl TireLateralStiffnessGraph {
     }
 }
 
-/// Resolve a longitudinal tire demand and lateral slip into one Coulomb-limited
+/// Standard PhysX minimum longitudinal slip speeds, in canonical m/s.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct LongitudinalSlipDenominators {
+    pub active_mps: f64,
+    pub passive_mps: f64,
+}
+
+impl Default for LongitudinalSlipDenominators {
+    fn default() -> Self {
+        Self {
+            active_mps: 0.1,
+            passive_mps: 4.0,
+        }
+    }
+}
+
+impl LongitudinalSlipDenominators {
+    pub fn minimum(self, active: bool) -> f64 {
+        if active {
+            self.active_mps
+        } else {
+            self.passive_mps
+        }
+    }
+}
+
+/// Resolve longitudinal and lateral slip into one Coulomb-limited
 /// contact-patch force.
 ///
+/// `longitudinal_stiffness` is force per dimensionless slip. Longitudinal slip
+/// is `longitudinal_slip_speed / longitudinal_reference_speed`. The vehicle's
+/// positive active/passive denominator bounds this longitudinal reference;
+/// it is independent of the tire's validated lateral-speed envelope.
 /// `lateral_stiffness_graph` is evaluated at this contact's normal load using
 /// the standard PhysX graph. `rolling_reference_speed` is derived by the wheel
-/// realization as `max(|v_hub,long|, |omega*r|)`: the actual longitudinal motion
-/// available to define a slip angle, including a counter-rotating pivot wheel.
-/// There is no fitted low-speed threshold. If translation and rotation are both
+/// realization as `max(|v_hub,long|, |omega*r|, min_validated_speed)`: the actual
+/// longitudinal motion and the authored tire's validated speed boundary,
+/// including a counter-rotating pivot wheel. If translation and rotation are both
 /// zero while the patch moves sideways, the angle tends to 90 degrees and the
 /// ordinary Coulomb limit supplies static lateral resistance.
 ///
@@ -1352,7 +1382,9 @@ impl TireLateralStiffnessGraph {
 /// but disables its generic tangent impulse for jointed tire contacts, so this
 /// remains the only tire model.
 pub fn tire_patch_force(
-    longitudinal_force: f64,
+    longitudinal_stiffness: f64,
+    longitudinal_slip_speed: f64,
+    longitudinal_reference_speed: f64,
     rolling_reference_speed: f64,
     lateral_speed: f64,
     normal_force: f64,
@@ -1363,6 +1395,9 @@ pub fn tire_patch_force(
         return (0.0, 0.0);
     }
 
+    let longitudinal_force =
+        longitudinal_stiffness * (longitudinal_slip_speed / longitudinal_reference_speed);
+
     let lateral_force = if lateral_stiffness_graph.max_stiffness > 0.0 {
         let slip_angle = (-lateral_speed).atan2(rolling_reference_speed.abs());
         lateral_stiffness_graph.stiffness_at_load(normal_force) * slip_angle
@@ -1372,7 +1407,7 @@ pub fn tire_patch_force(
 
     let cone = friction_mu.max(0.0) * normal_force;
     let magnitude = longitudinal_force.hypot(lateral_force);
-    if magnitude > cone && magnitude > f64::EPSILON {
+    if magnitude > cone {
         let scale = cone / magnitude;
         (longitudinal_force * scale, lateral_force * scale)
     } else {
@@ -1426,7 +1461,7 @@ fn parking_brake_force_with_velocity(
     }
     let available = friction_mu * normal_force;
     let magnitude = requested.length();
-    if magnitude <= f64::EPSILON {
+    if magnitude == 0.0 {
         DVec3::ZERO
     } else {
         requested * (available / magnitude).min(1.0)
@@ -1500,11 +1535,20 @@ pub fn solve_axle_step(
         if ![lower, upper].into_iter().all(f64::is_finite) {
             return Err("axle step is not representable");
         }
-        for _ in 0..48 {
+        for _ in 0..128 {
             let middle = lower + (upper - lower) * 0.5;
-            let residual = diagonal * middle + traction_torque(middle) - rhs;
+            let contact = traction_torque(middle);
+            let inertial = diagonal * middle;
+            let residual = inertial + contact - rhs;
             if !residual.is_finite() {
                 return Err("axle contact residual is not finite");
+            }
+            let scale = inertial.abs().max(contact.abs()).max(rhs.abs());
+            if residual == 0.0 || residual.abs() <= scale * (64.0 * f64::EPSILON) {
+                return Ok(middle);
+            }
+            if middle == lower || middle == upper {
+                break;
             }
             if residual > 0.0 {
                 upper = middle;
@@ -1512,7 +1556,7 @@ pub fn solve_axle_step(
                 lower = middle;
             }
         }
-        Ok(lower + (upper - lower) * 0.5)
+        Err("axle contact law did not converge to a finite torque balance")
     };
     let from_rest = |h: f64| -> Result<AxleInterval, &'static str> {
         if rest_torque.abs() <= brake_limit {
@@ -1584,27 +1628,124 @@ mod tire_patch_tests {
     use bevy::math::DVec3;
 
     #[test]
+    fn axle_starts_both_directions_with_standard_slip_denominators_at_tiny_and_unit_force() {
+        let minimum = super::LongitudinalSlipDenominators::default().minimum(true);
+        for scale in [1.0, 1e-24] {
+            for drive in [-10.0, -1.0, 1.0, 10.0] {
+                let drive = drive * scale;
+                let patch = |speed: f64| {
+                    tire_patch_force(
+                        14_000.0 * scale,
+                        speed * 0.4,
+                        (speed * 0.4).abs().max(minimum),
+                        0.0,
+                        0.0,
+                        400.0 * scale,
+                        1.1,
+                        TireLateralStiffnessGraph::default(),
+                    )
+                    .0
+                };
+                let step = solve_axle_step(
+                    0.0,
+                    2.0 * scale,
+                    0.45 * scale,
+                    drive,
+                    0.0,
+                    176.0 * scale,
+                    1.0 / 60.0,
+                    |speed| patch(speed) * 0.4,
+                )
+                .unwrap();
+                assert!(step.speed * drive > 0.0);
+                let residual =
+                    (120.0 + 0.45) * scale * step.speed + patch(step.speed) * 0.4 - drive;
+                assert!(residual.abs() < drive.abs() * 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn axle_rejects_a_discontinuous_contact_law_without_a_torque_balance() {
+        let result = solve_axle_step(0.0, 2.0, 0.45, 10.0, 0.0, 176.0, 1.0 / 60.0, |speed| {
+            if speed == 0.0 {
+                0.0
+            } else {
+                176.0 * speed.signum()
+            }
+        });
+        assert_eq!(
+            result.unwrap_err(),
+            "axle contact law did not converge to a finite torque balance"
+        );
+    }
+
+    #[test]
+    fn longitudinal_stiffness_uses_dimensionless_slip() {
+        let graph = TireLateralStiffnessGraph::default();
+        for speed_scale in [0.01, 1.0, 100.0] {
+            let (forward, _) = tire_patch_force(
+                1000.0,
+                0.5 * speed_scale,
+                10.0 * speed_scale,
+                10.0 * speed_scale,
+                0.0,
+                1000.0,
+                1.0,
+                graph,
+            );
+            let (reverse, _) = tire_patch_force(
+                1000.0,
+                -0.5 * speed_scale,
+                10.0 * speed_scale,
+                10.0 * speed_scale,
+                0.0,
+                1000.0,
+                1.0,
+                graph,
+            );
+            assert!((forward - 50.0).abs() < 1e-12);
+            assert!((reverse + 50.0).abs() < 1e-12);
+        }
+        assert_eq!(
+            tire_patch_force(1000.0, 0.0, 0.1, 0.0, 0.0, 1000.0, 1.0, graph),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn rolling_speed_defines_pivot_slip_angle_without_a_threshold() {
         let graph = TireLateralStiffnessGraph {
             minimum_normalized_load: 1.0,
             max_stiffness: 2.9 * 400.0,
             rest_load: 400.0,
         };
-        let (_, lateral) = tire_patch_force(0.0, 2.0, 1.0, 400.0, 10.0, graph);
+        let (_, lateral) = tire_patch_force(0.0, 0.0, 2.0, 2.0, 1.0, 400.0, 10.0, graph);
         let expected = 2.9 * 400.0 * (-0.5_f64).atan();
         assert!((lateral - expected).abs() < 1.0e-9);
     }
 
     #[test]
     fn combined_force_preserves_direction_at_coulomb_limit() {
-        let graph = TireLateralStiffnessGraph {
-            minimum_normalized_load: 1.0,
-            max_stiffness: 2.9 * 200.0,
-            rest_load: 200.0,
-        };
-        let (long, lateral) = tire_patch_force(600.0, 2.0, -1.0, 200.0, 1.5, graph);
-        assert!((long.hypot(lateral) - 300.0).abs() < 1.0e-9);
-        assert!(long > 0.0 && lateral > 0.0);
+        for scale in [1.0, 1e-24] {
+            let graph = TireLateralStiffnessGraph {
+                minimum_normalized_load: 1.0,
+                max_stiffness: 2.9 * 200.0 * scale,
+                rest_load: 200.0 * scale,
+            };
+            let (long, lateral) = tire_patch_force(
+                600.0 * scale,
+                2.0,
+                2.0,
+                2.0,
+                -1.0,
+                200.0 * scale,
+                1.5,
+                graph,
+            );
+            assert!((long.hypot(lateral) - 300.0 * scale).abs() < 1e-9 * scale);
+            assert!(long > 0.0 && lateral > 0.0);
+        }
     }
 
     #[test]
@@ -1612,6 +1753,8 @@ mod tire_patch_tests {
         assert_eq!(
             tire_patch_force(
                 10.0,
+                1.0,
+                1.0,
                 1.0,
                 1.0,
                 0.0,
@@ -1662,19 +1805,21 @@ mod tire_patch_tests {
 
     #[test]
     fn parking_brake_holds_a_preloaded_vertical_contact() {
-        let force = super::parking_brake_force_with_velocity(
-            DVec3::new(0.0, -9.80665, 0.0),
-            DVec3::Z,
-            10000.0,
-            487.5,
-            1.4,
-            DVec3::ZERO,
-            1.0 / 60.0,
-        );
-        assert!(
-            force.y > 4700.0,
-            "a vertical contact must resist tangential gravity"
-        );
+        for scale in [1.0, 1e-24] {
+            let force = super::parking_brake_force_with_velocity(
+                DVec3::new(0.0, -9.80665, 0.0),
+                DVec3::Z,
+                10000.0 * scale,
+                487.5 * scale,
+                1.4,
+                DVec3::ZERO,
+                1.0 / 60.0,
+            );
+            assert!(
+                (force.y - 9.80665 * 487.5 * scale).abs() < 1e-9 * scale,
+                "a vertical contact must resist tangential gravity at its physical force scale"
+            );
+        }
     }
 
     #[test]
@@ -1739,7 +1884,9 @@ mod tire_patch_tests {
                             for brake in [0.0, 300.0] {
                                 let patch = |w: f64| {
                                     tire_patch_force(
-                                        8000.0 * (w * radius - hub),
+                                        8000.0,
+                                        w * radius - hub,
+                                        hub.abs().max((w * radius).abs()).max(0.1),
                                         hub.abs().max((w * radius).abs()).max(0.1),
                                         lateral,
                                         load,
@@ -1912,7 +2059,7 @@ pub struct WheelRaycast {
     pub bearing_damping: f64,
     /// Caps the traction torque at `μ·N`, above which the tire breaks loose.
     pub friction_mu: f64,
-    /// hard the tire grips toward `v/r` before saturating at the friction limit.
+    /// Longitudinal force per dimensionless slip, N, before Coulomb saturation.
     pub slip_stiffness: f64,
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
@@ -1924,6 +2071,8 @@ pub struct WheelRaycast {
     /// Lowest speed at which the authored steady-state cornering curve was
     /// validated. This is an evidence boundary, not a fitted transition.
     pub min_validated_speed: f64,
+    /// Standard vehicle-level minimum longitudinal slip denominators, m/s.
+    pub longitudinal_slip_denominators: LongitudinalSlipDenominators,
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
     /// Heading rotation axis in the wheel's local frame
@@ -1942,7 +2091,8 @@ pub struct WheelRaycast {
 
 /// **USD is the sole source of a wheel's physical numbers.**
 ///
-/// Every tunable below is zero here on purpose: `Default` exists only as the
+/// Physical parameters are zero except for documented standard longitudinal
+/// slip-denominator defaults. `Default` supplies the
 /// struct-update base for `WheelParams::to_wheel_raycast`, which immediately
 /// overwrites all of them from the composed stage via `apply_to_raycast`. The
 /// reader (`lunco_usd_sim_authoring::wheel_params`) requires each attribute and reports a
@@ -1974,6 +2124,7 @@ impl Default for WheelRaycast {
             slip_stiffness: 0.0,
             lateral_stiffness_graph: TireLateralStiffnessGraph::default(),
             min_validated_speed: 0.0,
+            longitudinal_slip_denominators: LongitudinalSlipDenominators::default(),
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
             heading_axis: DVec3::Y,

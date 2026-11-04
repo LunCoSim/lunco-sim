@@ -56,7 +56,7 @@ scope. The docked detail pane
 retains the complete statement, source and evidence. **Open at line** opens
 the canonical `SysmlDocument` at the declaration or diagnostic location.
 **Save source** applies revision-checked `ApplySysmlOps` and
-`SaveSysmlDocument` commands. The text editor is read-only when the document is
+`SaveDocument` commands. The text editor is read-only when the document is
 not writable or its source revision conflicts with the open draft.
 
 The presentation model rebuilds when Twin, analysis, source-document, or

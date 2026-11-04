@@ -8,7 +8,7 @@
 def Xform "PhysicalRoverControls" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    documentation = "Physical skid and Ackermann rover control matrix; the shared antennas stay parked because this scene selects no ground station."
+    doc = "Physical skid and Ackermann rover control matrix; the shared antennas stay parked because this scene selects no ground station."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
@@ -45,7 +45,7 @@ def Xform "PhysicalRoverControls" (
         }
     }
     def Camera "ControlsCam" (
-        prepend apiSchemas = "LunCoCameraAPI"
+        prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
         double3 lunco:cameraLookAt = (0.0, 1.0, 40.0)
@@ -59,7 +59,7 @@ def Xform "PhysicalRoverControls" (
         variants = { string "drivetrain" = "physical" }
     )
     {
-        double3 xformOp:translate = (-12.0, 1.0, 60.0)
+        double3 xformOp:translate = (-12.0, 1.1, 60.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         over "Chassis"
         {
@@ -71,7 +71,7 @@ def Xform "PhysicalRoverControls" (
         variants = { string "drivetrain" = "physical" }
     )
     {
-        double3 xformOp:translate = (12.0, 1.0, 60.0)
+        double3 xformOp:translate = (12.0, 1.1, 60.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         over "Chassis"
         {
@@ -82,7 +82,7 @@ def Xform "PhysicalRoverControls" (
     {
         custom string lunco:scenario = "physical-rover-controls"
         def Scope "ControlsTest" (
-            prepend apiSchemas = "LunCoProgramAPI"
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform token info:implementationSource = "sourceAsset"

@@ -1,7 +1,7 @@
 use avian3d::prelude::JointDamping;
-use bevy::math::{DQuat, DVec3};
+use bevy::math::{DMat4, DQuat, DVec3};
 use lunco_usd_avian_contracts::{JointDrive, PendingUsdJoint};
-use lunco_usd_bevy_stage::world_transform;
+use lunco_usd_bevy_stage::world_transform_matrix_d_at;
 use openusd::sdf::Path as SdfPath;
 use openusd_schemas::physics::{DriveType, tokens as ptok};
 
@@ -134,27 +134,10 @@ fn is_avian_body(reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject, path: &
             && !has_rigid_body_ancestor(reader, path))
 }
 
-/// The body a joint endpoint actually attaches to: `path` itself when it is a
-/// body, otherwise its NEAREST ANCESTOR that is one.
-///
-/// **Why an endpoint may name a non-body.** A mechanism that mounts on something
-/// — an antenna on a rover, a lander, a tower — has to name the thing it mounts
-/// to. If that must be the HOST's body prim, the component is naming a path it
-/// cannot know, so every host ends up reaching into the component's namespace and
-/// authoring the mount joint itself. That is exactly what happened: `AntennaYawJoint`
-/// was written three times, in three hosts, each targeting a prim inside a nested
-/// reference. With this rule the component names its OWN root, and parenting it
-/// under a vehicle is the mount.
-///
-/// The rule keys off "a named prim that is not a body". It never keys off an
-/// EMPTY rel — UsdPhysics already gives that the meaning "world". `None` when
-/// the path names nothing that is or sits under a
-/// body, which stays an unresolved joint and still warns.
-///
-/// Resolving here rather than at ECS-match time is deliberate: `read_joint_spec`
-/// derives an unauthored anchor from the two body paths ([`derive_joint_anchor`]),
-/// and that derivation must run against the frame of the body the joint is really
-/// built on. Resolving later would leave the anchor expressed in the wrong frame.
+/// Resolve the relationship target's native rigid owner through composed USD.
+/// A collider without a rigid ancestor is a standalone static body. A valid
+/// target without any body ancestor instead defines a frame fixed in world;
+/// the endpoint reader retains that target's transform for its world anchor.
 pub fn nearest_body_path(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
@@ -181,32 +164,105 @@ pub fn resolve_joint_body_path(
     let path = SdfPath::new(target).ok()?;
     nearest_body_path(reader, &path).map(|resolved| resolved.to_string())
 }
-/// `xformOp:translate` — instead of typing it again as the joint's `physics:localPos0`.
-/// `read_joint_spec` calls it only when the anchor is UNAUTHORED, so authored
-/// joints are untouched (no regression) and hand-tuned anchors always win.
-///
-/// Uses WORLD poses, not an ancestor walk, so it is correct for **sibling** joints
-/// (a rocker ↔ bogie hinge where neither body contains the other) and for **scaled**
-/// hierarchies: `localPos0 = rot(world(b0))⁻¹ · (pos(world(b1)) − pos(world(b0)))`.
-/// Ancestor scales are baked into the world positions; the anchor is expressed in
-/// body0's rotation frame (avian applies a body's rotation — not its scale — to a
-/// local anchor). Relative, hence invariant under the reference/path-translation that
-/// drops a shared component onto each rover root.
-fn derive_joint_anchor(
+/// Convert a joint endpoint into the scale-free native body's frame. USD
+/// anchors are local to the relationship target; an empty target is world.
+/// Matrix composition stays f64, including cancellation of world translations.
+fn endpoint_frame(
+    body_world: DMat4,
+    target_world: DMat4,
+    position: DVec3,
+    rotation: DQuat,
+    target_is_body: bool,
+) -> Option<(DVec3, DQuat)> {
+    let affine = |matrix: DMat4| {
+        matrix.is_finite()
+            && matrix.row(3).abs_diff_eq(bevy::math::DVec4::W, 1e-12)
+            && matrix.determinant().is_finite()
+            && matrix.determinant() != 0.0
+    };
+    if !affine(body_world) || !affine(target_world) {
+        return None;
+    }
+    // Gf stores row-vector matrices; Glam's column storage is its transpose.
+    // Factor with zero threshold after the nonsingular check so valid tiny
+    // scales are preserved rather than replaced by a factorization tolerance.
+    let body = openusd::gf::Mat4d(body_world.to_cols_array()).factor(0.0);
+    let scale = DVec3::new(body.scale.x, body.scale.y, body.scale.z);
+    if !scale.is_finite() || !scale.cmpne(DVec3::ZERO).all() {
+        return None;
+    }
+    if target_is_body {
+        return Some((position * scale, rotation));
+    }
+    let local =
+        body_world.inverse() * target_world * DMat4::from_rotation_translation(rotation, position);
+    if !affine(local) {
+        return None;
+    }
+    let local = openusd::gf::Mat4d(local.to_cols_array()).factor(0.0);
+    let mut rigid_rotation = local.rotation;
+    if !rigid_rotation.orthonormalize() {
+        return None;
+    }
+    let q = rigid_rotation.extract_rotation_quat();
+    let rotation = DQuat::from_xyzw(q.x, q.y, q.z, q.w);
+    if !rotation.is_finite() || rotation.length_squared() <= f64::EPSILON {
+        return None;
+    }
+    let rotation = rotation.normalize();
+    let position = DVec3::new(
+        local.translation.x,
+        local.translation.y,
+        local.translation.z,
+    ) * scale;
+    (position.is_finite() && rotation.is_finite() && rotation.is_normalized())
+        .then_some((position, rotation))
+}
+
+fn read_joint_endpoint(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
-    body0: &str,
-    body1: &str,
-) -> Option<(DVec3, DVec3)> {
-    let p0 = SdfPath::new(body0).ok()?;
-    let p1 = SdfPath::new(body1).ok()?;
-    let w0 = world_transform(reader, &p0).ok()?;
-    let w1 = world_transform(reader, &p1).ok()?;
-    let rel = w0.rotation.inverse() * (w1.translation - w0.translation);
+    joint: &SdfPath,
+    target: Option<&SdfPath>,
+    position_attr: &str,
+    rotation_attr: &str,
+) -> Option<(String, DVec3, DQuat)> {
+    let convention = lunco_usd_bevy_stage::stage_convention(reader).ok()?;
+    let position = convention.point_d(
+        read_authored_vec3(reader, joint, position_attr)
+            .ok()?
+            .unwrap_or(DVec3::ZERO),
+    );
+    let rotation = convention.rotation_d(
+        read_authored_quat(reader, joint, rotation_attr)
+            .ok()?
+            .unwrap_or(DQuat::IDENTITY),
+    );
+    let Some(target) = target else {
+        return Some((String::new(), position, rotation));
+    };
+    if !reader.has_prim(target) {
+        return None;
+    }
+    let body = nearest_body_path(reader, target);
+    let body_world = match &body {
+        Some(body) => world_transform_matrix_d_at(reader, body, 0.0).ok()?,
+        None => DMat4::IDENTITY,
+    };
+    let target_world = world_transform_matrix_d_at(reader, target, 0.0).ok()?;
+    let (position, rotation) = endpoint_frame(
+        body_world,
+        target_world,
+        position,
+        rotation,
+        body.as_ref() == Some(target),
+    )?;
     Some((
-        DVec3::new(rel.x as f64, rel.y as f64, rel.z as f64),
-        DVec3::ZERO,
+        body.map(|body| body.to_string()).unwrap_or_default(),
+        position,
+        rotation,
     ))
 }
+
 /// The USD joint base fields shared by every concrete joint reader.
 struct JointBaseRead {
     body0: String,
@@ -227,7 +283,7 @@ struct JointBaseRead {
 /// the generic-D6 reduction. Returns `None` when
 /// `path` is not a UsdPhysics joint or has an invalid body reference.
 /// Revolute limits are converted degrees→radians
-/// (the `PendingUsdJoint` contract); prismatic/distance stay in scene units.
+/// (the `PendingUsdJoint` contract); prismatic/distance limits convert to metres.
 pub fn read_joint_spec(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
@@ -347,68 +403,31 @@ fn read_joint_spec_with_policy(
         };
         axis_of(&axis)
     };
-    // Shared JointBase reads (both bodies + local anchors). A rel left EMPTY is
-    // the spec's way to anchor that side to the WORLD frame — carried through as
-    // an empty body path, which the build arm realises as a static anchor body.
-    // `None` when neither body is authored, or a NAMED target fails to resolve.
-    // A missing anchor is DERIVED from the transform hierarchy (see
-    // [`derive_joint_anchor`]) so an asset need not type the wheel's position twice
-    // — once as its `xformOp:translate` and again as the joint's `localPos0`. An
-    // authored anchor always wins.
-    //
-    // An AUTHORED anchor is a point in the stage's frame and units, so it converts
-    // here. A DERIVED one must not: `derive_joint_anchor` builds it from
-    // `world_transform` → `local_transform_at`, which already converted. Applying
-    // the convention to both would double-convert the derived path.
+    // Each endpoint independently uses the schema's zero position and identity
+    // rotation defaults, then resolves its relationship target into a body frame.
     let base = || -> Option<JointBaseRead> {
-        let conv = lunco_usd_bevy_stage::stage_convention(reader).ok()?;
-        // An endpoint that names a prim which is not itself a body resolves to
-        // the body that prim is rigidly part of — see [`nearest_body_path`].
-        // This is what lets a mounted mechanism name its own root instead of its
-        // host's chassis. An exact hit is the normal case and costs one lookup.
-        let resolve = |target: &SdfPath| -> Option<String> {
-            Some(nearest_body_path(reader, target)?.to_string())
-        };
         let targets0 = reader.rel_targets(path, ptok::PHYSICS_BODY0);
         let targets1 = reader.rel_targets(path, ptok::PHYSICS_BODY1);
         if targets0.len() > 1 || targets1.len() > 1 {
             return None;
         }
-        let target0 = targets0.first();
-        let target1 = targets1.first();
-        let (b0, b1) = match (target0, target1) {
-            (Some(t0), Some(t1)) => (resolve(t0)?, resolve(t1)?),
-            (Some(t0), None) => (resolve(t0)?, String::new()),
-            (None, Some(t1)) => (String::new(), resolve(t1)?),
-            (None, None) => return None,
-        };
+        let (b0, lp0, local_rot0) = read_joint_endpoint(
+            reader,
+            path,
+            targets0.first(),
+            ptok::PHYSICS_LOCAL_POS0,
+            ptok::PHYSICS_LOCAL_ROT0,
+        )?;
+        let (b1, lp1, local_rot1) = read_joint_endpoint(
+            reader,
+            path,
+            targets1.first(),
+            ptok::PHYSICS_LOCAL_POS1,
+            ptok::PHYSICS_LOCAL_ROT1,
+        )?;
         if b0 == b1 {
             return None;
         }
-        let lp0_auth = read_authored_vec3(reader, path, ptok::PHYSICS_LOCAL_POS0)
-            .ok()?
-            .map(|value| conv.point_d(value));
-        let lp1_auth = read_authored_vec3(reader, path, ptok::PHYSICS_LOCAL_POS1)
-            .ok()?
-            .map(|value| conv.point_d(value));
-        let (lp0, lp1) = if let (Some(lp0), Some(lp1)) = (lp0_auth, lp1_auth) {
-            (lp0, lp1)
-        } else {
-            // A world side has no prim to derive from; its unauthored anchor is
-            // the world origin.
-            let derived = (!b0.is_empty() && !b1.is_empty())
-                .then(|| derive_joint_anchor(reader, &b0, &b1))
-                .flatten()?;
-            (lp0_auth.unwrap_or(derived.0), lp1_auth.unwrap_or(derived.1))
-        };
-        let local_rot0 = read_authored_quat(reader, path, ptok::PHYSICS_LOCAL_ROT0)
-            .ok()?
-            .map(|value| conv.rotation_d(value))
-            .unwrap_or(DQuat::IDENTITY);
-        let local_rot1 = read_authored_quat(reader, path, ptok::PHYSICS_LOCAL_ROT1)
-            .ok()?
-            .map(|value| conv.rotation_d(value))
-            .unwrap_or(DQuat::IDENTITY);
         Some(JointBaseRead {
             body0: b0,
             body1: b1,
@@ -640,5 +659,51 @@ fn reduce_generic_joint(
             true,
         )),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod endpoint_frame_tests {
+    use super::endpoint_frame;
+    use bevy::math::{DMat4, DQuat, DVec3};
+
+    #[test]
+    fn endpoint_lowering_preserves_scale_target_frame_and_large_world_precision() {
+        let rotation = DQuat::from_rotation_y(0.7);
+        let anchor_rotation = DQuat::from_rotation_x(0.4);
+        for scale in [2.0, 1e-13] {
+            let body = DMat4::from_scale_rotation_translation(
+                DVec3::splat(scale),
+                rotation,
+                DVec3::new(1e8, 2.0, 0.0),
+            );
+            let (position, orientation) =
+                endpoint_frame(body, body, DVec3::X, anchor_rotation, true).unwrap();
+            assert!(position.abs_diff_eq(DVec3::X * scale, scale * 1e-12));
+            assert!(orientation.abs_diff_eq(anchor_rotation, 1e-12));
+        }
+        let body = DMat4::from_scale_rotation_translation(
+            DVec3::splat(2.0),
+            DQuat::IDENTITY,
+            DVec3::new(1e8, 2.0, 0.0),
+        );
+        let target = body * DMat4::from_rotation_translation(rotation, DVec3::X);
+        let (position, orientation) =
+            endpoint_frame(body, target, DVec3::X, anchor_rotation, false).unwrap();
+        assert!(position.abs_diff_eq((DVec3::X + rotation * DVec3::X) * 2.0, 1e-8));
+        assert!(orientation.abs_diff_eq(rotation * anchor_rotation, 1e-12));
+        let (position, _) =
+            endpoint_frame(body, target, DVec3::ZERO, DQuat::IDENTITY, false).unwrap();
+        assert_eq!(position, DVec3::X * 2.0);
+        assert!(
+            endpoint_frame(
+                DMat4::from_scale(DVec3::ZERO),
+                target,
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                false,
+            )
+            .is_none()
+        );
     }
 }

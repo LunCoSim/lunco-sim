@@ -5,7 +5,7 @@ use bevy_egui::egui;
 use egui_extras::{Column, TableBuilder};
 use lunco_doc::{Document, FileBacked};
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
-use lunco_sysml::{ApplySysmlOps, SaveSysmlDocument, SysmlApiOp, SysmlDocument};
+use lunco_sysml::{ApplySysmlOps, SysmlApiOp, SysmlDocument};
 use lunco_sysml_ast::SysmlElementHandle;
 use lunco_sysml_ir::VerificationVerdict;
 use lunco_workbench_core::commands::FocusPanel;
@@ -471,7 +471,7 @@ fn dispatch_panel_actions(ctx: &mut PanelCtx, actions: Vec<PanelAction>) {
                 ops: vec![SysmlApiOp::ReplaceSource { source }],
                 parent_generation: Some(parent_generation),
             }),
-            PanelAction::Save(doc_id) => ctx.trigger(SaveSysmlDocument { doc_id }),
+            PanelAction::Save(doc_id) => ctx.trigger(lunco_doc_bevy::SaveDocument { doc_id }),
             PanelAction::RunVerification {
                 twin_id,
                 source_revision,

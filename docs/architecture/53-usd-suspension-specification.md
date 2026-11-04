@@ -30,10 +30,54 @@ rigid-body topology.
 Sections 1–5 below specify the **raycast** mechanism and its shared authoring
 contracts. A physical member is a `PhysicsPrismaticJoint` with the standard
 `PhysicsDriveAPI:linear`: `physics:lowerLimit` / `:upperLimit` bound the stroke,
-`physics:localRot0/1` carry the authored frame, and anchors are left unauthored
-when the body transforms already place the joint at zero. The standard drive
+`physics:localRot0/1` carry the authored frame. Each `physics:localPos0/1`
+defaults independently to zero in its relationship target's frame; body
+placement does not author a joint frame. Author the intended rest anchors
+explicitly when the endpoint origins differ. The standard drive
 is the sole axial spring-damper and its output-only `force` port is the runtime
-load readback. `assets/vessels/landers/descent_lander.usda` uses this boundary.
+load readback. A world endpoint uses a scene-owned static helper seated at the
+active physics frame origin; it participates in the same frame and teardown
+boundaries as the constrained bodies.
+`assets/vessels/landers/descent_lander.usda` uses this boundary.
+
+### Stage units and tire slip
+
+The composed wheel reader converts standard dimensional attributes into SI
+before either wheel realization consumes them. Radius, width, suspension travel,
+tire longitudinal stiffness, lateral graph plateau and rest load scale with
+`metersPerUnit`; wheel inertia, rotational damping and brake torque scale with
+its square. Suspension spring strength and damping have no length dimension.
+Custom `lunco:suspension:restLength` and `lunco:tire:minValidatedSpeed` explicitly
+use SI and are not converted again.
+
+The shared tire-patch law interprets longitudinal stiffness as force per
+dimensionless slip, as specified by the
+[PhysX tire schema](https://docs.omniverse.nvidia.com/kit/docs/omni_usd_schema_physics/latest/physxschema/class_physx_schema_physx_vehicle_tire_a_p_i.html).
+Both realizations normalize `omega * radius - hub_longitudinal_speed` by
+`max(abs(hub_longitudinal_speed), abs(omega * radius), vehicle_minimum)`.
+The enclosing vehicle context supplies standard `PhysxVehicleAPI`
+`physxVehicle:minActiveLongitudinalSlipDenominator` under drive/brake torque and
+`physxVehicle:minPassiveLongitudinalSlipDenominator` otherwise. Positive authored
+speeds convert from stage distance units/s. Their zero/omitted sentinels resolve
+to the documented SI defaults 0.1 and 4 m/s; a deprecated
+`physxVehicle:minLongitudinalSlipDenominator` opinion is rejected with replacement
+guidance. See the [PhysX vehicle schema](https://docs.omniverse.nvidia.com/kit/docs/omni_usd_schema_physics/latest/physxschema/class_physx_schema_physx_vehicle_a_p_i.html).
+Initial projection, validation and live ancestor-parameter edits use the same
+wheel reader and existing wheel resynchronization owner. Reusable parameter
+fragments without an enclosing vehicle use those omitted-input defaults; native
+wheel admission still requires a real vehicle mount owner. `minValidatedSpeed`
+remains the tire's measured lateral-speed envelope and does not regularize
+longitudinal slip. The axle solve accepts only a finite, scaled torque-balance
+residual; an interval narrowing around a discontinuity fails visibly.
+Jointed contact patches share the tire's force budget by normal-load fractions.
+The existing combined Coulomb cone bounds the longitudinal and lateral result.
+
+Run `scripts/api/test_simulation_core_third_pass.py --case physics --case mounts
+--case slip-invalid --case mount-invalid --case torque-z --case allocator` with `LUNCOSIM_BIN` set
+to the built production binary. The authored gates cover centimetre coefficients,
+world/descendant frames, live relative mounts and generated solver replacement.
+Negative wheel/mount cases require both a physics hold and a detailed Error event
+through the same telemetry surface used by Recent Events.
 
 ### 0.3 Schema reuse decision
 

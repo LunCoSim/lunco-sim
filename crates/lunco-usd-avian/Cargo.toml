@@ -12,6 +12,7 @@ openusd = { workspace = true }
 openusd-schemas = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-avian-joints = { path = "../lunco-usd-avian-joints" }
 lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
@@ -27,7 +28,6 @@ default = ["3d"]
 
 [dev-dependencies]
 big_space = { workspace = true }
-lunco-spatial = { path = "../lunco-spatial" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]

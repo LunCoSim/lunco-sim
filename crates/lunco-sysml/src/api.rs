@@ -56,16 +56,6 @@ pub struct ApplySysmlOps {
     pub parent_generation: Option<u64>,
 }
 
-/// Persist one SysML document without colliding with the domain-generic
-/// `SaveDocument` command.  The shared verb is still useful to UI code, but
-/// the transport-facing Rhai editor needs an owner-specific terminal command
-/// while multiple document domains observe the same generic event.
-#[Command(default)]
-pub struct SaveSysmlDocument {
-    /// Explicit SysML document id.
-    pub doc_id: DocumentId,
-}
-
 /// Register the SysML command and query adapters.
 pub struct SysmlApiPlugin;
 
@@ -103,7 +93,6 @@ register_commands!(
     on_open_sysml_file,
     on_new_sysml_document,
     on_apply_sysml_ops,
-    on_save_sysml_document_explicit,
     on_undo_sysml_document,
     on_redo_sysml_document,
     on_save_sysml_document,
@@ -468,61 +457,6 @@ fn on_apply_sysml_ops(
     Ok(ack)
 }
 
-/// Persist a SysML document through its owning registry and return a typed
-/// command result to Rhai/API callers.
-#[on_command(SaveSysmlDocument)]
-fn on_save_sysml_document_explicit(
-    trigger: On<SaveSysmlDocument>,
-    mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
-    mut commands: Commands,
-) -> Result<Ack, String> {
-    let doc_id = trigger.event().doc_id;
-    let Some(host) = registry.host(doc_id) else {
-        return Err(format!(
-            "SaveSysmlDocument: unknown SysML document {doc_id}"
-        ));
-    };
-    let document = host.document();
-    let Some(path) = document
-        .origin()
-        .canonical_path()
-        .map(std::path::Path::to_path_buf)
-    else {
-        return Err(format!(
-            "SaveSysmlDocument: {doc_id} has no file path; SaveAsDocument is required"
-        ));
-    };
-    if !document.origin().is_writable() {
-        return Err(format!("SaveSysmlDocument: {doc_id} is read-only"));
-    }
-    let source = document.source().to_owned();
-    let generation = document.generation();
-    let storage = lunco_storage::FileStorage::new();
-    let handle = lunco_storage::StorageHandle::File(path.clone());
-    storage
-        .write_sync(&handle, source.as_bytes())
-        .map_err(|error| {
-            format!(
-                "SaveSysmlDocument: save {} failed: {error:?}",
-                path.display()
-            )
-        })?;
-    if let Some(host) = registry.host_mut(doc_id) {
-        host.document_mut().mark_saved();
-    }
-    registry.note_saved(doc_id);
-    commands.trigger(DocumentSaved::local(doc_id));
-    Ok(Ack {
-        data: Some(lunco_api_core::api_value!({
-            "doc_id": doc_id.raw(),
-            "path": path.display().to_string(),
-            "generation": generation,
-            "action": "saved",
-        })),
-        ..Default::default()
-    })
-}
-
 /// Undo the most recent SysML history group through the shared document verb.
 #[on_command(UndoDocument)]
 fn on_undo_sysml_document(
@@ -557,84 +491,131 @@ fn on_redo_sysml_document(
     }
 }
 
-/// Persist a writable file-backed SysML document through `lunco-storage`.
+/// Persist one owned source snapshot before changing its saved state or origin.
+fn persist_sysml_document(
+    registry: &mut DocumentRegistry<SysmlDocument>,
+    doc_id: DocumentId,
+    destination: Option<&str>,
+) -> Result<Ack, String> {
+    let document = registry
+        .host(doc_id)
+        .ok_or_else(|| format!("SysML save source document {doc_id} is closed"))?
+        .document();
+    if document.origin().is_read_only() {
+        return Err(format!("SysML document {doc_id} is read-only"));
+    }
+    let path = match destination {
+        Some(path) if path.trim().is_empty() => {
+            return Err(format!(
+                "SysML Save As for {doc_id} requires an explicit destination path"
+            ));
+        }
+        Some(path) => std::path::PathBuf::from(path.trim()),
+        None => {
+            if !document.origin().is_writable() {
+                return Err(format!(
+                    "SysML document {doc_id} requires Save As to an explicit destination"
+                ));
+            }
+            document
+                .origin()
+                .canonical_path()
+                .map(std::path::Path::to_path_buf)
+                .ok_or_else(|| {
+                    format!("SysML document {doc_id} has no file path; Save As is required")
+                })?
+        }
+    };
+    let generation = document.generation();
+    let source = document.source();
+    let storage = lunco_storage::FileStorage::new();
+    let handle = lunco_storage::StorageHandle::File(path.clone());
+    storage
+        .write_sync(&handle, source.as_bytes())
+        .map_err(|error| format!("SysML save {} failed: {error}", path.display()))?;
+    let document = registry
+        .host_mut(doc_id)
+        .ok_or_else(|| format!("SysML save source document {doc_id} is closed"))?
+        .document_mut();
+    if destination.is_some() {
+        document.set_origin(lunco_doc::DocumentOrigin::File {
+            path: path.clone(),
+            writable: true,
+        });
+    }
+    document.mark_saved();
+    registry.note_saved(doc_id);
+    Ok(Ack {
+        data: Some(api_value!({
+            "doc_id": doc_id.raw(),
+            "path": path.display().to_string(),
+            "generation": generation,
+            "action": "saved",
+        })),
+        ..Default::default()
+    })
+}
+
+fn finish_sysml_save(
+    doc_id: DocumentId,
+    command_id: Option<u64>,
+    result: Result<Ack, String>,
+    results: &mut lunco_core::CommandResults,
+    commands: &mut Commands,
+) {
+    match &result {
+        Ok(_) => commands.trigger(DocumentSaved::local(doc_id)),
+        Err(message) => {
+            warn!("[SysML save] {message}");
+            commands.trigger(lunco_core::RuntimeError {
+                name: "sysml-save-failed".into(),
+                message: message.clone(),
+            });
+        }
+    }
+    if let Some(id) = command_id {
+        results.record(id, result);
+    }
+}
+
+/// Shared save commands complete only at the registry that owns their document.
 #[on_command(SaveDocument)]
 fn on_save_sysml_document(
     trigger: On<SaveDocument>,
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+    active: Res<lunco_core::ActiveCommandId>,
+    mut results: ResMut<lunco_core::CommandResults>,
     mut commands: Commands,
 ) {
     let doc_id = trigger.event().doc_id;
-    let Some(host) = registry.host(doc_id) else {
-        return;
-    };
-    let document = host.document();
-    let Some(path) = document
-        .origin()
-        .canonical_path()
-        .map(std::path::Path::to_path_buf)
-    else {
-        warn!("[sysml] {doc_id} has no file path; Save-As is required");
-        return;
-    };
-    if !document.origin().is_writable() {
-        warn!("[sysml] {doc_id} is read-only");
+    if !registry.contains(doc_id) {
         return;
     }
-    let source = document.source().to_owned();
-    let storage = lunco_storage::FileStorage::new();
-    let handle = lunco_storage::StorageHandle::File(path.clone());
-    if let Err(error) = storage.write_sync(&handle, source.as_bytes()) {
-        error!("[sysml] save {} failed: {error:?}", path.display());
-        return;
-    }
-    if let Some(host) = registry.host_mut(doc_id) {
-        host.document_mut().mark_saved();
-    }
-    registry.note_saved(doc_id);
-    commands.trigger(DocumentSaved::local(doc_id));
+    let result = persist_sysml_document(&mut registry, doc_id, None);
+    finish_sysml_save(doc_id, active.get(), result, &mut results, &mut commands);
 }
 
-/// Persist a SysML document to an explicit new path and rebind its identity.
-/// An empty path is rejected here; a UI may resolve a picker and reissue the
-/// same command with the chosen path.
+/// Save As uses the same checked persistence and terminal-outcome boundary.
 #[on_command(SaveAsDocument)]
 fn on_save_as_sysml_document(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+    active: Res<lunco_core::ActiveCommandId>,
+    mut results: ResMut<lunco_core::CommandResults>,
     mut commands: Commands,
 ) {
-    let doc_id = trigger.event().doc_id;
-    let target = trigger.event().path.trim();
-    if target.is_empty() {
-        warn!("[sysml] Save-As for {doc_id} requires an explicit destination path");
+    let request = trigger.event();
+    if !registry.contains(request.doc_id) {
         return;
     }
-    let Some(host) = registry.host(doc_id) else {
-        return;
-    };
-    if host.document().origin().is_read_only() {
-        warn!("[sysml] Save-As blocked for read-only document {doc_id}");
-        return;
-    }
-    let source = host.document().source().to_owned();
-    let path = std::path::PathBuf::from(target);
-    let storage = lunco_storage::FileStorage::new();
-    let handle = lunco_storage::StorageHandle::File(path.clone());
-    if let Err(error) = storage.write_sync(&handle, source.as_bytes()) {
-        error!("[sysml] Save-As {} failed: {error:?}", path.display());
-        return;
-    }
-    if let Some(host) = registry.host_mut(doc_id) {
-        host.document_mut()
-            .set_origin(lunco_doc::DocumentOrigin::File {
-                path: path.clone(),
-                writable: true,
-            });
-        host.document_mut().mark_saved();
-    }
-    registry.note_saved(doc_id);
-    commands.trigger(DocumentSaved::local(doc_id));
+    let result = persist_sysml_document(&mut registry, request.doc_id, Some(&request.path));
+    finish_sysml_save(
+        request.doc_id,
+        active.get(),
+        result,
+        &mut results,
+        &mut commands,
+    );
 }
 
 /// Inspect one open SysML document without copying the source into a second
@@ -772,5 +753,79 @@ mod browser_payload_tests {
                 .unwrap()
                 .contains("invalid UTF-8")
         );
+    }
+}
+
+#[cfg(test)]
+mod save_outcome_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn shared_save_outcomes_are_owner_scoped_and_rejections_preserve_document() {
+        let mut registry = DocumentRegistry::<SysmlDocument>::default();
+        let doc = registry.allocate(
+            "package Scratch {}".to_owned(),
+            lunco_doc::PathlessOrigin::untitled("Scratch.sysml"),
+        );
+        let before = registry.host(doc).unwrap().document();
+        let generation = before.generation();
+        let dirty = before.is_dirty();
+        let origin = before.origin().clone();
+        let mut app = App::new();
+        app.insert_resource(registry)
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core::CommandResults>()
+            .add_observer(on_save_sysml_document)
+            .add_observer(on_save_as_sysml_document);
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&errors);
+        app.add_observer(move |event: On<lunco_core::RuntimeError>| {
+            sink.lock().unwrap().push(event.message.clone());
+        });
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(Some(77));
+        app.world_mut()
+            .resource_mut::<lunco_core::CommandResults>()
+            .record(77, Ok(Ack::default()));
+        app.world_mut().trigger(SaveAsDocument {
+            doc_id: DocumentId::new(u64::MAX),
+            path: String::new(),
+        });
+        app.world_mut().flush();
+        assert!(matches!(
+            app.world().resource::<lunco_core::CommandResults>().get(77),
+            Some(lunco_core::CommandOutcome::Succeeded(_))
+        ));
+        assert!(errors.lock().unwrap().is_empty());
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(Some(78));
+        app.world_mut().trigger(SaveDocument { doc_id: doc });
+        app.world_mut().flush();
+        assert!(
+            matches!(app.world().resource::<lunco_core::CommandResults>().get(78),
+            Some(lunco_core::CommandOutcome::Failed(message)) if message.contains("Save As"))
+        );
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(Some(79));
+        app.world_mut().trigger(SaveAsDocument {
+            doc_id: doc,
+            path: " ".into(),
+        });
+        app.world_mut().flush();
+        assert!(
+            matches!(app.world().resource::<lunco_core::CommandResults>().get(79),
+            Some(lunco_core::CommandOutcome::Failed(message)) if message.contains("destination path"))
+        );
+        assert_eq!(errors.lock().unwrap().len(), 2);
+        let registry = app.world().resource::<DocumentRegistry<SysmlDocument>>();
+        let after = registry.host(doc).unwrap().document();
+        assert_eq!(after.generation(), generation);
+        assert_eq!(after.is_dirty(), dirty);
+        assert_eq!(after.origin(), &origin);
+        assert_eq!(after.source(), "package Scratch {}");
     }
 }

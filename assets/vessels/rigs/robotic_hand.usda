@@ -2,13 +2,9 @@
 (
     defaultPrim = "RoboticHand"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# A small three-finger manipulation rig. The file owns the mechanism: link
-# frames, collision shapes, revolute joints, joint limits, and the named
-# controller connections. Modelica owns only command shaping and angle math;
-# Rhai owns the open/grasp sequence and acceptance observations.
 def Xform "RoboticHand" (
     kind = "assembly"
     doc = "Three-finger articulated hand with authored joint limits and a kinematic grasp target."
@@ -16,16 +12,12 @@ def Xform "RoboticHand" (
 )
 {
     uniform bool lunco:spawnable = false
-
-    # The palm is the fixed reference for this standalone rig. The fingers are
-    # dynamic bodies, so contact with the target remains Avian-owned.
     def Xform "Palm" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
         float physics:mass = 4.0
         bool physics:kinematicEnabled = true
-
         def Cube "Shell" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
@@ -33,18 +25,16 @@ def Xform "RoboticHand" (
             double size = 1.0
             double3 xformOp:scale = (3.0, 0.7, 1.2)
             uniform token[] xformOpOrder = ["xformOp:scale"]
-            color3f[] primvars:displayColor = [(0.18, 0.22, 0.28)]
+            color3f[] primvars:displayColor = [(0.18000000715255737, 0.2199999988079071, 0.2800000011920929)]
         }
     }
-
     def Xform "Finger_Left" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        float physics:mass = 0.55
+        float physics:mass = 0.550000011920929
         double3 xformOp:translate = (-0.9, -0.4, -0.55)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         def Cube "Link" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
@@ -53,18 +43,16 @@ def Xform "RoboticHand" (
             double3 xformOp:translate = (0.0, -0.6, 0.0)
             double3 xformOp:scale = (0.3, 1.2, 0.3)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-            color3f[] primvars:displayColor = [(0.20, 0.48, 0.82)]
+            color3f[] primvars:displayColor = [(0.20000000298023224, 0.47999998927116394, 0.8199999928474426)]
         }
     }
-
     def Xform "Finger_Center" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        float physics:mass = 0.55
+        float physics:mass = 0.550000011920929
         double3 xformOp:translate = (0.0, -0.4, -0.95)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         def Cube "Link" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
@@ -73,18 +61,16 @@ def Xform "RoboticHand" (
             double3 xformOp:translate = (0.0, -0.6, 0.0)
             double3 xformOp:scale = (0.3, 1.2, 0.3)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-            color3f[] primvars:displayColor = [(0.27, 0.62, 0.86)]
+            color3f[] primvars:displayColor = [(0.27000001072883606, 0.6200000047683716, 0.8600000143051147)]
         }
     }
-
     def Xform "Finger_Right" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        float physics:mass = 0.55
+        float physics:mass = 0.550000011920929
         double3 xformOp:translate = (0.9, -0.4, -0.55)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         def Cube "Link" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
@@ -93,12 +79,9 @@ def Xform "RoboticHand" (
             double3 xformOp:translate = (0.0, -0.6, 0.0)
             double3 xformOp:scale = (0.3, 1.2, 0.3)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-            color3f[] primvars:displayColor = [(0.20, 0.48, 0.82)]
+            color3f[] primvars:displayColor = [(0.20000000298023224, 0.47999998927116394, 0.8199999928474426)]
         }
     }
-
-    # A kinematic object gives the closing fingers a deterministic, load-bearing
-    # surface to touch. It is not part of the hand's joint graph.
     def Cube "GripTarget" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
@@ -108,12 +91,8 @@ def Xform "RoboticHand" (
         double3 xformOp:translate = (0.0, -1.35, -0.55)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         double size = 0.3
-        color3f[] primvars:displayColor = [(0.92, 0.62, 0.16)]
+        color3f[] primvars:displayColor = [(0.9200000166893005, 0.6200000047683716, 0.1599999964237213)]
     }
-
-    # The joint frames coincide with the finger body origins. A direct joint
-    # pair is filtered by the generic Avian joint admission path; the fingers
-    # remain free to contact the authored target and one another.
     def PhysicsRevoluteJoint "Finger_Left_Hinge"
     {
         rel physics:body0 = </RoboticHand/Palm>
@@ -121,9 +100,10 @@ def Xform "RoboticHand" (
         uniform token physics:axis = "Z"
         float physics:lowerLimit = -10.0
         float physics:upperLimit = 55.0
+        float inputs:angle
         float inputs:angle.connect = </RoboticHand/Controller.outputs:left_angle>
+        point3f physics:localPos0 = (-0.8999999761581421, -0.4000000059604645, -0.550000011920929)
     }
-
     def PhysicsRevoluteJoint "Finger_Center_Hinge"
     {
         rel physics:body0 = </RoboticHand/Palm>
@@ -131,9 +111,10 @@ def Xform "RoboticHand" (
         uniform token physics:axis = "Z"
         float physics:lowerLimit = -10.0
         float physics:upperLimit = 20.0
+        float inputs:angle
         float inputs:angle.connect = </RoboticHand/Controller.outputs:center_angle>
+        point3f physics:localPos0 = (0.0, -0.4000000059604645, -0.949999988079071)
     }
-
     def PhysicsRevoluteJoint "Finger_Right_Hinge"
     {
         rel physics:body0 = </RoboticHand/Palm>
@@ -141,9 +122,10 @@ def Xform "RoboticHand" (
         uniform token physics:axis = "Z"
         float physics:lowerLimit = -55.0
         float physics:upperLimit = 10.0
+        float inputs:angle
         float inputs:angle.connect = </RoboticHand/Controller.outputs:right_angle>
+        point3f physics:localPos0 = (0.8999999761581421, -0.4000000059604645, -0.550000011920929)
     }
-
     def Xform "Controller" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )

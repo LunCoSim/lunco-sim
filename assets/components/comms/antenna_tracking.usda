@@ -7,7 +7,7 @@
 
 def Xform "CommsAntenna" (
     prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
-    documentation = "Two-axis articulated antenna. References the shared antenna geometry and owns its rigid bodies, joints, and controller. Connect all target_mount inputs at AntennaTrackerController before running."
+    doc = "Two-axis articulated antenna. References the shared antenna geometry and owns its rigid bodies, joints, and controller. Connect all target_mount inputs at AntennaTrackerController before running."
 )
 {
     def Xform "YawHead" (
@@ -48,6 +48,7 @@ def Xform "CommsAntenna" (
         uniform token physics:axis = "Y"
         custom float inputs:angle
         float inputs:angle.connect = </CommsAntenna/AntennaTrackerController.outputs:az>
+        point3f physics:localPos0 = (0.0, 0.800000011920929, 0.0)
     }
     def PhysicsRevoluteJoint "ElevationJoint"
     {

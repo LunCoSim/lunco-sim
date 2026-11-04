@@ -162,6 +162,13 @@ candidate source generations and URIs, admitted source-root operations and reque
 class. Compile, Run, status queries and deferred installation consume that same
 source snapshot. A sibling edit invalidates reuse even when the primary
 document's generation is unchanged.
+Library source sets contribute their load/unload operation identities.
+Document-backed namespace registrations without a worker operation are parser/editor facts; their source
+documents are already fenced by exact leases, generations and URIs. Publishing
+or retiring those namespace facts cannot invalidate otherwise unchanged source.
+Any real nonzero library operation remains fenced, including document-backed loads.
+A generated unit captures its own document and library operations, with no
+editor sibling overlays.
 
 The worker prepares one checked `FmiComponent`, borrowing it for live session
 construction. Its FMI inventory and executable model come from the same

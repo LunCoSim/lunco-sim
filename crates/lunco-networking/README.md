@@ -424,6 +424,11 @@ Current shipped-versus-planned capability status:
 
 ## Known gaps (open)
 
+TODO: the six deferred control-correctness fixes and their acceptance cases are
+tracked in [network control correctness](../../docs/reviews/open-network-control-correctness.md)
+(SC37–SC39, SC44–SC46). They were explicitly excluded from the current
+simulation-core repair pass.
+
 The current model uses authoritative state replication and local prediction.
 Bounded assembly replay is opt-in; this is not a whole-session rollback contract.
 

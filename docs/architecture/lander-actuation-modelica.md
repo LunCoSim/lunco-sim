@@ -192,6 +192,10 @@ contract for its single generated root: the `WrenchAllocator` is a real placed
 Modelica component and the root uses standard `Icon`/`Diagram` annotations.
 The physical USD actuators remain Avian members, so the UI does not invent a
 fake Modelica unit or drill-down class for them.
+Live actuator or ancestor transforms invalidate this generated geometry through
+the domain root/member dependency index, alongside the native physical mount
+refresh. The existing source fingerprint and compile admission owners decide
+whether the allocator instance needs replacement.
 
 Each force actuator targets its allocator output with
 `rel lunco:forceActuator:commandSource = </...outputs:...>`. This is a

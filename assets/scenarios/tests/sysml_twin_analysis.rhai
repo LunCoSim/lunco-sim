@@ -156,7 +156,7 @@ fn begin_restore(doc_id, original_source) {
     }
 
     let saved = ();
-    try { saved = cmd("SaveSysmlDocument", #{ doc_id: doc_id }); }
+    try { saved = cmd("SaveDocument", #{ doc_id: doc_id }); }
     catch (error) { }
     if saved == () || saved.ok != true {
         return #{ ok: false, error: "could not save the restored source document" };
@@ -352,14 +352,14 @@ fn on_tick(me, ctx) {
         }
 
         let saved = ();
-        try { saved = cmd("SaveSysmlDocument", #{ doc_id: this.doc_id }); }
+        try { saved = cmd("SaveDocument", #{ doc_id: this.doc_id }); }
         catch (error) { }
         let save_acknowledged = saved != () && saved.ok == true
             && saved.data != () && saved.data.generation == edited.generation;
         this.checks.push(t_true(save_acknowledged,
-            "SaveSysmlDocument acknowledges the edited document generation"));
+            "SaveDocument acknowledges the edited document generation"));
         if !save_acknowledged {
-            this.failure = "SaveSysmlDocument did not acknowledge the edited generation";
+            this.failure = "SaveDocument did not acknowledge the edited generation";
             let restored = begin_restore(this.doc_id, this.original_source);
             if restored.ok == true {
                 this.restore_save_ok = true;
@@ -492,7 +492,7 @@ fn on_stop(me, ctx) {
             restored_ok = restored != () && restored.ok == true;
         }
         if restored_ok {
-            try { cmd("SaveSysmlDocument", #{ doc_id: this.doc_id }); }
+            try { cmd("SaveDocument", #{ doc_id: this.doc_id }); }
             catch (error) { }
         }
     }

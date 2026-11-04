@@ -339,6 +339,26 @@ in the response body. In-process `cmd()` calls use the internal
 `CommandResults` store only while the script is running; it is not an API
 endpoint.
 
+Active-document save wrappers pin the document/runtime lease at admission and
+retain the original command identity and producer context while delegating to
+the shared document-domain save owner. Their transport response follows the
+child's terminal result, including queued USD writes. Changing the active tab
+does not retarget an admitted command. Only the registry owning that document
+may record the shared save command's result.
+
+Modelica compile and Reset share the typed `ModelicaLifecycleCompletion`,
+`ModelicaLifecycleReply` and `ModelicaLifecycleReceipt` contract. Success means
+the exact initialized worker result was installed. Reset admits only an idle
+compiled session, captures its class/library/session identity, and sends before
+changing installed state. Its worker rebuild uses the retained immutable FMI
+component and admitted solver plan; unrelated compiler/library changes cannot
+retarget that factory. Current admitted inputs are refreshed. A retained draft remains visibly stale; Reset does
+not silently compile it. Internal outcomes and workbench queries remain
+available in the `ui+scripting` profile without the API transport feature.
+The production gate `scripts/api/test_simulation_core_third_pass.py --case
+modelica` exercises successful and rejected save/compile/reset outcomes, retained
+installed state, busy-target rejection and command interleaving.
+
 ### Registering inside `Plugin::build`
 
 ```rust

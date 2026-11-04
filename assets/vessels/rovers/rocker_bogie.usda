@@ -6,9 +6,9 @@
 )
 
 def Xform "RockerBogie" (
-    documentation = "Perseverance-class six-wheel rocker-bogie Mars rover with articulated suspension and differential body leveling."
+    doc = "Perseverance-class six-wheel rocker-bogie Mars rover with articulated suspension and differential body leveling."
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "PhysicsArticulationRootAPI", "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components", "PhysicsArticulationRootAPI", "PhysxVehicleAPI"]
     prepend references = @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>
     prepend variantSets = ["power", "generation", "thermal"]
     variants = { string "generation" = "none"; string "power" = "infinite"; string "thermal" = "none" }
@@ -271,8 +271,8 @@ def Xform "RockerBogie" (
         }
         "basic" {
             def Scope "Thermal" (
-                prepend apiSchemas = "CollectionAPI:components"
-                documentation = "Rover thermal control network: motor dissipation → masses → radiators."
+                prepend apiSchemas = ["CollectionAPI:components"]
+                doc = "Rover thermal control network: motor dissipation → masses → radiators."
             )
             {
                 uniform token collection:components:expansionRule = "explicitOnly"
@@ -581,7 +581,7 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
         def Cube "Collider" (
-            prepend apiSchemas = "PhysicsCollisionAPI"
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
             double size = 1.0
@@ -719,7 +719,7 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
         def Cube "Collider" (
-            prepend apiSchemas = "PhysicsCollisionAPI"
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
             double size = 1.0
@@ -877,7 +877,7 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
         def Cube "Collider" (
-            prepend apiSchemas = "PhysicsCollisionAPI"
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
             double size = 1.0
@@ -1096,7 +1096,7 @@ def Xform "RockerBogie" (
             bool physics:collisionEnabled = false
         }
         def Cube "Collider" (
-            prepend apiSchemas = "PhysicsCollisionAPI"
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
             double size = 1.0
@@ -1234,7 +1234,7 @@ def Xform "RockerBogie" (
         }
     }
     def PhysicsRevoluteJoint "HingeL" (
-        documentation = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
+        doc = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
     )
     {
         rel physics:body0 = </RockerBogie>
@@ -1242,9 +1242,10 @@ def Xform "RockerBogie" (
         uniform token physics:axis = "X"
         float physics:lowerLimit = -30.0
         float physics:upperLimit = 30.0
+        point3f physics:localPos0 = (-0.9900000095367432, -0.20000000298023224, 0.0)
     }
     def PhysicsRevoluteJoint "HingeR" (
-        documentation = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
+        doc = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
     )
     {
         rel physics:body0 = </RockerBogie>
@@ -1252,9 +1253,10 @@ def Xform "RockerBogie" (
         uniform token physics:axis = "X"
         float physics:lowerLimit = -30.0
         float physics:upperLimit = 30.0
+        point3f physics:localPos0 = (0.9900000095367432, -0.20000000298023224, 0.0)
     }
     def PhysxPhysicsGearJoint "Differential" (
-        prepend apiSchemas = "PhysicsDriveAPI:angular"
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
     {
         rel physxGearJoint:hinge0 = </RockerBogie/HingeL>
@@ -1264,7 +1266,7 @@ def Xform "RockerBogie" (
         float drive:angular:physics:stiffness = 100000.0
     }
     def PhysicsRevoluteJoint "BogieHingeL" (
-        documentation = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
+        doc = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
     )
     {
         rel physics:body0 = </RockerBogie/RockerL>
@@ -1272,9 +1274,10 @@ def Xform "RockerBogie" (
         uniform token physics:axis = "X"
         float physics:lowerLimit = -20.0
         float physics:upperLimit = 20.0
+        point3f physics:localPos0 = (0.0, -0.20000000298023224, 0.6000000238418579)
     }
     def PhysicsRevoluteJoint "BogieHingeR" (
-        documentation = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
+        doc = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
     )
     {
         rel physics:body0 = </RockerBogie/RockerR>
@@ -1282,6 +1285,7 @@ def Xform "RockerBogie" (
         uniform token physics:axis = "X"
         float physics:lowerLimit = -20.0
         float physics:upperLimit = 20.0
+        point3f physics:localPos0 = (0.0, -0.20000000298023224, 0.6000000238418579)
     }
     def Xform "Battery" (
         prepend references = @lunco://components/power/battery.usda@</Battery>

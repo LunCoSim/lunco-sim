@@ -11,15 +11,15 @@ pub struct PendingCompileAdmissions(Vec<CompileRequested>);
 /// Completion ownership follows the exact installed session. Replacing or
 /// despawning its component cancels every remaining listener.
 #[derive(Component)]
-pub struct PendingCompileCompletion {
+pub struct PendingLifecycleCompletion {
     pub(super) session_id: u64,
-    completions: Vec<lunco_modelica_runtime::ModelicaCompileCompletion>,
+    completions: Vec<lunco_modelica_runtime::ModelicaLifecycleCompletion>,
 }
 
-impl PendingCompileCompletion {
+impl PendingLifecycleCompletion {
     pub(super) fn complete(
         &mut self,
-        result: Result<lunco_modelica_runtime::ModelicaCompileReceipt, String>,
+        result: Result<lunco_modelica_runtime::ModelicaLifecycleReceipt, String>,
     ) {
         for completion in self.completions.drain(..) {
             completion.complete(result.clone());
@@ -27,12 +27,130 @@ impl PendingCompileCompletion {
     }
 }
 
-impl Drop for PendingCompileCompletion {
+impl Drop for PendingLifecycleCompletion {
     fn drop(&mut self) {
         self.complete(Err(
-            "Modelica compile session retired or superseded before completion".into(),
+            "Modelica lifecycle session retired or superseded before completion".into(),
         ));
     }
+}
+
+/// Admit a reset of the installed document instance without changing its source
+/// snapshot. Draft changes remain stale until an explicit compile admits them.
+pub fn reset_modelica_document(
+    world: &mut World,
+    doc: lunco_doc::DocumentId,
+    completion: lunco_modelica_runtime::ModelicaLifecycleCompletion,
+) -> Result<(), String> {
+    let documents = world
+        .get_resource::<ModelicaDocuments>()
+        .ok_or("Modelica document registry is unavailable")?;
+    documents
+        .host(doc)
+        .ok_or("Modelica reset source document is closed")?;
+    let entity = documents
+        .simulator_for(doc)
+        .ok_or("The document has no runtime participant")?;
+    let model = world
+        .get::<ModelicaModel>(entity)
+        .ok_or("The document has no live Modelica model")?;
+    if !model.is_compiled || model.last_error.is_some() {
+        return Err(
+            "Reset requires an installed compiled Modelica session; compile the source first"
+                .into(),
+        );
+    }
+    if model.is_compiling || model.is_stepping || model.in_flight_step.is_some() {
+        return Err(
+            "Reset rejected while a Modelica transaction is pending; pause and wait for completion"
+                .into(),
+        );
+    }
+    if model.document != doc
+        || !model
+            .checked_interface
+            .as_ref()
+            .is_some_and(|interface| interface.model_name == model.model_name)
+    {
+        return Err("Reset participant has no matching checked source target".into());
+    }
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    let source = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(doc, workspace)?;
+    if !source.is_current(workspace, replication.as_ref())
+        || world.get::<lunco_workspace::PinnedDocumentRuntimeOwner>(entity) != Some(&source)
+        || !model.source_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot
+                .documents
+                .iter()
+                .any(|(owner, _, _)| owner == &source)
+        })
+    {
+        return Err(
+            "Reset source runtime has retired or differs from the installed session".into(),
+        );
+    }
+    if world.get::<ModelicaVariables>(entity).is_none() {
+        return Err("Reset participant is missing its required variable state".into());
+    }
+    if let Some(error) = world
+        .get_resource::<lunco_modelica_runtime::ModelicaWorkerFailure>()
+        .and_then(|failure| failure.0.as_ref())
+    {
+        return Err(format!("Modelica worker is unavailable: {error}"));
+    }
+    let target = lunco_modelica_runtime::ModelicaResetTarget {
+        session_id: model.session_id,
+        model_name: model.model_name.clone(),
+        library_revision: model
+            .live_solver_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.admitted_library_revision)
+            .ok_or("Reset session has no admitted source-library revision")?,
+    };
+    let session_id = model
+        .session_id
+        .max(
+            world
+                .get::<lunco_modelica_runtime::ModelicaSessionEpoch>(entity)
+                .map_or(0, |epoch| epoch.0),
+        )
+        .checked_add(1)
+        .ok_or("Modelica reset session identity exhausted")?;
+    let mut initial_inputs: Vec<_> = model
+        .inputs
+        .iter()
+        .map(|(name, value)| (name.clone(), *value))
+        .collect();
+    initial_inputs.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    world
+        .get_resource::<ModelicaChannels>()
+        .ok_or("Modelica worker transport is unavailable")?
+        .tx
+        .send(ModelicaCommand::Reset {
+            entity,
+            session_id,
+            target,
+            initial_inputs,
+        })
+        .map_err(|error| format!("Modelica reset dispatch failed: {error}"))?;
+    let mut model = world
+        .get_mut::<ModelicaModel>(entity)
+        .expect("exclusive validated reset participant");
+    model.session_id = session_id;
+    model.is_stepping = true;
+    model.is_compiling = true;
+    drop(model);
+    world.entity_mut(entity).insert((
+        lunco_modelica_runtime::ModelicaSessionEpoch(session_id),
+        PendingLifecycleCompletion {
+            session_id,
+            completions: vec![completion],
+        },
+    ));
+    Ok(())
 }
 
 /// Consume compile intent in the execution layer so headless and interactive
@@ -310,7 +428,7 @@ fn dispatch_one(
             .get::<ModelicaModel>(entity)
             .expect("compiled participant exists");
         for completion in &request.completions {
-            completion.complete(Ok(lunco_modelica_runtime::ModelicaCompileReceipt {
+            completion.complete(Ok(lunco_modelica_runtime::ModelicaLifecycleReceipt {
                 entity,
                 session_id: model.session_id,
                 generation,
@@ -659,9 +777,9 @@ fn dispatch_one(
         entry.insert(Name::new(model_name.clone()));
     }
     entry.insert((model, super::ModelicaVariables::default()));
-    entry.remove::<PendingCompileCompletion>();
+    entry.remove::<PendingLifecycleCompletion>();
     if !request.completions.is_empty() {
-        entry.insert(PendingCompileCompletion {
+        entry.insert(PendingLifecycleCompletion {
             session_id,
             completions: request.completions.clone(),
         });
@@ -724,7 +842,7 @@ fn dispatch_one(
 }
 
 fn fail_request(
-    completions: &[lunco_modelica_runtime::ModelicaCompileCompletion],
+    completions: &[lunco_modelica_runtime::ModelicaLifecycleCompletion],
     world: &mut World,
     doc: lunco_doc::DocumentId,
     entity: Option<Entity>,
@@ -736,7 +854,7 @@ fn fail_request(
         completion.complete(Err(message.clone()));
     }
     if let Some(entity) = entity {
-        if let Some(mut completion) = world.get_mut::<PendingCompileCompletion>(entity) {
+        if let Some(mut completion) = world.get_mut::<PendingLifecycleCompletion>(entity) {
             completion.complete(Err(message.clone()));
         }
         if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
@@ -800,14 +918,14 @@ mod tests {
 
     #[test]
     fn compile_completion_retires_once_with_its_session_owner() {
-        let (completion, reply) = lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+        let (completion, reply) = lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
         let duplicate = completion.clone();
-        let owner = PendingCompileCompletion {
+        let owner = PendingLifecycleCompletion {
             session_id: 7,
             completions: vec![completion],
         };
         drop(owner);
-        duplicate.complete(Ok(lunco_modelica_runtime::ModelicaCompileReceipt {
+        duplicate.complete(Ok(lunco_modelica_runtime::ModelicaLifecycleReceipt {
             entity: Entity::from_raw_u32(1).unwrap(),
             session_id: 7,
             generation: 3,
@@ -835,7 +953,7 @@ mod tests {
             rx,
             preparation_rx: crossbeam_channel::never(),
         });
-        let (completion, reply) = lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+        let (completion, reply) = lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
         let entity = app
             .world_mut()
             .spawn((
@@ -848,7 +966,7 @@ mod tests {
                     ..Default::default()
                 },
                 ModelicaVariables::default(),
-                PendingCompileCompletion {
+                PendingLifecycleCompletion {
                     session_id: 7,
                     completions: vec![completion],
                 },
@@ -916,7 +1034,8 @@ mod tests {
                 ))
                 .id();
             entities.push(entity);
-            let (completion, reply) = lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+            let (completion, reply) =
+                lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
             replies.push(reply);
             app.world_mut().write_message(CompileRequested {
                 completions: vec![completion],

@@ -49,6 +49,9 @@ pub fn capture(
     let mut source_roots: Vec<_> = roots
         .into_iter()
         .flat_map(|roots| roots.roots.values())
+        // Document namespace projections have operation zero until a worker
+        // load is issued. Overlaid source bytes use the document leases above.
+        .filter(|root| root.origin_document.is_none() || root.operation_id != 0)
         .map(|root| (root.id.clone(), root.operation_id))
         .collect();
     source_roots.sort_unstable();
@@ -101,6 +104,86 @@ pub fn model_is_current(world: &World, model: &ModelicaModel) -> bool {
 mod tests {
     use super::*;
     use lunco_modelica_document::ModelicaOp;
+
+    #[test]
+    fn document_namespace_roots_are_not_library_operations() {
+        for generated in [false, true] {
+            let mut documents = DocumentRegistry::<ModelicaDocument>::default();
+            let primary = if generated {
+                documents.allocate(
+                    "model Main end Main;".into(),
+                    lunco_doc::PathlessOrigin::bundled("generated/Main.mo"),
+                )
+            } else {
+                documents.allocate_untitled("model Main end Main;".into())
+            };
+            let library = documents.allocate_untitled("package LocalLib end LocalLib;".into());
+            documents
+                .host_mut(library)
+                .unwrap()
+                .document_mut()
+                .set_origin(lunco_doc::DocumentOrigin::writable_file("local/package.mo"));
+            let source = PinnedDocumentRuntimeOwner::for_document(primary, None).unwrap();
+            let mut roots = SourceRootRegistry::default();
+            roots.register_disk_root("Library", std::path::PathBuf::from("library"));
+            let snapshot = capture(&documents, &source, None, None, Some(&roots)).unwrap();
+            let namespace = roots
+                .register_open_doc_root(
+                    "LocalLib".into(),
+                    Some(std::path::PathBuf::from("local/package.mo")),
+                    library,
+                    lunco_modelica_source_roots::SourceRootOwner::Application,
+                )
+                .unwrap();
+            assert!(
+                is_current(&snapshot, &documents, &source, None, None, Some(&roots)),
+                "publishing namespace facts does not change admitted source bytes or library operations"
+            );
+            roots.roots.remove(&namespace);
+            assert!(
+                is_current(&snapshot, &documents, &source, None, None, Some(&roots)),
+                "retiring namespace metadata does not retire its still-open source document"
+            );
+            documents
+                .host_mut(library)
+                .unwrap()
+                .apply(ModelicaOp::ReplaceSource {
+                    new: "package LocalLib constant Real gain=2; end LocalLib;".into(),
+                })
+                .unwrap();
+            assert_eq!(
+                is_current(&snapshot, &documents, &source, None, None, Some(&roots)),
+                generated,
+                "editor document libraries remain source leases; generated units have no editor sibling overlays"
+            );
+            let snapshot = capture(&documents, &source, None, None, Some(&roots)).unwrap();
+            let namespace = roots
+                .register_open_doc_root(
+                    "LocalLib".into(),
+                    Some(std::path::PathBuf::from("local/package.mo")),
+                    library,
+                    lunco_modelica_source_roots::SourceRootOwner::Application,
+                )
+                .unwrap();
+            roots.roots.get_mut(&namespace).unwrap().operation_id = 1;
+            assert!(
+                !is_current(&snapshot, &documents, &source, None, None, Some(&roots)),
+                "a document-backed library with a real worker operation is strictly fenced"
+            );
+            let snapshot = capture(&documents, &source, None, None, Some(&roots)).unwrap();
+            roots.roots.get_mut(&namespace).unwrap().operation_id = 2;
+            assert!(
+                !is_current(&snapshot, &documents, &source, None, None, Some(&roots)),
+                "a replacement document-backed worker operation invalidates the admitted snapshot"
+            );
+            let snapshot = capture(&documents, &source, None, None, Some(&roots)).unwrap();
+            roots.roots.get_mut("Library").unwrap().operation_id = 3;
+            assert!(
+                !is_current(&snapshot, &documents, &source, None, None, Some(&roots)),
+                "actual library operations still fence both generated and editor compilation"
+            );
+        }
+    }
 
     #[test]
     fn source_leases_track_sibling_revisions_retirement_and_root_operations() {

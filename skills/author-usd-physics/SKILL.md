@@ -32,6 +32,11 @@ mesh contact through rolling, slip and penetration measurements. The production
 `wheel_collider_lint` scene checks the warning, its non-blocking severity and
 analytic/raycast/visual-only controls.
 
+Longitudinal slip-speed regularization belongs to the vehicle's standard
+`PhysxVehicleAPI` active/passive denominator fields, not the tire's
+`minValidatedSpeed` validity envelope. Follow the SI/default and live-edit
+contract in [the suspension specification](../../docs/architecture/53-usd-suspension-specification.md#stage-units-and-tire-slip).
+
 A separate wheel visual uses one centered `purpose=render` child and a hidden
 proxy through standard `VisibilityAPI`; see `build-vehicle`. Its geometry rest
 basis does not define the mechanical axle. `wheel_render_root` verifies the
@@ -463,8 +468,12 @@ geometry and contact ownership are verified.
 
 ### Where a joint's rest position sits
 
-Anchors left unauthored are DERIVED from the transform hierarchy, which puts
-displacement at exactly 0 in the authored rest pose. A leg authored `-0.8 .. 0.0`
+Author `physics:localPos0/1` in their relationship target frames so the intended
+rest frames coincide. Omitted positions independently use the standard zero
+default; omitted rotations use identity. A descendant target retains its full
+transform when resolved to a rigid ancestor, and body scale is baked into the
+native anchor. An empty endpoint relationship anchors that side to the world.
+A leg whose authored rest frames coincide and limits are `-0.8 .. 0.0`
 therefore rests **on** its upper limit and travels one way only — by design: 0 is
 the fully-extended pose the geometry is drawn in, and the ground can only
 compress it.
@@ -474,8 +483,8 @@ the load path first. Widening the limit to make a jammed leg move buries the
 actual defect under a range the mechanism never needed.
 
 **Anchors are also why you cannot freely move a body to fix clearance.** The
-anchor is derived from the body's origin; move the origin and you move the
-joint's zero, silently preloading the spring by the axial component of the shift.
+anchor is expressed in the selected endpoint frame; moving that frame without
+updating the authored anchor moves the joint's zero and can preload the spring.
 Change the part's *extent*, or the mating part, not the sprung body's origin.
 
 ## 2b. Author the body as a FRAME, with real dimensions

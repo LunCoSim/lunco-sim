@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**317 commands** across **60** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**316 commands** across **60** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -117,7 +117,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-scene-validation`](#lunco-scene-validation) (1 command)
 - [`lunco-scripting-rhai-runtime`](#lunco-scripting-rhai-runtime) (12 commands)
 - [`lunco-scripting-rhai-world`](#lunco-scripting-rhai-world) (2 commands)
-- [`lunco-sysml`](#lunco-sysml) (4 commands)
+- [`lunco-sysml`](#lunco-sysml) (3 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-usd-bevy-camera`](#lunco-usd-bevy-camera) (5 commands)
 - [`lunco-usd-bevy-runtime-core`](#lunco-usd-bevy-runtime-core) (5 commands)
@@ -3488,19 +3488,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `name` | `String` |  Exact `twin://` authority assigned to the Twin. |
 | `relative_paths` | `Vec < String >` |  Complete ordered source selection from the Twin loading policy. |
 
-#### `SaveSysmlDocument`
-
- Persist one SysML document without colliding with the domain-generic
- `SaveDocument` command.  The shared verb is still useful to UI code, but
- the transport-facing Rhai editor needs an owner-specific terminal command
- while multiple document domains observe the same generic event.
-
-- *defined in:* `crates/lunco-sysml/src/api.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `doc_id` | `DocumentId` |  Explicit SysML document id. |
-
 ### `lunco-telemetry` <a id="lunco-telemetry"></a>
 
 #### `ControlTelemetry`
@@ -4718,7 +4705,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 317 commands from the runtime schema; scanned 1077 .rs files for docs (0 parse failure(s) skipped).
+<!-- 316 commands from the runtime schema; scanned 1079 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetVisualLead, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

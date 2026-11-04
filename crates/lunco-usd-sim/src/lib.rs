@@ -94,6 +94,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
 mod billboard_runtime;
+mod mount_runtime;
 mod wheel_runtime;
 
 /// Plugin for mapping simulation-specific USD schemas (like NVIDIA PhysX Vehicles)
@@ -1096,6 +1097,13 @@ impl Plugin for UsdSimPlugin {
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_runtime_safety);
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
+        app.add_systems(
+            PreUpdate,
+            mount_runtime::refresh_mounted_physics
+                .after(lunco_core::RuntimeCycleSet::Lifecycle)
+                .before(lunco_physics::body_mass::PhysicsGeometryAdmission)
+                .before(lunco_physics::apply_physics_holds),
+        );
         app.init_scene_resource::<PendingUsdSimPrimWork>();
         app.add_systems(lunco_core::SceneTeardown, retire_joint_topology_work);
         // Client-only: reconstruct a remote rover's wheels from its chassis
@@ -2386,10 +2394,32 @@ fn process_usd_sim_prim_read(
     // torque actuator publish ordinary scalar input ports; the cosim backend
     // later resolves those commands to Avian's force/torque writer. RCS names,
     // reaction-wheel names, and controller ownership do not appear here.
-    if let Some(actuator) = lunco_usd_actuation::force_actuator_from_usd(reader, &sdf_path) {
+    let force = lunco_usd_actuation::force_actuator_from_usd(reader, &sdf_path);
+    let torque = lunco_usd_actuation::torque_actuator_from_usd(reader, &sdf_path);
+    if (reader.has_api_schema(&sdf_path, "LunCoForceActuatorAPI") && force.is_none())
+        || (reader.has_api_schema(&sdf_path, "LunCoTorqueActuatorAPI") && torque.is_none())
+    {
+        let reason = "actuator requires a rigid-body ancestor, finite body-local transform/direction and a positive force or torque limit";
+        push_usd_sim_diagnostic(
+            diagnostics,
+            &prim_path.path,
+            "usd-physical-mount-invalid",
+            reason,
+        );
+        mount_runtime::report_invalid_mount(
+            commands,
+            runtime_faults,
+            entity,
+            &prim_path.path,
+            reason,
+        );
+        commands.entity(entity).try_insert(UsdSimProcessed);
+        return;
+    }
+    if let Some(actuator) = force {
         commands.entity(entity).try_insert(actuator);
     }
-    if let Some(actuator) = lunco_usd_actuation::torque_actuator_from_usd(reader, &sdf_path) {
+    if let Some(actuator) = torque {
         commands.entity(entity).try_insert(actuator);
     }
     // Screen-constant marker, keyed on the size that IS the request: a prim
@@ -3404,14 +3434,9 @@ fn vehicle_mount_transform(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     wheel_path: &SdfPath,
 ) -> Option<(SdfPath, Transform)> {
-    let mut path = wheel_path.clone();
-    loop {
-        if reader.has_api_schema(&path, "PhysxVehicleContextAPI") {
-            let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &path, wheel_path)?;
-            return Some((path, local));
-        }
-        path = path.parent()?;
-    }
+    let path = lunco_usd_sim_authoring::wheel_params::vehicle_context_path(reader, wheel_path)?;
+    let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &path, wheel_path)?;
+    Some((path, local))
 }
 
 /// Project a standard USD child mass into the reduced raycast realization.

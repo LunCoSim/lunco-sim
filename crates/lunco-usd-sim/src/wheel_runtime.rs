@@ -94,6 +94,14 @@ pub(crate) fn claims_edit(
     prim: &SdfPath,
     attr: &str,
 ) -> bool {
+    if matches!(
+        attr,
+        "physxVehicle:minActiveLongitudinalSlipDenominator"
+            | "physxVehicle:minPassiveLongitudinalSlipDenominator"
+            | "physxVehicle:minLongitudinalSlipDenominator"
+    ) {
+        return reader.has_api_schema(prim, "PhysxVehicleContextAPI");
+    }
     if attr.starts_with("physxVehicleWheel:") {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
@@ -280,6 +288,10 @@ pub(crate) fn resync_wheels_for_stage(
             .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
         if first {
             error!("[wheel resync] terminal authored-state failure on {subject}: {detail}");
+            world.trigger(lunco_core::RuntimeError {
+                name: "usd-wheel-resync-invalid".into(),
+                message: format!("{subject}: {detail}"),
+            });
         }
     }
 

@@ -21,7 +21,10 @@ pub fn on_remove_modelica(
     commands.queue(move |world: &mut World| {
         if let Ok(mut owner) = world.get_entity_mut(entity) {
             if !owner.contains::<ModelicaModel>() {
-                owner.remove::<(ModelicaVariables, super::compile::PendingCompileCompletion)>();
+                owner.remove::<(
+                    ModelicaVariables,
+                    super::compile::PendingLifecycleCompletion,
+                )>();
             }
         }
     });
@@ -778,7 +781,7 @@ pub fn handle_modelica_responses(
         Option<&lunco_modelica_runtime::ModelicaSessionEpoch>,
         Option<&lunco_core::GlobalEntityId>,
         Option<&mut lunco_cosim_core::SimComponent>,
-        Option<&mut super::compile::PendingCompileCompletion>,
+        Option<&mut super::compile::PendingLifecycleCompletion>,
     )>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
@@ -951,7 +954,7 @@ pub fn handle_modelica_responses(
             if let Some(completion) = completion.as_deref_mut()
                 && completion.session_id != model.session_id
             {
-                completion.complete(Err("Modelica compile session was superseded".into()));
+                completion.complete(Err("Modelica lifecycle session was superseded".into()));
             }
             // Terminal participants have no pending lifecycle operation. This
             // also protects participants beyond the first recorded scene fault.
@@ -975,7 +978,7 @@ pub fn handle_modelica_responses(
                 )
             }) {
                 if let Some(completion) = completion.as_deref_mut() {
-                    completion.complete(Err("Modelica compile source owner retired".into()));
+                    completion.complete(Err("Modelica lifecycle source owner retired".into()));
                 }
                 continue;
             }
@@ -983,7 +986,7 @@ pub fn handle_modelica_responses(
                 if let Some(completion) = completion.as_deref_mut()
                     && epoch.is_some_and(|epoch| completion.session_id < epoch.0)
                 {
-                    completion.complete(Err("Modelica compile session was retired".into()));
+                    completion.complete(Err("Modelica lifecycle session was retired".into()));
                 }
                 continue;
             }
@@ -1211,6 +1214,14 @@ pub fn handle_modelica_responses(
                 if result.checked_interface.is_none() {
                     result.error =
                         Some("Modelica worker omitted its checked parameter interface".into());
+                } else if result.is_reset
+                    && result
+                        .checked_interface
+                        .as_ref()
+                        .is_some_and(|interface| interface.model_name != model.model_name)
+                {
+                    result.error =
+                        Some("Modelica reset returned a different compiled source target".into());
                 } else if let Some(missing) = result.detected_parameter_names.iter().find(|name| {
                     !result
                         .detected_symbols
@@ -1727,14 +1738,14 @@ pub fn handle_modelica_responses(
                 );
                 model.last_accepted_step = Some(sample);
             }
-            if result.is_new_model
+            if (result.is_new_model || result.is_reset)
                 && let Some(completion) = completion.as_deref_mut()
                 && completion.session_id == result.session_id
             {
                 let outcome = match model.last_error.as_ref() {
                     Some(error) => Err(error.clone()),
                     None if model.is_compiled => {
-                        Ok(lunco_modelica_runtime::ModelicaCompileReceipt {
+                        Ok(lunco_modelica_runtime::ModelicaLifecycleReceipt {
                             entity: result.entity,
                             session_id: model.session_id,
                             generation: model.compiled_generation,

@@ -19,6 +19,8 @@ native-allocator = ["dep:mimalloc"]
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
 # server) build with `default-features = false`.
 ui = [
+    # Plot and command identity/completion use the transport-free API core.
+    "dep:lunco-api", "dep:lunco-api-core",
     # The workbench task layouts are assembled by Rhai policies.
     "scripting",
     "lunco-assets-runtime/ui",

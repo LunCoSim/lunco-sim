@@ -49,6 +49,16 @@ class "PhysxVehicleContextAPI" (
 {
 }
 
+class "PhysxVehicleAPI"
+{
+    float physxVehicle:minActiveLongitudinalSlipDenominator = 0 (
+        doc = "Minimum longitudinal slip denominator under drive or brake torque, in stage distance units per second. Positive, or zero for the standard resolved default 0.1 m/s."
+    )
+    float physxVehicle:minPassiveLongitudinalSlipDenominator = 0 (
+        doc = "Minimum longitudinal slip denominator without drive or brake torque, in stage distance units per second. Positive, or zero for the standard resolved default 4 m/s when no deprecated denominator opinion is authored."
+    )
+}
+
 class "PhysxVehicleWheelAPI" (
     customData = {
         string userDocBrief = """Defines the physical dimensions and spin dynamics of a single wheel. Applied
@@ -312,8 +322,8 @@ class "PhysxVehicleTireAPI" (
         customData = {
             double min = 0
             double max = 30000
-            string unit = "N/(m/s)"
-            string userDocBrief = """Longitudinal tire stiffness — the slope of longitudinal force vs slip
+            string unit = "N"
+            string userDocBrief = """Longitudinal tire stiffness — the slope of longitudinal force vs dimensionless slip
     before saturation. Drives the traction model."""
         }
         displayName = "Longitudinal Stiffness"

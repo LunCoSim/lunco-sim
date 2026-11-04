@@ -94,6 +94,12 @@ impl Plugin for ModelicaCommandsPlugin {
         // All typed commands, collected by the `register_commands!`
         // invocation below (path form supports the split submodules).
         register_all_commands(app);
+        #[cfg(feature = "api")]
+        {
+            use lunco_api::DeferredCommandAppExt;
+            app.register_deferred_command::<SaveActiveDocument>()
+                .register_deferred_command::<SaveActiveDocumentAs>();
+        }
     }
 }
 

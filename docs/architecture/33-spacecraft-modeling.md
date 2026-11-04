@@ -261,8 +261,13 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   The prismatic `force` port reads the completed net native force on body2 along
   the slider axis, including correctly signed drive and travel-stop reactions;
   it does not reconstruct an unsolved spring force. Sleeping islands retain
-  their last completed native reaction. Disabled joints or endpoints clear
-  it; waking resumes native writeback. `prismatic_spring` verifies both load
+  their last completed native reaction. The `lunco-physics` measurement owner
+  samples active participation at the native pre-substep boundary and captures
+  `JointForces` after native solver finalization, before sleep transitions. A
+  sleeping island republishes that exact completed report through the same
+  component. Disabled joints/endpoints and removed or replaced joint definitions
+  invalidate retention; waking resumes native writeback. No force law is
+  reconstructed. `prismatic_spring` verifies both load
   retention and disabling.
 - **Proof:** `assets/scenes/tests/prismatic_drive.usda` — a standard
   `PhysicsPrismaticJoint` + `PhysicsDriveAPI:linear` elevator (50 kg platform).

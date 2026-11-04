@@ -841,7 +841,8 @@ pub(crate) fn apply_transform_edits_live(
     }
     // Read every changed transform under one short borrow of the `!Send` stage,
     // then release it before mutating the world.
-    let transforms: Vec<(String, TransformEditChannels, Transform)> = {
+    let mut failures = Vec::new();
+    let transforms: Vec<(String, TransformEditChannels, Transform, bevy::math::DVec3)> = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
         };
@@ -854,25 +855,54 @@ pub(crate) fn apply_transform_edits_live(
                 if !view.has_prim(&sp) {
                     return None;
                 }
-                match lunco_usd_bevy_stage::local_transform_at(&view, &sp, 0.0) {
-                    Ok(Some(transform)) => Some((path.clone(), *channels, transform)),
-                    Ok(None) => None,
-                    Err(error) => {
-                        error!("[usd] transform edit rejected for {path}: {error}");
+                match (
+                    lunco_usd_bevy_stage::local_transform_at(&view, &sp, 0.0),
+                    lunco_usd_bevy_stage::local_transform_matrix_d_at(&view, &sp, 0.0),
+                ) {
+                    (Ok(Some(transform)), Ok(Some(matrix))) => {
+                        Some((path.clone(), *channels, transform, matrix.w_axis.truncate()))
+                    }
+                    (Ok(None), Ok(None)) => None,
+                    (Err(error), _) | (_, Err(error)) => {
+                        failures.push((path.clone(), error.to_string()));
+                        None
+                    }
+                    _ => {
+                        failures.push((
+                            path.clone(),
+                            "native render and canonical transform facts disagree".to_owned(),
+                        ));
                         None
                     }
                 }
             })
             .collect()
     };
-    for (path, channels, transform) in transforms {
+    for (path, detail) in failures {
+        let message = format!("{path}: live USD transform could not be projected: {detail}");
+        let first = world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise(
+                "usd-transform-projection-invalid",
+                None,
+                path,
+                message.clone(),
+            );
+        if first {
+            world.trigger(lunco_core::RuntimeError {
+                name: "usd-transform-projection-invalid".into(),
+                message,
+            });
+        }
+    }
+    for (path, channels, transform, translation) in transforms {
         let entities = find_stage_entities(world, id, &path).to_vec();
         if entities.is_empty() {
             debug!("[usd] transform edit {path}: no projected entity on this stage");
         }
         for entity in entities {
             if channels.translate {
-                seat_authored_translate(world, entity, transform.translation);
+                seat_authored_translate(world, entity, translation);
             }
             let preview_only =
                 channels.scale && lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
@@ -903,7 +933,7 @@ pub(crate) fn apply_transform_edits_live(
 ///
 /// A prim with no parent `Grid` (nested under a referenced scene) has no cell,
 /// and its authored value IS the parent-local transform.
-fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
+fn seat_authored_translate(world: &mut World, entity: Entity, v: bevy::math::DVec3) {
     let parent_grid = world
         .get::<bevy::prelude::ChildOf>(entity)
         .map(|c| c.parent())
@@ -911,7 +941,7 @@ fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
         .cloned();
     match parent_grid {
         Some(grid) => {
-            let (cell, local) = grid.translation_to_grid(v.as_dvec3());
+            let (cell, local) = grid.translation_to_grid(v);
             let mut e = world.entity_mut(entity);
             if let Some(mut tf) = e.get_mut::<Transform>() {
                 tf.translation = local;
@@ -927,7 +957,9 @@ fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
         }
         None => {
             if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
-                tf.translation = v;
+                // This is the explicit parent-local render boundary. Grid-direct
+                // positions retain f64 until their cell/remainder split above.
+                tf.translation = v.as_vec3();
             }
         }
     }
@@ -963,7 +995,7 @@ mod translate_seat_tests {
             ))
             .id();
 
-        seat_authored_translate(&mut world, prim, Vec3::new(0.0, 4047.0, 0.0));
+        seat_authored_translate(&mut world, prim, bevy::math::DVec3::new(0.0, 4047.0, 0.0));
 
         let cell = world.get::<CellCoord>(prim).copied().unwrap();
         let tf = world.get::<Transform>(prim).copied().unwrap();
@@ -996,7 +1028,7 @@ mod translate_seat_tests {
         // What the gizmo would author for this prim: cell × edge + local.
         let authored = Vec3::new(1.0 * EDGE + 10.0, 2.0 * EDGE - 53.0, -EDGE + 4.0);
 
-        seat_authored_translate(&mut world, prim, authored);
+        seat_authored_translate(&mut world, prim, authored.as_dvec3());
 
         let cell = world.get::<CellCoord>(prim).copied().unwrap();
         let tf = world.get::<Transform>(prim).copied().unwrap();
@@ -1018,7 +1050,7 @@ mod translate_seat_tests {
         let parent = world.spawn(Transform::default()).id();
         let nested = world.spawn((Transform::default(), ChildOf(parent))).id();
 
-        seat_authored_translate(&mut world, nested, Vec3::new(1.0, 2.0, 3.0));
+        seat_authored_translate(&mut world, nested, bevy::math::DVec3::new(1.0, 2.0, 3.0));
 
         assert_eq!(
             world.get::<Transform>(nested).unwrap().translation,

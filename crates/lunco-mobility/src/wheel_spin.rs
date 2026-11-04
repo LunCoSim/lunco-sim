@@ -206,7 +206,13 @@ pub(crate) fn update_wheel_spin(
         };
         let patch = |omega: f64| {
             crate::tire_patch_force(
-                k_slip * (omega * r - v_long),
+                k_slip,
+                omega * r - v_long,
+                v_long.abs().max((omega * r).abs()).max(
+                    wheel
+                        .longitudinal_slip_denominators
+                        .minimum(tau_drive != 0.0 || (braking && wheel.brake_torque_max > 0.0)),
+                ),
                 v_long
                     .abs()
                     .max((omega * r).abs())
@@ -360,11 +366,8 @@ mod tests {
     /// The chassis is a Dynamic body at avian `Position`/`Rotation` = origin/identity
     /// with angular velocity `ang`. The wheel is a `ChildOf` the chassis with
     /// chassis-local transform `wheel_local`; its **`GlobalTransform.translation`** is
-    /// `wheel_gtf_translation` — the value big_space rebases away from the floating
-    /// origin. Pre-fix the integrator built the contact-slip lever as
-    /// `wheel_gtf − chassis_pos` (render-frame minus avian-frame), so the spin depended
-    /// on `wheel_gtf_translation`; post-fix it reconstructs the hub from the chassis
-    /// pose (`pos + rot·wheel_local`, pure avian), so spin is invariant to it.
+    /// `wheel_gtf_translation`, which varies independently from the hub's
+    /// simulation pose. The spin must depend only on the body pose and mount.
     fn run_raycast_spin(ang: DVec3, wheel_local: Vec3, wheel_gtf_translation: Vec3) -> f64 {
         // dt = 0.1 s, chosen so the expected gripped ω below is exact arithmetic
         // (inertia/dt = 10). One fixed tick per `app.update()`.
@@ -416,6 +419,7 @@ mod tests {
                     rest_load: 400.0,
                 },
                 min_validated_speed: 0.0,
+                longitudinal_slip_denominators: crate::LongitudinalSlipDenominators::default(),
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
             },
@@ -443,17 +447,7 @@ mod tests {
         ));
 
         app.add_systems(FixedUpdate, update_wheel_spin);
-        // EXACTLY ONE FIXED TICK, DRIVEN EXPLICITLY — `app.update()` will not do.
-        //
-        // The expected ω below is one step of the implicit grip solve, so this
-        // measurement is only meaningful for a known number of ticks. But the
-        // fixed accumulator starts empty and is filled by the frame that just
-        // ran, so the FIRST `app.update()` banks `dt` and runs `FixedUpdate`
-        // ZERO times — the wheel never integrated and the test read a pristine
-        // `spin_velocity: 0.0` as a physics answer. (The sibling
-        // no-load-speed test never noticed: it loops 600 updates, where one lost
-        // tick is invisible.) Advancing `Time<Fixed>` and running the schedule
-        // makes the tick count the thing the test actually controls.
+        // Advance exactly one fixed tick for the implicit-balance assertion.
         app.world_mut()
             .resource_mut::<Time<Fixed>>()
             .advance_by(Duration::from_secs_f64(0.1));
@@ -526,6 +520,7 @@ mod tests {
                         rest_load: 400.0,
                     },
                     min_validated_speed: 0.0,
+                    longitudinal_slip_denominators: crate::LongitudinalSlipDenominators::default(),
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,
                 },
@@ -578,14 +573,8 @@ mod tests {
 
     #[test]
     fn raycast_spin_is_floating_origin_invariant() {
-        // CQ-201 regression for the authoritative (raycast) rover. Chassis yaws
-        // about +Y at 1 rad/s; the hub sits 1 m out along +X, so the lever arm
-        // feeds the contact slip and thus the gripped axle rate. The ONLY change
-        // between runs is the wheel's GlobalTransform translation: "near origin"
-        // (true world hub pos) vs "≈1 km away" along the sensitive axis (a big_space
-        // rebase). A frame-correct integrator gives the SAME spin; the old
-        // `gtf − pos.0` lever gave a wildly different one (the bug, invisible near
-        // origin).
+        // A 1 rad/s chassis yaw gives the offset hub 1 m/s longitudinal speed.
+        // Vary only its render-frame translation to model a floating-origin rebase.
         let ang = DVec3::Y;
         let mount = Vec3::new(1.0, 0.0, 0.0);
 
@@ -597,13 +586,13 @@ mod tests {
             "raycast spin must be floating-origin invariant: near={near} far={far} (Δ={})",
             (near - far).abs()
         );
-        // And physically correct, not just self-consistent. v_long = 1 m/s (as in
-        // the proxy test); the implicit grip solve with inertia/dt=10, k_slip·r²=250
-        // gives ω = (k_slip·r·v_long)/(inertia/dt + k_slip·r²) = 500/260 ≈ 1.923,
-        // and |f_slip|≈38 < μN=100 so the tire grips (no saturation).
+        // With no drive/brake, the standard passive reference is 4 m/s.
+        // K/reference = 250 N/(m/s), r=.5 and I/dt=10, so the balance is
+        // (10 + 250*.5²)*omega = 250*.5*1. The force stays below mu*N=100 N.
+        let expected = 125.0 / 72.5;
         assert!(
-            (near - 1.9231).abs() < 1e-2,
-            "expected gripped ω≈1.923, got {near}"
+            (near - expected).abs() < 1e-10,
+            "passive slip must satisfy the gripped torque balance: {near} vs {expected}"
         );
     }
 }

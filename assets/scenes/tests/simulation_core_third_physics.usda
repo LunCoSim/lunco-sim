@@ -1,0 +1,129 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 0.01
+)
+
+def Xform "World"
+{
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 60000.0
+    }
+    def Xform "Host" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 4000.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        float physics:mass = 100.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        bool physics:kinematicEnabled = true
+        custom double3 xformOp:scale = (2.0, 2.0, 2.0)
+        def Xform "Socket"
+        {
+            custom double3 xformOp:translate = (100.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            custom double3 xformOp:rotateXYZ = (0.0, 0.0, 90.0)
+        }
+    }
+    def Xform "Follower" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (200.0, 4100.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float physics:mass = 100.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        custom double3 xformOp:rotateXYZ = (0.0, 0.0, 90.0)
+    }
+    def PhysicsFixedJoint "SocketJoint"
+    {
+        rel physics:body0 = </World/Host/Socket>
+        rel physics:body1 = </World/Follower>
+        point3f physics:localPos0 = (50.0, 0.0, 0.0)
+    }
+    def Xform "WorldFollower" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 100.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+    }
+    def PhysicsFixedJoint "WorldJoint"
+    {
+        rel physics:body1 = </World/WorldFollower>
+    }
+    def Xform "DefaultFollower" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 4000.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 100.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+    }
+    def PhysicsFixedJoint "DefaultJoint"
+    {
+        rel physics:body0 = </World/Host>
+        rel physics:body1 = </World/DefaultFollower>
+    }
+    def Xform "Vehicle" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysxVehicleContextAPI", "PhysxVehicleAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (1000.0, 500.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 100.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        bool physics:kinematicEnabled = true
+        custom token lunco:steeringGeometry = "differential"
+        custom float physxVehicle:minActiveLongitudinalSlipDenominator = 20.0
+        custom float physxVehicle:minPassiveLongitudinalSlipDenominator = 700.0
+        def Cylinder "Wheel" (
+            prepend apiSchemas = ["PhysxVehicleWheelAPI", "PhysxVehicleWheelAttachmentAPI", "PhysxVehicleTireAPI", "PhysicsMaterialAPI", "PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI", "LunCoTireAPI", "LunCoWheelAPI"]
+        )
+        {
+            custom double3 xformOp:translate = (100.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            uniform token axis = "X"
+            double radius = 35.0
+            double height = 20.0
+            float physxVehicleWheel:radius = 35.0
+            float physxVehicleWheel:width = 20.0
+            float physxVehicleWheel:mass = 25.0
+            float physxVehicleWheel:moi = 15312.5
+            float physxVehicleWheel:dampingRate = 5000.0
+            float physxVehicleWheel:maxBrakeTorque = 1200000.0
+            float physxVehicleTire:longitudinalStiffness = 1400000.0
+            float2 physxVehicleTire:lateralStiffnessGraph = (2.0, 1000000.0)
+            float physxVehicleTire:restLoad = 40000.0
+            float physics:dynamicFriction = 1.100000023841858
+            int physxVehicleWheelAttachment:index = 0
+            float lunco:tire:minValidatedSpeed = 0.20000000298023224
+            double3 lunco:wheel:headingAxis = (0.0, 1.0, 0.0)
+            float lunco:suspension:restLength = 0.5
+            float physxVehicleSuspension:travelDistance = 15.0
+            float physxVehicleSuspension:springStrength = 15000.0
+            float physxVehicleSuspension:springDamperRate = 3000.0
+            custom double inputs:drive = 0.0
+            double inputs:drive.connect = </World/Drive.outputs:torque>
+            custom double outputs:shaft_speed = 0.0
+        }
+    }
+    def Xform "Drive" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        custom double outputs:torque = 0.0
+        uniform asset info:sourceAsset = @lunco://models/tests/WheelUnitDrive.mo@
+    }
+}

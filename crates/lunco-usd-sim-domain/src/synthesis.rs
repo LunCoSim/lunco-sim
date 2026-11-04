@@ -1586,9 +1586,9 @@ fn network_boundary_for_target(network: &DomainNetwork, target: &str) -> Option<
 /// actuator prims are physical USD members, not Modelica component facets. The
 /// authored geometry supplies each actuator's moment contribution and an
 /// explicit relationship to the generated network's command output. Modelica
-/// owns the runtime clamp and matrix operation. A rank-deficient actuator
-/// arrangement is an authoring error, not a reason to silently select a
-/// different allocation policy.
+/// owns the runtime clamp and matrix operation. Non-finite or zero-authority
+/// geometry is an authoring error. Underactuated arrangements retain their
+/// authored wrench space and do not select a different allocation policy.
 pub struct ActuatorWrenchSynthesizer;
 
 struct ActuatorWrenchNetwork {

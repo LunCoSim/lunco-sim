@@ -149,11 +149,13 @@ pub(super) fn take_runnable_compile_command(
                 && !source_root_preparation_pending
                 && !pending_entities.contains(entity)
         }
-        ModelicaCommand::UpdateParameters { entity, .. }
-        | ModelicaCommand::Reset { entity, .. } => {
+        ModelicaCommand::UpdateParameters { entity, .. } => {
             !preparation_pending
                 && !source_root_preparation_pending
                 && !pending_entities.contains(entity)
+        }
+        ModelicaCommand::Reset { entity, .. } => {
+            preparation_capacity_available && !pending_entities.contains(entity)
         }
         ModelicaCommand::Despawn { .. } => true,
         ModelicaCommand::LoadSourceRoot { .. } => {
@@ -502,11 +504,16 @@ mod tests {
     }
 
     #[test]
-    fn rebuild_commands_wait_for_owner_preparations() {
-        let pending = std::collections::HashSet::new();
+    fn reset_waits_for_its_owner_and_capacity_but_not_unrelated_preparation() {
+        let pending = std::collections::HashSet::from([ent(2)]);
         let mut compile_lane = VecDeque::from([ModelicaCommand::Reset {
             entity: ent(2),
             session_id: 4,
+            target: lunco_modelica_runtime::ModelicaResetTarget {
+                session_id: 3,
+                model_name: "Plant".into(),
+                library_revision: 0,
+            },
             initial_inputs: Vec::new(),
         }]);
 
@@ -514,8 +521,12 @@ mod tests {
             take_runnable_compile_command(&mut compile_lane, &pending, true, false, true).is_none()
         );
         assert_eq!(compile_lane.len(), 1);
+        let pending = std::collections::HashSet::new();
+        assert!(
+            take_runnable_compile_command(&mut compile_lane, &pending, true, true, false).is_none()
+        );
         assert!(matches!(
-            take_runnable_compile_command(&mut compile_lane, &pending, false, false, true),
+            take_runnable_compile_command(&mut compile_lane, &pending, true, true, true),
             Some(ModelicaCommand::Reset { entity, session_id: 4, .. }) if entity == ent(2)
         ));
     }

@@ -296,7 +296,9 @@ impl PreparationWork {
                 if work.cancelled || sessions.get(&work.entity).copied() != Some(work.session_id) {
                     return false;
                 }
-                if work.library_gen != library_gen {
+                if !matches!(&work.intent, super::CompileIntent::Reset)
+                    && work.library_gen != library_gen
+                {
                     compile_work_error(
                         responses,
                         work,

@@ -73,7 +73,7 @@ pub(super) fn construct(
             )))
         });
         let result = built.map(
-            |((stepper, snapshot, metadata, symbols, mut profile), native_profile)| {
+            |((stepper, snapshot, metadata, symbols, mut profile, retained), native_profile)| {
                 profile.queue_wait_ns = Some(queue_wait_ns);
                 profile.native_code_cache = Some(native_profile);
                 let handle = SessionHandle {
@@ -85,7 +85,7 @@ pub(super) fn construct(
                     last_step_duration_ns: None,
                 };
                 sessions.insert(id, stepper);
-                (handle, snapshot, metadata, symbols, profile)
+                (handle, snapshot, metadata, symbols, profile, retained)
             },
         );
         let _ = tx.send(WorkerPreparationResult::Live(LiveConstructionResult {

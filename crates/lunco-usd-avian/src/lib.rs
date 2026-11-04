@@ -1878,6 +1878,7 @@ fn report_pending_usd_joint_wait(
 fn build_usd_physics_joints(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     // Preparation may run while the world-readiness hold has paused Avian's
     // nested PhysicsSchedule. These filters establish that both USD endpoints
     // are live rigid bodies with a Position slot. They may still carry
@@ -2089,10 +2090,37 @@ fn build_usd_physics_joints(
         // [`admit_pending_joints`]). These entities are spawned only after the
         // drive resolver succeeds, so a deferred computed-property update never
         // leaks one anonymous anchor per retry.
-        let b0 = body0_ent
-            .unwrap_or_else(|| commands.spawn((RigidBody::Static, ScenePhysicsOwned)).id());
-        let b1 = body1_ent
-            .unwrap_or_else(|| commands.spawn((RigidBody::Static, ScenePhysicsOwned)).id());
+        if (world0 || world1) && active_frame.is_none() {
+            report_physics_runtime_fault(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                joint_entity,
+                joint_prim_path.path.clone(),
+                "usd-joint-world-frame-missing",
+                "World-anchored joint has no admitted active physics frame".to_owned(),
+            );
+            continue;
+        }
+        let mut world_anchor = || {
+            let frame = active_frame
+                .as_ref()
+                .expect("validated world endpoint frame")
+                .0;
+            commands
+                .spawn((
+                    RigidBody::Static,
+                    ScenePhysicsOwned,
+                    lunco_core::SceneOwned,
+                    lunco_core::PhysicsPoseAuthoritative,
+                    Position(DVec3::ZERO),
+                    Rotation::default(),
+                    Transform::IDENTITY,
+                    ChildOf(frame),
+                ))
+                .id()
+        };
+        let b0 = body0_ent.unwrap_or_else(&mut world_anchor);
+        let b1 = body1_ent.unwrap_or_else(&mut world_anchor);
         let instance_path = q_instance_member
             .get(joint_entity)
             .map(|member| member.root_path.as_str())
@@ -3348,15 +3376,7 @@ def PhysicsJoint "Generic"
         );
     }
 
-    /// A Z-up / centimetre stage — the Omniverse and Isaac Sim default — must
-    /// convert the joint's AXIS and its AUTHORED anchors, exactly as meshes and
-    /// colliders already do through their local transform composition.
-    ///
-    /// Before doc 41's conversion reached this reader, both were taken raw: the
-    /// hinge rotated about the stage's +Z while the canonical frame's up is +Y,
-    /// and a 100 cm anchor stayed "100 m". Meshes and colliders converted
-    /// correctly, so the assembly LOOKED right and only the physics was wrong —
-    /// the failure mode a regression test has to pin down.
+    /// Canonical joint axes and anchors use the stage's declared convention.
     const ZUP_CM_FIXTURE: &str = r#"#usda 1.0
 (
     upAxis = "Z"
@@ -3381,16 +3401,7 @@ def PhysicsRevoluteJoint "Hinge"
         let j = read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap())
             .expect("revolute joint reads off a Z-up stage");
 
-        // Tolerance is 1e-6, not machine epsilon: `ConventionTransform` stores its
-        // up-axis rotation as an `f32` `Quat`, so `Rx(-90°)` carries ~3e-8 of f32
-        // error that `point_d`/`dir_d` faithfully propagate. That is the real
-        // guarantee — the f64 arms preserve the precision of the INPUT and of the
-        // metres-per-unit multiply, not the rotation's own accuracy. 1e-6 still
-        // catches the bug this test exists for: an unconverted axis is off by a
-        // full 90°, not 3e-8.
-        //
-        // `axis = "Z"` names the STAGE's up. Canonical up is +Y, so Rx(-90°)
-        // must carry it there: (x,y,z) -> (x, z, -y).
+        // Stage +Z is canonical +Y.
         assert!(
             (j.axis - DVec3::Y).length() < 1e-6,
             "joint axis not converted to canonical: {:?} (want +Y)",
@@ -3407,9 +3418,6 @@ def PhysicsRevoluteJoint "Hinge"
         assert_eq!(j.local_pos1, DVec3::ZERO, "origin anchor stays the origin");
     }
 
-    /// Anchors round-trip through `[f32;3]` both when authored and when derived, so
-    /// compare at f32 precision — the point is that the derived value equals what the
-    /// file used to hand-author (byte-identical physics), not full f64 equality.
     fn close(a: DVec3, b: DVec3) -> bool {
         (a - b).length() < 1e-5
     }
@@ -3418,65 +3426,77 @@ def PhysicsRevoluteJoint "Hinge"
         stage_from_source(body)
     }
 
-    const DERIVE_FIXTURE: &str = "#usda 1.0\n(\n\
-    upAxis = \"Y\"\n\
-    metersPerUnit = 1\n\
-)\n\
-def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
-    def Xform \"Wheel\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n    {\n\
-        double3 xformOp:translate = (0.9, -0.65, 1.225)\n\
-        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n\
-    def PhysicsRevoluteJoint \"Hinge\"\n    {\n\
-        rel physics:body0 = </Rover>\n\
-        rel physics:body1 = </Rover/Wheel>\n\
-        uniform token physics:axis = \"X\"\nAUTHORED    }\n}\n";
-
     #[test]
-    fn derives_unauthored_joint_anchor_from_child_translate() {
-        // A wheel placed by its own `xformOp:translate`, jointed to the root with NO
-        // `physics:localPos0/1`. The reader must DERIVE the anchor: lp0 = the wheel's
-        // origin in the root frame (its translate), lp1 = origin. This is what lets
-        // `physical_drivetrain.usda` state each wheel's position once, not twice.
-        let stage = write_and_compose("derive.usda", &DERIVE_FIXTURE.replace("AUTHORED", ""));
-        let j = read_joint_spec(&stage.view(), &SdfPath::new("/Rover/Hinge").unwrap())
-            .expect("revolute joint reads");
-        assert!(
-            close(j.local_pos0, DVec3::new(0.9, -0.65, 1.225)),
-            "lp0 derived from wheel translate: {:?}",
-            j.local_pos0
-        );
-        assert_eq!(j.local_pos1, DVec3::ZERO, "lp1 = body1 origin");
+    fn joint_anchor_defaults_are_independent_of_body_placement_and_world_endpoint() {
+        let source = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Body" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
+{
+    double3 xformOp:translate = (100000001, 2, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+def PhysicsFixedJoint "Joint"
+{
+    rel physics:body0 = </Body>
+    point3f physics:localPos0 = (1, 2, 3)
+}
+"#;
+        let stage = stage_from_source(source);
+        let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Joint").unwrap()).unwrap();
+        assert_eq!(joint.body0_path, "/Body");
+        assert_eq!(joint.body1_path, "");
+        assert_eq!(joint.local_pos0, DVec3::new(1.0, 2.0, 3.0));
+        assert_eq!(joint.local_pos1, DVec3::ZERO);
+        assert_eq!(joint.local_rot1, bevy::math::DQuat::IDENTITY);
+        let stage = stage_from_source(&source.replace("point3f physics:localPos0 = (1, 2, 3)", ""));
+        let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Joint").unwrap()).unwrap();
+        assert_eq!(joint.local_pos0, DVec3::ZERO);
+        assert_eq!(joint.local_pos1, DVec3::ZERO);
     }
 
     #[test]
-    fn authored_anchor_is_not_overridden_by_derivation() {
-        // An explicit `physics:localPos0` must win — derivation fills only an
-        // UNAUTHORED anchors only, so hand-tuned joints never change.
-        let stage = write_and_compose(
-            "authored.usda",
-            &DERIVE_FIXTURE.replace(
-                "AUTHORED",
-                "        point3f physics:localPos0 = (1, 2, 3)\n",
-            ),
-        );
-        let j = read_joint_spec(&stage.view(), &SdfPath::new("/Rover/Hinge").unwrap())
-            .expect("revolute joint reads");
-        assert_eq!(
-            j.local_pos0,
-            DVec3::new(1.0, 2.0, 3.0),
-            "authored lp0 wins over derivation"
-        );
+    fn joint_endpoint_composition_bakes_scale_and_retains_descendant_pose() {
+        let source = r#"#usda 1.0
+(
+    upAxis = "Z"
+    metersPerUnit = 0.01
+)
+def Xform "Body" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
+{
+    double3 xformOp:translate = (10000000000, 0, 0)
+    float3 xformOp:scale = (2, 2, 2)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    def Xform "Socket"
+    {
+        double3 xformOp:translate = (100, 0, 0)
+        float xformOp:rotateZ = 90
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZ"]
+    }
+}
+def Xform "Other" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+def PhysicsFixedJoint "Joint"
+{
+    rel physics:body0 = </Body/Socket>
+    rel physics:body1 = </Other>
+    point3f physics:localPos0 = (100, 0, 0)
+}
+"#;
+        let stage = stage_from_source(source);
+        let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Joint").unwrap()).unwrap();
+        assert_eq!(joint.body0_path, "/Body");
+        assert!(close(joint.local_pos0, DVec3::new(2.0, 0.0, -2.0)));
+        assert!(close(joint.local_rot0 * DVec3::X, -DVec3::Z));
+        assert_eq!(joint.local_pos1, DVec3::ZERO);
+        let source = source.replace("</Body/Socket>", "</Body>");
+        let stage = stage_from_source(&source);
+        let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Joint").unwrap()).unwrap();
+        assert!(close(joint.local_pos0, DVec3::new(2.0, 0.0, 0.0)));
     }
 
-    /// A MOUNTED MECHANISM, in the shape `components/comms/antenna.usda` uses.
-    ///
-    /// The mechanism is a plain `Xform` (`Mount`) parented under a host body, and
-    /// its own joint names THAT XFORM as `body0` — it cannot name the host, which
-    /// it has never heard of. The endpoint must resolve to the nearest ancestor
-    /// body, and the derived anchor must land in THAT body's frame: the mechanism
-    /// sits at (0, 1, 0) on the host and its head 0.5 m above that, so lp0 is the
-    /// head's origin in host coordinates, (0, 1.5, 0) — not (0, 0.5, 0), which is
-    /// what resolving after the anchor derivation would produce.
+    /// A descendant target retains its frame when resolving to a host body.
     const MOUNT_FIXTURE: &str = "#usda 1.0\n(\n\
     upAxis = \"Y\"\n\
     metersPerUnit = 1\n\
@@ -3507,8 +3527,8 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         );
         assert_eq!(j.body1_path, "/Host/Mount/Head", "body1 is already a body");
         assert!(
-            close(j.local_pos0, DVec3::new(0.0, 1.5, 0.0)),
-            "the anchor must be derived in the RESOLVED body's frame: {:?}",
+            close(j.local_pos0, DVec3::new(0.0, 1.0, 0.0)),
+            "the target origin must resolve in the host body's frame: {:?}",
             j.local_pos0
         );
     }
@@ -3556,60 +3576,6 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             .is_none(),
             "physics:jointEnabled = false must suppress the joint"
         );
-    }
-
-    #[test]
-    fn physical_drivetrain_derives_all_four_wheel_anchors() {
-        // `physical_drivetrain.usda` OMITS every localPos0/1. The reader must
-        // reproduce, exactly, the four wheel anchors the file used to type twice.
-        //
-        // The fixture is a FOUR-WHEEL ROVER, not the overlay: the overlay owns the
-        // joints and the ROVER owns the mounts (the wheel prim is the axle in both
-        // realizations, so where a wheel sits is a property of the vehicle and is
-        // authored once, outside the `drivetrain` variantSet). Asking the overlay in
-        // isolation where its wheels are would derive four anchors at the origin and
-        // call that fine — the fragment cannot answer a question the arc resolves.
-        //
-        // Inline topology isolates anchor derivation from asset composition.
-        let mut body = String::from(
-            "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n    upAxis = \"Y\"\n    metersPerUnit = 1\n)\n\
-             def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n",
-        );
-        let mounts = [
-            ("Wheel_FL", DVec3::new(-1.0, -0.65, -1.225)),
-            ("Wheel_FR", DVec3::new(1.0, -0.65, -1.225)),
-            ("Wheel_RL", DVec3::new(-1.0, -0.65, 1.225)),
-            ("Wheel_RR", DVec3::new(1.0, -0.65, 1.225)),
-        ];
-        for (w, p) in mounts {
-            body += &format!(
-                "    def Cylinder \"{w}\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n    {{\n\
-                 \x20       double3 xformOp:translate = ({}, {}, {})\n\
-                 \x20       uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }}\n\
-                 \x20   def PhysicsRevoluteJoint \"{w}_Hinge\"\n    {{\n\
-                 \x20       rel physics:body0 = </Rover>\n\
-                 \x20       rel physics:body1 = </Rover/{w}>\n\
-                 \x20       uniform token physics:axis = \"X\"\n    }}\n",
-                p.x, p.y, p.z
-            );
-        }
-        body += "}\n";
-        let stage = write_and_compose("four_wheel_derive.usda", &body);
-
-        for (w, lp0) in mounts {
-            let name = format!("{w}_Hinge");
-            let j = read_joint_spec(
-                &stage.view(),
-                &SdfPath::new(&format!("/Rover/{name}")).unwrap(),
-            )
-            .unwrap_or_else(|| panic!("{name} reads"));
-            assert!(
-                close(j.local_pos0, lp0),
-                "{name}: anchor derived from the wheel translate: {:?}",
-                j.local_pos0
-            );
-            assert_eq!(j.local_pos1, DVec3::ZERO, "{name}: lp1 = origin");
-        }
     }
 }
 

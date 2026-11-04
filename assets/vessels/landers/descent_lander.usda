@@ -6,7 +6,7 @@
 )
 
 def Xform "DescentLander" (
-    documentation = "A powered-descent lander. Possess it to take the stick: Space thrusts, WASD tilts, Q/E turns. It has no guidance of its own — a scene composes that on."
+    doc = "A powered-descent lander. Possess it to take the stick: Space thrusts, WASD tilts, Q/E turns. It has no guidance of its own — a scene composes that on."
     kind = "assembly"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoProgramAPI", "LunCoUiSchemaAPI", "MaterialBindingAPI"]
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
@@ -1770,7 +1770,7 @@ def Xform "DescentLander" (
     }
     def Scope "Subsystems" (
         prepend apiSchemas = ["LunCoProgramAPI"]
-        documentation = "Reacts to touchdown and propellant events. Does not fly the vehicle."
+        doc = "Reacts to touchdown and propellant events. Does not fly the vehicle."
     )
     {
         uniform token info:implementationSource = "sourceAsset"
@@ -1940,7 +1940,7 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
         custom float3 lunco:forceActuator:direction = (0.0, 1.0, 0.0)
         custom double lunco:forceActuator:maxForce = 89611.1979970336 (
-            documentation = "Reduced-model design envelope: MainChamber nominal_flow_kgs (31.75 kg/s) * effective_exhaust_velocity_mps (2940 m/s) * authored combustion_efficiency, matching CombustionChamber.maximum_thrust_n. This reusable lander is a simulation study; this envelope is not a Griffin flight-engine rating."
+            doc = "Reduced-model design envelope: MainChamber nominal_flow_kgs (31.75 kg/s) * effective_exhaust_velocity_mps (2940 m/s) * authored combustion_efficiency, matching CombustionChamber.maximum_thrust_n. This reusable lander is a simulation study; this envelope is not a Griffin flight-engine rating."
         )
         float inputs:force_command
         float inputs:force_command.connect = </DescentLander/MainPropulsion.outputs:thrust_n>
@@ -4888,6 +4888,7 @@ def Xform "DescentLander" (
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 800.0
         float drive:linear:physics:maxForce = 12000.0
+        point3f physics:localPos0 = (2.5190000534057617, 1.3880000114440918, 0.0)
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
@@ -4906,6 +4907,7 @@ def Xform "DescentLander" (
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 800.0
         float drive:linear:physics:maxForce = 12000.0
+        point3f physics:localPos0 = (-2.5190000534057617, 1.3880000114440918, 0.0)
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
@@ -4924,6 +4926,7 @@ def Xform "DescentLander" (
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 800.0
         float drive:linear:physics:maxForce = 12000.0
+        point3f physics:localPos0 = (0.0, 1.3880000114440918, 2.5190000534057617)
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
@@ -4942,5 +4945,6 @@ def Xform "DescentLander" (
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 800.0
         float drive:linear:physics:maxForce = 12000.0
+        point3f physics:localPos0 = (0.0, 1.3880000114440918, -2.5190000534057617)
     }
 }

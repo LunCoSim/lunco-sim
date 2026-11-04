@@ -24,13 +24,11 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_runner::resolve_setup_bounds;
-use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
+use lunco_modelica_runtime::ModelicaModel;
 
 #[cfg(feature = "api")]
 use lunco_api::{DeferredCommandAppExt, executor::PendingApiRequest};
-#[cfg(feature = "api")]
 use lunco_command_contracts::{Ack, OpId};
-#[cfg(feature = "api")]
 use lunco_core::ActiveCommandId;
 use lunco_core::{Command, on_command, register_commands};
 #[cfg(feature = "api")]
@@ -619,22 +617,44 @@ pub(crate) fn render_compile_class_picker(
 
 // ─── on_compile_model ─────────────────────────────────────────────────────
 
-#[cfg(feature = "api")]
 #[derive(Resource, Default)]
-pub struct PendingCompileCommands(Vec<PendingCompileCommand>);
+pub struct PendingLifecycleCommands(Vec<PendingLifecycleCommand>);
 
-#[cfg(feature = "api")]
-struct PendingCompileCommand {
+struct PendingLifecycleCommand {
     command_id: Option<u64>,
     correlation_id: Option<u64>,
-    reply: lunco_modelica_runtime::ModelicaCompileReply,
+    reply: lunco_modelica_runtime::ModelicaLifecycleReply,
 }
 
-#[cfg(feature = "api")]
-fn finish_compile_commands(world: &mut World) {
+fn finish_modelica_command(
+    world: &mut World,
+    command_id: Option<u64>,
+    correlation_id: Option<u64>,
+    result: Result<Ack, String>,
+) {
+    #[cfg(feature = "api")]
+    lunco_api::executor::finish_command_result(
+        world,
+        command_id,
+        correlation_id,
+        result,
+        lunco_api_core::ApiErrorCode::CommandRejected,
+    );
+    #[cfg(not(feature = "api"))]
+    {
+        let _ = correlation_id;
+        if let Some(id) = command_id {
+            world
+                .resource_mut::<lunco_core::CommandResults>()
+                .record(id, result);
+        }
+    }
+}
+
+fn finish_lifecycle_commands(world: &mut World) {
     let mut completed = Vec::new();
     world
-        .resource_mut::<PendingCompileCommands>()
+        .resource_mut::<PendingLifecycleCommands>()
         .0
         .retain(|pending| {
             if let Some(result) = pending.reply.try_take() {
@@ -645,12 +665,11 @@ fn finish_compile_commands(world: &mut World) {
             }
         });
     for (command_id, correlation_id, result) in completed {
-        lunco_api::executor::finish_command_result(
+        finish_modelica_command(
             world,
             command_id,
             correlation_id,
             result.map(|_| Ack::new(OpId::new())),
-            lunco_api_core::ApiErrorCode::CommandRejected,
         );
     }
 }
@@ -665,23 +684,21 @@ pub fn on_compile_model(
     mut picker: ResMut<CompileClassPickerState>,
     model_tabs: Res<crate::model_tabs::ModelTabs>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    #[cfg(feature = "api")] active_id: Option<Res<ActiveCommandId>>,
+    active_id: Option<Res<ActiveCommandId>>,
     #[cfg(feature = "api")] pending_request: Option<Res<PendingApiRequest>>,
-    #[cfg(feature = "api")] mut pending: ResMut<PendingCompileCommands>,
-    #[cfg(feature = "api")] mut commands: Commands,
+    mut pending: ResMut<PendingLifecycleCommands>,
+    mut commands: Commands,
 ) {
     let request = trigger.event();
-    #[cfg(feature = "api")]
     let command_id = active_id.as_ref().and_then(|id| id.get());
     #[cfg(feature = "api")]
     let correlation_id = pending_request
         .as_ref()
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
-    #[cfg(feature = "api")]
-    let external = command_id.is_some() || correlation_id.is_some();
     #[cfg(not(feature = "api"))]
-    let external = false;
+    let correlation_id = None;
+    let external = command_id.is_some() || correlation_id.is_some();
     let mut resolved_doc = None;
     let admission = (|| -> Result<Option<lunco_modelica_runtime::CompileRequested>, String> {
         let doc = if request.doc_id.is_unassigned() {
@@ -763,14 +780,13 @@ pub fn on_compile_model(
     })();
     match admission {
         Ok(Some(request)) => {
-            #[cfg(feature = "api")]
             let request = {
                 let mut request = request;
                 if external {
                     let (completion, reply) =
-                        lunco_modelica_runtime::ModelicaCompileCompletion::channel();
+                        lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
                     request.completions.push(completion);
-                    pending.0.push(PendingCompileCommand {
+                    pending.0.push(PendingLifecycleCommand {
                         command_id,
                         correlation_id,
                         reply,
@@ -786,15 +802,8 @@ pub fn on_compile_model(
                 compile_states.set_error_message(doc, error.clone());
             }
             console.error(error.clone());
-            #[cfg(feature = "api")]
             commands.queue(move |world: &mut World| {
-                lunco_api::executor::finish_command_result(
-                    world,
-                    command_id,
-                    correlation_id,
-                    Err(error),
-                    lunco_api_core::ApiErrorCode::CommandRejected,
-                );
+                finish_modelica_command(world, command_id, correlation_id, Err(error));
             });
         }
     }
@@ -1928,84 +1937,54 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
 pub fn on_reset_active_model(
     trigger: On<ResetActiveModel>,
     mut commands: Commands,
-    #[cfg(feature = "api")] active_id: Option<Res<ActiveCommandId>>,
+    active_id: Option<Res<ActiveCommandId>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     #[cfg(feature = "api")] pending_request: Option<Res<PendingApiRequest>>,
 ) {
     let raw = trigger.event().doc_id;
-    #[cfg(feature = "api")]
+    let doc = if raw.is_unassigned() {
+        workspace
+            .as_ref()
+            .and_then(|workspace| workspace.active_document)
+    } else {
+        Some(raw)
+    };
     let command_id = active_id.as_ref().and_then(|id| id.get());
     #[cfg(feature = "api")]
     let correlation_id = pending_request
         .as_ref()
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
     commands.queue(move |world: &mut World| {
-        let result = reset_active_model(world, raw);
-        if let Err(message) = &result {
-            bevy::log::warn!("ResetActiveModel rejected: {message}");
+        let (completion, reply) = lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
+        let result = doc
+            .ok_or_else(|| "No Modelica document selected".to_owned())
+            .and_then(|doc| {
+                lunco_modelica_execution::reset_modelica_document(world, doc, completion)
+            });
+        match result {
+            Ok(()) => {
+                world
+                    .resource_mut::<PendingLifecycleCommands>()
+                    .0
+                    .push(PendingLifecycleCommand {
+                        command_id,
+                        correlation_id,
+                        reply,
+                    })
+            }
+            Err(message) => {
+                bevy::log::warn!("ResetActiveModel rejected: {message}");
+                world.commands().trigger(lunco_core::RuntimeError {
+                    name: "modelica-reset-rejected".into(),
+                    message: message.clone(),
+                });
+                finish_modelica_command(world, command_id, correlation_id, Err(message));
+            }
         }
-        #[cfg(feature = "api")]
-        lunco_api::executor::finish_command_result(
-            world,
-            command_id,
-            correlation_id,
-            result.map(|()| Ack::new(OpId::new())),
-            lunco_api_core::ApiErrorCode::CommandRejected,
-        );
     });
-}
-
-fn reset_active_model(world: &mut World, raw: lunco_doc::DocumentId) -> Result<(), String> {
-    let doc = resolve_doc_or_active(world, raw).ok_or("No Modelica document selected")?;
-    let entity = entity_for_doc(world, doc).ok_or("The document has no runtime participant")?;
-    let model = world
-        .get::<ModelicaModel>(entity)
-        .ok_or("The document has no live Modelica model")?;
-    let session_id = model
-        .session_id
-        .checked_add(1)
-        .ok_or("Modelica session identity exhausted")?;
-    let initial_inputs = model
-        .inputs
-        .iter()
-        .map(|(name, value)| (name.to_owned(), *value))
-        .collect();
-    let channels = world
-        .get_resource::<lunco_modelica_runtime::ModelicaChannels>()
-        .ok_or("Modelica worker transport is unavailable")?
-        .tx
-        .clone();
-    let Some(mut variables) = world.get_mut::<ModelicaVariables>(entity) else {
-        let message = format!("participant {entity:?} has no required variable state");
-        if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
-            faults.raise(
-                "modelica-variables-missing",
-                Some(entity),
-                "ModelicaVariables",
-                message.clone(),
-            );
-        }
-        return Err(message);
-    };
-    variables.values.clear();
-    drop(variables);
-    let mut model = world
-        .get_mut::<ModelicaModel>(entity)
-        .expect("validated live participant");
-    model.session_id = session_id;
-    model.is_stepping = true;
-    model.in_flight_step = None;
-    model.pending_step_inputs = None;
-    model.next_step_id = 1;
-    model.clear_clock();
-    drop(model);
-    channels
-        .send(lunco_modelica_runtime::ModelicaCommand::Reset {
-            entity,
-            session_id,
-            initial_inputs,
-        })
-        .map_err(|error| format!("Modelica reset dispatch failed: {error}"))
 }
 
 // ─── Compile command plugin ────────────────────────────────────────────────
@@ -2030,9 +2009,9 @@ impl Plugin for CompileCommandsPlugin {
         app.register_deferred_command::<ResetActiveModel>()
             .register_deferred_command::<RunActiveModel>();
         #[cfg(feature = "api")]
-        app.register_deferred_command::<CompileModel>()
-            .init_resource::<PendingCompileCommands>()
-            .add_systems(Update, finish_compile_commands);
+        app.register_deferred_command::<CompileModel>();
+        app.init_resource::<PendingLifecycleCommands>()
+            .add_systems(Update, finish_lifecycle_commands);
     }
 }
 

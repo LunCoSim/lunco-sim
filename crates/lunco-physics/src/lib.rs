@@ -32,6 +32,7 @@ pub mod drive;
 pub mod escape;
 pub mod force_ports;
 pub mod joint;
+mod joint_reaction;
 pub mod kinematics;
 pub mod occlusion;
 pub mod order;
@@ -1191,9 +1192,11 @@ pub struct PhysicsGatePlugin;
 
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
+        joint_reaction::install(app);
         pose::register_spatial_query_providers(app);
         kinematics::install(app);
         app.register_type::<avian3d::prelude::SleepThreshold>()
+            .register_type::<avian3d::prelude::JointDisabled>()
             .register_type::<PhysicsInitializationPolicy>()
             .register_type::<PhysicsObjectPaused>()
             .register_type::<UnboundedPhysicsDomain>()

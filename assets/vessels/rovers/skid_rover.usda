@@ -6,9 +6,9 @@
 )
 
 def Xform "SkidRover" (
-    documentation = "Four-wheel skid-steer lunar rover with selectable raycast or joint-based drivetrain."
+    doc = "Four-wheel skid-steer lunar rover with selectable raycast or joint-based drivetrain."
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components", "PhysxVehicleAPI"]
     prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
     prepend variantSets = ["drivetrain", "power", "generation", "thermal"]
     variants = { string "drivetrain" = "raycast"; string "generation" = "none"; string "power" = "infinite"; string "thermal" = "none" }
@@ -31,7 +31,7 @@ def Xform "SkidRover" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
             over "Suspension_FL" (
-                prepend apiSchemas = "PhysicsRigidBodyAPI"
+                prepend apiSchemas = ["PhysicsRigidBodyAPI"]
             )
             {
                 over "Wheel_FL" (
@@ -44,7 +44,7 @@ def Xform "SkidRover" (
                 }
             }
             over "Suspension_FR" (
-                prepend apiSchemas = "PhysicsRigidBodyAPI"
+                prepend apiSchemas = ["PhysicsRigidBodyAPI"]
             )
             {
                 over "Wheel_FR" (
@@ -57,7 +57,7 @@ def Xform "SkidRover" (
                 }
             }
             over "Suspension_RL" (
-                prepend apiSchemas = "PhysicsRigidBodyAPI"
+                prepend apiSchemas = ["PhysicsRigidBodyAPI"]
             )
             {
                 over "Wheel_RL" (
@@ -70,7 +70,7 @@ def Xform "SkidRover" (
                 }
             }
             over "Suspension_RR" (
-                prepend apiSchemas = "PhysicsRigidBodyAPI"
+                prepend apiSchemas = ["PhysicsRigidBodyAPI"]
             )
             {
                 over "Wheel_RR" (
@@ -82,7 +82,22 @@ def Xform "SkidRover" (
                     rel physics:filteredPairs = </SkidRover/Chassis>
                 }
             }
-
+            over "Suspension_FL_Slider"
+            {
+                point3f physics:localPos0 = (-1.0, -0.6499999761581421, -1.225000023841858)
+            }
+            over "Suspension_FR_Slider"
+            {
+                point3f physics:localPos0 = (1.0, -0.6499999761581421, -1.225000023841858)
+            }
+            over "Suspension_RL_Slider"
+            {
+                point3f physics:localPos0 = (-1.0, -0.6499999761581421, 1.225000023841858)
+            }
+            over "Suspension_RR_Slider"
+            {
+                point3f physics:localPos0 = (1.0, -0.6499999761581421, 1.225000023841858)
+            }
         }
     }
     variantSet "power" = {
@@ -264,8 +279,8 @@ def Xform "SkidRover" (
         }
         "basic" {
             def Scope "Thermal" (
-                prepend apiSchemas = "CollectionAPI:components"
-                documentation = "Rover thermal control network: motor dissipation → masses → radiators."
+                prepend apiSchemas = ["CollectionAPI:components"]
+                doc = "Rover thermal control network: motor dissipation → masses → radiators."
             )
             {
                 uniform token collection:components:expansionRule = "explicitOnly"

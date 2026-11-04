@@ -2,12 +2,9 @@
 (
     defaultPrim = "ConnectionPreflight"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# A deliberately small, schema-neutral USD dataflow fixture. The connection
-# linter must inspect standard typed attributes even when the sink has no
-# LunCo-specific API schema.
 def Xform "ConnectionPreflight"
 {
     def Scope "Scenario" (
@@ -17,16 +14,11 @@ def Xform "ConnectionPreflight"
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://scenarios/tests/connection_preflight.rhai@
     }
-
     def Xform "Source"
     {
         float outputs:valid = 1.0
         double outputs:wide = 2.0
     }
-
-    # Physics state ports are published by Avian at projection time rather
-    # than authored as USD attributes. The linter must accept the real port and
-    # reject a typo in the same dynamic surface.
     def Xform "RuntimeBody" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI"]
     )
@@ -37,11 +29,6 @@ def Xform "ConnectionPreflight"
         {
         }
     }
-
-    # Standard joint prims publish their cosim ports from the projected Avian
-    # joint, not from authored `outputs:` attributes. Keep both native joint
-    # types in this fixture so the connection linter cannot mistake a valid
-    # standard provider for a missing authored property.
     def Cube "RevoluteBody0" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
@@ -52,7 +39,6 @@ def Xform "ConnectionPreflight"
         float physics:mass = 1.0
         bool physics:kinematicEnabled = true
     }
-
     def Cube "RevoluteBody1" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
@@ -63,14 +49,13 @@ def Xform "ConnectionPreflight"
         float physics:mass = 1.0
         bool physics:kinematicEnabled = true
     }
-
     def PhysicsRevoluteJoint "RuntimeHinge"
     {
         rel physics:body0 = </ConnectionPreflight/RevoluteBody0>
         rel physics:body1 = </ConnectionPreflight/RevoluteBody1>
         uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0.0, 0.0, 1.0)
     }
-
     def Cube "PrismaticBody0" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
@@ -81,7 +66,6 @@ def Xform "ConnectionPreflight"
         float physics:mass = 1.0
         bool physics:kinematicEnabled = true
     }
-
     def Cube "PrismaticBody1" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
@@ -92,27 +76,34 @@ def Xform "ConnectionPreflight"
         float physics:mass = 1.0
         bool physics:kinematicEnabled = true
     }
-
     def PhysicsPrismaticJoint "RuntimeSlider"
     {
         rel physics:body0 = </ConnectionPreflight/PrismaticBody0>
         rel physics:body1 = </ConnectionPreflight/PrismaticBody1>
         uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0.0, 1.0, 0.0)
     }
-
     def Xform "Sink"
     {
+        float inputs:valid
         float inputs:valid.connect = </ConnectionPreflight/Source.outputs:valid>
+        float inputs:missing_property
         float inputs:missing_property.connect = </ConnectionPreflight/Source.outputs:ghost>
+        float inputs:missing_prim
         float inputs:missing_prim.connect = </ConnectionPreflight/Ghost.outputs:signal>
+        float inputs:type_mismatch
         float inputs:type_mismatch.connect = </ConnectionPreflight/Source.outputs:wide>
+        float inputs:runtime_valid
         float inputs:runtime_valid.connect = </ConnectionPreflight/RuntimeBody.outputs:position_x>
+        float inputs:runtime_missing
         float inputs:runtime_missing.connect = </ConnectionPreflight/RuntimeBody.outputs:positon_x>
+        float inputs:runtime_invalid
         float inputs:runtime_invalid.connect = </ConnectionPreflight/RuntimeBody.position_x>
+        float inputs:revolute_valid
         float inputs:revolute_valid.connect = </ConnectionPreflight/RuntimeHinge.outputs:angle>
+        float inputs:prismatic_valid
         float inputs:prismatic_valid.connect = </ConnectionPreflight/RuntimeSlider.outputs:displacement>
     }
-
     def DistantLight "TestLight"
     {
         float intensity = 1.0

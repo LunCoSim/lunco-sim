@@ -54,6 +54,20 @@ world-space cooked hull/mesh vertices also carry the f64 rigid
 `local_to_stage` pose of their scaled cooking frame. Inverting that pose
 recovers section-local dimensions without treating a rotated stage AABB as
 a local box or borrowing the renderer's f32 transform;
+
+`UsdSimPlugin` consumes committed `UsdSceneChangeBatch` notices after Lifecycle
+and before physics geometry admission to refresh affected actuator, wheel and
+reduced-mass mounts. Initial and live projection use the same composed readers,
+including ancestor edits, and compare body-relative values before mutation.
+Whole-assembly moves preserve unchanged mount metadata. Force directions and
+torque axes include the prim-to-body rotation and stage convention. Invalid
+mounts publish `usd-physical-mount-invalid` through RuntimeError, fault the
+operation and hold physics. Mount edits do not rebuild the scene.
+Domain synthesis consumes transform notices through its existing root/member
+dependency index as well: generated allocator geometry must change with its
+actuators. Source fingerprints suppress replacement when the generated source
+is unchanged.
+
 `lunco-usd-bevy-core` owns the generic runtime projection mechanisms and
 domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
@@ -1473,7 +1487,7 @@ time code. `timeCodesPerSecond` maps presentation seconds to that stage's time
 codes. Native ordered-transform variation and consumed appearance samples determine
 `UsdAnimated`; the per-frame samplers then drive:
 
-- **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose ordered translation cannot be split with its authored meaning intact is rejected visibly. A translation attribute omitted from `xformOpOrder` is inert and does not block projection.
+- **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose ordered translation cannot be split with its authored meaning intact is rejected visibly. A translation attribute omitted from `xformOpOrder` is inert and does not block projection. Live edits use the composed f64 matrix translation for that same cell split, so an intermediate render `Transform` cannot narrow canonical positions.
 - **Visibility** — animated `visibility` token (held).
 - **Material** — animated `inputs:diffuseColor` / `inputs:opacity` (and geom
   `primvars:displayColor`) into the entity's **`PbrLook`** — the render-free appearance

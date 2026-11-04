@@ -44,6 +44,13 @@ can originate in a different layer.
 see is a rendering of a prim. Nothing is authoritative because it is in the
 world; it is in the world because it is in the document.
 
+For live physical mount edits, follow the notice-driven owner in
+[USD Domain](../../docs/architecture/21-domain-usd.md). Check both native mount
+metadata and any generated allocator source; both consume the committed USD
+revision. Do not rebuild a scene or clear a one-shot projection marker for a
+mount transform edit. The third-pass production gates exercise native refresh,
+ancestor edits, wheel units and non-crashing invalid authored state.
+
 That single sentence generates every rule below.
 
 Native USD dependencies are pinned at Rust `openusd` 0.8.0 with

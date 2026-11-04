@@ -478,8 +478,8 @@ fn standard_joint_type(type_name) {
 /// Check explicit joint bodies, axis and optional frame opinions. Omitted
 /// primary axes on revolute, prismatic and spherical joints mean standard X.
 /// Fixed, distance and generic joints have no single primary axis. Omitted
-/// `physics:localPos*` values are valid when the engine's documented derived
-/// anchor contract is intended; set `require_positions` only for joints whose
+/// `physics:localPos*` values independently use the standard zero default in
+/// their relationship target's frame; set `require_positions` only for joints whose
 /// asset contract requires authored anchors.
 fn joint_frame_report(doc, joints) {
     let frames = [];

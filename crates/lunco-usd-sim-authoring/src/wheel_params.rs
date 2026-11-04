@@ -45,10 +45,71 @@
 
 use bevy_ecs::entity::Entity;
 use bevy_math::DVec3;
-use lunco_mobility::{Suspension, TireLateralStiffnessGraph, WheelRaycast};
+use lunco_mobility::{
+    LongitudinalSlipDenominators, Suspension, TireLateralStiffnessGraph, WheelRaycast,
+};
 use lunco_usd_bevy_stage::read::{UsdReadObject, read_vec3_f64};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
+
+/// Resolve the authored vehicle context shared by mount geometry and tire laws.
+pub fn vehicle_context_path(reader: &dyn UsdReadObject, wheel: &SdfPath) -> Option<SdfPath> {
+    let mut path = wheel.clone();
+    loop {
+        if reader.has_api_schema(&path, "PhysxVehicleContextAPI") {
+            return Some(path);
+        }
+        path = path.parent()?;
+    }
+}
+
+fn read_longitudinal_slip_denominators(
+    reader: &dyn UsdReadObject,
+    wheel: &SdfPath,
+) -> Result<LongitudinalSlipDenominators, Vec<String>> {
+    let Some(owner) = vehicle_context_path(reader, wheel) else {
+        // Reusable parameter fragments have no enclosing vehicle opinions.
+        // Native admission separately requires a real vehicle mount owner.
+        return Ok(LongitudinalSlipDenominators::default());
+    };
+    if reader.has_authored_attribute(&owner, "physxVehicle:minLongitudinalSlipDenominator") {
+        return Err(vec![format!(
+            "{owner}.physxVehicle:minLongitudinalSlipDenominator is deprecated; replace it with physxVehicle:minPassiveLongitudinalSlipDenominator",
+        )]);
+    }
+    let convention = lunco_usd_bevy_stage::stage_convention(reader)
+        .map_err(|error| vec![format!("invalid vehicle stage convention: {error}")])?;
+    let defaults = LongitudinalSlipDenominators::default();
+    let read = |name: &str, default: f64| -> Result<f64, Vec<String>> {
+        let value = match reader.real(&owner, name) {
+            None if !reader.has_authored_attribute(&owner, name) => return Ok(default),
+            Some(0.0) => return Ok(default),
+            Some(value) if value.is_finite() && value > 0.0 => convention.length(value),
+            value => {
+                return Err(vec![format!(
+                    "{owner}.{name}={value:?} requires a finite positive speed or the standard zero sentinel",
+                )]);
+            }
+        };
+        if value.is_finite() && value > 0.0 {
+            Ok(value)
+        } else {
+            Err(vec![format!(
+                "{owner}.{name} does not resolve to a finite positive m/s value"
+            )])
+        }
+    };
+    Ok(LongitudinalSlipDenominators {
+        active_mps: read(
+            "physxVehicle:minActiveLongitudinalSlipDenominator",
+            defaults.active_mps,
+        )?,
+        passive_mps: read(
+            "physxVehicle:minPassiveLongitudinalSlipDenominator",
+            defaults.passive_mps,
+        )?,
+    })
+}
 
 /// Authored suspension compliance, shared by both wheel implementations. The
 /// raycast wheel emulates this spring analytically; a joint wheel is a rigid
@@ -308,6 +369,8 @@ pub struct WheelParams {
     pub lateral_stiffness_graph: TireLateralStiffnessGraph,
     /// Lower edge of the tire's measured steady-state cornering-speed envelope.
     pub min_validated_speed: f64,
+    /// Standard vehicle-level positive longitudinal slip speeds, m/s.
+    pub longitudinal_slip_denominators: LongitudinalSlipDenominators,
     /// Coulomb μ from the wheel's standard `UsdPhysicsMaterialAPI`, composed
     /// through the `tire` variant. Both realizations use it as the shared tire
     /// cone; Avian's generic tangent friction is disabled for jointed tire
@@ -407,8 +470,22 @@ impl WheelParams {
 
         let convention = lunco_usd_bevy_stage::stage_convention(reader)
             .map_err(|error| vec![format!("invalid wheel stage convention: {error}")])?;
+        let longitudinal_slip_denominators = read_longitudinal_slip_denominators(reader, wheel)?;
         let axle_axis = convention.dir_d(axle_axis);
         let heading_axis = convention.dir_d(heading_axis);
+        // Standard PhysX quantities use the stage's length unit. Mass units
+        // have already been admitted as kilograms by the stage convention.
+        // The LunCo rest length and validated-speed extensions declare SI.
+        let radius = convention.length(radius);
+        let width = convention.length(width);
+        let moment_of_inertia = convention.length(convention.length(moment_of_inertia));
+        let bearing_damping = convention.length(convention.length(bearing_damping));
+        let brake_torque_max = convention.length(convention.length(brake_torque_max));
+        let slip_stiffness = convention.length(slip_stiffness);
+        let rest_load = convention.length(rest_load);
+        lateral_stiffness_graph.max_stiffness =
+            convention.length(lateral_stiffness_graph.max_stiffness);
+        lateral_stiffness_graph.rest_load = rest_load;
 
         validate_wheel_values(
             &mut missing,
@@ -488,6 +565,7 @@ impl WheelParams {
             slip_stiffness,
             lateral_stiffness_graph,
             min_validated_speed,
+            longitudinal_slip_denominators,
             friction_mu,
             heading_axis,
             suspension,
@@ -508,6 +586,7 @@ impl WheelParams {
             slip_stiffness: self.slip_stiffness,
             lateral_stiffness_graph: self.lateral_stiffness_graph,
             min_validated_speed: self.min_validated_speed,
+            longitudinal_slip_denominators: self.longitudinal_slip_denominators,
             friction_mu: self.friction_mu,
             bearing_damping: self.bearing_damping,
             heading_local,
@@ -547,6 +626,7 @@ impl WheelParams {
         wheel.slip_stiffness = self.slip_stiffness;
         wheel.lateral_stiffness_graph = self.lateral_stiffness_graph;
         wheel.min_validated_speed = self.min_validated_speed;
+        wheel.longitudinal_slip_denominators = self.longitudinal_slip_denominators;
         wheel.brake_torque_max = self.brake_torque_max;
         wheel.heading_axis = self.heading_axis;
         wheel.axle_axis = self.axle_axis;
@@ -609,6 +689,9 @@ fn read_suspension_attrs(
     else {
         unreachable!("missing suspension values were rejected above")
     };
+    let convention = lunco_usd_bevy_stage::stage_convention(reader)
+        .map_err(|error| vec![format!("invalid suspension stage convention: {error}")])?;
+    let travel_distance = convention.length(travel_distance);
     let mut invalid = Vec::new();
     validate_suspension_values(&mut invalid, rest_length, spring_k, damping_c);
     validate_nonnegative(

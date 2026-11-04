@@ -51,7 +51,8 @@ pub use bridge::{
     spawn_modelica_requests, validate_modelica_variable_ownership,
 };
 pub use compile::{
-    PendingCompileAdmissions, PendingCompileCompletion, dispatch_modelica_compile_requests,
+    PendingCompileAdmissions, PendingLifecycleCompletion, dispatch_modelica_compile_requests,
+    reset_modelica_document,
 };
 #[cfg(not(target_arch = "wasm32"))]
 mod compiler_actor;
@@ -207,7 +208,24 @@ type BuiltStepper<S> = (
     std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
     Vec<(String, f64)>,
     lunco_modelica_runtime::ModelicaConstructionProfile,
+    RetainedLiveModel,
 );
+
+#[derive(Clone)]
+struct RetainedLiveModel {
+    component: Arc<rumoca_ir_solve::fmi::FmiComponent>,
+    plan: LiveBuildPlan,
+}
+
+impl LiveBuildPlan {
+    fn with_initial_inputs(&self, inputs: &[(String, f64)]) -> Self {
+        let mut plan = self.clone();
+        let inputs = canonical_parameter_overrides(inputs);
+        plan.options.initial_inputs = inputs.clone();
+        Arc::make_mut(&mut plan.snapshot).initial_inputs = inputs;
+        plan
+    }
+}
 
 #[cfg(test)]
 fn test_checked_interface() -> Arc<lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface>
@@ -342,10 +360,11 @@ fn build_stepper(
 }
 
 fn build_prepared_stepper(
-    model: &rumoca_ir_solve::fmi::FmiComponent,
+    component: &Arc<rumoca_ir_solve::fmi::FmiComponent>,
     mut plan: LiveBuildPlan,
 ) -> Result<BuiltStepper<LiveStepper>, rumoca_sim::SimulationDiagnosticError> {
     let started = web_time::Instant::now();
+    let model = component.as_ref();
     let constrained;
     let model = if let Some(values) = &plan.initial_state_values {
         let constraints = model
@@ -384,6 +403,10 @@ fn build_prepared_stepper(
         }
     } else {
         model
+    };
+    let retained = RetainedLiveModel {
+        component: Arc::clone(component),
+        plan: plan.clone(),
     };
     let stepper = {
         let _span = bevy::log::info_span!("modelica_live_session_construct").entered();
@@ -457,6 +480,7 @@ fn build_prepared_stepper(
         variable_metadata,
         symbols,
         construction_profile,
+        retained,
     ))
 }
 
@@ -1110,16 +1134,8 @@ fn send_compile_artifact_error(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn admit_preparation(
-    work: PreparationWork,
-    prepared: &mut PreparedSolveCache,
-    tx: &ModelicaResponseSender,
-    pool: &mut ModelicaWorkerPools,
-    pipeline: &mut LivePreparationPipeline,
-    pending: &mut HashMap<u64, PreparationWork>,
-) {
-    let id = pool.allocate_id();
-    let lane = match &work {
+fn construction_lane(work: &PreparationWork, pool: &mut ModelicaWorkerPools) -> ConstructionLane {
+    match work {
         PreparationWork::Participant(work) => {
             ConstructionLane::Participant(match work.execution_domain {
                 lunco_modelica_runtime::ModelicaExecutionDomain::Scene => {
@@ -1133,7 +1149,20 @@ fn admit_preparation(
         PreparationWork::Initialization(_) => {
             ConstructionLane::Initialization(pool.pool.next_lane())
         }
-    };
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn admit_preparation(
+    work: PreparationWork,
+    prepared: &mut PreparedSolveCache,
+    tx: &ModelicaResponseSender,
+    pool: &mut ModelicaWorkerPools,
+    pipeline: &mut LivePreparationPipeline,
+    pending: &mut HashMap<u64, PreparationWork>,
+) {
+    let id = pool.allocate_id();
+    let lane = construction_lane(&work, pool);
     let lookup_started = web_time::Instant::now();
     if let Some(component) = prepared.get(&work.plan().key).cloned() {
         log::info!(
@@ -1233,7 +1262,14 @@ fn install_compile_work(
     )
     .entered();
     match stepper_result {
-        Ok((stepper, live_solver_snapshot, variable_metadata, symbols, construction_profile)) => {
+        Ok((
+            stepper,
+            live_solver_snapshot,
+            variable_metadata,
+            symbols,
+            construction_profile,
+            retained,
+        )) => {
             send_preparation_phase(
                 tx,
                 work.entity,
@@ -1283,7 +1319,7 @@ fn install_compile_work(
                     compiled: comp_res.clone(),
                     unit_hash,
                     library_gen,
-                    live_solver_snapshot: live_solver_snapshot.clone(),
+                    retained,
                     pending_variable_metadata: pending_metadata,
                 },
             );
@@ -1946,25 +1982,17 @@ fn commit_ready_compiler_completions(
 
 use std::sync::Arc;
 
-/// Cached compilation result per entity.
-///
-/// The checked runtime DAE is shared through an `Arc`; Reset
-/// and Step auto-init can rebuild from it without touching the compiler while
-/// the library generation matches. If solve IR is absent, disk cache access
-/// and lowering run through the asynchronous preparation pool.
-///
-/// The artifact is valid only for what it was built from: `unit_hash` keys the
-/// assembled [`CompileUnit`] (original primary + extras + model name + session
-/// URI), and `library_gen` records the worker's library generation (bumped on
-/// every `LoadSourceRoot`). Native rebuilds validate both before reusing the
-/// artifact; wasm rebuilds refresh it through [`rebuild_from_cache`].
+/// Installed source/artifact context and its immutable live-session factory.
+/// Reset uses the retained FMI component and exact admitted plan, independent
+/// of mutable compiler revisions and shared-cache eviction. Source-backed
+/// recompilation is reserved for new authoring or Step auto-initialization.
 struct CachedModel {
     #[cfg(not(target_arch = "wasm32"))]
     execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain,
     model_name: String,
     source: Arc<str>,
     /// Sibling docs the model was compiled with, raw like `source`. Replayed
-    /// on a cache-invalidating recompile so Reset and Step auto-init resolve
+    /// on a cache-invalidating recompile so Step auto-init resolves
     /// the same source closure as Compile.
     extra_sources: Vec<(String, String)>,
     /// Instance parameter values passed to checked FMI preparation. Reapplied if a
@@ -1974,7 +2002,7 @@ struct CachedModel {
     expected_library_revision: Option<u64>,
     initial_state_values: Option<Vec<(String, f64)>>,
     /// The document's stable session URI (see `ModelicaCommand::Compile`'s
-    /// `doc_uri`). Every cached-source recompile — Reset, Step auto-init,
+    /// `doc_uri`). Every cached-source recompile — Step auto-init or
     /// UpdateParameters — re-seats under this SAME key so the reused rumoca
     /// session never holds the document under two filenames.
     doc_uri: String,
@@ -1984,8 +2012,8 @@ struct CachedModel {
     unit_hash: u64,
     /// Worker library generation at the time `compiled` was built.
     library_gen: u64,
-    /// The resolved solver plan used by the installed or rebuildable stepper.
-    live_solver_snapshot: Arc<ModelicaLiveSolverSnapshot>,
+    /// Exact immutable prepared component and plan used by the installed session.
+    retained: RetainedLiveModel,
     pending_variable_metadata:
         Option<std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>>,
 }
@@ -2062,6 +2090,27 @@ impl CachedModel {
             merge_instance_values(&unit.parameter_overrides, &[(name, value)]);
         unit
     }
+}
+
+fn validate_reset_target(
+    cached: Option<&CachedModel>,
+    installed: Option<(u64, &str)>,
+    current_session: Option<u64>,
+    target: &lunco_modelica_runtime::ModelicaResetTarget,
+) -> Result<(), String> {
+    let cached = cached.ok_or("Reset requires a cached compiled model")?;
+    if installed != Some((target.session_id, target.model_name.as_str()))
+        || current_session != Some(target.session_id)
+        || cached.model_name != target.model_name
+    {
+        return Err("Reset installed target was superseded before cached reconstruction".into());
+    }
+    if cached.retained.plan.snapshot.admitted_library_revision != Some(target.library_revision) {
+        return Err(
+            "Reset cached source-library identity differs from the installed session".into(),
+        );
+    }
+    Ok(())
 }
 
 /// A compiled artifact belongs to one exact source unit and source-root revision.
@@ -2348,7 +2397,6 @@ fn artifact_still_valid(cached_hash: u64, cached_gen: u64, hash: u64, library_ge
 /// source set, plus everything the caller needs to seat a fresh stepper.
 #[cfg(target_arch = "wasm32")]
 struct CacheRebuild {
-    model_name: String,
     source: Arc<str>,
     /// Revision of the compiler-owned source roots used by this artifact.
     library_revision: Option<u64>,
@@ -2414,7 +2462,6 @@ fn rebuild_from_cache(
             .compiled
             .clone();
         return Some(CacheRebuild {
-            model_name,
             source: diagnostic_source,
             library_revision,
             parameter_overrides,
@@ -2433,7 +2480,6 @@ fn rebuild_from_cache(
         }
     }
     Some(CacheRebuild {
-        model_name,
         source: diagnostic_source,
         library_revision: Some(result.library_revision),
         parameter_overrides,
@@ -3630,82 +3676,82 @@ pub fn modelica_worker(
                     ModelicaCommand::Reset {
                         entity,
                         session_id,
+                        target,
                         initial_inputs,
                     } => {
-                        current_sessions.insert(entity, session_id);
-
-                        if let Some((_, _, stepper)) = steppers.get(&entity) {
-                            match stepper.capture_initial_inputs() {
-                                Ok(inputs) => {
-                                    if let Some(cached) = cached_models.get_mut(&entity) {
-                                        cached.initial_inputs = inputs;
-                                    }
-                                }
-                                Err(error) => {
-                                    let mut result = reset_ok(
-                                        entity,
-                                        session_id,
-                                        Vec::new(),
-                                        Vec::new(),
-                                        "Reset rejected.",
-                                    );
-                                    result.error = Some(error.to_string());
-                                    let _ = tx_inner.send(result);
-                                    return;
-                                }
-                            }
+                        if let Err(error) = validate_reset_target(
+                            cached_models.get(&entity),
+                            steppers
+                                .get(&entity)
+                                .map(|(session, name, _)| (*session, name.as_str())),
+                            current_sessions.get(&entity).copied(),
+                            &target,
+                        ) {
+                            let mut result = reset_ok(
+                                entity,
+                                session_id,
+                                Vec::new(),
+                                Vec::new(),
+                                "Reset rejected.",
+                            );
+                            result.error = Some(error);
+                            let _ = tx_inner.send(result);
+                            return;
                         }
-
-                        if let Some(cached) = cached_models.get_mut(&entity) {
-                            merge_initial_inputs(&mut cached.initial_inputs, &initial_inputs);
-                        }
-
-                        // Rebuild from the cached DAE. A changed library set
-                        // recompiles through the Rumoca actor; a missing solve
-                        // model is loaded/lowered through the preparation pool.
-                        if let Some(cached) =
-                            native_cached_rebuild(&cached_models, entity, library_revision)
+                        let cached = cached_models.get(&entity).expect("validated reset cache");
+                        let captured = match steppers
+                            .get(&entity)
+                            .expect("validated reset session")
+                            .2
+                            .capture_initial_inputs()
                         {
-                            if !cached.artifact_is_valid(library_gen) {
-                                let (pending, unit) = cached.into_pending_compile(
+                            Ok(inputs) => inputs,
+                            Err(error) => {
+                                send_compile_stepper_error(
+                                    &tx_inner,
                                     entity,
                                     session_id,
-                                    library_gen,
-                                    CompileIntent::Reset,
-                                );
-                                submit_pending_compile(
-                                    pending,
-                                    unit,
-                                    &mut compiler,
-                                    &mut compiler_order,
-                                    &mut pending_compiles,
-                                    &tx_inner,
+                                    &cached.source,
+                                    &error,
+                                    &CompileIntent::Reset,
                                 );
                                 return;
                             }
-                            submit_cached_solve_preparation(
-                                cached,
-                                entity,
-                                session_id,
-                                library_gen,
-                                profile_for(entity, &realtime_models),
-                                CompileIntent::Reset,
-                                &mut solve_preparation_pool,
-                                &mut live_preparation_pipeline,
-                                &mut pending_compile_works,
-                                &mut prepared_solve_cache,
-                                &tx_inner,
-                            );
-                        } else {
-                            steppers.remove(&entity);
-                            let _ = tx_inner.send(ModelicaResult {
-                                entity,
-                                session_id,
-                                is_reset: true,
-                                error: Some("Reset requires a cached compiled model".to_owned()),
-                                ..Default::default()
-                            });
-                        }
+                        };
+                        let inputs = merge_instance_values(&captured, &initial_inputs);
+                        let component = Arc::clone(&cached.retained.component);
+                        let work = PreparationWork::Participant(CompileWork {
+                            execution_domain: cached.execution_domain,
+                            entity,
+                            session_id,
+                            cancelled: false,
+                            model_name: cached.model_name.clone(),
+                            source: cached.source.to_string(),
+                            doc_uri: cached.doc_uri.clone(),
+                            raw_extras: cached.extra_sources.clone(),
+                            parameter_overrides: cached.parameter_overrides.clone(),
+                            initial_inputs: inputs.clone(),
+                            initial_state_values: cached.initial_state_values.clone(),
+                            unit: cached.compile_unit(&cached.source),
+                            comp_res: cached.compiled.clone(),
+                            library_gen: cached.library_gen,
+                            plan: cached.retained.plan.with_initial_inputs(&inputs),
+                            intent: CompileIntent::Reset,
+                        });
+                        current_sessions.insert(entity, session_id);
+                        let id = solve_preparation_pool.allocate_id();
+                        let lane = construction_lane(&work, &mut solve_preparation_pool);
+                        live_preparation_pipeline.order.admit(id, None);
+                        dispatch_live_construction(
+                            id,
+                            lane,
+                            component,
+                            work,
+                            &tx_inner,
+                            &mut solve_preparation_pool,
+                            &mut live_preparation_pipeline,
+                            &mut pending_compile_works,
+                        );
                     }
                     ModelicaCommand::UpdateParameters {
                         entity,
@@ -3972,7 +4018,7 @@ pub fn modelica_worker(
 
                         let live_solver_snapshot = cached_models
                             .get(&entity)
-                            .map(|cached| cached.live_solver_snapshot.clone());
+                            .map(|cached| cached.retained.plan.snapshot.clone());
 
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
@@ -4458,10 +4504,11 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                         };
                         let (
                             stepper,
-                            live_solver_snapshot,
+                            _live_solver_snapshot,
                             variable_metadata,
                             _,
                             construction_profile,
+                            retained,
                         ) = match build_stepper(
                             &comp_res,
                             profile_for(entity, &w.realtime_models),
@@ -4486,7 +4533,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                             preparation_phase: Some(lunco_modelica_runtime::ModelicaPreparationPhase::LiveSolverConstructed(construction_profile)),
                             ..Default::default() });
                         if let Some(cached) = w.cached_models.get_mut(&entity) {
-                            cached.live_solver_snapshot = live_solver_snapshot;
+                            cached.retained = retained;
                             cached.pending_variable_metadata = Some(variable_metadata);
                         }
                         w.steppers
@@ -4509,7 +4556,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
             let live_solver_snapshot = w
                 .cached_models
                 .get(&entity)
-                .map(|cached| cached.live_solver_snapshot.clone());
+                .map(|cached| cached.retained.plan.snapshot.clone());
 
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
@@ -4649,6 +4696,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                             variable_metadata,
                             symbols,
                             construction_profile,
+                            retained,
                         )) => {
                             send(ModelicaResult { entity, session_id,
                                 preparation_phase: Some(lunco_modelica_runtime::ModelicaPreparationPhase::LiveSolverConstructed(construction_profile)),
@@ -4669,7 +4717,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                                     compiled: comp_res.clone(),
                                     unit_hash,
                                     library_gen: w.library_gen,
-                                    live_solver_snapshot: live_solver_snapshot.clone(),
+                                    retained,
                                     pending_variable_metadata: None,
                                 },
                             );
@@ -4742,121 +4790,97 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
         ModelicaCommand::Reset {
             entity,
             session_id,
+            target,
             initial_inputs,
         } => {
-            w.current_sessions.insert(entity, session_id);
-
-            if let Some((_, _, stepper)) = w.steppers.get(&entity) {
-                match capture_initial_inputs(stepper) {
-                    Ok(inputs) => {
-                        if let Some(cached) = w.cached_models.get_mut(&entity) {
-                            cached.initial_inputs = inputs;
-                        }
-                    }
-                    Err(error) => {
-                        let mut result = reset_ok(
-                            entity,
-                            session_id,
-                            Vec::new(),
-                            Vec::new(),
-                            "Reset rejected.",
-                        );
-                        result.error = Some(error.to_string());
-                        send(result);
-                        return;
-                    }
+            if let Err(error) = validate_reset_target(
+                w.cached_models.get(&entity),
+                w.steppers
+                    .get(&entity)
+                    .map(|(session, name, _)| (*session, name.as_str())),
+                w.current_sessions.get(&entity).copied(),
+                &target,
+            ) {
+                let mut result = reset_ok(
+                    entity,
+                    session_id,
+                    Vec::new(),
+                    Vec::new(),
+                    "Reset rejected.",
+                );
+                result.error = Some(error);
+                send(result);
+                return;
+            }
+            let captured = match capture_initial_inputs(
+                &w.steppers.get(&entity).expect("validated reset session").2,
+            ) {
+                Ok(inputs) => inputs,
+                Err(error) => {
+                    let mut result = reset_ok(
+                        entity,
+                        session_id,
+                        Vec::new(),
+                        Vec::new(),
+                        "Reset rejected.",
+                    );
+                    result.error = Some(error.to_string());
+                    send(result);
+                    return;
                 }
-            }
-
-            if let Some(cached) = w.cached_models.get_mut(&entity) {
-                merge_initial_inputs(&mut cached.initial_inputs, &initial_inputs);
-            }
-
-            // Rebuild from the compiled artifact while its source admission is current.
-            let rebuild = {
-                let mut backend = InlineCompileBackend {
-                    compiler: &mut w.compiler,
-                    artifacts: &mut w.compiled_artifacts,
-                };
-                rebuild_from_cache(&mut w.cached_models, &mut backend, entity, w.library_gen)
             };
-            if let Some(rb) = rebuild {
-                match rb.outcome {
-                    Ok(comp_res) => {
-                        let (
-                            stepper,
-                            live_solver_snapshot,
-                            variable_metadata,
-                            symbols,
-                            construction_profile,
-                        ) = match build_stepper(
-                            &comp_res,
-                            profile_for(entity, &w.realtime_models),
-                            &rb.parameter_overrides,
-                            &rb.initial_inputs,
-                            rb.initial_state_values.as_deref(),
-                            comp_res.prepared_source_key,
-                            rb.library_revision,
-                            &mut w.prepared_solve_cache,
-                        ) {
-                            Ok(built) => built,
-                            Err(error) => {
-                                send(ModelicaResult {
-                                    entity,
-                                    session_id,
-                                    is_reset: true,
-                                    error: Some(format!("Reset stepper error: {error}")),
-                                    compile_diagnostics: diagnostics_from_sim_error(
-                                        &error, &rb.source,
-                                    ),
-                                    ..Default::default()
-                                });
-                                return;
-                            }
-                        };
-                        send(ModelicaResult { entity, session_id,
-                            preparation_phase: Some(lunco_modelica_runtime::ModelicaPreparationPhase::LiveSolverConstructed(construction_profile)),
-                            ..Default::default() });
-                        let input_names: Vec<String> = stepper.input_names().to_vec();
-                        w.steppers
-                            .insert(entity, (session_id, rb.model_name.clone(), stepper));
-                        if let Some(cached) = w.cached_models.get_mut(&entity) {
-                            cached.live_solver_snapshot = live_solver_snapshot.clone();
-                            cached.pending_variable_metadata = None;
-                        }
-                        let mut result =
-                            reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
-                        result.live_solver_snapshot = Some(live_solver_snapshot);
-                        result.variable_metadata = Some(variable_metadata);
-                        send(add_experiment_defaults(result, &comp_res));
-                    }
-                    Err(e) => {
-                        send(ModelicaResult {
-                            entity,
-                            session_id,
-                            new_time: 0.0,
-                            outputs: Vec::new(),
-                            detected_symbols: Vec::new(),
-                            error: Some(format!("Reset compile error: {e}")),
-                            log_message: None,
-                            is_new_model: false,
-                            is_parameter_update: false,
-                            is_reset: true,
-                            detected_input_names: Vec::new(),
-                            compile_diagnostics: rb.compile_diagnostics,
-                            ..Default::default()
-                        });
-                    }
+            let inputs = merge_instance_values(&captured, &initial_inputs);
+            let cached = w.cached_models.get(&entity).expect("validated reset cache");
+            let comp_res = cached.compiled.clone();
+            let source = Arc::clone(&cached.source);
+            let model_name = cached.model_name.clone();
+            let built = build_prepared_stepper(
+                &cached.retained.component,
+                cached.retained.plan.with_initial_inputs(&inputs),
+            );
+            w.current_sessions.insert(entity, session_id);
+            match built {
+                Ok((
+                    stepper,
+                    live_solver_snapshot,
+                    variable_metadata,
+                    symbols,
+                    construction_profile,
+                    retained,
+                )) => {
+                    send(ModelicaResult {
+                        entity,
+                        session_id,
+                        preparation_phase: Some(
+                            lunco_modelica_runtime::ModelicaPreparationPhase::LiveSolverConstructed(
+                                construction_profile,
+                            ),
+                        ),
+                        ..Default::default()
+                    });
+                    let input_names = stepper.input_names().to_vec();
+                    w.steppers.insert(entity, (session_id, model_name, stepper));
+                    let cached = w
+                        .cached_models
+                        .get_mut(&entity)
+                        .expect("reset retains its cache owner");
+                    cached.retained = retained;
+                    cached.initial_inputs = inputs;
+                    cached.pending_variable_metadata = None;
+                    let mut result =
+                        reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
+                    result.live_solver_snapshot = Some(live_solver_snapshot);
+                    result.variable_metadata = Some(variable_metadata);
+                    send(add_experiment_defaults(result, &comp_res));
                 }
-            } else {
-                w.steppers.remove(&entity);
-                send(ModelicaResult {
+                Err(error) => send(ModelicaResult {
                     entity,
                     session_id,
                     is_reset: true,
-                    error: Some("Reset requires a cached compiled model".to_owned()),
+                    compile_diagnostics: diagnostics_from_sim_error(&error, &source),
+                    error: Some(format!("Reset stepper error: {error}")),
                     ..Default::default()
-                });
+                }),
             }
         }
         ModelicaCommand::UpdateParameters {
@@ -4927,6 +4951,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                             variable_metadata,
                             symbols,
                             construction_profile,
+                            retained,
                         )) => {
                             send(ModelicaResult { entity, session_id,
                                 preparation_phase: Some(lunco_modelica_runtime::ModelicaPreparationPhase::LiveSolverConstructed(construction_profile)),
@@ -4947,7 +4972,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                                     compiled: comp_res.clone(),
                                     unit_hash,
                                     library_gen: w.library_gen,
-                                    live_solver_snapshot: live_solver_snapshot.clone(),
+                                    retained,
                                     pending_variable_metadata: None,
                                 },
                             );
@@ -6199,6 +6224,38 @@ end CoupledArrays;
 #[cfg(test)]
 mod live_solver_snapshot_tests {
     use super::*;
+
+    #[test]
+    fn reset_inputs_preserve_the_admitted_solver_and_source_plan() {
+        let original = live_build_plan(
+            solver::RuntimeProfile {
+                live: true,
+                predicted: false,
+            },
+            &[("gain".into(), 6.0)],
+            &[("u".into(), 1.0)],
+            17,
+            &[],
+            Some(9),
+        )
+        .unwrap();
+        let reset = original.with_initial_inputs(&[("u".into(), 8.0)]);
+        assert_eq!(reset.snapshot.admitted_library_revision, Some(9));
+        assert_eq!(reset.key, original.key);
+        assert_eq!(reset.spec.id, original.spec.id);
+        assert_eq!(reset.snapshot.parameters, original.snapshot.parameters);
+        assert_eq!(
+            reset.snapshot.parameter_overrides,
+            original.snapshot.parameter_overrides
+        );
+        assert_eq!(
+            reset.options.param_overrides,
+            original.options.param_overrides
+        );
+        assert_eq!(reset.options.initial_inputs, vec![("u".into(), 8.0)]);
+        assert_eq!(original.options.initial_inputs, vec![("u".into(), 1.0)]);
+        assert_eq!(reset.snapshot.initial_inputs, reset.options.initial_inputs);
+    }
 
     #[test]
     fn snapshot_matches_the_resolved_live_plan_and_ordered_overrides() {

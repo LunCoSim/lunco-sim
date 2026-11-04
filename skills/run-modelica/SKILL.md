@@ -822,6 +822,10 @@ stale, then plays it. Reuse requires the exact requested class, document leases,
 candidate source generations and admitted source-root operations to match.
 `CompileStatus.stale` reads that same source owner. `CompileModel` compiles only (stays paused);
 `ResumeActiveModel` unpauses only.
+Generated-source regeneration fences its own document and library operations;
+unrelated editor namespace publication or retirement does not stale that unit.
+Editable document libraries remain protected by the ordinary source-document
+leases described in [the runtime contract](../../docs/architecture/29-rumoca-runtime-contracts.md).
 
 A strict compile failure is terminal and appears as a Modelica Error in Recent
 status events. Selecting the row expands Rumoca's checked phase diagnostic;
@@ -1292,6 +1296,13 @@ source snapshot in `RunScenarioAsset.params` (`source` and
 `source_uri: "lunco://models/DescentGuidance.mo"`). It checks sensor feedback,
 current gain initialization, paused input changes, and the authority gate.
 Reset admits current values even when the worker has not stepped after a write.
+It requires an idle compiled participant and retains the installed source and
+class lease. The worker rebuilds from the installed immutable FMI factory and
+solver plan, refreshing admitted inputs without consulting mutable compiler
+libraries. Await its terminal command result: submission is pending until the
+matching rebuilt session is installed or rejected. Busy, uncompiled or retired
+targets reject before installed state changes. Internal compile/reset results
+remain available with `ui+scripting` even when the transport API feature is off.
 
 Tune a document-backed participant through `SetModelicaParameter`, using its
 stable entity id and exact parameter key. Compile the current source first,
@@ -1320,13 +1331,17 @@ parameters, typed edit rejection before mutation, and checked editing after
 compiled artifact reuse. Query `CompileStatus` for public activity facts; worker
 in-flight fields intentionally remain outside component reflection.
 
-Await `SaveDocument` or explicit-path `SaveAsDocument` command results before
+Await `SaveDocument`, explicit-path `SaveAsDocument`, or their active-document
+wrappers' command results before
 assuming a native write or browser download was admitted. A native picker result
 with `picker_requested: true` acknowledges the picker request; the follow-up save
 owns actual write completion. A failed write leaves origin and saved-generation
 state intact and reports `modelica-save-failed` in Recent Events. The native
 lifecycle gate also checks Save As URI invalidation, failed writes, and saving
 the subsequently edited source.
+Active wrappers capture their target and source lease at admission, retain the
+original command identity and producer origin, and delegate to the same save
+owner. Changing the active tab cannot retarget an admitted save.
 
 `SnapshotVariables.metadata` carries checked scalar `unit`, `description`,
 `minimum`, and `maximum` facts for the installed component, using the same
