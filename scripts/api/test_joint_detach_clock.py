@@ -42,7 +42,7 @@ def run(port, windowed, mode, log):
         execute("StepSimulation", hold=True)
         offset = log.stat().st_size
         execute("RunScenarioAsset", source_asset=f"lunco://scenarios/tests/joint_detach_{mode}.rhai",
-                reload_policy="Retain")
+                reload_policy="retain")
         wait_for_ready(port)
         if mode == "clock":
             execute("StepSimulation", steps=3)

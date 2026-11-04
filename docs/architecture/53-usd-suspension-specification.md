@@ -381,7 +381,12 @@ valid:
 The reusable `physical_drivetrain.usda` is this second form. The rover owns the
 carrier placement; the shared drivetrain owns the joint graph; and the reduced
 raycast realization folds the carrier's explicitly applied
-`LunCoMassContributionAPI` into its resolved rigid-body owner.
+`LunCoMassContributionAPI` into its resolved rigid-body owner. Reduced children
+require explicit mass, principal inertia and centre of mass; their principal
+frame and body-local rotation remain part of the physical tensor. The shared
+carrier authors its origin COM explicitly. Full tensor reduction, native
+validation and the supported stage mass units follow the canonical
+[physical mass contract](41-axes-and-units.md#physical-mounts-and-reduced-mass).
 
 ---
 

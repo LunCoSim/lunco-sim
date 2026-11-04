@@ -206,7 +206,7 @@ fn on_event(me, evt, ctx) {
         let checkpoint = parse_int(action.sub_string(11));
         if checkpoint < 0 || checkpoint > 2 { throw "unknown workshop checkpoint"; }
         lab_require(cmd("RunScenarioAsset", #{target: me, source_asset: "lunco://tutorials/sandbox/rover_lab.rhai",
-            reload_policy: "Restart",
+            reload_policy: "restart",
             params: #{checkpoint: checkpoint}}));
         return;
     } else if action == "restart" && !this.running {

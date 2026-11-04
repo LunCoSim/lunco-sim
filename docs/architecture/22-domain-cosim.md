@@ -447,10 +447,20 @@ values. `PortHolds` retains controller and authored-program setpoints in
 separate layers. `SetPorts` assigns Twin/Simulation Rhai writes to the program
 layer; controller, UI, and external command writes use the controller layer.
 Controller input takes precedence over authored program guidance, which takes
-precedence over the wiring fabric. The
+precedence over the wiring fabric. The input owner resolves this priority before
+committing immediate or queued writes, including unwired inputs. It validates
+every effective backend write before changing any endpoint or hold layer; a
+rejected transaction preserves both. The
 `ReleaseControlInputs` lifecycle release clears only controller-owned holds,
 so an autopilot's authored program setpoints survive possession release.
 Authored control policy uses named `SetPorts` writes for explicit setpoints.
+All `SetPorts` inputs are levels, including body force/torque and generic actuator
+commands. The exchange reapplies a held level every fixed cycle even without a
+wire. Release removes the requested hold without writing a replacement endpoint
+value; an unwired force stops after its last admitted native interval, and a
+wired input resumes its authored source. A one-interval force pulse explicitly
+sets the level and releases it at the following simulation callback, as in the
+`planetary_flight_surface` gate. A force input is not an impulse-valued port.
 
 | Kind | Ports |
 |---|---|
@@ -474,21 +484,32 @@ vehicle/lander modeling that builds on this surface is in
 ### One propagation fabric and one reader path
 
 `lunco-cosim::systems::propagate::propagate_connections` is the sole scalar
-connection transaction. It reads source endpoints and writes target endpoints
+connection and held-input transaction. It reads source endpoints and writes target endpoints
 through the shared `PortRegistry`; it does not query Modelica, Avian, or a
 particular vehicle directly. `SimConnection` topology is compiled into one
 generation-aware `PropagationCache` and resolved endpoint handles are reused
-until the bound connection set changes. The fixed simulation schedule and
+until the bound connection set, port contracts, or hold membership changes. The fixed simulation schedule and
 rollback replay schedule invoke this same function and share that cache, so
 replay does not introduce a second wiring table or a second source-reader
 implementation.
 
-Layered `PortHolds` are indexed by entity, then port name. Effective hold changes
-advance a revision. Propagation maps active holds to compiled target indices only
-when that revision or the compiled wiring changes, retaining a target-aligned
-scalar buffer across physics ticks. It does not clone the hold map, hash names,
-or rebuild the hold projection per tick. The flat hold snapshot is reserved for
-presentation consumers.
+Layered `PortHolds` are indexed by entity, then port name. Layer value changes
+advance a sample revision; adding or removing a held endpoint also advances a
+membership revision. Compiled targets are the union of wired and held inputs,
+with shared endpoints interned once. Only membership changes rebuild that union.
+Held endpoints require unique nonzero global entity identities; invalid identity
+raises `cosim-held-input-identity-invalid` before any exchange write.
+Propagation maps active holds to target indices when their sample revision or
+the compiled fabric changes, retaining a target-aligned scalar buffer across
+physics ticks. It does not clone the hold map, hash names, or rebuild the hold
+projection per tick. The flat hold snapshot is reserved for presentation consumers.
+
+External joint-effort application orders all active `JointTorqueActuator`
+couplings through `lunco-physics::ordered_physics_entities` using their authored
+`PhysicsOrderKey`. Missing, empty, or duplicate keys raise
+`cosim-joint-effort-order-invalid` and stop physics before feedback, brake state,
+or body force accumulators change. USD's joint projection publishes those keys;
+programmatic producers must supply their own stable source identity.
 
 Propagation keeps its accumulator, hold projection, and diagnostic staging
 buffers in the shared `PropagationCache`, so fixed simulation and rollback use
@@ -676,8 +697,9 @@ coordinate.
 
 **5. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
 The worker retains every ordered transaction with its interval-start input
-sample. Setpoint coalescing applies to `UpdateParameters`/`Compile`, never to
-`Step`. Backpressure bounds pending work without merging integration intervals
+sample. Parameter deltas coalesce only for the same entity, session and scalar
+name; distinct scalars retain their FIFO slots. Compile requests may replace a
+matching pending compile, never a `Step`. Backpressure bounds pending work without merging integration intervals
 or retiming their inputs.
 
 **6. Numerical backends own internal steps.** The worker asks

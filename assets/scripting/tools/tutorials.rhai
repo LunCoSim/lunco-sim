@@ -74,7 +74,7 @@ fn start_path(path) {
     if path.len() == 0 { throw "tutorial navigation requires a catalog entry"; }
     let current = path[0];
     let args = #{source_asset: current.source_asset, scene_asset: current.scene_asset,
-        twin_asset: current.twin_asset, reload_policy: "Restart", params: #{lesson_path: path}};
+        twin_asset: current.twin_asset, reload_policy: "restart", params: #{lesson_path: path}};
     let route = execution_context();
     if route.scope == "twin" {
         if route.owner_id == () { throw "tutorial navigation has no exact Twin owner"; }

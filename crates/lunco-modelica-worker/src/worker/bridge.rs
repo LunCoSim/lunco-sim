@@ -1039,7 +1039,7 @@ pub fn handle_modelica_responses(
             // user can edit the document while Rumoca is compiling; accepting
             // that older stepper would let a later FixedUpdate advance against
             // equations that no longer match the authoritative document.
-            if result.is_new_model
+            if (result.is_new_model || result.is_parameter_update)
                 && model.pending_generation != 0
                 && !model.document.is_unassigned()
             {
@@ -1484,7 +1484,7 @@ pub fn handle_modelica_responses(
                 }
             }
 
-            if result.is_new_model {
+            if result.is_new_model || result.is_parameter_update {
                 let values = &mut variables.bypass_change_detection().values;
                 variables_changed |= !values.is_empty();
                 values.clear();
@@ -1569,8 +1569,6 @@ pub fn handle_modelica_responses(
                     model.is_stepping,
                     model.paused
                 );
-            } else if result.is_parameter_update {
-                model.clear_clock();
             } else if result.is_reset {
                 model.clear_clock();
                 let values = &mut variables.bypass_change_detection().values;
@@ -1700,7 +1698,10 @@ pub fn handle_modelica_responses(
                 };
                 completion.complete(outcome);
             }
-            if result.is_new_model && result.error.is_none() && model.is_compiled {
+            if (result.is_new_model || result.is_parameter_update)
+                && result.error.is_none()
+                && model.is_compiled
+            {
                 session_starts.write(ModelicaSessionStarted {
                     entity: result.entity,
                     session_id: model.session_id,

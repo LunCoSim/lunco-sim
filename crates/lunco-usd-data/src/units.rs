@@ -97,8 +97,8 @@ impl UpAxis {
 }
 
 /// A stage's declared metrics, as read from its pseudo-root metadata. The
-/// **only** place these two tokens are interpreted (doc 41's "one choke point
-/// per format").
+/// **only** place distance/up-axis tokens and the supported runtime mass-unit
+/// convention are interpreted (doc 41's "one choke point per format").
 #[derive(Debug, Clone, Copy, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
 pub struct StageMetrics {
     /// `metersPerUnit` — SI metres per authored linear unit. `1.0` = metres
@@ -122,6 +122,9 @@ pub enum StageMetricsError {
     /// `metersPerUnit` was authored with an unsupported type or a non-positive
     /// or non-finite value.
     InvalidMetersPerUnit(String),
+    /// Runtime physics supports kilograms; other mass units must be rejected
+    /// before interpreting dimensional mass, inertia or drive coefficients.
+    InvalidKilogramsPerUnit(String),
 }
 
 impl std::fmt::Display for StageMetricsError {
@@ -131,6 +134,10 @@ impl std::fmt::Display for StageMetricsError {
             Self::InvalidMetersPerUnit(value) => {
                 write!(f, "invalid metersPerUnit metadata: {value}")
             }
+            Self::InvalidKilogramsPerUnit(value) => write!(
+                f,
+                "unsupported kilogramsPerUnit metadata: {value}; runtime physics requires 1.0 (kilograms)"
+            ),
         }
     }
 }
@@ -158,12 +165,30 @@ impl StageMetrics {
     /// - an `upAxis` value that is neither `Y` nor `Z` is an **error** (USD only
     ///   defines those two);
     /// - a non-finite or non-positive `metersPerUnit` is an **error**;
+    /// - omitted `kilogramsPerUnit` means kilograms; an authored value other
+    ///   than `1.0` is unsupported and rejects runtime admission;
     /// - a *supported but non-canonical* stage (Z-up and/or non-metre) logs a
     ///   one-shot warning naming what is being converted, so an unexpected
     ///   Omniverse/Isaac stage is visible rather than merely handled.
     pub fn from_reader<R: StageMetadataReader + ?Sized>(
         reader: &R,
     ) -> Result<Self, StageMetricsError> {
+        if let Some(value) = reader.stage_metadata_value("kilogramsPerUnit") {
+            let mass_unit = value
+                .clone()
+                .get::<f64>()
+                .or_else(|| value.get::<f32>().map(f64::from))
+                .ok_or_else(|| {
+                    StageMetricsError::InvalidKilogramsPerUnit(
+                        "unsupported USD value type".to_owned(),
+                    )
+                })?;
+            if mass_unit != 1.0 {
+                return Err(StageMetricsError::InvalidKilogramsPerUnit(
+                    mass_unit.to_string(),
+                ));
+            }
+        }
         let up_axis = match reader.stage_metadata_value("upAxis") {
             None => UpAxis::Y,
             Some(value) => match value.as_str().map(str::to_string).as_deref() {
@@ -215,7 +240,7 @@ impl StageMetrics {
 
     /// The same metrics off an authoring [`Stage`](openusd::usd::Stage).
     ///
-    /// The AUTHORING counterpart to [`from_reader`](Self::from_reader). The
+    /// The geometry AUTHORING counterpart to [`from_reader`](Self::from_reader). The
     /// owning document must pass its composed authoring stage here. An isolated
     /// runtime or view layer does not own the stage's pseudo-root metadata and
     /// can therefore report USD's centimetre default instead of the scene's
@@ -229,6 +254,8 @@ impl StageMetrics {
     ///
     /// Silent on a non-canonical stage: `from_reader` warned already at import, and
     /// this runs once per edit.
+    /// Authoring may retain non-kilogram mass metadata for interchange; runtime
+    /// admission rejects that unsupported physical convention in `from_reader`.
     pub fn from_stage(stage: &openusd::usd::Stage) -> Result<Self, StageMetricsError> {
         let up_axis = match stage
             .stage_metadata("upAxis")
@@ -1036,6 +1063,32 @@ impl ConventionTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_mass_units_reject_unsupported_or_malformed_metadata() {
+        struct Reader(Option<openusd::sdf::Value>);
+        impl StageMetadataReader for Reader {
+            fn stage_metadata_value(&self, name: &str) -> Option<openusd::sdf::Value> {
+                (name == "kilogramsPerUnit")
+                    .then(|| self.0.clone())
+                    .flatten()
+            }
+        }
+        assert!(StageMetrics::from_reader(&Reader(None)).is_ok());
+        assert!(StageMetrics::from_reader(&Reader(Some(openusd::sdf::Value::Double(1.0)))).is_ok());
+        for value in [0.001, 0.0, -1.0, f64::INFINITY, f64::NAN] {
+            assert!(matches!(
+                StageMetrics::from_reader(&Reader(Some(openusd::sdf::Value::Double(value),))),
+                Err(StageMetricsError::InvalidKilogramsPerUnit(_))
+            ));
+        }
+        assert!(
+            StageMetrics::from_reader(&Reader(Some(openusd::sdf::Value::String(
+                "kilograms".to_owned()
+            ),)))
+            .is_err()
+        );
+    }
 
     /// The Z-up remap sends the stage's up (+Z) to canonical up (+Y), keeps X,
     /// and sends the stage's +Y (its "forward-ish" horizontal) to canonical −Z.

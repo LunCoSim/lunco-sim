@@ -129,25 +129,12 @@ pub fn api_request_observer(
     }
 }
 
-/// Can `params` actually become this command? `Ok(())` if it deserializes AND
-/// is constructible; `Err(message)` otherwise.
-///
-/// The two ways a command dies silently, checked here so a caller learns about
-/// them from its own HTTP response instead of from a log line it can't see:
-///
-/// 1. **Deserialize failure** — a misspelled/mistyped field.
-/// 2. **Not constructible** — deserializes as a partial `dyn Reflect`, but
-///    `FromReflect` can't build the concrete type (a field with no `Default`
-///    was omitted). `ReflectEvent::trigger` PANICS on that, so the dispatcher
-///    guards it and drops the command.
-///
-/// This mirrors exactly what `api_command_dispatcher` does, deliberately: the
-/// dispatcher stays authoritative (it also serves in-process triggers), and this
-/// is the synchronous gate in front of it.
 /// Validate typed in-process command parameters at the API reflection edge.
 ///
-/// A typed-value deserializer feeds Bevy reflection directly, keeping JSON out
-/// of in-process command validation and dispatch.
+/// The registered concrete serde adapter validates supplied fields and semantic
+/// defaults before reflection dispatch. Entity IDs resolve through the shared
+/// registry, and construction is checked before triggering the command event.
+/// This uses the same typed-value path as dispatch without an internal JSON hop.
 pub fn validate_command_params_value(
     command: &str,
     params: &ApiValue,
@@ -668,29 +655,10 @@ fn collect_authz_target_values(
             }
         }
         TypeInfo::Enum(info) if info.variant("None").is_some() => {
-            if matches!(value, ApiValue::Unit)
-                || matches!(value, ApiValue::Map(entries) if entries.iter().any(|(key, _)| key == "None"))
-            {
+            if matches!(value, ApiValue::Unit) {
                 return Ok(());
             }
-            // The command-value adapter represents `Some(entity)` as the raw
-            // entity id and `None` as Unit. Accept that wire shape here as well
-            // as the explicit enum-map form used by generic reflected values.
-            if let Some(target) = api_value_u64(value) {
-                targets.push(target);
-                return Ok(());
-            }
-            let nested = match value {
-                ApiValue::Map(entries) => entries
-                    .iter()
-                    .find(|(key, _)| key == "Some")
-                    .map(|(_, value)| value),
-                _ => None,
-            }
-            .ok_or_else(|| {
-                format!("authorization target option '{field_name}' must be Some or None")
-            })?;
-            targets.push(api_value_u64(nested).ok_or_else(|| {
+            targets.push(api_value_u64(value).ok_or_else(|| {
                 format!("authorization target field '{field_name}' must contain an unsigned ID")
             })?);
         }
@@ -761,6 +729,23 @@ fn convert_value_node(
             let ApiValue::Map(entries) = value else {
                 return Ok(());
             };
+            // A registered serde adapter owns its wire shape. Ordinary
+            // reflected structures retain strict field-name validation while
+            // the command's serde constructor applies documented defaults.
+            if !reg.get(type_id).is_some_and(|registration| {
+                registration
+                    .data::<bevy::reflect::ReflectDeserialize>()
+                    .is_some()
+            }) {
+                for (name, _) in entries.iter() {
+                    if struct_info.field(name).is_none() {
+                        return Err(format!(
+                            "unknown field '{name}' in {}",
+                            struct_info.type_path()
+                        ));
+                    }
+                }
+            }
             for index in 0..struct_info.field_len() {
                 let Some(field) = struct_info.field_at(index) else {
                     continue;
@@ -879,6 +864,24 @@ fn convert_value_node(
             }
             _ => {}
         },
+        TypeInfo::Enum(enum_info)
+            if enum_info.variant("Some").is_some() && enum_info.variant("None").is_some() =>
+        {
+            if !matches!(value, ApiValue::Unit) {
+                if let Some(VariantInfo::Tuple(some)) = enum_info.variant("Some") {
+                    if let Some(field) = some.field_at(0) {
+                        convert_value_node(
+                            value,
+                            field.type_id(),
+                            reg,
+                            entities,
+                            direction,
+                            sync_local,
+                        )?;
+                    }
+                }
+            }
+        }
         TypeInfo::Enum(enum_info) => match value {
             ApiValue::Map(entries) if entries.len() == 1 => {
                 let (variant_name, payload) = &mut entries[0];
@@ -888,6 +891,19 @@ fn convert_value_node(
                 match variant {
                     VariantInfo::Struct(struct_info) => {
                         if let ApiValue::Map(fields) = payload {
+                            if !reg.get(type_id).is_some_and(|registration| {
+                                registration
+                                    .data::<bevy::reflect::ReflectDeserialize>()
+                                    .is_some()
+                            }) {
+                                for (name, _) in fields.iter() {
+                                    if struct_info.field(name).is_none() {
+                                        return Err(format!(
+                                            "unknown field '{name}' in variant {variant_name}"
+                                        ));
+                                    }
+                                }
+                            }
                             for index in 0..struct_info.field_len() {
                                 if let Some(field) = struct_info.field_at(index) {
                                     if let Some((_, child)) =
@@ -940,22 +956,7 @@ fn convert_value_node(
                 }
             }
             ApiValue::Unit | ApiValue::Str(_) => {}
-            child => {
-                if let Some(VariantInfo::Tuple(tuple_info)) = enum_info.variant("Some") {
-                    if tuple_info.field_len() == 1 {
-                        if let Some(field) = tuple_info.field_at(0) {
-                            convert_value_node(
-                                child,
-                                field.type_id(),
-                                reg,
-                                entities,
-                                direction,
-                                sync_local,
-                            )?;
-                        }
-                    }
-                }
-            }
+            _ => {}
         },
         _ => {}
     }
@@ -1287,6 +1288,20 @@ mod tests {
     #[Command(default)]
     struct TestEcho {
         pub fail: bool,
+    }
+
+    #[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+    enum NestedCommandOperation {
+        Add {
+            path: String,
+            #[serde(default)]
+            reference: Option<String>,
+        },
+    }
+
+    #[Command(default)]
+    struct TestNestedCommand {
+        pub operations: Vec<NestedCommandOperation>,
     }
 
     #[derive(Reflect)]
@@ -1821,6 +1836,52 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn nested_command_params_preserve_supplied_values_and_reject_invalid_fields() {
+        use serde::de::DeserializeSeed;
+        let mut reg = TypeRegistry::new();
+        reg.register::<TestNestedCommand>();
+        let registration = reg.get_with_short_type_path("TestNestedCommand").unwrap();
+        let params = |fields| {
+            api_value!({ "operations": ApiValue::Array(vec![
+            api_value!({ "Add": fields }),
+        ]) })
+        };
+        let valid = params(api_value!({ "path": "/Probe" }));
+        validate_command_params_value(
+            "TestNestedCommand",
+            &valid,
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .unwrap();
+        let reflected = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &reg)
+            .deserialize(ApiValueDeserializer::new(valid))
+            .unwrap();
+        let concrete = TestNestedCommand::from_reflect(reflected.as_ref()).unwrap();
+        assert!(matches!(concrete.operations.as_slice(),
+            [NestedCommandOperation::Add { path, reference: None }] if path == "/Probe"));
+
+        for invalid in [
+            params(api_value!({ "path": false })),
+            params(api_value!({ "reference": "asset" })),
+            params(api_value!({ "path": "/Probe", "typo": true })),
+            api_value!({ "typo": ApiValue::Array(Vec::new()) }),
+        ] {
+            assert!(
+                validate_command_params_value(
+                    "TestNestedCommand",
+                    &invalid,
+                    registration,
+                    &reg,
+                    &ApiEntityRegistry::default(),
+                )
+                .is_err()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1884,7 +1945,7 @@ mod id_codec_tests {
         let gid = api_value_from_u64(gid.get());
         let mut value = ApiValue::map([
             ("many", ApiValue::Array(vec![gid.clone(), gid.clone()])),
-            ("maybe", ApiValue::map([("Some", gid.clone())])),
+            ("maybe", gid.clone()),
             ("inner", ApiValue::map([("body", gid)])),
         ]);
 
@@ -1896,10 +1957,7 @@ mod id_codec_tests {
             value.get("many"),
             Some(&ApiValue::Array(vec![local.clone(), local.clone()]))
         );
-        assert_eq!(
-            value.get("maybe"),
-            Some(&ApiValue::map([("Some", local.clone())]))
-        );
+        assert_eq!(value.get("maybe"), Some(&local));
         assert_eq!(value.get("inner"), Some(&ApiValue::map([("body", local)])));
     }
 
@@ -1935,15 +1993,6 @@ mod id_codec_tests {
         let optional = ApiValue::map([("maybe", api_value_from_u64(gid.get()))]);
         assert_eq!(
             authz_target_gids_value(&optional, TypeId::of::<TColl>(), &reg),
-            Ok(vec![gid.get()])
-        );
-
-        let explicit_some = ApiValue::map([(
-            "maybe",
-            ApiValue::map([("Some", api_value_from_u64(gid.get()))]),
-        )]);
-        assert_eq!(
-            authz_target_gids_value(&explicit_some, TypeId::of::<TColl>(), &reg),
             Ok(vec![gid.get()])
         );
 

@@ -134,8 +134,8 @@ fn lesson_menu_item(lesson, source_asset, scene_asset, twin_id, path) {
     if twin_id != () {
         args.owner_twin_id = twin_id.parse_int();
     }
-    // Rhai command reflection uses the typed enum variant spelling.
-    args.reload_policy = "Restart";
+    // Command payloads use the reload policy's serialized snake-case value.
+    args.reload_policy = "restart";
     let item = #{};
     item.label = lesson["title"] + "  ·  " + lesson["difficulty"];
     if lesson.contains("lesson_type") {

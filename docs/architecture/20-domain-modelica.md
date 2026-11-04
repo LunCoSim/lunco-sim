@@ -839,8 +839,9 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
   return scalar interface facts without numerical initialization
 - `ModelicaCommand::Compile { entity, source, session_id }` — reuse or compile
   the checked DAE, admit numerical inputs, and construct the live stepper
-- `ModelicaCommand::UpdateParameters { entity, source, session_id }` —
-  admit new parameter values, reuse a compatible DAE variant or compile it
+- `ModelicaCommand::UpdateParameters` — admit one named scalar delta with its
+  edited source, session identity and latest inputs; retain sibling sources
+  and untouched instance overrides while constructing the checked replacement
 - `ModelicaCommand::Reset { entity, session_id }` — rebuild stepper from
   cached DAE, reset to initial conditions
 - `ModelicaCommand::Step { entity, inputs, dt }` — advance one timestep
@@ -1746,13 +1747,15 @@ A `ModelicaModel` component on a Bevy entity is an **instance** of that type.
 
 - Editing the type (changing `Balloon.mo`) affects **all** instances on
   the next recompile.
-- Editing an instance (changing one balloon's `R=100` → `R=200`) affects
-  **only** that instance — stored on the instance's
-  `ModelicaModel.parameters`.
+- Authored USD bindings and compile-time overrides select values for one
+  instance; they are distinct from the source declaration.
 
-Dymola has the same distinction. Our UI should keep it visible — a
-parameter edit in the Inspector is instance-level unless the user
-explicitly promotes it ("save as default in model").
+The document-backed Inspector parameter control uses `SetModelicaParameter`.
+It edits the declaration in the participant's exact selected class, leaves the
+document dirty, and reinitializes that participant with the checked replacement.
+The edit is a source change and becomes a type default when saved. Other
+instance overrides remain intact. USD-backed controls require editing their
+authored USD binding and are disabled in the document-only inspector path.
 
 ## 7a. Document identity — three tiers, one truth
 

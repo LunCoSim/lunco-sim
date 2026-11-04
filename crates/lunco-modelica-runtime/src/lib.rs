@@ -6,6 +6,7 @@
 //! `lunco-modelica-worker`; consumers that only exchange runtime state do not
 //! depend on that implementation closure.
 
+use bevy::ecs::reflect::ReflectEvent;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
@@ -19,6 +20,20 @@ pub mod generated_source;
 pub mod source_asset;
 
 pub use source_asset::{ModelicaSource, ModelicaSourceAssetPlugin, ModelicaSourceLoader};
+
+/// Edit one mutable scalar parameter in the selected participant's source and
+/// install the checked replacement session. The headless Modelica core owns
+/// validation, authored mutation and terminal completion in every host.
+#[lunco_core::Command]
+pub struct SetModelicaParameter {
+    /// Existing participant selected by its stable API identity over transports.
+    #[authz_target]
+    pub entity: Entity,
+    /// Exact scalar parameter declared by the selected source class.
+    pub key: String,
+    /// Finite value admitted by the parameter's checked bounds.
+    pub value: f64,
+}
 
 /// Facts for one scalar identity in the installed checked FMI component.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -379,6 +394,11 @@ pub enum ModelicaCommand {
         session_id: u64,
         model_name: String,
         source: String,
+        /// Exact changed scalar; the worker retains all other instance overrides.
+        parameter_name: String,
+        parameter_value: f64,
+        /// Current admitted inputs, including edits made while paused.
+        initial_inputs: Vec<(String, f64)>,
     },
     Reset {
         entity: Entity,

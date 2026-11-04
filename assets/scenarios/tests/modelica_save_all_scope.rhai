@@ -1,6 +1,6 @@
 // Production Save All scope regression. Start without an active Workspace
 // Twin in a UI-capable Modelica/FileOps host. Attach with Application scope
-// and Retain reload policy. Supply distinct root_a/root_b directories and
+// and retain reload policy. Supply distinct root_a/root_b directories and
 // entry_scene, an API-authored entry present in both fixture roots.
 import "lunco://scripting/tools/modelica_editor" as editor;
 

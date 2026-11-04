@@ -1,5 +1,5 @@
 // Production Twin replacement regression. Start with no active Workspace Twin,
-// attach with Application scope and Retain reload policy, and supply root_a,
+// attach with Application scope and retain reload policy, and supply root_a,
 // root_b plus entry_scene and marker_a/marker_b. The Command host signals
 // modelica-retirement-scene-ready after each exact fixture marker is projected.
 // The owned host config must set experiments.max_parallel = 1.

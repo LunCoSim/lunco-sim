@@ -354,20 +354,25 @@ pub fn world_transform_matrix_d_at(
     Ok(matrix)
 }
 
-/// Compose a prim's transform in an authored body's local frame.
+/// Compose a physical mount in its body's frame before the native `f32`
+/// boundary. Absolute translations remain `f64` through subtraction, so moving
+/// an assembly far from the origin cannot change its local geometry.
 pub fn transform_in_body_frame(
     reader: &dyn UsdReadObject,
     body_path: &SdfPath,
     prim_path: &SdfPath,
 ) -> Option<Transform> {
-    let body = world_transform(reader, body_path).ok()?;
-    let prim = world_transform(reader, prim_path).ok()?;
-    let inv = body.rotation.inverse();
-    Some(Transform {
-        translation: inv * (prim.translation - body.translation),
-        rotation: (inv * prim.rotation).normalize(),
-        scale: Vec3::ONE,
-    })
+    let body = world_transform_matrix_d_at(reader, body_path, 0.0).ok()?;
+    let prim = world_transform_matrix_d_at(reader, prim_path, 0.0).ok()?;
+    let (_, body_rotation, body_translation) = body.to_scale_rotation_translation();
+    let (_, prim_rotation, prim_translation) = prim.to_scale_rotation_translation();
+    let inverse = body_rotation.inverse();
+    let relative = DMat4::from_rotation_translation(
+        (inverse * prim_rotation).normalize(),
+        inverse * (prim_translation - body_translation),
+    );
+    // This component is a native body-local mount, never an absolute position.
+    project_transform_matrix_d(relative, prim_path).ok()
 }
 
 pub fn read_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> Option<Vec<String>> {
@@ -437,6 +442,32 @@ def Xform "Parent" {
             matrix.transform_point3(DVec3::ONE),
             DVec3::new(2.125, 3.0, 4.0)
         );
+    }
+
+    #[test]
+    fn physical_mount_reduction_is_invariant_under_large_translation() {
+        for offset in [0.0, 100_000_000.0, 149_597_870_700.0] {
+            let source = format!(
+                r#"#usda 1.0
+(metersPerUnit = 1)
+def Xform "Body" {{
+    double3 xformOp:translate = ({offset}, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    def Xform "Mount" {{
+        double3 xformOp:translate = (1, 0.125, -2)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }}
+}}"#
+            );
+            let stage = plan(&source);
+            let mount = transform_in_body_frame(
+                &stage,
+                &SdfPath::new("/Body").unwrap(),
+                &SdfPath::new("/Body/Mount").unwrap(),
+            )
+            .unwrap();
+            assert_eq!(mount.translation, Vec3::new(1.0, 0.125, -2.0));
+        }
     }
 
     #[test]

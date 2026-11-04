@@ -15,10 +15,8 @@
 /// Capture a frame from `vessel`'s mounted camera (or the active scene camera
 /// when the vessel has none). Thin wrapper over the typed `CaptureFromCamera`
 /// command — the same verb a UI button or HTTP call uses (§4.2).
-/// `target` is an `Option<Entity>`, so it goes on the wire as the tagged enum
-/// `#{ Some: <gid> }` — a bare id is not an object, so the executor never
-/// descends into the enum and silently drops the whole command.
-fn photo_from(vessel) { cmd("CaptureFromCamera", #{ target: #{ Some: vessel } }); }
+/// Optional entity targets use their global ID; omission selects the active camera.
+fn photo_from(vessel) { cmd("CaptureFromCamera", #{ target: vessel }); }
 
 /// `take_photo()` → a `run_tool` action value usable in a task or route policy.
 /// It returns declarative action data; the runtime dispatches the registered

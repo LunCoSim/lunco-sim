@@ -55,15 +55,15 @@ therefore wakes the island on demand. This distinction is part of the physics
 ownership contract; do not make all per-tick tire forces waking just to preserve
 control response.
 
-Raycast mass preparation uses the existing carrier `Mass` and
-`RaycastWheelMassFolded` membership before collecting additions. All wheel and
-reduced-part identities still pass the shared physics ordering validator on
-every call, including sources whose carrier is already folded or unavailable.
-Eligible additions retain that order and contain only mass, local offset and
-principal inertia; the validated key is not copied into an unread tuple field.
-Pending parameters defer folding. The existing mass, centre-of-mass and
-parallel-axis calculations apply once through the carrier's marker boundary,
-including while physics is held.
+Raycast mass preparation folds once through `RaycastWheelMassFolded`, using the
+carrier's explicit or prepared collider-derived mass properties. Every wheel
+and reduced-part identity passes the shared physics ordering validator, including
+sources whose carrier is already folded or unavailable. In that stable order,
+Parry combines full tensors, principal frames, local centres of mass and
+parallel-axis terms. Proxy wheels contribute point mass; their spin inertia
+belongs to the wheel integrator. Pending wheel parameters defer folding. The
+complete native mass, inertia and centre-of-mass candidate is validated before
+publication; invalid physical data faults and holds integration.
 
 ## Usage
 

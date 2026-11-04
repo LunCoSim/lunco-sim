@@ -549,7 +549,10 @@ fn dispatch_one(
     let entity = match target_entity {
         Some(entity) => entity,
         None => world
-            .spawn(lunco_modelica_runtime::EditorModelicaActor)
+            .spawn((
+                lunco_modelica_runtime::EditorModelicaActor,
+                lunco_core::Provenance::Authoritative,
+            ))
             .id(),
     };
     world.entity_mut(entity).insert((

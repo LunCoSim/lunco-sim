@@ -1060,6 +1060,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | command | params | effect |
 |---|---|---|
 | `CompileModel` | `{doc, class?, force?, resume_after_compile?}` | terminal result after initialized session installation; paused unless resume requested |
+| `SetModelicaParameter` | `{entity, key, value}` | checked edit of the selected participant's mutable source parameter; terminal success after exact replacement installation |
 | `RunActiveModel` | `{doc, class?}` | compile-if-stale + play (live) |
 | `PauseActiveModel` / `ResumeActiveModel` / `ResetActiveModel` | `{doc}` | live stepping control |
 | `RestartActiveModel` | `{doc}` | reset t=0 then run |
@@ -1289,6 +1290,23 @@ source snapshot in `RunScenarioAsset.params` (`source` and
 `source_uri: "lunco://models/DescentGuidance.mo"`). It checks sensor feedback,
 current gain initialization, paused input changes, and the authority gate.
 Reset admits current values even when the worker has not stepped after a write.
+
+Tune a document-backed participant through `SetModelicaParameter`, using its
+stable entity id and exact parameter key. Compile the current source first,
+then await its terminal `command_result` before another edit. The owner rejects
+busy, read-only, stale, final, unknown and out-of-range edits before replacing
+any live session. A USD participant without an editable Modelica document
+rejects this command; edit the parameter at its authored USD owner instead.
+Replacement reinitializes the selected class with current inputs and retained
+sibling sources and instance overrides. It does not transfer continuous state.
+Use `modelica_parameter_contracts.rhai` with a compiled standalone USD
+`InitialFeedback` participant supplied as `params.no_document_entity` to check
+positive edits, exact class identity and the negative ownership boundary.
+Run that scenario in a windowed production session: its scratch-document
+`CompileModel` command belongs to the workbench. `SetModelicaParameter` itself
+is available in the headless core. Document-created participants receive stable
+entity ids through shared session identity admission and can be resolved by
+their compiled class name with `find`.
 
 `SnapshotVariables.metadata` carries checked scalar `unit`, `description`,
 `minimum`, and `maximum` facts for the installed component, using the same

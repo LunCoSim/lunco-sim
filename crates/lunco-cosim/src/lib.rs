@@ -574,10 +574,11 @@ mod binding_lifecycle_tests {
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
         let joint = app
             .world_mut()
-            .spawn(
+            .spawn((
+                GlobalEntityId::from_raw(10),
                 RevoluteJoint::new(Entity::PLACEHOLDER, Entity::PLACEHOLDER)
                     .with_angle_limits(-0.7, 1.2),
-            )
+            ))
             .id();
         let registry = app
             .world()
@@ -1818,8 +1819,30 @@ fn apply_validated_port_input_writes(
         .iter()
         .map(|write| (write.entity(), write.name().to_owned(), write.value()))
         .collect::<Vec<_>>();
+    let effective = prepared
+        .into_iter()
+        .map(|write| {
+            let value = world.resource::<PortHolds>().effective_write(
+                write.entity(),
+                write.name(),
+                write.value(),
+                program_setpoint,
+            );
+            if value.to_bits() == write.value().to_bits() {
+                Ok(write)
+            } else {
+                registry.prepare_input_write(world, write.entity(), write.name(), value)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            (
+                error.to_string(),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            )
+        })?;
     registry
-        .apply_prepared_input_writes(world, &prepared)
+        .apply_prepared_input_writes(world, &effective)
         .map_err(|error| {
             (
                 error.to_string(),

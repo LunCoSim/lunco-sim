@@ -188,8 +188,8 @@ fn preview_explode(preview, doc, assembly, parts, action, axis, spacing) {
         assembly: assembly,
         parts: parts,
         action: action,
-        // Reflection uses the typed enum variant names on the command bus;
-        // explicit nulls keep reset constructible without a fake spacing.
+        // Commands use serialized enum values; explicit nulls represent the
+        // absent axis/spacing of a reset operation.
         axis: axis,
         spacing: spacing,
     };
@@ -199,18 +199,18 @@ fn preview_explode(preview, doc, assembly, parts, action, axis, spacing) {
 /// Enable an explode pose. Parts are ordered by canonical USD path before
 /// offsets are computed, making repeated calls deterministic.
 fn preview_explode_enable(preview, doc, assembly, parts, axis, spacing) {
-    preview_explode(preview, doc, assembly, parts, "Enable", axis, spacing)
+    preview_explode(preview, doc, assembly, parts, "enable", axis, spacing)
 }
 
 /// Update the axis/spacing of an existing explode pose without recapturing
 /// the original local transforms.
 fn preview_explode_update(preview, doc, assembly, parts, axis, spacing) {
-    preview_explode(preview, doc, assembly, parts, "Update", axis, spacing)
+    preview_explode(preview, doc, assembly, parts, "update", axis, spacing)
 }
 
 /// Reset the explicit explode target to its captured, unmodified preview pose.
 fn preview_explode_reset(preview, doc, assembly, parts) {
-    preview_explode(preview, doc, assembly, parts, "Reset", (), ())
+    preview_explode(preview, doc, assembly, parts, "reset", (), ())
 }
 
 /// Describe one explicit USD document, including layers, revisions,

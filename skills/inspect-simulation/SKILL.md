@@ -70,7 +70,7 @@ shared-clock gate.
 |---|---|
 | `list_entities` (`ListEntities`) | every registered entity → `{api_id, name, type, pos}`. **Start here** — most reads need an `api_id`. |
 | `query_entity` (`QueryEntity {id}`) | one entity's pose/name/type blob. |
-| `QueryPhysicsState {id}` | native body/admission state, collider ownership and support; `sleep_state` reports the native timer, required rest time, disabled marker and effective velocity thresholds. `constant_linear_acceleration_mps2` reports the persistent native acceleration, or unavailable when absent. These are observations, not instructions to force sleeping. |
+| `QueryPhysicsState {id}` | native body/admission state, collider ownership and support; `sleep_state` reports the native timer, required rest time, disabled marker and effective velocity thresholds. `constant_linear_acceleration_mps2` reports the persistent native acceleration, or unavailable when absent. `inertia_tensor_kgm2` is the finite computed body-local tensor as three rows, preserving orientation and cross terms; unavailable tensors remain null. These are observations, not instructions to force sleeping. |
 | `QueryUsdPrim` | composed USD attributes and the resolved world position for a prim; use it to verify `xformOpOrder`, placement heading and mounted-part dimensions. Add `topology:true` for one scoped visual/collider/material/joint/bounds/projection record. |
 | `InspectUsdViewport` | the explicit focused USD preview/view handles, document IDs, edit targets, projection generations, and `projection_ready` state; use this to identify the exact editor item visible in a screenshot and wait for a ready preview before editing. |
 | `InspectUsdInspectionPresets` | persisted view-only USD inspection camera presets; use it to verify the named settings state and the active preset without treating camera presentation as authored USD. |
@@ -162,6 +162,27 @@ nonzero producer id for the same external caller, then re-read. Use
 `ReleasePort` / `ReleaseControl` with the same producer id when releasing a
 live hold to return an input to authored wiring. Apply a safe state with
 explicit named `SetPorts` values and keep that hold active while it is wanted.
+Controller holds outrank Twin/Simulation program setpoints at the actual input
+commit, including inputs without wires. A lower-priority program command can be
+accepted and retained without replacing the current controlled value. All held
+targets require unique nonzero `GlobalEntityId` values; missing or duplicate
+identity reports `cosim-held-input-identity-invalid` before exchange writes. Held
+inputs are levels: an unwired `force_x`, `torque_z`, or `force_command` continues
+each fixed cycle until release. To apply a one-cycle force pulse, set the force
+in a simulation callback and release that named input in the following callback;
+do not treat `SetPorts` as an impulse command. Release preserves endpoint values
+at its boundary; a resumed wire or remaining program hold supplies the next
+exchange value, and an unwired force accumulator drains without another command.
+The production `cosim_input_contracts` observer checks priority, atomic rejection,
+release, and force persistence after its API driver admits a controller mass hold.
+Native force and torque inputs must fit their published native range; a finite
+`f64` outside that range rejects the entire command batch before any writes.
+Run `LUNCOSIM_BIN=target/debug/luncosim python3 scripts/api/test_simulation_core_contracts.py`
+for the focused production gates: command decoding, mass tensors, mount
+precision, input priority, parameter replacement and terminal admission errors.
+For `cosim-joint-effort-order-invalid`, inspect the affected joint's
+`PhysicsOrderKey`: the effort owner rejects missing/empty/duplicate identity
+before applying any torque or feedback update.
 Use `possess_vessel` when the
 target also requires an explicit control claim.
 

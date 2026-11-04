@@ -528,5 +528,10 @@ contract. Coordinate projection and time authority are separate boundaries.
 the calendar anchor at the current tick. `SetCelestialClock` rate-scales or
 seeks the `WorldTime` child without changing its parent or the physical cadence.
 `ControlAnimation` controls explicitly bound preview or driven domains.
+An unavailable target, non-finite seek/rate, or invalid mission epoch returns a
+terminal command rejection with a concise owner warning before changing state.
+Mission-epoch and animation-owner rejections publish named runtime errors
+through the shared event/status bridge for Recent Events.
+Default animation requests resolve the installed preview owner explicitly.
 `SetSimulationExecutionMode` controls host pacing only; it does not change
 `TimeTransport.rate`.

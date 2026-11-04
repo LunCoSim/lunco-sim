@@ -743,6 +743,13 @@ causes a whole-stage projection rebuild; it is exposed to Rhai through
 `assembly_edit::stage_metrics`. The USD token spelling is created only at this
 format boundary, not used as a stored string-valued design parameter.
 
+`UsdOp::SetStageMassUnits` authors the standard `kilogramsPerUnit` metadata;
+its optional positive finite value sets or clears the selected layer's opinion.
+Its typed inverse preserves the prior opinion, and live changes require a
+whole-stage rebuild. Documents can author arbitrary valid USD mass units;
+runtime physics admits only the kilogram convention (`1.0`, also the omitted
+USD default) and reports unsupported units before instantiating bodies.
+
 Modelica runtime admission respects the same `UsdPreviewOnly` ancestry as the
 simulation projector. Domain member discovery, synthesis, and asynchronous
 completion use `lunco_usd_bevy_scene::is_preview_only`; presentation collections do

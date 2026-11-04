@@ -232,6 +232,42 @@ A scoped output budget admits grid dimensions before allocation and every
 recorded trace append, including event observations. Guards are thread-local,
 restore nested callers, and cannot migrate between worker threads.
 
+## Parameter authoring and session replacement
+
+`SetModelicaParameter {entity, key, value}` is a typed command shared by the
+inspector, Rhai and headless API. Its contract lives in `lunco-modelica-runtime`;
+`lunco-modelica-core::parameter_commands` owns admission and terminal replies.
+Document-created actors carry authoritative provenance and receive stable entity
+ids through the shared session identity admission, so scripts and external
+commands address the same participant as the inspector.
+The owner validates the exact selected class, current compiled document,
+mutable declaration, finite bounded scalar and idle worker transaction before
+changing source or session state. Read-only, stale or pending source, final or
+unknown parameters, and participants without an editable document reject
+visibly without changing the live session. USD-backed participants use their
+existing authored USD parameter owner; their document-only inspector controls
+are disabled with that explanation.
+
+The document operation must commit synchronously before dispatch. A closed
+worker channel leaves the authored edit visible and the installed session
+unchanged; the command fails explicitly. Accepted replacements retain current
+inputs, the full admitted sibling-source closure and every other instance
+override in both native and browser workers. The explicit changed scalar
+replaces its own override. A successful result refreshes checked declarations,
+values and metadata at the same source-generation/session fence as compilation.
+The command remains pending until that exact replacement is installed, and
+source changes or retirement of that exact document/runtime/participant owner
+terminate its reply. Application document requests survive unrelated scene
+teardown and can still acknowledge their checked installation. These are
+authored reinitializations, not continuous-state transfer.
+`modelica_parameter_contracts.rhai` covers exact selected-class edits, sibling
+sources, busy and invalid requests, and no-document rejection through the
+production command surface. A low-level native worker check seeds a distinct
+instance override and verifies it across successive parameter replacements.
+The scenario uses the workbench's `CompileModel` command to create its editable
+document participant and therefore runs in a windowed production session; the
+parameter command itself is registered by the headless core.
+
 ## Source-preserving editing and lint
 
 Structured document edits splice the original source spans; untouched bytes,

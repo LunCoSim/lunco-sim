@@ -268,8 +268,8 @@ use lunco_doc::DocumentId;
 
 /// Open a Modelica file and create a tab for it.
 #[Command(default)]                         // ← expands to:
-pub struct OpenFile {                       //   #[derive(Event, Reflect, Clone, Debug, Default)]
-    pub path: String,                       //   #[reflect(Event, Default)]
+pub struct OpenFile {                       //   Event, Reflect, Clone, Debug, Default + serde
+    pub path: String,                       //   ReflectDeserialize + serde(default, deny_unknown_fields)
 }
 ```
 
@@ -383,7 +383,7 @@ pub struct Foo { pub doc_id: u64 }   // use DocumentId
 
 ## Command Execution (Side Effects)
 
-Commands are typed — each domain crate defines its own command structs. The API discovers marked reflected commands automatically. Use `GET /api/commands/schema` to see the full list of available commands and their parameters; each command reports whether its Rust type registered `Default`, which is the authoritative omitted-field contract. For a static, documented catalog (descriptions + field types, generated from that same runtime schema), see [`../commands-reference.md`](../commands-reference.md).
+Commands are typed — each domain crate defines its own command structs. The API discovers marked reflected commands automatically. Use `GET /api/commands/schema` to see the full list of available commands and their parameters. The registered concrete serde implementation owns omission: command and per-field defaults apply only to omitted values, and omitted optional fields are `None`. Optional wire values are raw values or `null`; enums use their serialized spellings, including declared renames. Supplied malformed values and unknown command fields reject before dispatch. The schema's Rust `Default` flag describes type registration rather than every field's omission rule. For a static, documented catalog generated from that runtime schema, see [`../commands-reference.md`](../commands-reference.md).
 
 ### Common Commands
 

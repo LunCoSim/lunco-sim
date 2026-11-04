@@ -67,7 +67,7 @@ def run_gate(scenario, port, timeout):
             wait_for_ready(session.port)
             execute(session, "SetTimeTransport", playing=True)
             execute(session, "RunScenarioAsset", source_asset=f"lunco://scenarios/tests/{scenario}.rhai",
-                    reload_policy="Retain", params={"root_a": str(roots[0]), "root_b": str(roots[1]),
+                    reload_policy="retain", params={"root_a": str(roots[0]), "root_b": str(roots[1]),
                                                      "entry_scene": "scene.usda", "marker_a": "/World/owner_a", "marker_b": "/World/owner_b"})
             deadline = time.monotonic() + timeout
             admitted = set()

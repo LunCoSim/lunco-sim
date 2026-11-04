@@ -67,7 +67,7 @@ Resolve a live prim's owning document once with
 changes. A detached library demonstration stage has no editable document owner.
 
 The menu submits the generic `RunScenarioAsset` command. It uses
-`ScenarioReloadPolicy::Restart` for a predictable fresh start and lets the
+`reload_policy: "restart"` for a predictable fresh start and lets the
 command resolve an omitted host target to the active `WorldRoot`. Other apps
 can reuse the command without importing tutorial code.
 

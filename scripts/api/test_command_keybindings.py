@@ -30,7 +30,7 @@ def main() -> None:
         print(f"OWNED pid={pid} port={args.port} cwd={ROOT}", flush=True)
         offset = log.stat().st_size
         result = session.post({"type": "ExecuteCommand", "command": "RunScenarioAsset", "params": {
-            "source_asset": "lunco://scenarios/tests/command_keybindings.rhai", "reload_policy": "Retain",
+            "source_asset": "lunco://scenarios/tests/command_keybindings.rhai", "reload_policy": "retain",
             "params": {"override_twin": str(override_twin),
                        "replacement": str(ROOT / "assets/scenes/tests/workbench_perspectives")},
         }})

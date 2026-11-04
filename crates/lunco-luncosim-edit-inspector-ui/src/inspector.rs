@@ -17,7 +17,7 @@ use lunco_command_contracts::OpId;
 use lunco_control_core::{EguiFocus, IntentState, UserIntent};
 use lunco_doc::Document;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
-use lunco_modelica_ui_core::SetModelicaParameter;
+use lunco_modelica_runtime::SetModelicaParameter;
 use lunco_port_core::ports::PortRegistry;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
@@ -3647,8 +3647,21 @@ fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: En
     use lunco_modelica_runtime::ModelicaModel;
 
     // Snapshot the current params so we can render stable sliders.
-    let params = match ctx.get::<ModelicaModel>(entity) {
-        Some(m) => m.parameters.clone(),
+    let (params, unavailable) = match ctx.get::<ModelicaModel>(entity) {
+        Some(model) => (
+            model.parameters.clone(),
+            if model.document.is_unassigned() {
+                Some(
+                    "Edit this participant's authored USD parameters; it has no editable Modelica document.",
+                )
+            } else if !model.is_compiled || model.last_error.is_some() {
+                Some("Compile the current Modelica source before editing its live parameters.")
+            } else if model.is_compiling || model.is_stepping {
+                Some("Wait for the current Modelica transaction to complete.")
+            } else {
+                None
+            },
+        ),
         None => return,
     };
     if params.is_empty() {
@@ -3666,7 +3679,11 @@ fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: En
         ui.horizontal(|ui| {
             ui.label(format!("{key:14}"));
             if ui
-                .add(egui::DragValue::new(&mut v).speed(0.01).fixed_decimals(3))
+                .add_enabled(
+                    unavailable.is_none(),
+                    egui::DragValue::new(&mut v).speed(0.01).fixed_decimals(3),
+                )
+                .on_disabled_hover_text(unavailable.unwrap_or(""))
                 .changed()
             {
                 changed_pair = Some((key.clone(), v));

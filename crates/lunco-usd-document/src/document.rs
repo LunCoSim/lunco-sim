@@ -709,6 +709,14 @@ pub enum UsdOp {
         /// Positive finite metres per authored unit, plus the typed up axis.
         metrics: StageMetrics,
     },
+    /// Author or clear standard USD mass-unit metadata. Document authoring
+    /// accepts positive finite scales; runtime admission owns its supported units.
+    SetStageMassUnits {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Kilograms per authored mass unit, or `None` to clear this opinion.
+        kilograms_per_unit: Option<f64>,
+    },
     /// Author standard USD `doc` metadata on the layer pseudo-root.
     SetStageDocumentation {
         /// Layer to write.
@@ -964,6 +972,7 @@ impl UsdOp {
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
+            | Self::SetStageMassUnits { edit_target, .. }
             | Self::SetStageDocumentation { edit_target, .. }
             | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
@@ -1015,6 +1024,7 @@ impl UsdOp {
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
+            | Self::SetStageMassUnits { edit_target, .. }
             | Self::SetStageDocumentation { edit_target, .. }
             | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
@@ -1084,6 +1094,7 @@ impl UsdOp {
             } => vec![from_path.clone(), to_path.clone()],
             Self::SetDefaultPrim { .. }
             | Self::SetStageMetrics { .. }
+            | Self::SetStageMassUnits { .. }
             | Self::SetStageDocumentation { .. } => {
                 vec!["/".to_owned()]
             }
@@ -2472,6 +2483,7 @@ impl<'a> UsdEditSession<'a> {
             | UsdOp::SetConnection { edit_target, .. }
             | UsdOp::SetDefaultPrim { edit_target, .. }
             | UsdOp::SetStageMetrics { edit_target, .. }
+            | UsdOp::SetStageMassUnits { edit_target, .. }
             | UsdOp::SetStageDocumentation { edit_target, .. }
             | UsdOp::SetPrimDocumentation { edit_target, .. }
             | UsdOp::SetPrimKind { edit_target, .. }
@@ -3795,6 +3807,54 @@ impl<'a> UsdEditSession<'a> {
                     sdf::Value::Token(metrics.up_axis.as_token().into()),
                 );
                 self.commit_layer(target, new_data, UsdChange::Resync { path: "/".into() });
+                Ok(inverse)
+            }
+
+            UsdOp::SetStageMassUnits {
+                kilograms_per_unit, ..
+            } => {
+                if kilograms_per_unit.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+                    return Err(DocumentError::ValidationFailed(
+                        "kilogramsPerUnit must be finite and positive".to_owned(),
+                    ));
+                }
+                let root = SdfPath::abs_root();
+                let field = "kilogramsPerUnit";
+                let prior = self
+                    .layer(target)
+                    .spec(&root)
+                    .and_then(|spec| spec.get(field));
+                let inverse = match prior {
+                    None => UsdOp::SetStageMassUnits {
+                        edit_target: id,
+                        kilograms_per_unit: None,
+                    },
+                    Some(sdf::Value::Double(value)) if value.is_finite() && *value > 0.0 => {
+                        UsdOp::SetStageMassUnits {
+                            edit_target: id,
+                            kilograms_per_unit: Some(*value),
+                        }
+                    }
+                    Some(_) => self.coarse_inverse(target, &id)?,
+                };
+                let mut data = self.layer(target).clone();
+                if !data.has_spec(&root) {
+                    return Err(DocumentError::ValidationFailed(
+                        "SetStageMassUnits requires an authored USD pseudo-root".to_owned(),
+                    ));
+                }
+                if let Some(value) = kilograms_per_unit {
+                    data.set_field(&root, field, sdf::Value::Double(value));
+                } else {
+                    data.erase_field(&root, field);
+                }
+                self.commit_layer(
+                    target,
+                    data,
+                    UsdChange::Resync {
+                        path: "/".to_owned(),
+                    },
+                );
                 Ok(inverse)
             }
 

@@ -2264,7 +2264,7 @@ mod tests {
         let params = api_value!({
             "source_asset": "lunco://tutorials/sandbox/first_drive.rhai",
             "scene_asset": "lunco://tutorials/sandbox/first_drive.usda",
-            "reload_policy": "Restart"
+            "reload_policy": "restart"
         });
 
         lunco_api::executor::validate_command_params_value(

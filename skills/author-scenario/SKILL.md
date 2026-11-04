@@ -354,7 +354,7 @@ Twin. A script projected from USD is scene-owned and is stopped when that scene
 is replaced; a file-backed tutorial launched for a Twin uses an isolated host
 and is stopped, with its source handles and document, at `TwinClosed`.
 
-For a persistent Twin-owned host using `reload_policy: "Retain"`, scene
+For a persistent Twin-owned host using `reload_policy: "retain"`, scene
 replacement preserves `this` and does not repeat initialization or `on_start`.
 The owner reruns `simulation_dependencies` against the new scene generation
 before admitting subsequent hooks. Resolve scene entity identities in that

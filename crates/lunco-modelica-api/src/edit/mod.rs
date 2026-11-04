@@ -330,7 +330,7 @@ impl ApiVariability {
 }
 
 #[derive(Reflect, Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", deny_unknown_fields)]
 pub enum ApiGraphic {
     Rectangle {
         x1: f32,
