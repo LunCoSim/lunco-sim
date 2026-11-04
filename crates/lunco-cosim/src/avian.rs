@@ -1479,6 +1479,11 @@ fn write_mass(w: &mut World, e: Entity, v: f64) {
         w.get::<RigidBody>(e).is_some(),
         "prepared mass input retains RigidBody"
     );
+    if let Some(mut automatic) = w.get_mut::<lunco_physics::body_mass::BodyMassFromColliders>(e) {
+        if automatic.mass {
+            automatic.mass = false;
+        }
+    }
     let mass = ComputedMass::new(v as f32);
     if w.get::<ComputedMass>(e) != Some(&mass)
         || w.get::<NoAutoMass>(e).is_none()
@@ -1489,21 +1494,10 @@ fn write_mass(w: &mut World, e: Entity, v: f64) {
 }
 
 fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
-    w.get::<ComputedAngularInertia>(e).map(|inertia| {
-        let inverse = inertia.inverse_tensor();
-        if inverse.m01 == 0.0 && inverse.m02 == 0.0 && inverse.m12 == 0.0 {
-            // Component-wise reciprocals avoid determinant overflow/underflow
-            // for diagonal tensors spanning the native scalar range.
-            DVec3::from_array(inverse.diagonal().to_array().map(|value| {
-                if value == 0.0 {
-                    0.0
-                } else {
-                    f64::from(value).recip()
-                }
-            }))
-        } else {
-            inertia.tensor().diagonal().as_dvec3()
-        }
+    w.get::<ComputedAngularInertia>(e).and_then(|inertia| {
+        lunco_physics::body_mass::computed_inertia_tensor_d(inertia)
+            .ok()
+            .map(|tensor| tensor.diagonal())
     })
 }
 
@@ -1515,7 +1509,10 @@ fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
 pub(crate) fn scalar_inertia_writable(w: &World, e: Entity) -> bool {
     w.get::<ComputedAngularInertia>(e).is_some_and(|inertia| {
         let tensor = inertia.inverse_tensor();
-        tensor.is_finite() && tensor.m01 == 0.0 && tensor.m02 == 0.0 && tensor.m12 == 0.0
+        tensor.m01 == 0.0
+            && tensor.m02 == 0.0
+            && tensor.m12 == 0.0
+            && lunco_physics::body_mass::computed_inertia_tensor_d(inertia).is_ok()
     })
 }
 
@@ -1529,6 +1526,11 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
         scalar_inertia_writable(w, e),
         "prepared scalar inertia input retains an axis-aligned tensor"
     );
+    if let Some(mut automatic) = w.get_mut::<lunco_physics::body_mass::BodyMassFromColliders>(e) {
+        if automatic.inertia {
+            automatic.inertia = false;
+        }
+    }
     let mut diagonal = inertia_diagonal(w, e)
         .expect("writable inertia ports require an effective native baseline");
     diagonal[axis] = v;
@@ -1553,6 +1555,11 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
         "prepared centre-of-mass input retains RigidBody"
     );
     assert!(axis < 3, "centre-of-mass axis is declared by its owner");
+    if let Some(mut automatic) = w.get_mut::<lunco_physics::body_mass::BodyMassFromColliders>(e) {
+        if automatic.center {
+            automatic.center = false;
+        }
+    }
     let mut c = center_of_mass(w, e)
         .expect("writable centre-of-mass ports require an effective native baseline");
     c[axis] = v;
@@ -2229,5 +2236,44 @@ mod tests {
             assert!(registry.read_port(&world, body, name).unwrap() > 0.0);
         }
         assert!(world.get::<NoAutoAngularInertia>(body).is_none());
+    }
+
+    #[test]
+    fn unavailable_inertia_rejects_scalar_input_before_ownership_or_state_mutation() {
+        let mut world = World::new();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
+        let automatic = lunco_physics::body_mass::BodyMassFromColliders {
+            mass: true,
+            inertia: true,
+            center: true,
+        };
+        let body = world
+            .spawn((
+                RigidBody::Static,
+                ComputedAngularInertia::INFINITY,
+                automatic,
+            ))
+            .id();
+        let mut registry = lunco_port_core::ports::PortRegistry::default();
+        crate::ports::register_builtin_port_backends(&mut registry);
+        for name in ["inertia_xx", "inertia_yy", "inertia_zz"] {
+            let error = registry
+                .write_port(&mut world, body, name, 1.0)
+                .unwrap_err();
+            assert!(matches!(
+                error.kind,
+                lunco_port_core::ports::PortWriteErrorKind::NotWritable
+            ));
+            assert_eq!(
+                world.get::<ComputedAngularInertia>(body),
+                Some(&ComputedAngularInertia::INFINITY)
+            );
+            assert_eq!(
+                world.get::<lunco_physics::body_mass::BodyMassFromColliders>(body),
+                Some(&automatic)
+            );
+            assert!(world.get::<NoAutoAngularInertia>(body).is_none());
+            assert!(world.get::<AngularInertia>(body).is_none());
+        }
     }
 }

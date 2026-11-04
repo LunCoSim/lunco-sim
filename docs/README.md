@@ -16,7 +16,7 @@ The authoritative home for LunCoSim architecture, design, and reference docs.
 | Run the thing | [`apps/README.md`](apps/README.md) — every binary, its flags, when to use it |
 | Find which crate does X | [`crates-index.md`](crates-index.md) |
 | Find a Modelica model or USD part | [`component-index.md`](component-index.md) |
-| Call the app from code / curl / MCP | [`commands-reference.md`](commands-reference.md) — every `#[Command]`, generated from source |
+| Call the app from code / curl / MCP | [`commands-reference.md`](commands-reference.md) — public commands, generated from the runtime schema |
 | Build a mission end-to-end | [`tutorials/`](tutorials/README.md) |
 | Write rhai behaviour | [`scripting-guide.md`](scripting-guide.md) · [`behaviour-trees.md`](behaviour-trees.md) |
 | Build or inspect a USD assembly with human/AI tools | [`architecture/48-assembly-editor.md`](architecture/48-assembly-editor.md) · [`scripting-guide.md#model-and-assembly-authoring-human-and-ai`](scripting-guide.md#model-and-assembly-authoring-human-and-ai) |

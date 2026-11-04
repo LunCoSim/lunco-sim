@@ -209,6 +209,18 @@ type BuiltStepper<S> = (
     lunco_modelica_runtime::ModelicaConstructionProfile,
 );
 
+#[cfg(test)]
+fn test_checked_interface() -> Arc<lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface>
+{
+    Arc::new(
+        lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface {
+            model_name: "Plant".into(),
+            declarations: Default::default(),
+            input_groups: Vec::new(),
+        },
+    )
+}
+
 fn live_build_plan(
     profile: solver::RuntimeProfile,
     parameter_overrides: &[(String, f64)],
@@ -407,10 +419,11 @@ fn build_prepared_stepper(
             .collect()
     };
     let metadata_collected = web_time::Instant::now();
-    let symbols = {
+    let mut symbols = {
         let _span = bevy::log::info_span!("modelica_initial_observation").entered();
         collect_stepper_observables(&stepper)?
     };
+    symbols.extend(stepper.parameter_values()?);
     if let Some(expected) = &plan.initial_state_values {
         for (name, expected) in expected {
             let actual = symbols
@@ -1306,7 +1319,7 @@ fn install_compile_work(
                     result.compile_diagnostics = Vec::new();
                     result.live_solver_snapshot = Some(live_solver_snapshot.clone());
                     result.variable_metadata = published_metadata;
-                    let _ = tx.send(result);
+                    let _ = tx.send(add_experiment_defaults(result, &comp_res));
                 }
                 CompileIntent::UpdateParameters => {
                     let _ = tx.send(add_experiment_defaults(
@@ -2007,6 +2020,8 @@ struct CompiledModelArtifact {
     /// Per-request values classified after the shared artifact lookup. Never
     /// stored in the shared compiled-artifact cache.
     authored_bindings: lunco_modelica_compiler::AdmittedModelicaBindings,
+    /// Per-request source authority, rebuilt after every shared/disk lookup.
+    edit_interface: Option<Arc<lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface>>,
     #[cfg(not(target_arch = "wasm32"))]
     source_content: lunco_hash::content::Cid,
     /// Exact source/root context and explicitly bound parameter name set.
@@ -2130,6 +2145,14 @@ fn compile_shared(
         &unit.authored_bindings.values,
         &unit.authored_bindings.external_inputs,
     )?;
+    artifact.edit_interface = Some(Arc::new(compiler.interface_for_parameter_edits(
+        model_name,
+        &unit.source,
+        doc_uri,
+        &unit.extras,
+        &artifact.compiled.dae,
+        &parameters,
+    )?));
     Ok(artifact)
 }
 
@@ -2229,6 +2252,7 @@ fn compile_bound_variant(
         prepared_source_key,
         structural_overrides,
         authored_bindings: Default::default(),
+        edit_interface: None,
         #[cfg(not(target_arch = "wasm32"))]
         source_content,
         binding_schema,
@@ -2834,9 +2858,19 @@ fn add_experiment_defaults(
     mut result: ModelicaResult,
     comp_res: &CompiledModelArtifact,
 ) -> ModelicaResult {
+    result.checked_interface = comp_res.edit_interface.clone();
     result.detected_parameter_names = comp_res.compiled.dae.inspect(|view| {
         view.variables()
-            .filter(|(_, variable)| variable.role() == rumoca_ir_dae::VariableRole::Parameter)
+            .filter(|(_, variable)| {
+                variable.role() == rumoca_ir_dae::VariableRole::Parameter
+                    && matches!(
+                        variable.value_type().scalar_type(),
+                        rumoca_ir_dae::ScalarType::Real
+                            | rumoca_ir_dae::ScalarType::Integer
+                            | rumoca_ir_dae::ScalarType::Boolean
+                            | rumoca_ir_dae::ScalarType::Enumeration
+                    )
+            })
             .flat_map(|(_, variable)| variable.scalar_names())
             .collect()
     });
@@ -4794,7 +4828,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                             reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
                         result.live_solver_snapshot = Some(live_solver_snapshot);
                         result.variable_metadata = Some(variable_metadata);
-                        send(result);
+                        send(add_experiment_defaults(result, &comp_res));
                     }
                     Err(e) => {
                         send(ModelicaResult {
@@ -6021,7 +6055,7 @@ end CoupledArrays;
     #[test]
     fn prepared_closure_key_remains_with_shared_artifact_after_overlay_release() {
         let unit = assemble_compile_unit(
-            "model Probe Real x(start=1); equation der(x)=-x; end Probe;",
+            "model Probe parameter Integer count=2; final parameter Real fixedGain=4; protected parameter Real hidden=7; public Real x(start=1); equation der(x)=-x; end Probe;",
             Vec::new(),
         );
         let mut compiler = ModelicaCompiler::new();
@@ -6036,6 +6070,32 @@ end CoupledArrays;
             &first.compiled.dae,
             &reused.compiled.dae
         ));
+        for artifact in [&first, &reused] {
+            let interface = artifact
+                .edit_interface
+                .as_ref()
+                .expect("checked source authority is attached after every cache lookup");
+            assert_eq!(
+                interface.declarations["count"]
+                    .parameter_edit_source(3.0)
+                    .unwrap(),
+                "3"
+            );
+            assert!(
+                interface.declarations["count"]
+                    .parameter_edit_source(1.5)
+                    .unwrap_err()
+                    .contains("Integer")
+            );
+            for name in ["fixedGain", "hidden"] {
+                assert!(
+                    interface.declarations[name]
+                        .parameter_edit_source(9.0)
+                        .unwrap_err()
+                        .contains("public, non-final")
+                );
+            }
+        }
     }
 
     #[test]

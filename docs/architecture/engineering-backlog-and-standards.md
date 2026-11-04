@@ -283,7 +283,7 @@ Not adopted; re-evaluate when the trigger fires:
 | MaterialX / OpenPBR | keep UsdShade authoring compatible; do **not** implement a runtime |
 | GPU-driven LOD (CBT/UDLOD) | the wasm main-thread LOD cost, if terrain streaming targets web seriously |
 | International Lunar Reference Frame | standardization lands; ANISE (§1) positions us to adopt cheaply |
-| lightyear releases | each release; we track 0.27 |
+| Lightyear releases | each release; transport/messaging dependency is 0.31 |
 
 ## 12. Validated non-adoptions
 

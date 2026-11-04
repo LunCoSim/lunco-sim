@@ -4,6 +4,12 @@ The transport-neutral implementation described here lives in
 `lunco-networking-sync`. `lunco-networking` only supplies the lightyear transport
 adapter and connection lifecycle around it.
 
+Lightyear is composed with transport, messages, netcode and connection clock
+synchronization. Its optional ECS replication, prediction and interpolation
+features are disabled. LunCoSim's typed snapshot, control-frame, reconciliation
+and presentation owners provide those capabilities through the `Frame` message;
+there is no parallel Replicon entity stream or native interpolation timeline.
+
 The capstone. The other docs cover pieces (identity, transport, gaps). This one
 answers the whole question: **across all possible cases, how is state kept
 consistent — derivably, not feature-by-feature?**
@@ -27,6 +33,20 @@ workspace Twin ID, independent of persistent UUID, content revision, mount-local
 asset authority, and stable entity provenance. Application replication requires
 that neither an active Twin nor a USD scene owns the world; it supports the
 scene-free `net_smoke` harness without inventing a Twin.
+The harness first commits an explicitly empty scene through the shared Clear
+lifecycle, then creates its runtime fixture entities; simulation inputs therefore
+retain a real committed scene generation without mounting a USD stage.
+
+The client adapter installs a private attempt lease after the native client's
+initial disconnected-state publication and before dispatching Connect. Only a
+later disconnection carrying that exact lease retires the selected connection,
+session and held control inputs. A retired connection's callback removes its own
+lease without clearing the replacement connection or its session.
+
+`LunCoCoreSessionPlugin` initializes the session, RBAC, command-policy and
+control-path registries used by the wire authorization gate. Installing a
+physical controller is not required to receive commands; controller commands
+update the same control-path registry when a mission declares a blackout.
 
 Snapshots, ownership, despawns, catalog spawns, and journal entries retain the
 scope captured by their producer. Snapshot assembly checks its captured scope
@@ -38,7 +58,7 @@ late spawns and manifests for the same mount. A despawn cancels only matching
 owner work. Reliable journal and ownership envelopes may wait for their matching
 root under the codec's bounded byte budget; budget exhaustion disconnects visibly.
 The version handshake is admitted before any traffic is consumed on a connection.
-The positional wire contract is version 6. Run status carries the producer's
+The positional codec and ordered-control contract is version 7; peers must match it exactly. Run status carries the producer's
 immutable scope alongside its experiment UUID. Its consumer requires the exact
 admitted run origin, transport, and live mount before changing a row.
 
@@ -207,15 +227,15 @@ world stays coherent. Everything is stamped in **M6** sim-ticks, never wall-cloc
 
 **Server tick T:**
 1. **M6** advance sim-clock (respect warp/pause).
-2. **M4** drain client inputs destined for tick T from the per-client jitter buffer.
+2. **M4** commit the earliest pending authenticated action once per vessel, in stable target order, through the co-simulation input/hold owner.
 3. **M3** apply + validate authoritative commands for T; assign `OpId`; append to op-log.
 4. Step **cosim** (consume async Modelica results) → step **avian** → authoritative state for T.
 5. **M2** capture snapshot, emit deltas (predicted-eligible + interpolated) + **M3** acks + **M6** clock beacon.
 
 **Client tick T (running ~RTT/2 + jitter ahead, per M6):**
 1. **M6** sync clock to server, adjust local rate.
-2. **M4** sample local input → send (redundant) **and** apply to **M2-Predicted** entities locally (move now).
-3. **M2** on snapshot: reconcile predicted (smooth error-correct, *not* full avian rollback); push interpolated into the snapshot buffer.
+2. **M4** admit local input atomically; committed receipts retain the sequence and control snapshot for prediction and wire capture.
+3. **M2** on snapshot: reconcile predicted state, or replay the owned assembly when rollback is explicitly enabled; push interpolated snapshots into their buffer.
 4. **M3** apply received commands in `OpId` order (idempotent via `OpId` dedupe); **M5** apply CRDT updates (any time, commutative).
 5. **M1** content is loaded at join / on content-edit — *never* per tick.
 6. **Render** (decoupled): interpolate **M2-Interpolated** at `now − interp_delay`; draw **M2-Predicted** at `now`; the Avian/BigSpace bridge projects the f64 physics pose into this client's grid/cell/local representation.
@@ -227,6 +247,12 @@ the local bridge performs the terminal cell/local split. Identity (M1) and
 coordinates (M2) remain orthogonal.
 
 ### 4.1 M2-Predicted — Client Prediction Status
+
+Ordered network port controls are single-target writes or named/all releases.
+`SetPortsBatch` has no wire channel and rejects authenticated peer submission.
+It remains atomic on authoritative simulation hosts; a client may use it only
+when all participants are existing local embodiments. Shared client batches
+reject before local admission, endpoint/hold mutation or prediction logging.
 
 The abstract "reconcile predicted (smooth error-correct, not rollback)" above is
 realised on the client as **physics-space error reduction** (Fiedler / Rocket
@@ -261,9 +287,13 @@ Shape:
   `LinearVelocity`/`AngularVelocity` = curve feed-forward + soft correction (capped),
   never a deadbeat `(target−pos)/h` (that spiked ~50 m/s and tunnelled contacts).
 
-**Still open:** M4 input hardening (tick-stamped redundant inputs + host de-jitter
-buffer) is specced but unbuilt; it shrinks the corrections above at the source under
-real latency (today they only stay *smooth*, not *small*). See PLAN §4.
+The input queue consumes sequenced writes and named/all releases exactly once.
+Arrival does not install a hold, and acknowledgement follows successful owner
+commit. Releases use the reliable command channel and fence delayed older writes.
+Rollback consumes captured control channels and holds through that same owner;
+it does not restore unrelated pose or velocity inputs. Unsupported history with
+a different control surface rejects before mutation. Tick-delay scheduling and
+redundant packet transmission remain separate transport design work.
 
 ---
 
@@ -336,9 +366,10 @@ mechanism is independently convergent — therefore the world converges.**
 
 ## 8. How this maps to the rest of the design
 - **M1** ⇐ README → *Entity Identity Mapping* (provenance-derived ids, content loaders).
-- **M2/M4/M6** ⇐ the backend (lightyear ships M2-predicted/interpolated + M6
-  tick-sync; this is the standing argument for lightyear). README → *Transport
-  Abstraction* is the pipes they ride.
+- **M2/M4** ⇐ LunCoSim's typed snapshots, committed control frames and
+  reconciliation owners. **M6** ⇐ Lightyear connection clock synchronization
+  and LunCoSim's simulation tick contract. README → *Transport Abstraction*
+  describes the channels they use.
 - **M2 local write chokepoint** ⇐ `lunco_spatial::attach::migrate_to_grid` (commit
   `7e5fddce`). When an applied snapshot or a reconciled prediction changes *which
   grid* a body belongs to (e.g. an SOI crossing), the local `(ChildOf, CellCoord,

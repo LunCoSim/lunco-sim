@@ -67,15 +67,19 @@ free-form data.
 boundary. Omitted mass units use the standard kilogram default. Prepared plans
 retain all three metadata fields and validate the convention before publication.
 The existing primary-stage load-failure owner reports the rejected stage; no
-physical body can be admitted from it. There is no canonical-value substitution for malformed
+physical body can be admitted from it. A live document rebuild validates its
+replacement convention before replacing the canonical stage. Failure preserves
+the admitted entities, raises `usd-stage-projection-reset`, and holds simulation
+until scene retirement. Authoring a valid non-SI interchange document remains
+permitted; runtime admission owns its supported-unit restriction.
+There is no canonical-value substitution for malformed
 metadata. A *supported but non-canonical* stage logs a one-shot warning naming
 what is being converted.
 
-**Every asset we ship is `upAxis="Y", metersPerUnit=1`, so
-`ConventionTransform::is_identity()` holds and the hot decoders early-out** —
-import of our own content is bit-for-bit what it was before this module existed.
-The seam exists, is exercised by unit tests (Z-up remap, centimetre stage,
-identity stage, and a conjugated-chain property test), and costs nothing.
+Canonical scene content uses `upAxis="Y", metersPerUnit=1`, so
+`ConventionTransform::is_identity()` lets the hot decoders return directly.
+Import fixtures exercise Z-up and centimetre stages, identity stages, and
+conjugated transform chains.
 
 ### Save: the same map, backwards, at one seam
 
@@ -213,6 +217,31 @@ and subtracts their translations before the explicit native local-transform
 conversion. Physical mounts, wheel offsets and reduced mass placements consume
 that shared path. Large translations of an assembly therefore preserve its
 body-local geometry and force moment arms.
+Compound collider walks likewise compose their relative matrices in `f64`,
+honour transform-stack resets, and narrow only the final native mount. An
+actuator's prim-frame direction crosses the stage convention before its
+canonical body-relative rotation.
+
+`lunco-usd-avian` prepares the complete collider and body mass candidate before
+inserting `RigidBody`. Standard MassAPI zero sentinels retain automatic ownership.
+Omitted density is 1000 kg/m³; an explicit child mass takes precedence over its
+density, and an explicit root mass rescales the assembled body. Authored COMs
+include world scale. A body without collision volume uses the standard unit mass
+and missing-inertia approximation. Invalid authored values or native reciprocals
+raise `usd-rigid-body-mass-invalid` with the prim, property, value and failed
+invariant before any unsafe native constructor runs.
+`BodyMassFromColliders` records automatic ownership independently for mass,
+inertia and COM. The complete native components and `NoAuto*` markers protect
+validated caches from unchecked native intermediate reconstruction. The checked
+owner continues deriving automatic fields directly from cooked f64 shape
+properties, including body-world scale. Explicit computed input writers retire
+the corresponding automatic field and retain authority over the complete body.
+
+The composed-reader adapter serves both prepared snapshots and live stages.
+OpenUSD's maintained `RigidBodyAPI::mass_properties` requires native prim handles
+and its own traversal; it cannot consume the prepared reader's admitted collider
+set. This adapter reads USD opinions at the existing projection owner; Parry
+owns the tensor reduction, mass rescaling and diagonalization.
 
 A `LunCoMassContributionAPI` child in a reduced realization supplies explicit
 standard `physics:mass`, `physics:diagonalInertia` and `physics:centerOfMass`.
@@ -230,14 +259,25 @@ their physical mounts; their independent spin inertia remains with the wheel
 integrator. The carrier's explicit mass override or actual prepared
 `ComputedMass` joins the same reduction with its authored or prepared tensor
 and COM. A collider-massed carrier needs no fabricated mass seed.
+Common moment normalization precedes maintained Parry principal extraction,
+preserving physical orientation independently of the tensor's units. Native
+engineering reads widen the stored inverse before inversion rather than relying
+on an overflowing f32 determinant; singular operators remain unavailable.
 
 `lunco-physics::body_mass` checks source contributions and the complete native
-candidate before mobility changes mass, inertia, COM or its once-only marker.
+candidate before mobility changes mass, inertia or COM.
 Nonfinite values, degenerate final inertia and native-range overflow raise
 `physics-reduced-mass-invalid` and hold integration. No partial native candidate
 is published. The completed mass and tensor become the explicit native owners
 (`Mass`/`NoAutoMass`, `AngularInertia`/`NoAutoAngularInertia`) so collider
 recomputation cannot discard the reduced children.
+`ReducedMassState` retains the independent carrier baseline, original automatic
+ownership and admitted ordered contributions. A changed wheel mass, mount or
+source topology recomputes from that baseline. Repeated identical edits cannot
+double-count a contribution; removing the last source restores the baseline and
+its ownership. A settled-source preflight avoids rebuilding the tensor each tick.
+Live computed mass, COM and inertia inputs remain complete-body overrides across
+refolds and are never added into the cached baseline as new contributions.
 
 ## Full API shape — **design; does not exist yet**
 

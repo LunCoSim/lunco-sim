@@ -1,40 +1,20 @@
-//! Generates `docs/commands-reference.md` from the **runtime** command schema.
+//! Generates `docs/commands-reference.md` from the runtime command schema.
+//!
+//! Capture schemas from owned, settled production sessions. A windowed host
+//! supplies the workbench/Modelica commands; feature-specific hosts may add
+//! commands that must be unioned into the generated reference.
 //!
 //! ```sh
-//! # 1. dump the schema from a running app — and let it SETTLE first, or the
-//! #    dump is a partial command list (see `--help`):
-//! cargo run -p lunco-luncosim --bin luncosim -- --api 4101 &
-//! until curl -sf -m 2 http://127.0.0.1:4101/api/commands/schema -o /dev/null; do sleep 2; done
-//! sleep 10
-//! curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema.json
-//! # 2. generate:
-//! cargo run -p gen-command-docs -- --schema /tmp/schema.json
+//! mkdir -p .cache/command-docs
+//! curl -sf http://127.0.0.1:4101/api/commands/schema > .cache/command-docs/gui.json
+//! cargo run -p gen-command-docs -- --schema .cache/command-docs/gui.json
 //! ```
 //!
-//! # Why a schema, not a grep
+//! Runtime discovery owns command membership and visibility. Source parsing
+//! supplies only documentation comments and defining paths. Commands absent
+//! from the supplied runtime schemas are excluded from the reference.
 //!
-//! The previous version text-scraped `#[Command]` structs out of `crates/**.rs`
-//! with `syn` and called that the command list. It was wrong in both directions:
-//! it MISSED commands (a `#[Command]` behind a `macro_rules!` or a re-export
-//! never matched the pattern) and it INVENTED them — it published `TestEcho`, a
-//! `#[cfg(test)]` unit-test fixture, as public API, and it could not see
-//! `ApiVisibility::hide`, so internal-only verbs leaked into the doc too.
-//!
-//! `DiscoverSchema` is the same derived, visibility-filtered list that drives the
-//! MCP tool surface and the API itself. Making it the source here means the doc
-//! can only ever describe commands that a caller can actually call.
-//!
-//! Source is still parsed — but only for *prose*: the `///` doc comments and the
-//! defining file, neither of which survives into the reflect schema. A command in
-//! the schema with no source match still gets documented (name + fields); a
-//! `#[Command]` in source that is NOT in the schema is deliberately omitted and
-//! listed in a trailing HTML comment, because it is not reachable.
-//!
-//! A host-side dev tool: it reads `.rs` files and writes a `.md` file, and never
-//! runs on wasm. The workspace `disallowed_methods` ban on `std::fs` exists to
-//! keep the *browser* build from calling a wasm-panicking API; it does not apply
-//! here (`clippy.toml`'s header says so, but cargo has no path-scoped lint
-//! config, so the exemption has to be written out).
+//! This native development tool owns filesystem input and Markdown output.
 #![allow(clippy::disallowed_methods)]
 
 use std::{
@@ -304,36 +284,20 @@ fn short_type(path: &str) -> String {
 const USAGE: &str = "\
 usage: cargo run -p gen-command-docs -- --schema <a.json> [--schema <b.json> ...]
 
-  Each <schema.json> is a `DiscoverSchema` response from a RUNNING app — the
-  authoritative, visibility-filtered command list (the same one MCP reads).
+  Each file is a DiscoverSchema response from an owned, settled production app.
+  Runtime plugins and visibility determine which commands it contains.
 
-  WHICH commands a dump contains is decided by WHICH PLUGINS THE HOST ADDS, so
-  dump from the widest host and union anything it misses. Today the GUI sandbox
-  is a strict superset (it registers the Modelica/workbench verbs too); a
-  `--no-ui` host drops every UI command, and `lunco-luncosim-server` serves no
-  HTTP API at all, so neither can be the source on its own. Generating from a
-  narrow dump silently DELETES the rest from the reference.
+  Use a windowed production session for the workbench/Modelica surface. Start
+  the already-built binary through LUNCOSIM_BIN with an explicit free API port,
+  wait for scene readiness and a stable schema, then capture it:
 
-  WAIT FOR THE APP TO SETTLE before dumping. The API answers before plugin
-  registration finishes, so the first successful response can be a PARTIAL list
-  — dumping too eagerly is how this doc once lost 81 commands to what looked
-  like a regression. Poll until it answers, then sleep ~10s and dump again.
+      mkdir -p .cache/command-docs
+      curl -sf http://127.0.0.1:4101/api/commands/schema > .cache/command-docs/gui.json
+      cargo run -p gen-command-docs -- --schema .cache/command-docs/gui.json
 
-      # GUI (needs a display)
-      cargo run -p lunco-luncosim --bin luncosim -- --api 4101 &
-      until curl -sf -m 2 http://127.0.0.1:4101/api/commands/schema -o /dev/null; do sleep 2; done
-      sleep 10
-      curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema-gui.json
-
-      # Any host with plugins the sandbox lacks — union it in:
-      #   cargo run -p lunco-modelica-ui --bin lunica -- --api 3001 &   (same wait)
-
-      cargo run -p gen-command-docs -- --schema /tmp/schema-gui.json [--schema ...]
-
-  There is deliberately no source-scrape fallback: a grep of `#[Command]` both
-  misses commands and invents them (it used to publish the `TestEcho` unit-test
-  fixture as public API), and a doc that is confidently wrong is worse than one
-  that refuses to build.
+  Union additional feature-specific production schemas when needed. A numeric
+  --no-ui schema alone cannot supply the workbench command surface. The tool
+  requires runtime schemas and uses source only for prose and defining paths.
 ";
 
 fn main() {

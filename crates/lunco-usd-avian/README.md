@@ -22,8 +22,16 @@ Compose the native physics group with
 `lunco_physics::body_mass::with_geometry_preparation` and install
 `BigSpacePhysicsBridgePlugin` for the shared geometry preparation boundary.
 The bridge runs native shape and mass preparation before initial query
-admission and each fixed solver step; USD projection only supplies authored
-components. See [the spatial contract](../../docs/architecture/45-big-space-correct-usage.md).
+admission and each fixed solver step. USD projection supplies checked native
+caches and typed automatic ownership. See [the spatial contract](../../docs/architecture/45-big-space-correct-usage.md).
+
+USD bodies publish a complete checked mass/tensor/COM candidate before native
+rigid-body insertion. `BodyMassFromColliders` identifies which fields remain
+automatic; their native `Mass`/`AngularInertia`/`CenterOfMass` and `NoAuto*`
+components are validated caches for native observers. Geometry changes continue
+through the checked f64 owner, using cooked `Collider.shape_scaled()` properties
+at the resolved SI density. Explicit computed co-simulation inputs retire that
+field's automatic ownership and retain their complete-body authority.
 
 ### 2. Mapping (observers + deferred resolution)
 When an entity is tagged with a `UsdPrimPath`, the crate looks up the Prim and maps:

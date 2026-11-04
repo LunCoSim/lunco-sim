@@ -2,6 +2,57 @@ use super::ModelicaCompiler;
 use lunco_modelica_ast::resolved_interface::{ModelicaCausality, ModelicaScalarBound};
 
 #[test]
+fn source_edit_interface_admits_exact_literals_and_resolved_access() {
+    let source = "model EditProbe
+      parameter Integer count=2;
+      parameter Real gain=2*3;
+      final parameter Real fixedGain=4;
+      protected parameter Real hidden=7;
+      public output Real value;
+      equation value=count+gain+fixedGain+hidden;
+      end EditProbe;";
+    let mut compiler = ModelicaCompiler::new();
+    let compiled = compiler
+        .compile_str_after_source_root_admission("EditProbe", source, "edit_probe.mo", &[])
+        .unwrap();
+    let interface = compiler
+        .interface_for_parameter_edits(
+            "EditProbe",
+            source,
+            "edit_probe.mo",
+            &[],
+            &compiled.dae,
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        interface.declarations["count"]
+            .parameter_edit_source(3.0)
+            .unwrap(),
+        "3"
+    );
+    assert!(
+        interface.declarations["count"]
+            .parameter_edit_source(1.5)
+            .unwrap_err()
+            .contains("Integer")
+    );
+    assert!(
+        interface.declarations["gain"]
+            .parameter_edit_source(9.0)
+            .is_ok()
+    );
+    for name in ["fixedGain", "hidden"] {
+        assert!(
+            interface.declarations[name]
+                .parameter_edit_source(9.0)
+                .unwrap_err()
+                .contains("public, non-final")
+        );
+    }
+}
+
+#[test]
 fn checked_interface_owns_conditional_presence_units_bounds_and_state_observables() {
     let source = r#"
 package P

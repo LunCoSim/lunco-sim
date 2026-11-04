@@ -43,7 +43,7 @@ pub struct PhysicsMaterial {
     pub(crate) restitution: Option<f32>,
     /// `physics:density` — for bodies that author no mass of their own (stage
     /// units: mass per unit³).
-    pub(crate) density: Option<f32>,
+    pub(crate) density: Option<f64>,
     /// `physxMaterial:frictionCombineMode` — how THIS surface's friction combines
     /// with whatever it touches.
     pub(crate) friction_combine: Option<CoefficientCombine>,
@@ -143,7 +143,16 @@ pub fn read_physics_material(
     let dynamic_friction = read_coefficient(ptok::PHYSICS_DYNAMIC_FRICTION, None)?;
     let static_friction = read_coefficient(ptok::PHYSICS_STATIC_FRICTION, None)?;
     let restitution = read_coefficient(ptok::PHYSICS_RESTITUTION, Some(1.0))?;
-    let density = read_coefficient(ptok::PHYSICS_DENSITY, None)?;
+    // Density converts from stage volume units at the mass owner; retain its
+    // authored precision until that dimensional/native boundary.
+    let density =
+        match lunco_usd_avian_reader::read_authored_real(reader, &mat, ptok::PHYSICS_DENSITY)
+            .map_err(|_| PhysicsMaterialReadError::new(ptok::PHYSICS_DENSITY))?
+        {
+            None => None,
+            Some(value) if value.is_finite() && value >= 0.0 => Some(value),
+            Some(_) => return Err(PhysicsMaterialReadError::new(ptok::PHYSICS_DENSITY)),
+        };
     let read_combine =
         |attr: &str| -> Result<Option<CoefficientCombine>, PhysicsMaterialReadError> {
             if !reader.has_authored_attribute(&mat, attr) {

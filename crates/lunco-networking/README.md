@@ -7,11 +7,12 @@ sync protocols. **Domain crates never import this crate.** They declare what cro
 the network (replicated components, `#[Command]`s) and the networking layer handles
 sync format, authority, and protocol translation silently.
 
-> **Multiplayer Status:** Multiplayer is fully implemented using a **lightyear 0.26.4** backend
+> **Multiplayer Status:** Multiplayer uses **Lightyear 0.31** for transport and messaging
 > over **WebTransport** (native host + dedicated server + wasm client), provenance-derived
 > entity identity, server-authoritative state replication, client prediction +
 > input-replay reconciliation + physics-space smoothing, RBAC command/relay gating, and
-> a headless server (`target/debug/luncosim-server`). The
+> a headless server (`target/debug/luncosim-server`). Snapshot replication and
+> physics reconciliation are owned by LunCoSim rather than Lightyear ECS plugins. The
 > [Implementation status](#implementation-status) table is the source of truth for
 > shipped-versus-planned capability, and [Known gaps](#known-gaps-open) lists what is
 > not built.
@@ -109,7 +110,7 @@ Domain systems react to:  Command (local)  |  Command (remote, verified via poli
 
 ## Transport Abstraction (as-built)
 
-**SHIPPED.** We picked **one backend — lightyear 0.26.4 — and committed to it** (no
+**SHIPPED.** We picked **one backend — Lightyear 0.31 — and committed to it** (no
 runtime backend-swap abstraction; see [DECISIONS.md D1](./DECISIONS.md)). Domain crates
 still never import it: they speak only the semantic API, and everything below
 `Peer { SessionId }` is transport-erased.
@@ -127,8 +128,10 @@ The reusable manifest and asset wire contracts live in `lunco-networking-scenari
 so a transport or cache consumer can depend on those contracts without compiling
 the state-sync runtime.
 The lightyear adapter ferries pre-serialized `sync::SyncEnvelope`s between
-`SyncOutbox`/`SyncInbox` and two lightyear messages: a
-**reliable `CmdChannel`** (commands) and a **best-effort `SnapChannel`** (snapshot deltas).
+`SyncOutbox`/`SyncInbox` and one `Frame` message on three channels: reliable `CmdChannel` commands,
+best-effort `SnapChannel` snapshots/continuous input, and reliable `BulkChannel`
+asset traffic. Lightyear's optional ECS replication, prediction and interpolation
+features are disabled; LunCoSim's typed runtime owns those operations.
 Above the `Peer` boundary nothing branches on which transport a client used.
 
 As-built transport is **WebTransport only** (QUIC/TLS, browsers *and* native):
@@ -227,11 +230,12 @@ Client-side prediction is implemented. The mechanism context is
 canonical summary of the shipped shape:
 
 - **Predict-all-vehicles membership** — three disjoint, client-only sets:
-  - *Owned, actively driven* (`OwnedLocally`): **input-replay** predicted. The body records
+  - *Owned, actively driven* (`OwnedLocally`): locally predicted with acknowledged-input reconciliation. The body records
     its post-step pose each tick keyed by input `seq`; on a snapshot that acks a `seq` it
     compares *prediction-at-seq* vs *authority-at-seq* (apples-to-apples, so the latency lead
     cancels) and corrects **only on genuine divergence**. The pure decision is
-    `lunco_networking_core::reconcile_decision` (unit-tested, no sync layer).
+    `lunco_networking_core::reconcile_decision`. Bounded assembly replay is
+    explicitly enabled by `LUNCO_ROLLBACK=1`; ordinary reconciliation is the default.
   - *Predicted props + all remote rovers* (`PredictedDynamic`): run local avian `Dynamic`,
     **state**-reconciled per snapshot. Remote rovers predict so they **yield** to a local
     push (mutual push), not just push.
@@ -248,13 +252,16 @@ canonical summary of the shipped shape:
   `bevy_transform_interpolation` owns every `Transform`; any external `Transform` write resets
   that body's easing → client-only jitter. All correction goes through
   `Position`/`Rotation`/velocity. (This is the single most important client-side sync
-  invariant — it cost a multi-hour debug.)
-- Full rollback of the whole avian world is **ruled out** (global solver, non-determinism);
-  we predict-and-correct a 1-body island on the client instead.
-
-> **Still open:** M4 **input hardening** (tick-stamped redundant inputs + host de-jitter
-> buffer) is specced but unbuilt — it would shrink corrections at the source under real
-> latency (today they stay *smooth*, not *small*). See [Known gaps](#known-gaps-open).
+  invariant.)
+- Replay uses committed control frames from the co-simulation input owner. Writes
+  and named/all releases share a per-vessel sequence; ingress only buffers, and
+  the host commits one earliest action per fixed tick. Acknowledged prefixes may
+  be retired without losing the sequence high watermark. Replay requires the
+  same enrolled control surface and preserves unrelated authoritative state.
+- Atomic `SetPortsBatch` is available to authoritative simulation hosts and
+  batches consisting exclusively of existing local embodiments. Shared client
+  targets reject before mutation, and authenticated peer batches are not a wire
+  command. Network port controls use the single-target ordered stream.
 
 ---
 
@@ -417,19 +424,19 @@ Current shipped-versus-planned capability status:
 
 ## Known gaps (open)
 
-Open gaps in the current model — **state replication + client prediction**
-(Source/Overwatch/Unreal/lightyear), *not* lockstep (avian is not cross-platform
-deterministic) and *not* full physics rollback (global solver) — is settled. Still open:
+The current model uses authoritative state replication and local prediction.
+Bounded assembly replay is opt-in; this is not a whole-session rollback contract.
 
 - **Per-client BigSpace projection — DONE.** Snapshot batches identify a semantic frame and
   carry f64 Avian position, linear velocity, and angular velocity in that frame. Capture
   converts the host's private `ActivePhysicsFrame` into the semantic frame; apply converts
   that frame into the receiver's private active grid. The Avian bridge alone performs the
   terminal `(CellCoord, Transform)` render split. Private grid topology never crosses peers.
-- **Gap G — M4 input hardening (redundancy + server-side jitter buffer).** UNBUILT. Inputs
-  ride an unreliable channel; a dropped input is a hitch. Need: each packet carries the last N
-  unacked inputs; the host keeps a small per-client input buffer. This shrinks prediction
-  corrections at the source under real latency.
+- **Input delivery under loss.** Sequenced host buffering and reliable releases
+  are implemented. Continuous writes use an unreliable stream; redundant
+  transmission of unacknowledged writes and an explicit de-jitter delay remain
+  delivery improvements. A release fences late older writes; invalid actions
+  cannot mutate a valid prefix or advance the acknowledgement.
 - **Deferred (acknowledged, not built):** rover↔rover collision under prediction (accept the
   snap for now), server-rewind lag compensation (no shooting → low priority), real input
   validation / anti-cheat (LAN co-op; clamp inputs server-side).
@@ -454,7 +461,7 @@ by a rendered host that installs the workbench plugin.
 
 ## References
 
-- [lightyear](https://github.com/cBournhonesque/lightyear) — **the shipped backend** (0.26.4): WebTransport transport, replication, prediction/interpolation, tick-sync
+- [lightyear](https://github.com/cBournhonesque/lightyear) — **the shipped backend** (0.31): WebTransport, messaging, netcode and connection clock synchronization
 - [renet2](https://github.com/UkoeHB/renet2) — *evaluated, not used* — transport abstraction (UDP, WS, WT, Steam)
 - [bevy_replicon](https://github.com/simgine/bevy_replicon) — *evaluated, not used* — ECS replication for Bevy
 - [bevy_replicon_renet2](https://github.com/simgine/bevy_replicon_renet) — *evaluated, not used* — Renet2 backend for replicon

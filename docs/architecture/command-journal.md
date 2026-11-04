@@ -24,9 +24,10 @@ actions into authored document operations: document-backed `SpawnEntity` uses
 replication.
 `AcquireControl`, `SetPorts`, terrain spawning, time control, and other
 transient runtime actions still lack complete session capture, so deterministic
-session replay is not built. Archive version 2 includes Modelica input
-records and continues to decode version 1 records. A completed capture can be
-exported as a bounded binary archive; baseline state, remaining command
+session replay is not built. Archive version 7 retains typed producers,
+Modelica inputs, port transactions and explicit releases. Its reader accepts
+exactly that version and rejects every other discriminator before decoding.
+A completed capture can be exported as a bounded binary archive; baseline state, remaining command
 inputs, and a playback consumer are still absent.
 
 The networking-owned `ScenarioManifestMsg` carries a scenario Merkle revision
@@ -187,8 +188,8 @@ admission and network replication. The canonical `WorldGrid` has deterministic
 content provenance for stable active-frame identity. Document-backed spawning
 continues through `ApplyUsdOps` and the Twin journal, without a duplicate
 session-input record. `SessionInputCaptureArchive` checks the record contract
-and encodes version 2 archives bounded to 65,536 records and 16 MiB; it reads
-existing version 1 archives.
+and encodes version 7 archives bounded to 65,536 records and 16 MiB. The reader
+requires exactly version 7, including authenticated network producer identities.
 On native hosts, `ExportSessionInputCapture` accepts a completed capture,
 shares its immutable records with a `Background`-priority `AsyncWorkAdmission`
 job, encodes away from the simulation schedule, and writes through

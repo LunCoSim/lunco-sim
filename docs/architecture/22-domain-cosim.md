@@ -453,6 +453,9 @@ every effective backend write before changing any endpoint or hold layer; a
 rejected transaction preserves both. The
 `ReleaseControlInputs` lifecycle release clears only controller-owned holds,
 so an autopilot's authored program setpoints survive possession release.
+Despawn retires holds for that exact entity lease. A deleted endpoint cannot
+leave a level for a future entity or fault the surviving exchange; missing
+identity on a still-live held endpoint remains an invalid-state failure.
 Authored control policy uses named `SetPorts` writes for explicit setpoints.
 All `SetPorts` inputs are levels, including body force/torque and generic actuator
 commands. The exchange reapplies a held level every fixed cycle even without a
@@ -536,6 +539,23 @@ rollback can be requested while transport is paused, and propagation still has
 to rebuild the inputs for each replayed tick. The current networking path
 re-simulates an owned body assembly and freezes unrelated dynamic bodies; this
 schedule is not a whole-session command, Rhai, or Modelica replay log.
+
+Network control frames contain ordered writes or named/all release actions.
+`SetPortsBatch` remains an atomic authoritative simulation command. On clients
+it is available only when every participant is an existing local embodiment;
+shared client targets and authenticated network batches reject before admission
+or mutation. It has no wire channel: ordered network controls are single-target
+`SetPorts`, `ReleasePort` and `ReleaseControl`, with one sequence per vessel.
+Authenticated receipt only buffers an action; it cannot change a persistent
+hold. The fixed consumer commits the earliest pending action once per vessel,
+in stable target order, through the co-simulation transaction owner. Its sequence
+acknowledgement advances after successful application. Local prediction and wire
+capture consume `PortControlCommitted` receipts, so rejected or pending commands
+cannot be sent ahead of their actual commit. Reliable releases share the same
+sequence fence as best-effort writes; delayed older writes cannot reinstall a
+released hold. Replay restores the enrolled control surface and controller levels
+through this owner, preserving unrelated authoritative physics state. A changed
+control surface rejects unsupported history before mutation.
 
 Participant adapters have explicit edges around this transaction: they publish
 their outputs before propagation and consume their inputs after propagation.

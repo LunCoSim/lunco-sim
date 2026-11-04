@@ -44,7 +44,7 @@ use super::{entity_for_doc, resolve_doc_or_active};
 // ─── Compile typed command ────────────────────────────────────────────────
 
 /// Compile a document: rumoca front-end → DAE → simulator setup. Idempotent —
-/// an already-compiled, unmodified model skips the worker dispatch unless
+/// an already-compiled model with the same current source closure and target skips the worker dispatch unless
 /// `force`. A dispatched compile leaves the model paused/ready unless the
 /// request carries explicit Run intent; failures use `DocumentDiagnostics`.
 #[Command(default)]
@@ -59,7 +59,7 @@ pub struct CompileModel {
     /// a GUI (cf. spec 033 User Story 1.5).
     pub class: Option<String>,
     /// Force a recompile even if the model is already compiled and
-    /// clean (same document generation). Defaults to `false` so a
+    /// current (same source closure and selected target). Defaults to `false` so a
     /// Compile on an up-to-date model is an idempotent no-op.
     pub force: bool,
     /// When `true`, the post-compile success handler unpauses the model
@@ -840,12 +840,13 @@ pub struct ResetActiveModel {
 /// Start a live realtime simulation: compile-if-stale, then play.
 ///
 /// This is the user-facing "Run" verb. If the model is already
-/// compiled and clean (same document generation), it simply unpauses —
-/// no recompile. Otherwise it sets [`ModelicaModel::resume_after_compile`]
+/// compiled for the requested class and its admitted source context is current,
+/// it unpauses without recompiling. Otherwise it sets [`ModelicaModel::resume_after_compile`]
 /// and triggers a [`CompileModel`]; the post-compile success handler in
 /// the worker then unpauses, so play begins as soon as the stepper is
 /// installed. Contrast with [`CompileModel`] (compile only, never auto-
 /// starts) and [`ResumeActiveModel`] (unpause only, never compiles).
+/// Invalid document, parse or class selection rejects before changing run intent.
 #[Command(default)]
 pub struct RunActiveModel {
     pub doc_id: DocumentId,
@@ -891,59 +892,126 @@ pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Comm
 }
 
 #[on_command(RunActiveModel)]
-pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) {
+pub fn on_run_active_model(
+    trigger: On<RunActiveModel>,
+    mut commands: Commands,
+    active: Option<Res<lunco_core::ActiveCommandId>>,
+    #[cfg(feature = "api")] pending: Option<Res<PendingApiRequest>>,
+) {
     let raw = trigger.event().doc_id;
     let class = trigger.event().class.clone();
+    let command_id = active.as_ref().and_then(|active| active.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending
+        .as_ref()
+        .map(|pending| pending.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc_or_active(world, raw) else {
-            return;
-        };
-        let Some(entity) = entity_for_doc(world, doc) else {
-            // No entity yet — never compiled. We pass the resume intent
-            // through the compile itself; the spawn carries it into the
-            // new model so the post-compile handler unpauses and play
-            // begins immediately. (Previously this needed a second click:
-            // there was no entity to pre-arm before the deferred spawn.)
-            world.commands().trigger(CompileModel {
-                doc_id: doc,
-                class,
-                force: false,
-                resume_after_compile: true,
+        let result = run_active_model(world, raw, class);
+        if let Err(message) = &result {
+            world.commands().trigger(lunco_core::RuntimeError {
+                name: "modelica-run-rejected".into(),
+                message: message.clone(),
             });
-            return;
-        };
-        // Document generation for the staleness check.
-        let doc_generation = world
-            .get_resource::<ModelicaDocuments>()
-            .and_then(|r| r.host(doc))
-            .map(|h| h.document().generation_owned())
-            .unwrap_or(0);
-        let (is_compiled, is_compiling, stale) = world
-            .get::<ModelicaModel>(entity)
-            .map(|m| {
-                let stale = !m.is_compiled || m.compiled_generation != doc_generation;
-                (m.is_compiled, m.is_compiling, stale)
-            })
-            .unwrap_or((false, false, true));
-        if is_compiled && !stale && !is_compiling {
-            // Already up to date — just play, no recompile.
-            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
-                model.paused = false;
-            }
-            return;
         }
-        // Stale or never-compiled: mark the resume intent so the
-        // post-compile success handler unpauses, then compile.
-        if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
-            model.resume_after_compile = true;
+        let outcome = result
+            .map(|()| lunco_command_contracts::Ack::new(lunco_command_contracts::OpId::new()));
+        #[cfg(feature = "api")]
+        lunco_api::executor::finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        );
+        #[cfg(not(feature = "api"))]
+        if let Some(id) = command_id {
+            let outcome = match outcome {
+                Ok(ack) => lunco_core::CommandOutcome::Succeeded(ack),
+                Err(message) => lunco_core::CommandOutcome::Rejected(
+                    lunco_command_contracts::Reject::InvalidOp(message),
+                ),
+            };
+            world
+                .resource_mut::<lunco_core::CommandResults>()
+                .insert(id, outcome);
         }
+    });
+}
+
+/// Validate the selected document/class before admitting Run intent. The
+/// compile owner retains checked installation and its worker diagnostics.
+fn run_active_model(
+    world: &mut World,
+    raw: DocumentId,
+    class: Option<String>,
+) -> Result<(), String> {
+    let doc =
+        resolve_doc_or_active(world, raw).ok_or("Run requires a selected Modelica document")?;
+    let documents = world
+        .get_resource::<ModelicaDocuments>()
+        .ok_or("Run document registry is unavailable")?;
+    let document = documents
+        .host(doc)
+        .ok_or("Run source document is closed")?
+        .document();
+    if document.syntax_is_stale() || document.ast_is_stale() {
+        return Err("Run source analysis is pending; wait for its current parse".into());
+    }
+    if document.strict_ast().is_none() {
+        return Err("Run source has no valid parsed definition".into());
+    }
+    let doc_generation = document.generation_owned();
+    let selected_class = class
+        .as_deref()
+        .map(|requested| {
+            crate::sim_target::resolve_requested_class(
+                requested,
+                &document.index().simulation_candidates(),
+                document.index().within_path.as_deref(),
+            )
+            .map_err(|error| format!("Run class '{requested}' {error}"))
+        })
+        .transpose()?;
+    let Some(entity) = entity_for_doc(world, doc) else {
         world.commands().trigger(CompileModel {
             doc_id: doc,
             class,
             force: false,
             resume_after_compile: true,
         });
+        return Ok(());
+    };
+    let (is_compiled, is_compiling, stale) = world
+        .get::<ModelicaModel>(entity)
+        .map(|model| {
+            let stale = !model.is_compiled
+                || model.compiled_generation != doc_generation
+                || selected_class
+                    .as_ref()
+                    .is_some_and(|selected| selected != &model.model_name)
+                || !lunco_modelica_core::source_snapshot::model_is_current(world, model);
+            (model.is_compiled, model.is_compiling, stale)
+        })
+        .ok_or("Run document has no Modelica participant")?;
+    if is_compiled && !stale && !is_compiling {
+        world
+            .get_mut::<ModelicaModel>(entity)
+            .expect("validated Run participant")
+            .paused = false;
+        return Ok(());
+    }
+    world
+        .get_mut::<ModelicaModel>(entity)
+        .expect("validated Run participant")
+        .resume_after_compile = true;
+    world.commands().trigger(CompileModel {
+        doc_id: doc,
+        class,
+        force: false,
+        resume_after_compile: true,
     });
+    Ok(())
 }
 
 #[on_command(RestartActiveModel)]
@@ -1959,7 +2027,8 @@ impl Plugin for CompileCommandsPlugin {
         #[cfg(feature = "api")]
         app.register_deferred_command::<RunExperiment>();
         #[cfg(feature = "api")]
-        app.register_deferred_command::<ResetActiveModel>();
+        app.register_deferred_command::<ResetActiveModel>()
+            .register_deferred_command::<RunActiveModel>();
         #[cfg(feature = "api")]
         app.register_deferred_command::<CompileModel>()
             .init_resource::<PendingCompileCommands>()

@@ -186,9 +186,9 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Register `ReflectDefault` when either deriving Default (`default`) or the
     // caller supplies a manual one (`reflect_default`).
     let reflect = if wants_default || wants_reflect_default {
-        quote!(#[reflect(Event, bevy::reflect::ReflectDeserialize, Default)])
+        quote!(#[reflect(Event, bevy::reflect::ReflectDeserialize, bevy::reflect::ReflectSerialize, Default)])
     } else {
-        quote!(#[reflect(Event, bevy::reflect::ReflectDeserialize)])
+        quote!(#[reflect(Event, bevy::reflect::ReflectDeserialize, bevy::reflect::ReflectSerialize)])
     };
     let api_marker = quote!(#[reflect(@::lunco_core::ApiCommandMarker)]);
 

@@ -144,6 +144,29 @@ fn dispatch_parameter_edit(
             request.key, model.model_name
         ));
     }
+    let checked = model
+        .checked_interface
+        .as_ref()
+        .filter(|interface| interface.model_name == model.model_name)
+        .ok_or("installed session has no checked parameter interface; compile the source first")?;
+    let value_source = checked
+        .declarations
+        .get(&request.key)
+        .ok_or_else(|| format!("parameter '{}' has no checked declaration", request.key))?
+        .parameter_edit_source(request.value)
+        .map_err(|error| format!("parameter '{}': {error}", request.key))?;
+    if !crate::source_snapshot::model_is_current(world, model) {
+        return Err("parameter source closure changed; compile the current sources first".into());
+    }
+    let mut source_snapshot = model
+        .source_snapshot
+        .clone()
+        .ok_or("installed session has no admitted source closure")?;
+    let primary_index = source_snapshot
+        .documents
+        .iter()
+        .position(|(owner, _, _)| owner.document == model.document)
+        .ok_or("admitted source closure omits the selected document")?;
     if let Some(metadata) = model
         .variable_metadata
         .as_ref()
@@ -212,15 +235,9 @@ fn dispatch_parameter_edit(
     let ast = document
         .strict_ast()
         .ok_or("parameter source has no valid parsed definition")?;
-    let declaration = ast.get_class_by_qualified_name(&class)
+    ast.get_class_by_qualified_name(&class)
         .and_then(|class| class.components.get(&request.key))
         .ok_or_else(|| format!("parameter '{}' is not directly declared in selected class '{class}'; edit its owning declaration", request.key))?;
-    if declaration.is_final {
-        return Err(format!(
-            "parameter '{}' is final and cannot be tuned",
-            request.key
-        ));
-    }
     let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>();
     let source = PinnedDocumentRuntimeOwner::for_document(doc, workspace.map(|w| &w.0))?;
     let replication = lunco_core_session::current_replication_owner_in(world);
@@ -242,7 +259,7 @@ fn dispatch_parameter_edit(
             class,
             component: request.key.clone(),
             param: String::new(),
-            value: request.value.to_string(),
+            value: value_source,
         },
         lunco_twin_journal::AuthorTag::local_user(),
     )
@@ -250,6 +267,7 @@ fn dispatch_parameter_edit(
     let generation = edit
         .new_gen
         .ok_or("parameter source edit did not commit synchronously")?;
+    source_snapshot.documents[primary_index].1 = generation;
     let source_text = world
         .resource::<DocumentRegistry<ModelicaDocument>>()
         .host(doc)
@@ -279,6 +297,7 @@ fn dispatch_parameter_edit(
         model.is_compiling = true;
         model.is_stepping = true;
         model.pending_generation = generation;
+        model.source_snapshot = Some(source_snapshot);
         model.resume_after_compile = resume;
         model.pending_step_inputs = None;
         model.last_accepted_step = None;

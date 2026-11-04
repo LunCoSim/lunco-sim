@@ -42,6 +42,8 @@ converts values only at JSON wire boundaries, and outward transports are in
 
 - **No hardcoded commands**: Any registered `#[Command]` type is automatically discoverable via `AppTypeRegistry` reflection; arbitrary internal reflected events are excluded.
 - **Typed inside the app**: ECS callers exchange `ApiValue`; JSON is confined to `lunco-api-codec` at wire boundaries.
+- **Checked construction**: numeric validation covers both supplied values and the concrete serde result, including tagged enum payloads and native vectors. A finite `f64` outside the destination `f32` range rejects before dispatch.
+- **Global entity identity**: an unresolved global ID rejects before dispatch. Unregistered local entity bits cannot be sent to peers; fields marked `sync_local` use the explicit local placeholder contract.
 - **Small contracts**: Consumers that only need typed request/response/value contracts depend on `lunco-api-core`, not the Bevy runtime.
 - **Headless-compatible**: Runs without GPU/graphics. Perfect for server deployments.
 

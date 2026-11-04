@@ -1024,6 +1024,7 @@ fn project_intent_edge(
     let producer_kind = match edge.origin {
         Some(CommandOrigin::ApiTransport) => Some("api_transport"),
         Some(CommandOrigin::LocalUser { .. }) => Some("local_user"),
+        Some(CommandOrigin::Network { .. }) => Some("network"),
         Some(CommandOrigin::Rhai { .. }) => Some("rhai"),
         None if edge.producer_id.is_some() => Some("direct_command"),
         None => None,
@@ -1457,17 +1458,10 @@ fn clear_simulated_intents(intents: &mut SimulatedIntents, target: Entity) {
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
         ensure_control_plugin(app);
-        // NOTE: OwnedInputLog / AppliedInputSeq are always-on session substrate
-        // owned by LunCoCoreSessionPlugin (lunco-core-session). The controller's
-        // observers consume them unconditionally, but it does NOT init them here;
-        // the session plugin is the single resource owner.
-        //
-        // Input → port writes are EMITTED once per fixed tick (so the
-        // prediction replay is a clean 1:1 loop over `InputFrame`s).
-        // Suppressed during a rollback replay: re-simulation feeds the RECORDED
-        // input for each replayed tick, so regenerating input from the live keyboard
-        // mid-replay would overwrite the very history we are replaying (and mint new
-        // seqs for ticks that already happened).
+        // Session owns prediction history and acknowledgements. Co-simulation
+        // records accepted input frames; this controller only emits intent and
+        // consumes committed receipts for presentation. Replay suppresses live
+        // keyboard sampling so recorded actions keep their original order.
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
@@ -1485,9 +1479,6 @@ impl Plugin for LunCoControllerPlugin {
         app.add_observer(commit_controller_session_input);
         app.add_observer(project_intent_edge);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_control_state);
-        // The blackout table the authorization gate reads. Empty by default, so an
-        // app that never declares one is byte-for-byte unchanged.
-        app.init_resource::<lunco_core_session::ControlPathRegistry>();
         register_all_commands(app);
         // Session-owned commits run before physical sampling, so every producer
         // at this tick observes the allocator's one authoritative input order.
@@ -1534,10 +1525,8 @@ impl Plugin for LunCoControllerPlugin {
                 .run_if(any_with_component::<PrimaryWindow>)
                 .before(bevy::picking::PickingSystems::Input),
         );
-        // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
-        // API, or wire-replayed — flows through this observer, so the client
-        // prediction log and the host reconcile-ack no longer depend on how the
-        // command was produced.
+        // Drive anticipation follows committed control, including release.
+        // The co-simulation owner records prediction and network sequence state.
         app.add_observer(record_control_input);
     }
 }
@@ -1612,17 +1601,6 @@ mod control_release_tests {
 /// the SYSTEM that consumes it
 /// ([`drive_from_bindings`]).
 
-/// Cap on the unacked input ring (~2 s at 60 Hz). The reconcile normally drains
-/// it to the acked `seq` each snapshot; this only bounds a stalled/disconnected
-/// client so the buffer can't grow without limit.
-const MAX_INPUT_FRAMES: usize = 128;
-
-/// Magnitude below which a control setpoint counts as "no input" for the
-/// prediction-membership signal (`VesselInputLog::last_active_tick`). The
-/// controller emits a `SetPorts` every fixed tick even when idle (all zeros), so
-/// presence of writes is NOT an activity signal — the *value* is.
-const INPUT_EPS: f64 = 1e-3;
-
 #[derive(Default)]
 struct VesselInputState {
     ports_active: std::collections::HashMap<Entity, bool>,
@@ -1641,14 +1619,11 @@ struct ControllerOrder {
 /// Fixed-tick input emission for prediction. Emits a [`lunco_cosim_core::commands::SetPorts`]
 /// while a controller is active and once on the active→idle edge, from its
 /// [`ControlBinding`], sampled [`PhysicalIntentFrame`], and separately held
-/// simulated intents, stamped with a per-vessel `seq` + `SimTick`.
-/// For a vessel this client owns + predicts ([`lunco_core_session::OwnedLocally`]) the
-/// frame is buffered for replay by [`record_control_input`]; on host/standalone
-/// the command uses `seq = 0`. Silent idle ticks leave the domain writer alone.
+/// simulated intents, stamped with the current `SimTick`. Co-simulation assigns
+/// the client sequence after successful input commit and retains its replay
+/// frame. Silent idle ticks leave the domain writer alone.
 fn drive_from_bindings(
-    role: Res<lunco_core_session::NetworkRole>,
     mut input_admission: ControllerInputAdmission,
-    mut log: ResMut<lunco_core_session::OwnedInputLog>,
     // Control authority is generic session ownership. If another session owns a
     // target, an active operator intent requests the normal claim transition below;
     // the authored authority policy decides whether the handoff is allowed. The
@@ -1695,8 +1670,6 @@ fn drive_from_bindings(
     input_state
         .takeover_requested
         .retain(|(source, _)| q_ctrl.contains(*source));
-
-    let client = matches!(*role, lunco_core_session::NetworkRole::Client);
 
     // When egui holds the keyboard, no local key counts as pressed. `drive_from_
     // bindings` still runs and `resolve` still writes EVERY bound port — now all
@@ -1844,8 +1817,7 @@ fn drive_from_bindings(
                 .retain(|(owner, _)| *owner != source);
         }
 
-        // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
-        // handoff below and the client seq bookkeeping.
+        // The vessel's stable identity addresses the ownership handoff.
         let owns = registry
             .as_ref()
             .zip(local_session.as_ref())
@@ -1940,15 +1912,6 @@ fn drive_from_bindings(
         let writes =
             binding.resolve(|intent| intent_held(link.target, intent, &physical, sim_intents));
 
-        // Owned + predicted on a client → assign a real seq (buffered for replay
-        // by `record_control_input`). seq MUST be stamped HERE (the origin)
-        // because the wire-capture serializes the command we trigger below.
-        let owned_gid = client
-            .then(|| match vessel_id {
-                Some((gid, true)) => Some(gid.get()),
-                _ => None,
-            })
-            .flatten();
         // Spec-034 scope B (idle-yield): an idle possessing human used to write
         // every bound port as 0 EVERY tick, stomping any scripted/API `SetPorts`
         // on the same vessel, so authored guidance could not drive a vessel the
@@ -1972,19 +1935,10 @@ fn drive_from_bindings(
             continue;
         }
 
-        let seq = if let Some(g) = owned_gid {
-            let entry = log.0.entry(g).or_default();
-            let s = entry.next_seq.wrapping_add(1); // seq 0 reserved = "no input yet"
-            entry.next_seq = s;
-            s
-        } else {
-            0
-        };
-
         commands.trigger(lunco_cosim_core::commands::SetPorts {
             target: link.target,
             writes,
-            seq,
+            seq: 0,
             tick: input_admission.tick.0,
             producer_id: None,
         });
@@ -2115,322 +2069,24 @@ fn drive_self_drivers(
     }
 }
 
-/// The single chokepoint where a [`lunco_cosim_core::commands::SetPorts`] records its input
-/// bookkeeping, regardless of origin (local keyboard via [`drive_from_bindings`],
-/// the HTTP/MCP API, or a wire-replayed remote input). Unifying it here is what
-/// keeps control and prediction on the same path: prediction logging (client) and
-/// the reconcile ack (host) no longer depend on *how* the command was made.
+/// Presentational drive anticipation consumes only committed control receipts.
 fn record_control_input(
-    trigger: On<lunco_cosim_core::commands::SetPorts>,
-    role: Res<lunco_core_session::NetworkRole>,
-    sim_tick: Res<lunco_core_runtime::SimTick>,
-    virtual_time: Option<Res<Time<Virtual>>>,
-    mut owned_log: ResMut<lunco_core_session::OwnedInputLog>,
-    mut applied: ResMut<lunco_core_session::AppliedInputSeq>,
-    // Latest local drive input per gid — the render-lead reads it to visually
-    // anticipate the rover's motion (presentational only; see `LocalDriveInput`).
+    trigger: On<lunco_core_session::PortControlCommitted>,
+    identities: Query<&lunco_core::GlobalEntityId>,
     mut drive_input: ResMut<lunco_core_session::LocalDriveInput>,
-    // Host-side per-tick input buffer + ownership table: a forwarded client input
-    // is queued by seq so `apply_buffered_client_inputs` steps EXACTLY ONE per
-    // fixed tick — matching the client's one-input-per-tick prediction, so the two
-    // deterministic sims stay in lockstep (no divergence → gentle reconcile).
-    reg: Res<lunco_core_session::SessionRegistry>,
-    local: Res<lunco_core_session::LocalSession>,
-    mut buffered: ResMut<lunco_core_session::BufferedClientInputs>,
-    q: Query<(
-        &lunco_core::GlobalEntityId,
-        Has<lunco_core_session::OwnedLocally>,
-    )>,
 ) {
-    let cmd = trigger.event();
-    if virtual_time.is_some_and(|time| time.is_paused()) {
-        return;
-    }
-    let Ok((gid, owned)) = q.get(cmd.target) else {
+    let receipt = trigger.event();
+    let Ok(gid) = identities.get(receipt.target) else {
         return;
     };
-    let g = gid.get();
-    // Capture throttle/steer for the render-lead (both roles harmless; the lead
-    // system is client-only). Undeclared names default to the prior value.
-    {
-        let entry = drive_input.0.entry(g).or_insert((0.0, 0.0));
-        for (name, v) in &cmd.writes {
-            match name.as_str() {
-                "throttle" | "forward" => entry.0 = *v,
-                "steer" => entry.1 = *v,
-                _ => {}
-            }
+    let entry = drive_input.0.entry(gid.get()).or_insert((0.0, 0.0));
+    *entry = (0.0, 0.0);
+    for (name, value) in &receipt.frame.control_levels {
+        match name.as_str() {
+            "throttle" | "forward" => entry.0 = *value,
+            "steer" => entry.1 = *value,
+            _ => {}
         }
-    }
-    if role.is_host() {
-        let owner = reg.owner_of(g);
-        // Queue a REMOTE-owned rover's forwarded input for per-tick application, so
-        // the host integrates the same input sequence one-per-tick as the client
-        // predicted (its own drives — owner == host — apply immediately, unbuffered).
-        if cmd.seq != 0 && owner.is_some_and(|o| o != local.0) {
-            // ACK DISCIPLINE (review N2): do NOT ack here. This observer runs on the
-            // RENDER clock (`drain_sync_inbox` is in `Update`), so a host whose
-            // `Update` is slower than its `FixedUpdate` drains K of the client's
-            // per-tick `SetPorts` in one frame. Acking `max(seq)` here claimed all K
-            // were applied while physics had integrated only the one that
-            // `apply_buffered_client_inputs` consumes this fixed tick — the client
-            // then dropped K−1 predicted frames it had actually simulated, and the
-            // divergence scaled with input VARIABILITY (i.e. showed up on turns and
-            // stops: the "post-turn oscillation"). The ack is now stamped by the
-            // consumer, from the seq it really integrated.
-            buffered.push(g, cmd.seq, cmd.writes.clone());
-        } else {
-            // Host-local / API drive: applied straight to the ports, so the ack is
-            // immediate. `record` binds the slot to its owner and rejects an
-            // implausible seq jump (review N1).
-            applied.record(g, owner, cmd.seq);
-        }
-        return;
-    }
-    // --- Client ---
-    if owned && cmd.seq != 0 {
-        // Buffer the complete port frame keyed by seq so rollback can re-simulate
-        // it and reconciliation can prune it after the host acknowledges it.
-        let entry = owned_log.0.entry(g).or_default();
-        if entry.frames.back().is_none_or(|f| f.seq != cmd.seq) {
-            // Capture the full port actuation for deterministic rollback.
-            // `drive_from_bindings` resolves every bound port each tick; API
-            // and other partial writes retain the prior value for omitted ports.
-            let mut writes = entry
-                .frames
-                .back()
-                .map(|frame| frame.writes.clone())
-                .unwrap_or_default();
-            for (name, value) in &cmd.writes {
-                if let Some((_, latched_value)) = writes
-                    .iter_mut()
-                    .find(|(latched_name, _)| latched_name == name)
-                {
-                    *latched_value = *value;
-                } else {
-                    writes.push((name.clone(), *value));
-                }
-            }
-            entry.frames.push_back(lunco_core_session::InputFrame {
-                seq: cmd.seq,
-                tick: cmd.tick,
-                writes,
-            });
-            while entry.frames.len() > MAX_INPUT_FRAMES {
-                entry.frames.pop_front();
-            }
-        }
-    }
-    // Prediction-membership signal (Phase A): record activity on ANY nonzero
-    // write, independent of `owned`/`seq`, so the first real input can bootstrap
-    // prediction even while the body is still an interpolated proxy. Stamp the
-    // CURRENT sim tick, NOT `cmd.tick`: the tick field is the caller's ordering
-    // hint and is 0 for host-local scenario/API drives (the `drive()` prelude,
-    // HTTP `SetPorts`), which would pin `last_active_tick` at 0 forever and never
-    // promote the body to predicted. `drive_from_bindings` already sends the real
-    // tick, so keyboard behaviour is unchanged.
-    if cmd.writes.iter().any(|(_, v)| v.abs() > INPUT_EPS) {
-        owned_log.0.entry(g).or_default().last_active_tick = sim_tick.0;
-    }
-}
-
-#[cfg(test)]
-mod input_ack_tests {
-    use super::*;
-    use lunco_command_contracts::SessionId;
-    use lunco_core::GlobalEntityId;
-    use lunco_core_runtime::SimTick;
-    use lunco_core_session::{
-        AppliedInputSeq, BufferedClientInputs, LocalDriveInput, LocalSession, NetworkRole,
-        OwnedInputLog, SessionRegistry,
-    };
-
-    const HOST: SessionId = SessionId(0);
-    const CLIENT_A: SessionId = SessionId(11);
-
-    /// A host app carrying just the substrate `record_control_input` touches, plus
-    /// the observer itself — no physics, no wire.
-    fn host_app(owner: SessionId, gid: u64) -> (App, Entity) {
-        let mut app = App::new();
-        app.insert_resource(NetworkRole::Host)
-            .insert_resource(LocalSession(HOST))
-            .init_resource::<SimTick>()
-            .init_resource::<OwnedInputLog>()
-            .init_resource::<AppliedInputSeq>()
-            .init_resource::<LocalDriveInput>()
-            .init_resource::<BufferedClientInputs>()
-            .init_resource::<SessionRegistry>();
-        app.world_mut()
-            .resource_mut::<SessionRegistry>()
-            .claim(owner, gid)
-            .expect("claim");
-        app.add_observer(record_control_input);
-        let e = app.world_mut().spawn(GlobalEntityId::from_raw(gid)).id();
-        (app, e)
-    }
-
-    fn predicted_client_app(gid: u64) -> (App, Entity) {
-        let mut app = App::new();
-        app.insert_resource(NetworkRole::Client)
-            .insert_resource(LocalSession(CLIENT_A))
-            .init_resource::<SimTick>()
-            .init_resource::<OwnedInputLog>()
-            .init_resource::<AppliedInputSeq>()
-            .init_resource::<LocalDriveInput>()
-            .init_resource::<BufferedClientInputs>()
-            .init_resource::<SessionRegistry>();
-        app.add_observer(record_control_input);
-        let e = app
-            .world_mut()
-            .spawn((
-                GlobalEntityId::from_raw(gid),
-                lunco_core_session::OwnedLocally,
-            ))
-            .id();
-        (app, e)
-    }
-
-    fn drive(app: &mut App, target: Entity, seq: u32, steer: f64) {
-        app.world_mut()
-            .trigger(lunco_cosim_core::commands::SetPorts {
-                target,
-                writes: vec![("steer".to_string(), steer)],
-                seq,
-                tick: seq as u64,
-                producer_id: None,
-            });
-        app.update();
-    }
-
-    /// The host's fixed-tick consumer, in miniature: exactly what
-    /// `apply_buffered_client_inputs` in the networking prediction pipeline does
-    /// to the ack.
-    fn integrate_one_fixed_tick(app: &mut App, gid: u64) {
-        let owner = app.world().resource::<SessionRegistry>().owner_of(gid);
-        let mut buf = app.world_mut().resource_mut::<BufferedClientInputs>();
-        let consumed = buf.next_for_tick(gid, 8).is_some();
-        let cursor = buf.cursor(gid);
-        if consumed {
-            app.world_mut()
-                .resource_mut::<AppliedInputSeq>()
-                .record(gid, owner, cursor);
-        }
-    }
-
-    /// **N2 — the host must not ack input it has not integrated.** The wire is drained
-    /// on the RENDER clock, so one frame can deliver K of the client's per-fixed-tick
-    /// `SetPorts`; physics runs ONE per fixed tick. The old code stamped `max(seq)`
-    /// into the snapshot the moment the command arrived — claiming all K applied.
-    /// The client then dropped K−1 predicted frames it had genuinely simulated, and
-    /// the resulting divergence scaled with how much the input CHANGED across them:
-    /// i.e. it appeared on turns and stops. That is the reported "post-turn
-    /// oscillation", and the widened reconcile dead-zone was a band-aid over it.
-    #[test]
-    fn host_acks_only_the_input_it_actually_integrated() {
-        let gid = 0xBEEF_0001;
-        let (mut app, e) = host_app(CLIENT_A, gid);
-
-        // One slow render frame delivers three ticks of a TURN (steer sweeping).
-        drive(&mut app, e, 1, 0.0);
-        drive(&mut app, e, 2, 0.5);
-        drive(&mut app, e, 3, 1.0);
-
-        // Nothing has been integrated yet — physics has not run a fixed tick.
-        assert_eq!(
-            app.world().resource::<AppliedInputSeq>().ack(gid),
-            0,
-            "receiving an input is not applying it (this was `max(seq)` = 3)"
-        );
-        assert_eq!(
-            app.world().resource::<BufferedClientInputs>().pending[&gid].len(),
-            3,
-            "all three inputs are queued for per-tick consumption"
-        );
-
-        // Each fixed tick integrates exactly one, and the ack follows it.
-        for expected in 1..=3u32 {
-            integrate_one_fixed_tick(&mut app, gid);
-            assert_eq!(
-                app.world().resource::<AppliedInputSeq>().ack(gid),
-                expected,
-                "the ack must name the seq physics ran on tick {expected}"
-            );
-        }
-    }
-
-    /// A hostile/corrupt `SetPorts { seq: u32::MAX }` must not poison the gid — for
-    /// this owner or any future one. Under the old rule nothing could ever exceed the
-    /// watermark again, so no ack was ever "new" and the owner's reconcile
-    /// early-returned for the life of the process.
-    #[test]
-    fn a_wild_seq_cannot_poison_the_vessel() {
-        let gid = 0xBEEF_0003;
-        let (mut app, e) = host_app(CLIENT_A, gid);
-        drive(&mut app, e, 1, 0.0);
-        integrate_one_fixed_tick(&mut app, gid);
-
-        drive(&mut app, e, u32::MAX, 1.0);
-        integrate_one_fixed_tick(&mut app, gid);
-        assert_eq!(
-            app.world().resource::<AppliedInputSeq>().ack(gid),
-            1,
-            "u32::MAX must never become the watermark"
-        );
-
-        // …and the vessel still works: the next genuine input is consumed and acked.
-        drive(&mut app, e, 2, 0.2);
-        integrate_one_fixed_tick(&mut app, gid);
-        assert_eq!(app.world().resource::<AppliedInputSeq>().ack(gid), 2);
-    }
-
-    #[test]
-    fn rollback_frames_keep_all_control_ports_and_latch_partial_updates() {
-        let gid = 0xBEEF_0004;
-        let (mut app, entity) = predicted_client_app(gid);
-
-        app.world_mut()
-            .trigger(lunco_cosim_core::commands::SetPorts {
-                target: entity,
-                writes: vec![
-                    ("steer".into(), 0.5),
-                    ("arm".into(), 1.0),
-                    ("throttle".into(), 0.7),
-                ],
-                seq: 1,
-                tick: 7,
-                producer_id: None,
-            });
-        app.update();
-
-        app.world_mut()
-            .trigger(lunco_cosim_core::commands::SetPorts {
-                target: entity,
-                writes: vec![("steer".into(), -0.25)],
-                seq: 2,
-                tick: 8,
-                producer_id: None,
-            });
-        app.update();
-
-        let frames = &app.world().resource::<OwnedInputLog>().0[&gid].frames;
-        assert_eq!(frames[0].tick, 7);
-        assert_eq!(
-            frames[0].writes,
-            vec![
-                ("steer".into(), 0.5),
-                ("arm".into(), 1.0),
-                ("throttle".into(), 0.7),
-            ]
-        );
-        assert_eq!(frames[1].tick, 8);
-        assert_eq!(
-            frames[1].writes,
-            vec![
-                ("steer".into(), -0.25),
-                ("arm".into(), 1.0),
-                ("throttle".into(), 0.7),
-            ]
-        );
     }
 }
 

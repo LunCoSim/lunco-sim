@@ -201,6 +201,11 @@ pub enum CommandOrigin {
         /// Whether this invocation is restricted to client-local capabilities.
         client_local: bool,
     },
+    /// Authenticated peer command received through the network owner.
+    Network {
+        /// Connection-bound session, never a caller-supplied identity.
+        session_id: lunco_command_contracts::SessionId,
+    },
     /// Local interaction dispatched by a user-facing workbench surface.
     LocalUser {
         /// Session that owns the interaction.

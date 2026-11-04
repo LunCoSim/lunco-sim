@@ -387,6 +387,8 @@ frame and body-local rotation remain part of the physical tensor. The shared
 carrier authors its origin COM explicitly. Full tensor reduction, native
 validation and the supported stage mass units follow the canonical
 [physical mass contract](41-axes-and-units.md#physical-mounts-and-reduced-mass).
+In-place wheel parameter edits invalidate the admitted source contribution;
+carrier mass and tensor are recomputed from an independent baseline.
 
 ---
 

@@ -73,7 +73,11 @@ pub fn force_actuator_from_usd(
         );
         return None;
     };
-    let direction_local = relative.rotation * direction_in_prim_frame;
+    let convention = lunco_usd_bevy_stage::stage_convention(reader).ok()?;
+    let direction_local = relative.rotation
+        * convention
+            .dir_d(direction_in_prim_frame.as_dvec3())
+            .as_vec3();
     if !direction_local.is_finite() || direction_local.length_squared() <= f32::EPSILON {
         warn!(
             "[usd-actuation] force actuator {} produced an invalid body-frame direction",

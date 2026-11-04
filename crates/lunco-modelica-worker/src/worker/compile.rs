@@ -1,6 +1,6 @@
 use super::*;
 use lunco_modelica_runtime::CompileRequested;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
 type ModelicaDocuments =
     lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>;
@@ -241,6 +241,26 @@ fn dispatch_one(
         }
     };
     let generation = document.generation_owned();
+    let source_snapshot = match lunco_modelica_core::source_snapshot::capture(
+        documents,
+        &request.source,
+        workspace,
+        replication.as_ref(),
+        world.get_resource::<lunco_modelica_source_roots::SourceRootRegistry>(),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            fail_request(
+                &request.completions,
+                world,
+                doc,
+                target_entity,
+                &model_name,
+                &error,
+            );
+            return;
+        }
+    };
 
     let existing = target_entity.and_then(|entity| {
         world.get::<ModelicaModel>(entity).map(|model| {
@@ -275,7 +295,10 @@ fn dispatch_one(
     if !request.force
         && target_entity
             .and_then(|entity| world.get::<ModelicaModel>(entity))
-            .is_some_and(|model| model.model_name == model_name)
+            .is_some_and(|model| {
+                model.model_name == model_name
+                    && model.source_snapshot.as_ref() == Some(&source_snapshot)
+            })
         && existing.as_ref().is_some_and(
             |(_, _, _, is_compiled, is_compiling, compiled_generation, _)| {
                 *is_compiled && !*is_compiling && *compiled_generation == generation
@@ -414,21 +437,6 @@ fn dispatch_one(
     let generated =
         lunco_modelica_runtime::generated_source::is_generated_origin(document.origin());
 
-    let mut parameters = HashMap::new();
-    for entry in document.index().components_in_class(&model_name) {
-        if matches!(
-            entry.variability,
-            lunco_modelica_index::index::Variability::Parameter
-                | lunco_modelica_index::index::Variability::Constant
-        ) && let Some(value) = entry
-            .binding
-            .as_ref()
-            .and_then(|value| value.parse::<f64>().ok())
-        {
-            parameters.insert(entry.name.clone(), value);
-        }
-    }
-
     let mut claimed: HashSet<String> = ast.classes.iter().map(|(name, _)| name.clone()).collect();
     let mut dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
     let mut extra_sources = Vec::new();
@@ -507,6 +515,30 @@ fn dispatch_one(
 
     // Retain explicit runtime values. Omitted inputs are initialized by the
     // compiled DAE, never by an index spanning multiple declaring classes.
+    // Root admission may have issued operations since the reuse check. Their
+    // exact ids must travel with the compile while readiness settles.
+    let source_snapshot = match lunco_modelica_core::source_snapshot::capture(
+        world.resource::<ModelicaDocuments>(),
+        &request.source,
+        world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .map(|w| &w.0),
+        replication.as_ref(),
+        world.get_resource::<lunco_modelica_source_roots::SourceRootRegistry>(),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            fail_request(
+                &request.completions,
+                world,
+                doc,
+                target_entity,
+                &model_name,
+                &error,
+            );
+            return;
+        }
+    };
     let mut inputs = existing
         .as_ref()
         .map(|(_, inputs, _, _, _, _, _)| inputs.clone())
@@ -597,14 +629,12 @@ fn dispatch_one(
         last_step_time: 0.0,
         session_id,
         paused: true,
-        parameters: parameters
-            .iter()
-            .map(|(name, value)| (name.clone(), *value))
-            .collect(),
+        parameters: Default::default(),
         inputs,
         pending_step_inputs: None,
         compiled_input_names: BTreeSet::new(),
         compiled_parameter_names: BTreeSet::new(),
+        checked_interface: None,
         last_error: None,
         document: doc,
         is_stepping: true,
@@ -620,10 +650,12 @@ fn dispatch_one(
         variable_metadata: None,
         construction_profile: None,
         pending_generation: generation,
+        source_snapshot: Some(source_snapshot),
         resume_after_compile,
     };
     let mut entry = world.entity_mut(entity);
-    if !entry.contains::<Name>() {
+    if entry.contains::<lunco_modelica_runtime::EditorModelicaActor>() || !entry.contains::<Name>()
+    {
         entry.insert(Name::new(model_name.clone()));
     }
     entry.insert((model, super::ModelicaVariables::default()));
@@ -828,6 +860,7 @@ mod tests {
                     entity,
                     session_id,
                     is_new_model: true,
+                    checked_interface: Some(crate::worker::test_checked_interface()),
                     variable_metadata: Some(Default::default()),
                     ..Default::default()
                 })

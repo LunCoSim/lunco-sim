@@ -817,8 +817,10 @@ post '{"type":"ExecuteCommand","command":"PauseActiveModel","params":{"doc_id":0
 post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc_id":0}}'   # reset t=0 then run
 ```
 
-`RunActiveModel` = compile-if-stale then play. If already compiled & clean it
-just unpauses (no recompile). `CompileModel` compiles only (stays paused);
+`RunActiveModel` compiles the selected class when its admitted source context is
+stale, then plays it. Reuse requires the exact requested class, document leases,
+candidate source generations and admitted source-root operations to match.
+`CompileStatus.stale` reads that same source owner. `CompileModel` compiles only (stays paused);
 `ResumeActiveModel` unpauses only.
 
 A strict compile failure is terminal and appears as a Modelica Error in Recent
@@ -1294,8 +1296,11 @@ Reset admits current values even when the worker has not stepped after a write.
 Tune a document-backed participant through `SetModelicaParameter`, using its
 stable entity id and exact parameter key. Compile the current source first,
 then await its terminal `command_result` before another edit. The owner rejects
-busy, read-only, stale, final, unknown and out-of-range edits before replacing
-any live session. A USD participant without an editable Modelica document
+busy, read-only, stale, protected, final, unknown, type-invalid and out-of-range
+edits before changing source or replacing a live session. Integer values must
+be integral and within their checked scalar range. The parameter inventory uses
+Rumoca's initialized values, including expressions and inherited declarations.
+A USD participant without an editable Modelica document
 rejects this command; edit the parameter at its authored USD owner instead.
 Replacement reinitializes the selected class with current inputs and retained
 sibling sources and instance overrides. It does not transfer continuous state.
@@ -1307,6 +1312,21 @@ Run that scenario in a windowed production session: its scratch-document
 is available in the headless core. Document-created participants receive stable
 entity ids through shared session identity admission and can be resolved by
 their compiled class name with `find`.
+
+Run `scripts/api/test_simulation_core_second_pass.py --case modelica-lifecycle`
+with `LUNCOSIM_BIN` set to the production binary for the windowed lifecycle gate.
+It covers exact selected classes, sibling-source freshness, initialized numeric
+parameters, typed edit rejection before mutation, and checked editing after
+compiled artifact reuse. Query `CompileStatus` for public activity facts; worker
+in-flight fields intentionally remain outside component reflection.
+
+Await `SaveDocument` or explicit-path `SaveAsDocument` command results before
+assuming a native write or browser download was admitted. A native picker result
+with `picker_requested: true` acknowledges the picker request; the follow-up save
+owns actual write completion. A failed write leaves origin and saved-generation
+state intact and reports `modelica-save-failed` in Recent Events. The native
+lifecycle gate also checks Save As URI invalidation, failed writes, and saving
+the subsequently edited source.
 
 `SnapshotVariables.metadata` carries checked scalar `unit`, `description`,
 `minimum`, and `maximum` facts for the installed component, using the same

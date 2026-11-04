@@ -42,6 +42,14 @@ lunco-core = { path = "../lunco-core", optional = true }
 lunco-core-session = { path = "../lunco-core-session", optional = true }
 lunco-control-core = { path = "../lunco-control-core", optional = true }
 lunco-cosim-core = { path = "../lunco-cosim-core", optional = true }
+lunco-cosim = { path = "../lunco-cosim", optional = true }
+lunco-port-core = { path = "../lunco-port-core", optional = true }
+lunco-spatial = { path = "../lunco-spatial", optional = true }
+lunco-celestial = { path = "../lunco-celestial", optional = true }
+lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core", optional = true }
+lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
+avian3d = { workspace = true, optional = true }
+big_space = { workspace = true, optional = true }
 lunco-doc = { path = "../lunco-doc", optional = true }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optional = true }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
@@ -127,6 +135,14 @@ networking = [
     "dep:lunco-core-session",
     "dep:lunco-control-core",
     "dep:lunco-cosim-core",
+    "dep:lunco-cosim",
+    "dep:lunco-port-core",
+    "dep:lunco-spatial",
+    "dep:lunco-celestial",
+    "dep:lunco-celestial-spatial-core",
+    "dep:lunco-networking-sync",
+    "dep:avian3d",
+    "dep:big_space",
     "dep:lunco-doc",
     "dep:lunco-doc-bevy",
     "lunco-luncosim-runtime/networking",

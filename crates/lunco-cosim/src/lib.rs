@@ -44,6 +44,8 @@ use bevy::prelude::*;
 pub mod avian;
 pub mod avian_queries;
 pub mod binding;
+mod control_frames;
+pub use control_frames::{apply_network_control_frame, replay_control_frame};
 mod failure;
 pub mod joint;
 mod object_pause;
@@ -184,6 +186,29 @@ fn reset_scene_state(
     *propagation = systems::propagate::PropagationCache::default();
 }
 
+/// Private lifetime installed by the input owner before publishing any hold.
+/// It stays on ordinary release and identity changes, so only removal of the
+/// actual lease or entity retires its state.
+#[derive(Component)]
+#[component(on_remove = retire_endpoint_hold_lease)]
+struct HeldInputLease;
+
+fn retire_endpoint_hold_lease(
+    mut world: bevy::ecs::world::DeferredWorld,
+    context: bevy::ecs::lifecycle::HookContext,
+) {
+    if let Some(mut holds) = world.get_resource_mut::<PortHolds>() {
+        holds.clear_entity(context.entity);
+    }
+    control_frames::retire_frame_inputs(&mut world, context.entity);
+}
+
+fn ensure_endpoint_hold_lease(world: &mut World, target: Entity) {
+    if world.get::<HeldInputLease>(target).is_none() {
+        world.entity_mut(target).insert(HeldInputLease);
+    }
+}
+
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         object_pause::install(app);
@@ -192,6 +217,12 @@ impl Plugin for CoSimPlugin {
         app.register_deferred_command::<ReleasePort>();
         app.register_deferred_command::<ReleaseControl>();
         app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
+            .register(
+                "SetPortsBatch",
+                lunco_core_session::CommandPolicy::OWNED_CONTROL,
+            );
         app.world_mut()
             .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
             .register(
@@ -244,6 +275,10 @@ impl Plugin for CoSimPlugin {
         // explicit release — without it, a `SetPorts` write on a WIRED input
         // lives less than one tick.
         app.init_resource::<PortHolds>();
+        use lunco_core::AppSceneExt;
+        app.init_scene_resource::<control_frames::FrameInputCache>();
+        app.add_observer(control_frames::invalidate_frame_identities::<Insert<GlobalEntityId>>);
+        app.add_observer(control_frames::retire_frame_identity);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_state);
         app.add_observer(binding::on_add_connection)
             .add_observer(binding::on_port_surface_change)
@@ -603,15 +638,17 @@ mod binding_lifecycle_tests {
         assert!((angle_owner.metadata.min.expect("owner lower limit") + 0.7).abs() < 1.0e-6);
         assert!((angle_owner.metadata.max.expect("owner upper limit") - 1.2).abs() < 1.0e-6);
 
-        let rejection = apply_port_input_writes(
+        let rejection = control_frames::commit_local_action(
             app.world_mut(),
             &registry,
             joint,
-            &[("angle".into(), 1.21)],
+            lunco_core_session::PortControlAction::Writes(vec![("angle".into(), 1.21)]),
+            0,
+            0,
             false,
         )
         .expect_err("an out-of-range target is rejected before it is applied");
-        assert!(rejection.0.contains("1.2"));
+        assert!(rejection.contains("1.2"));
         assert_eq!(
             app.world()
                 .get::<RevoluteJoint>(joint)
@@ -623,11 +660,13 @@ mod binding_lifecycle_tests {
         );
         assert!(app.world().resource::<PortHolds>().is_empty());
 
-        apply_port_input_writes(
+        control_frames::commit_local_action(
             app.world_mut(),
             &registry,
             joint,
-            &[("angle".into(), 1.2)],
+            lunco_core_session::PortControlAction::Writes(vec![("angle".into(), 1.2)]),
+            0,
+            0,
             false,
         )
         .expect("the inclusive upper bound is a valid target");
@@ -1193,6 +1232,86 @@ mod binding_lifecycle_tests {
     }
 
     #[test]
+    fn endpoint_lease_retirement_clears_only_its_holds() {
+        let mut world = World::new();
+        world.init_resource::<PortHolds>();
+        world.init_resource::<CosimDiagnostics>();
+        world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
+        let mut registry = lunco_port_core::ports::PortRegistry::default();
+        ports::register_builtin_port_backends(&mut registry);
+        let retired = world
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                lunco_port_core::InputPorts::new(&["force_x", "force_y"]),
+            ))
+            .id();
+        let surviving = world
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                lunco_port_core::InputPorts::new(&["force_x"]),
+            ))
+            .id();
+        control_frames::commit_local_action(
+            &mut world,
+            &registry,
+            retired,
+            lunco_core_session::PortControlAction::Writes(vec![("force_x".into(), 4.0)]),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
+        control_frames::commit_local_action(
+            &mut world,
+            &registry,
+            retired,
+            lunco_core_session::PortControlAction::Writes(vec![("force_y".into(), 2.0)]),
+            0,
+            0,
+            true,
+        )
+        .unwrap();
+        control_frames::commit_local_action(
+            &mut world,
+            &registry,
+            surviving,
+            lunco_core_session::PortControlAction::Writes(vec![("force_x".into(), 8.0)]),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
+        assert!(world.get::<HeldInputLease>(retired).is_some());
+        let revision = world.resource::<PortHolds>().membership_revision();
+
+        world.entity_mut(retired).remove::<GlobalEntityId>();
+        assert_eq!(
+            world.resource::<PortHolds>().get(retired, "force_x"),
+            Some(4.0)
+        );
+        assert_eq!(
+            world.resource::<PortHolds>().membership_revision(),
+            revision
+        );
+        // Removing the remaining public endpoint data still leaves the owning
+        // lease. Its removal hook runs even when it is the last component.
+        world
+            .entity_mut(retired)
+            .remove::<lunco_port_core::InputPorts>();
+        assert_eq!(
+            world.resource::<PortHolds>().get(retired, "force_x"),
+            Some(4.0)
+        );
+        world.entity_mut(retired).despawn();
+
+        let holds = world.resource::<PortHolds>();
+        assert_eq!(holds.get(retired, "force_x"), None);
+        assert_eq!(holds.get(retired, "force_y"), None);
+        assert_eq!(holds.get(surviving, "force_x"), Some(8.0));
+        assert!(holds.membership_revision() > revision);
+    }
+
+    #[test]
     fn scene_teardown_clears_scene_owned_cosim_state() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
@@ -1276,6 +1395,8 @@ fn on_set_ports(
     let target = cmd.target;
     let writes = cmd.writes.clone();
     let producer_id = cmd.producer_id;
+    let seq = cmd.seq;
+    let tick = cmd.tick;
     let command_id = active_id.get();
     let origin = active_id.origin();
     let program_setpoint = authored_simulation_setpoint(origin);
@@ -1286,6 +1407,29 @@ fn on_set_ports(
         let admission_correlation_id = correlation_id
             .or(command_id)
             .unwrap_or_else(|| OpId::new().0);
+        if let Some(CommandOrigin::Network { session_id }) = origin {
+            let result = if producer_id.is_some() {
+                Err("network control uses its authenticated session; omit producer_id".to_owned())
+            } else {
+                control_frames::buffer_network_action(
+                    world,
+                    &reg,
+                    target,
+                    lunco_core_session::PortControlAction::Writes(writes),
+                    seq,
+                    tick,
+                    session_id,
+                )
+            };
+            finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                result.map(|()| Ack::new(OpId::new())),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            );
+            return;
+        }
         let should_admit = should_admit_port_input(world, target, origin, producer_id);
         if should_admit {
             let result = validate_port_input_writes(world, &reg, target, &writes)
@@ -1327,7 +1471,15 @@ fn on_set_ports(
         // remain in their existing deterministic pass. Their source inputs
         // are captured at the owning boundary instead of logging resolved
         // actuator writes a second time.
-        match apply_port_input_writes(world, &reg, target, &writes, program_setpoint) {
+        match control_frames::commit_local_action(
+            world,
+            &reg,
+            target,
+            lunco_core_session::PortControlAction::Writes(writes),
+            seq,
+            tick,
+            program_setpoint,
+        ) {
             Ok(()) => finish_command_result(
                 world,
                 command_id,
@@ -1335,9 +1487,13 @@ fn on_set_ports(
                 Ok(Ack::new(OpId::new())),
                 lunco_api_core::ApiErrorCode::InternalError,
             ),
-            Err((message, error_code)) => {
-                finish_command_result(world, command_id, correlation_id, Err(message), error_code)
-            }
+            Err(message) => finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                Err(message),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            ),
         }
     });
 }
@@ -1361,6 +1517,16 @@ fn on_set_ports_batch(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
+        let shared_client_input = world
+            .get_resource::<lunco_core_session::NetworkRole>()
+            .is_some_and(|role| !role.is_authoritative())
+            && input_batches.iter().any(|batch| !local_embodiment_port_input(world, batch.target));
+        if matches!(origin, Some(CommandOrigin::Network { .. })) || shared_client_input {
+            let message = "SetPortsBatch requires authoritative simulation or exclusively local embodiments; ordered network controls are single-target SetPorts, ReleasePort and ReleaseControl".to_owned();
+            warn!("[cosim] {message}");
+            finish_command_result(world, command_id, correlation_id, Err(message), lunco_api_core::ApiErrorCode::CommandRejected);
+            return;
+        }
         let admission_correlation_id = correlation_id
             .or(command_id)
             .unwrap_or_else(|| OpId::new().0);
@@ -1449,14 +1615,11 @@ fn should_admit_port_input(
     producer_id: Option<u64>,
 ) -> bool {
     // Local embodiment commands belong to the unpaused interaction clock.
-    if world
-        .get::<lunco_embodiment_core::roles::LocalEmbodiment>(target)
-        .is_some()
-    {
+    if local_embodiment_port_input(world, target) {
         return false;
     }
     match origin {
-        Some(CommandOrigin::ApiTransport) => true,
+        Some(CommandOrigin::ApiTransport | CommandOrigin::Network { .. }) => true,
         Some(CommandOrigin::LocalUser { .. }) => world.get::<GlobalEntityId>(target).is_some(),
         Some(CommandOrigin::Rhai { context, .. }) => {
             context.clock != RuntimeClock::Simulation
@@ -1467,6 +1630,12 @@ fn should_admit_port_input(
         }
         None => producer_id.is_some(),
     }
+}
+
+fn local_embodiment_port_input(world: &World, target: Entity) -> bool {
+    world
+        .get::<lunco_embodiment_core::roles::LocalEmbodiment>(target)
+        .is_some()
 }
 
 fn unique_target_global_id(
@@ -1797,9 +1966,7 @@ fn validate_port_input_target_state(
         .is_some_and(|transport| !transport.is_running());
     if user_paused
         && world.get::<GlobalEntityId>(target).is_some()
-        && world
-            .get::<lunco_embodiment_core::roles::LocalEmbodiment>(target)
-            .is_none()
+        && !local_embodiment_port_input(world, target)
     {
         return Err((
             "simulation is paused".to_owned(),
@@ -1815,6 +1982,16 @@ fn apply_validated_port_input_writes(
     prepared: Vec<lunco_port_core::ports::PreparedPortWrite>,
     program_setpoint: bool,
 ) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
+    commit_prepared_port_input_writes(world, registry, prepared, program_setpoint, None)
+}
+
+fn commit_prepared_port_input_writes(
+    world: &mut World,
+    registry: &lunco_port_core::ports::PortRegistry,
+    prepared: Vec<lunco_port_core::ports::PreparedPortWrite>,
+    program_setpoint: bool,
+    replace_controls: Option<(Entity, &[(String, f64)])>,
+) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
     let committed_values = prepared
         .iter()
         .map(|write| (write.entity(), write.name().to_owned(), write.value()))
@@ -1822,12 +1999,16 @@ fn apply_validated_port_input_writes(
     let effective = prepared
         .into_iter()
         .map(|write| {
-            let value = world.resource::<PortHolds>().effective_write(
-                write.entity(),
-                write.name(),
-                write.value(),
-                program_setpoint,
-            );
+            let value = if replace_controls.is_some_and(|(target, _)| target == write.entity()) {
+                write.value()
+            } else {
+                world.resource::<PortHolds>().effective_write(
+                    write.entity(),
+                    write.name(),
+                    write.value(),
+                    program_setpoint,
+                )
+            };
             if value.to_bits() == write.value().to_bits() {
                 Ok(write)
             } else {
@@ -1849,8 +2030,19 @@ fn apply_validated_port_input_writes(
                 lunco_api_core::ApiErrorCode::CommandRejected,
             )
         })?;
+    if let Some((target, levels)) = replace_controls {
+        if !levels.is_empty() {
+            ensure_endpoint_hold_lease(world, target);
+        }
+        let mut holds = world.resource_mut::<PortHolds>();
+        holds.clear_control_entity(target);
+        for (name, value) in levels {
+            holds.hold(target, name.clone(), *value);
+        }
+    }
     for (target, port, value) in committed_values {
-        {
+        if replace_controls.is_none() {
+            ensure_endpoint_hold_lease(world, target);
             let mut holds = world.resource_mut::<PortHolds>();
             if program_setpoint {
                 holds.hold_program(target, port.clone(), value);
@@ -1953,19 +2145,6 @@ fn validate_port_input_writes(
     Ok(prepared)
 }
 
-fn apply_port_input_writes(
-    world: &mut World,
-    registry: &lunco_port_core::ports::PortRegistry,
-    target: Entity,
-    writes: &[(String, f64)],
-    program_setpoint: bool,
-) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
-    validate_port_input_target_state(world, target)?;
-    let prepared = validate_port_input_writes(world, registry, target, writes)
-        .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))?;
-    apply_validated_port_input_writes(world, registry, prepared, program_setpoint)
-}
-
 fn on_commit_session_input_ports(
     trigger: On<lunco_core_session::SessionInputCommit>,
     registry: Res<lunco_port_core::ports::PortRegistry>,
@@ -1989,15 +2168,11 @@ fn on_commit_session_input_ports(
             lunco_core_session::SessionInputPayload::PortInputWrites {
                 writes,
                 correlation_id,
-            } => apply_port_input_writes(
-                world,
-                &registry,
-                target,
-                &writes,
-                program_setpoint,
+            } => control_frames::commit_local_action(
+                world, &registry, target, lunco_core_session::PortControlAction::Writes(writes), 0, 0, program_setpoint,
             )
             .map_err(
-                |(message, _error_code)| (correlation_id, "SetPorts", message),
+                |message| (correlation_id, "SetPorts", message),
             ),
             lunco_core_session::SessionInputPayload::PortInputTransaction {
                 batches,
@@ -2022,12 +2197,14 @@ fn on_commit_session_input_ports(
                 name,
                 correlation_id: _,
             } => {
-                world.resource_mut::<PortHolds>().release(target, &name);
-                Ok(())
+                control_frames::commit_local_action(world, &registry, target,
+                    lunco_core_session::PortControlAction::ReleasePort(name), 0, 0, false)
+                    .map_err(|message| (0, "ReleasePort", message))
             }
             lunco_core_session::SessionInputPayload::ControlInputRelease { .. } => {
-                world.resource_mut::<PortHolds>().clear_entity(target);
-                Ok(())
+                control_frames::commit_local_action(world, &registry, target,
+                    lunco_core_session::PortControlAction::ReleaseControl, 0, 0, false)
+                    .map_err(|message| (0, "ReleaseControl", message))
             }
             lunco_core_session::SessionInputPayload::ControlInputsReleased => {
                 world
@@ -2059,6 +2236,8 @@ fn on_release_port(
     let target = cmd.target;
     let name = cmd.name.clone();
     let producer_id = cmd.producer_id;
+    let seq = cmd.seq;
+    let tick = cmd.tick;
     let command_id = active_id.as_ref().and_then(|active_id| active_id.get());
     let origin = active_id.as_ref().and_then(|active_id| active_id.origin());
     let correlation_id = pending_request
@@ -2068,7 +2247,29 @@ fn on_release_port(
         let admission_correlation_id = correlation_id
             .or(command_id)
             .unwrap_or_else(|| OpId::new().0);
-        let result = if should_admit_port_input(world, target, origin, producer_id) {
+        let registry = world
+            .resource::<lunco_port_core::ports::PortRegistry>()
+            .clone();
+        let result = if let Some(CommandOrigin::Network { session_id }) = origin {
+            if producer_id.is_some() {
+                Err((
+                    "network control uses its authenticated session; omit producer_id".to_owned(),
+                    lunco_api_core::ApiErrorCode::CommandRejected,
+                ))
+            } else {
+                control_frames::buffer_network_action(
+                    world,
+                    &registry,
+                    target,
+                    lunco_core_session::PortControlAction::ReleasePort(name),
+                    seq,
+                    tick,
+                    session_id,
+                )
+                .map(|()| Ack::new(OpId::new()))
+                .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))
+            }
+        } else if should_admit_port_input(world, target, origin, producer_id) {
             admit_port_input(
                 world,
                 target,
@@ -2082,8 +2283,17 @@ fn on_release_port(
                 },
             )
         } else {
-            world.resource_mut::<PortHolds>().release(target, &name);
-            Ok(Ack::new(OpId::new()))
+            control_frames::commit_local_action(
+                world,
+                &registry,
+                target,
+                lunco_core_session::PortControlAction::ReleasePort(name),
+                seq,
+                tick,
+                false,
+            )
+            .map(|()| Ack::new(OpId::new()))
+            .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))
         };
         match result {
             Ok(ack) => finish_command_result(
@@ -2113,6 +2323,8 @@ fn on_release_control(
     let command = trigger.event();
     let target = command.target;
     let producer_id = command.producer_id;
+    let seq = command.seq;
+    let tick = command.tick;
     let command_id = active_id.as_ref().and_then(|active_id| active_id.get());
     let origin = active_id.as_ref().and_then(|active_id| active_id.origin());
     let correlation_id = pending_request
@@ -2122,11 +2334,33 @@ fn on_release_control(
         let admission_correlation_id = correlation_id
             .or(command_id)
             .unwrap_or_else(|| OpId::new().0);
+        let registry = world
+            .resource::<lunco_port_core::ports::PortRegistry>()
+            .clone();
         let result = if world.get_entity(target).is_err() {
             Err((
                 "ReleaseControl target no longer exists".to_owned(),
                 lunco_api_core::ApiErrorCode::CommandRejected,
             ))
+        } else if let Some(CommandOrigin::Network { session_id }) = origin {
+            if producer_id.is_some() {
+                Err((
+                    "network control uses its authenticated session; omit producer_id".to_owned(),
+                    lunco_api_core::ApiErrorCode::CommandRejected,
+                ))
+            } else {
+                control_frames::buffer_network_action(
+                    world,
+                    &registry,
+                    target,
+                    lunco_core_session::PortControlAction::ReleaseControl,
+                    seq,
+                    tick,
+                    session_id,
+                )
+                .map(|()| Ack::new(OpId::new()))
+                .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))
+            }
         } else if should_admit_port_input(world, target, origin, producer_id) {
             admit_port_input(
                 world,
@@ -2140,8 +2374,17 @@ fn on_release_control(
                 },
             )
         } else {
-            world.resource_mut::<PortHolds>().clear_entity(target);
-            Ok(Ack::new(OpId::new()))
+            control_frames::commit_local_action(
+                world,
+                &registry,
+                target,
+                lunco_core_session::PortControlAction::ReleaseControl,
+                seq,
+                tick,
+                false,
+            )
+            .map(|()| Ack::new(OpId::new()))
+            .map_err(|message| (message, lunco_api_core::ApiErrorCode::CommandRejected))
         };
         match result {
             Ok(ack) => finish_command_result(
@@ -2550,6 +2793,8 @@ mod control_intent_tests {
             .hold(target, "throttle", 0.6);
 
         app.world_mut().trigger(ReleaseControl {
+            seq: 0,
+            tick: 0,
             target,
             producer_id: None,
         });

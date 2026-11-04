@@ -55,15 +55,21 @@ therefore wakes the island on demand. This distinction is part of the physics
 ownership contract; do not make all per-tick tire forces waking just to preserve
 control response.
 
-Raycast mass preparation folds once through `RaycastWheelMassFolded`, using the
-carrier's explicit or prepared collider-derived mass properties. Every wheel
+Raycast mass preparation retains an independent `ReducedMassState` baseline,
+using the carrier's explicit or prepared collider-derived mass properties. It
+recomputes from that baseline when source mass, mounts or topology change and
+restores the original native ownership when the last source disappears. Settled
+ticks perform only change/signature checks. Every wheel
 and reduced-part identity passes the shared physics ordering validator, including
-sources whose carrier is already folded or unavailable. In that stable order,
+sources whose carrier has an aggregate or is unavailable. In that stable order,
 Parry combines full tensors, principal frames, local centres of mass and
 parallel-axis terms. Proxy wheels contribute point mass; their spin inertia
 belongs to the wheel integrator. Pending wheel parameters defer folding. The
 complete native mass, inertia and centre-of-mass candidate is validated before
 publication; invalid physical data faults and holds integration.
+Computed co-simulation mass, tensor and COM inputs retain independent complete-body
+authority across refolding. They are consumed after source reduction; an explicit
+computed total mass is never added as another baseline contribution.
 
 ## Usage
 

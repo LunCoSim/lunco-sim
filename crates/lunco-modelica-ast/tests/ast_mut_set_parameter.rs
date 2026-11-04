@@ -135,6 +135,62 @@ fn set_parameter_replaces_existing_modification() {
 }
 
 #[test]
+fn set_parameter_replaces_the_complete_expression_for_bindings_starts_and_modifiers() {
+    for expression in [
+        "2*3",
+        "2 /* binary λ */ * 3",
+        "- /* unary */ 2*3",
+        "( /* leading */ 2*3 /* trailing */ )",
+        "if /* condition */ true then 2 elseif false then 4 else 3",
+        "max(/* call */ 2,3)",
+        "{2, /* array */ 3}",
+        "[2,3; /* matrix */ 4,5]",
+        "(2, /* tuple */ 3)",
+        "{i for i in 1:3}",
+        ".P.some[1].other[ /* index */ 2 ]",
+        "max(2,3)[1]",
+    ] {
+        for parameter in ["", "start", "min"] {
+            let declaration = match parameter {
+                "" => format!("parameter Real gain = {expression} \"unchanged description\";"),
+                "start" => format!(
+                    "parameter Real gain(start = {expression}, min = -10) = 1 \"unchanged description\";"
+                ),
+                _ => format!(
+                    "parameter Real gain(min = {expression}, start = 1) = 1 \"unchanged description\";"
+                ),
+            };
+            let source = format!(
+                "model M\n  // untouched λ comment\n  {declaration}\n  parameter Real sibling=7;\nend M;\n"
+            );
+            let parsed = parse_to_ast(&source, "full_expression.mo").unwrap();
+            let (range, replacement, _) =
+                ast_mut::class_patch(&source, &parsed, "M", |class, edit| {
+                    ast_mut::set_parameter(class, edit, "gain", parameter, "9.0")
+                })
+                .unwrap();
+            assert_eq!(
+                &source[range.clone()],
+                expression,
+                "the splice must claim the whole {parameter:?} expression"
+            );
+            let expected = source.replacen(expression, "9.0", 1);
+            let mut patched = source;
+            patched.replace_range(range, &replacement);
+            assert_eq!(patched, expected, "untargeted bytes must remain unchanged");
+            let reparsed = parse_to_ast(&patched, "full_expression.mo").unwrap();
+            let component = &reparsed.classes["M"].components["gain"];
+            let value = match parameter {
+                "" => component.binding.as_ref().unwrap(),
+                "start" => &component.start,
+                _ => &component.modifications[parameter],
+            };
+            assert_eq!(&patched[value.span().start.0..value.span().end.0], "9.0");
+        }
+    }
+}
+
+#[test]
 fn set_parameter_preserves_other_modifications() {
     // Two existing modifications — replacing one must not drop the
     // other.

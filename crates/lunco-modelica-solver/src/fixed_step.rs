@@ -156,6 +156,14 @@ impl FixedStepSession {
     pub fn input_names(&self) -> &[String] {
         &self.input_names
     }
+
+    /// Initialized parameters read by the shared Model Exchange host.
+    pub fn parameter_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
+        self.session
+            .parameter_values()
+            .map(|values| values.into_iter().collect())
+            .map_err(solver_error)
+    }
 }
 
 struct Rk4History {

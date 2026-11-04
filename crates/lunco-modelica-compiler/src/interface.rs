@@ -13,6 +13,35 @@ use rumoca_ir_dae::{
 use super::ModelicaCompiler;
 
 impl ModelicaCompiler {
+    /// Preserve the checked scalar interface and source-level access facts
+    /// while its exact source unit is still seated in the compiler session.
+    pub fn interface_for_parameter_edits(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+        dae: &Dae,
+        overrides: &[(String, f64)],
+    ) -> Result<ResolvedModelicaInterface, String> {
+        let selected = self.seat_source_unit(model_name, source, filename, extras, true)?;
+        let mut interface = Self::interface_from_checked_dae(model_name, dae, overrides)?;
+        for (name, declaration) in &mut interface.declarations {
+            if !declaration.is_parameter {
+                continue;
+            }
+            declaration.source_edit_error = match self
+                .session
+                .class_component_reference_query(&selected, name)
+            {
+                Some(target) => Self::raw_parameter_value(&target, 0.0).err(),
+                None => Some(format!(
+                    "parameter '{name}' has no resolved source declaration"
+                )),
+            };
+        }
+        Ok(interface)
+    }
     pub(super) fn checked_scalar_type(kind: ScalarType) -> Option<ModelicaScalarType> {
         match kind {
             ScalarType::Real => Some(ModelicaScalarType::Real),
@@ -151,6 +180,9 @@ impl ModelicaCompiler {
                         variability,
                         is_parameter: variable.role() == VariableRole::Parameter,
                         is_tunable: variable.is_tunable(),
+                        source_edit_error: Some(
+                            "source declaration access has not been admitted".into(),
+                        ),
                         observable,
                         description: variable.description().map(str::to_owned),
                         unit: variable.unit().map(str::to_owned),

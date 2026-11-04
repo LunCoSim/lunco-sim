@@ -227,6 +227,7 @@ impl CompiledArtifactCache {
                 .cloned()
                 .collect(),
             authored_bindings: Default::default(),
+            edit_interface: None,
             source_content,
             binding_schema,
         }))

@@ -350,12 +350,36 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             && colliders
                 .iter()
                 .all(|collider| world.get::<ColliderDisabled>(*collider).is_some());
-        let authored_mass = world.get::<Mass>(entity);
-        let authored_inertia = world.get::<AngularInertia>(entity);
-        let authored_center_of_mass = world.get::<CenterOfMass>(entity);
+        let source_properties =
+            world.get::<lunco_physics::body_mass::ColliderMassOverrides>(entity);
+        let automatic = world.get::<lunco_physics::body_mass::BodyMassFromColliders>(entity);
+        let authored_mass = match source_properties {
+            Some(source) => source.mass,
+            None if automatic.is_some_and(|owner| owner.mass) => None,
+            None => world.get::<Mass>(entity).map(|mass| f64::from(mass.0)),
+        };
+        let authored_inertia = match source_properties {
+            Some(source) => source.principal,
+            None if automatic.is_some_and(|owner| owner.inertia) => None,
+            None => world
+                .get::<AngularInertia>(entity)
+                .map(|inertia| inertia.principal.as_dvec3()),
+        };
+        let authored_center_of_mass = match source_properties {
+            Some(source) => source.center,
+            None if automatic.is_some_and(|owner| owner.center) => None,
+            None => world
+                .get::<CenterOfMass>(entity)
+                .map(|center| center.0.as_dvec3()),
+        };
         let mass = world.get::<ComputedMass>(entity);
         let center_of_mass = world.get::<ComputedCenterOfMass>(entity);
         let inertia = world.get::<ComputedAngularInertia>(entity);
+        let tensor = inertia
+            .and_then(|inertia| lunco_physics::body_mass::computed_inertia_tensor_d(inertia).ok());
+        let principal = inertia.and_then(|inertia| {
+            lunco_physics::body_mass::computed_inertia_principal_d(inertia).ok()
+        });
         let support = world.get::<PhysicsSupportFootprint>(entity);
         let support_state = world.get::<PhysicsSupportState>(entity);
         let prim_path = world.get::<UsdPrimPath>(entity);
@@ -535,37 +559,32 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "collider_local_bounds": collider_local_bounds,
             "colliders": collider_details,
             "collider_disabled": collider_disabled,
-            "authored_mass_kg": authored_mass.map(|mass| mass.0 as f64),
-            "mass_override_active": world.get::<NoAutoMass>(entity).is_some(),
+            "authored_mass_kg": authored_mass,
+            "mass_override_active": world.get::<NoAutoMass>(entity).is_some()
+                && !automatic.is_some_and(|owner| owner.mass),
             "authored_inertia_principal_kgm2": authored_inertia.map(|inertia| {
-                api_value!([inertia.principal.x, inertia.principal.y, inertia.principal.z])
+                api_value!([inertia.x, inertia.y, inertia.z])
             }),
-            "inertia_override_active": world.get::<NoAutoAngularInertia>(entity).is_some(),
+            "inertia_override_active": world.get::<NoAutoAngularInertia>(entity).is_some()
+                && !automatic.is_some_and(|owner| owner.inertia),
             "authored_center_of_mass_m": authored_center_of_mass
-                .map(|center| api_value!([center.0.x, center.0.y, center.0.z])),
+                .map(|center| api_value!([center.x, center.y, center.z])),
             "center_of_mass_override_active": world
                 .get::<NoAutoCenterOfMass>(entity)
-                .is_some(),
+                .is_some() && !automatic.is_some_and(|owner| owner.center),
             "mass_kg": mass.map(|mass| mass.value()),
             "computed_mass_finite": mass.is_some_and(|mass| mass.is_finite()),
-            "computed_inertia_finite": inertia.is_some_and(|inertia| inertia.is_finite()),
+            "computed_inertia_finite": tensor.is_some(),
             "center_of_mass_m": center_of_mass
                 .map(|center| api_value!([center.0.x, center.0.y, center.0.z])),
-            "inertia_principal_kgm2": inertia.map(|inertia| {
-                let (principal, _) = inertia.principal_angular_inertia_with_local_frame();
+            "inertia_principal_kgm2": principal.map(|(principal, _)| {
                 api_value!([principal.x, principal.y, principal.z])
             }),
             // Body-local rows preserve the full physical tensor, including
             // cross terms and orientation that principal values alone omit.
-            "inertia_tensor_kgm2": inertia.filter(|inertia| inertia.is_finite())
-                .and_then(|inertia| {
-                    let tensor = inertia.tensor();
-                    tensor.is_finite().then(|| api_value!([
-                        [tensor.m00, tensor.m01, tensor.m02],
-                        [tensor.m01, tensor.m11, tensor.m12],
-                        [tensor.m02, tensor.m12, tensor.m22],
-                    ]))
-                }),
+            "inertia_tensor_kgm2": tensor.map(|tensor| api_value!([
+                tensor.row(0).to_array(), tensor.row(1).to_array(), tensor.row(2).to_array(),
+            ])),
             // A footprint is authored support geometry; a contact count is a
             // live result from the owning physics realization. Keep them
             // separate so callers cannot mistake a declared probe for ground

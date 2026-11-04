@@ -4066,6 +4066,14 @@ fn rebuild_scene_from_document(
             return false;
         }
     };
+    if let Err(error) = lunco_usd_bevy_stage::stage_convention(&replacement.view()) {
+        report_stage_projection_reset_failure(
+            world,
+            scene_id,
+            format!("native document stage convention cannot be admitted: {error}"),
+        );
+        return false;
+    }
     let rebuilt = {
         let _span = bevy::log::info_span!("usd_twin_rebuild_commit_live_stage").entered();
         if let Some(mut stages) = world.get_non_send_mut::<CanonicalStages>() {

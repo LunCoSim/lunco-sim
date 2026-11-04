@@ -13,8 +13,7 @@ pub const MAX_SESSION_INPUT_RECORDS: usize = 65_536;
 pub const MAX_SESSION_INPUT_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"LCSINP\0\0";
-const ARCHIVE_VERSION: u16 = 6;
-const FIRST_ARCHIVE_VERSION: u16 = 1;
+const ARCHIVE_VERSION: u16 = 7;
 const HEADER_BYTES: usize = 8 + 2 + 4 + 4;
 const MAX_ARCHIVE_PAYLOAD_BYTES: usize = MAX_SESSION_INPUT_ARCHIVE_BYTES - HEADER_BYTES;
 
@@ -38,6 +37,9 @@ enum ArchiveProducer {
         session_id: SessionId,
     },
     RuntimeLifecycle,
+    Network {
+        session_id: SessionId,
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -122,6 +124,9 @@ impl From<&SessionInputRecord> for ArchiveRecord {
                 ArchiveProducer::LocalUser { session_id }
             }
             crate::SessionInputProducer::RuntimeLifecycle => ArchiveProducer::RuntimeLifecycle,
+            crate::SessionInputProducer::Network { session_id } => {
+                ArchiveProducer::Network { session_id }
+            }
         };
         let payload = match &record.payload {
             crate::SessionInputPayload::PhysicalIntentFrame { intent_ids } => {
@@ -238,6 +243,9 @@ impl From<ArchiveRecord> for SessionInputRecord {
                 crate::SessionInputProducer::LocalUser { session_id }
             }
             ArchiveProducer::RuntimeLifecycle => crate::SessionInputProducer::RuntimeLifecycle,
+            ArchiveProducer::Network { session_id } => {
+                crate::SessionInputProducer::Network { session_id }
+            }
         };
         let payload = match record.payload {
             ArchivePayload::PhysicalIntentFrame { intent_ids } => {
@@ -408,9 +416,9 @@ impl SessionInputCaptureArchive {
         }
 
         let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-        if !(FIRST_ARCHIVE_VERSION..=ARCHIVE_VERSION).contains(&version) {
+        if version != ARCHIVE_VERSION {
             return Err(format!(
-                "session input archive version {version} is unsupported"
+                "session input archive version {version} is unsupported; expected {ARCHIVE_VERSION}"
             ));
         }
         let record_count =
@@ -438,54 +446,6 @@ impl SessionInputCaptureArchive {
                 .map_err(|error| format!("session input archive decode failed: {error}"))?;
         if consumed != payload_length {
             return Err("session input archive payload contains trailing data".to_owned());
-        }
-        if version == FIRST_ARCHIVE_VERSION
-            && wire_records.iter().any(|record| {
-                matches!(&record.producer, ArchiveProducer::LocalUser { .. })
-                    || matches!(&record.payload, ArchivePayload::ModelicaInputChange { .. })
-            })
-        {
-            return Err(
-                "session input archive version one contains a version two record variant"
-                    .to_owned(),
-            );
-        }
-        if version < 3
-            && wire_records.iter().any(|record| {
-                matches!(
-                    &record.payload,
-                    ArchivePayload::PortInputWrites { .. }
-                        | ArchivePayload::PortInputRelease { .. }
-                        | ArchivePayload::ControlInputRelease { .. }
-                )
-            })
-        {
-            return Err(format!(
-                "session input archive version {version} contains a version three record variant"
-            ));
-        }
-        if version < 5
-            && wire_records.iter().any(|record| {
-                matches!(&record.producer, ArchiveProducer::RuntimeLifecycle)
-                    || matches!(
-                        &record.payload,
-                        ArchivePayload::ControlInputRelease { .. }
-                            | ArchivePayload::ControlInputsReleased
-                    )
-            })
-        {
-            return Err(format!(
-                "control-release records require session input archive version 5 or newer, got {version}"
-            ));
-        }
-        if version < 6
-            && wire_records.iter().any(|record| {
-                matches!(&record.payload, ArchivePayload::PortInputTransaction { .. })
-            })
-        {
-            return Err(format!(
-                "session input archive version {version} contains a version six transaction record variant"
-            ));
         }
         if wire_records.len() != record_count {
             return Err(format!(
@@ -872,19 +832,6 @@ mod tests {
         ]
     }
 
-    fn records_without_control_release() -> Vec<SessionInputRecord> {
-        valid_records()
-            .into_iter()
-            .filter(|record| {
-                !matches!(
-                    &record.payload,
-                    SessionInputPayload::ControlInputRelease { .. }
-                        | SessionInputPayload::ControlInputsReleased
-                )
-            })
-            .collect()
-    }
-
     fn encode_wire_records(records: &[ArchiveRecord]) -> Vec<u8> {
         let config = bincode::config::standard().with_limit::<MAX_ARCHIVE_PAYLOAD_BYTES>();
         let payload =
@@ -896,6 +843,47 @@ mod tests {
         bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&payload);
         bytes
+    }
+
+    #[test]
+    fn session_input_capture_archive_round_trips_network_producers() {
+        let record = SessionInputRecord {
+            producer: SessionInputProducer::Network {
+                session_id: SessionId(7),
+            },
+            target: lunco_core::GlobalEntityId::from_raw(42),
+            scene_generation: 3,
+            effective_tick: 10,
+            sequence: 1,
+            payload: SessionInputPayload::PortInputRelease {
+                name: "throttle".into(),
+                correlation_id: 9,
+            },
+        };
+        let archive = SessionInputCaptureArchive::new(vec![record.clone()]).unwrap();
+        let bytes = archive.to_bytes().unwrap();
+        assert_eq!(
+            SessionInputCaptureArchive::from_bytes(&bytes)
+                .unwrap()
+                .records(),
+            &[record]
+        );
+    }
+
+    #[test]
+    fn session_input_capture_archive_rejects_every_noncurrent_version() {
+        let bytes = SessionInputCaptureArchive::new(valid_records())
+            .unwrap()
+            .to_bytes()
+            .unwrap();
+        for version in [0_u16, 1, 2, 3, 4, 5, 6, 8, u16::MAX] {
+            let mut invalid = bytes.clone();
+            invalid[8..10].copy_from_slice(&version.to_le_bytes());
+            let error = SessionInputCaptureArchive::from_bytes(&invalid).unwrap_err();
+            assert!(error.contains(&format!(
+                "version {version} is unsupported; expected {ARCHIVE_VERSION}"
+            )));
+        }
     }
 
     #[test]
@@ -928,91 +916,6 @@ mod tests {
     }
 
     #[test]
-    fn session_input_capture_archive_decodes_existing_version_one_records() {
-        let legacy_records: Vec<_> = valid_records().into_iter().take(5).collect();
-        let wire_records: Vec<_> = legacy_records.iter().map(ArchiveRecord::from).collect();
-        let mut bytes = encode_wire_records(&wire_records);
-        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
-
-        let decoded = SessionInputCaptureArchive::from_bytes(&bytes)
-            .expect("version one records remain readable after appending variants");
-        assert_eq!(decoded.records(), legacy_records.as_slice());
-    }
-
-    #[test]
-    fn session_input_capture_archive_decodes_existing_version_two_records() {
-        let legacy_records: Vec<_> = valid_records().into_iter().take(6).collect();
-        let wire_records: Vec<_> = legacy_records.iter().map(ArchiveRecord::from).collect();
-        let mut bytes = encode_wire_records(&wire_records);
-        bytes[8..10].copy_from_slice(&2_u16.to_le_bytes());
-
-        let decoded = SessionInputCaptureArchive::from_bytes(&bytes)
-            .expect("version two records remain readable after appending variants");
-        assert_eq!(decoded.records(), legacy_records.as_slice());
-    }
-
-    #[test]
-    fn session_input_capture_archive_decodes_existing_version_three_records() {
-        let legacy_records = records_without_control_release();
-        let wire_records: Vec<_> = legacy_records.iter().map(ArchiveRecord::from).collect();
-        let mut bytes = encode_wire_records(&wire_records);
-        bytes[8..10].copy_from_slice(&3_u16.to_le_bytes());
-
-        let decoded = SessionInputCaptureArchive::from_bytes(&bytes)
-            .expect("version three records without control releases remain readable");
-        assert_eq!(decoded.records(), legacy_records.as_slice());
-    }
-
-    #[test]
-    fn session_input_capture_archive_rejects_version_two_variants_in_version_one() {
-        let record = ArchiveRecord {
-            producer: ArchiveProducer::LocalUser {
-                session_id: SessionId::LOCAL,
-            },
-            target: lunco_core::GlobalEntityId::from_raw(42),
-            scene_generation: 3,
-            effective_tick: 14,
-            sequence: 1,
-            payload: ArchivePayload::ModelicaInputChange {
-                name: "drive_torque".to_owned(),
-                value: 12.5,
-                correlation_id: 304,
-            },
-        };
-        let mut bytes = encode_wire_records(&[record]);
-        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
-
-        assert!(
-            SessionInputCaptureArchive::from_bytes(&bytes)
-                .expect_err("version one cannot claim variants introduced by version two")
-                .contains("version two record variant")
-        );
-    }
-
-    #[test]
-    fn session_input_capture_archive_rejects_version_three_port_inputs_in_version_two() {
-        let record = ArchiveRecord {
-            producer: ArchiveProducer::ApiTransport { producer_id: 8182 },
-            target: lunco_core::GlobalEntityId::from_raw(42),
-            scene_generation: 3,
-            effective_tick: 15,
-            sequence: 1,
-            payload: ArchivePayload::PortInputWrites {
-                writes: vec![("throttle".to_owned(), 0.625)],
-                correlation_id: 305,
-            },
-        };
-        let mut bytes = encode_wire_records(&[record]);
-        bytes[8..10].copy_from_slice(&2_u16.to_le_bytes());
-
-        assert!(
-            SessionInputCaptureArchive::from_bytes(&bytes)
-                .expect_err("version two cannot claim version three port input records")
-                .contains("version three record variant")
-        );
-    }
-
-    #[test]
     fn session_input_capture_archive_round_trips_lifecycle_releases() {
         let record = SessionInputRecord {
             producer: SessionInputProducer::RuntimeLifecycle,
@@ -1027,88 +930,9 @@ mod tests {
         let bytes = archive.to_bytes().expect("archive encodes");
         assert_eq!(
             SessionInputCaptureArchive::from_bytes(&bytes)
-                .expect("version five lifecycle record decodes")
+                .expect("current lifecycle record decodes")
                 .records(),
             &[record]
-        );
-    }
-
-    #[test]
-    fn session_input_capture_archive_rejects_control_release_before_version_five() {
-        let record = ArchiveRecord {
-            producer: ArchiveProducer::ApiTransport { producer_id: 8484 },
-            target: lunco_core::GlobalEntityId::from_raw(42),
-            scene_generation: 3,
-            effective_tick: 17,
-            sequence: 1,
-            payload: ArchivePayload::ControlInputRelease {
-                correlation_id: 307,
-            },
-        };
-        for version in [3_u16, 4] {
-            let mut bytes = encode_wire_records(std::slice::from_ref(&record));
-            bytes[8..10].copy_from_slice(&version.to_le_bytes());
-            assert!(
-                SessionInputCaptureArchive::from_bytes(&bytes)
-                    .expect_err("earlier release records apply retired value-writing semantics")
-                    .contains("require session input archive version 5")
-            );
-        }
-    }
-
-    #[test]
-    fn session_input_capture_archive_rejects_lifecycle_records_before_version_five() {
-        let record = ArchiveRecord {
-            producer: ArchiveProducer::RuntimeLifecycle,
-            target: lunco_core::GlobalEntityId::from_raw(42),
-            scene_generation: 3,
-            effective_tick: 18,
-            sequence: 1,
-            payload: ArchivePayload::ControlInputsReleased,
-        };
-        let mut bytes = encode_wire_records(&[record]);
-        bytes[8..10].copy_from_slice(&3_u16.to_le_bytes());
-
-        assert!(
-            SessionInputCaptureArchive::from_bytes(&bytes)
-                .expect_err("version three cannot claim lifecycle records")
-                .contains("require session input archive version 5")
-        );
-    }
-
-    #[test]
-    fn session_input_capture_archive_rejects_version_four_lifecycle_release() {
-        let record = ArchiveRecord {
-            producer: ArchiveProducer::RuntimeLifecycle,
-            target: lunco_core::GlobalEntityId::from_raw(42),
-            scene_generation: 3,
-            effective_tick: 18,
-            sequence: 1,
-            payload: ArchivePayload::ControlInputsReleased,
-        };
-        let mut version_four = encode_wire_records(&[record]);
-        version_four[8..10].copy_from_slice(&4_u16.to_le_bytes());
-
-        assert!(
-            SessionInputCaptureArchive::from_bytes(&version_four)
-                .expect_err("version four lifecycle records imply value-writing behavior")
-                .contains("require session input archive version 5")
-        );
-    }
-
-    #[test]
-    fn session_input_capture_archive_reads_version_four_without_lifecycle_releases() {
-        let records = records_without_control_release();
-        let archive = SessionInputCaptureArchive::new(records.clone())
-            .expect("current non-lifecycle records form an archive");
-        let mut version_four = archive.to_bytes().expect("archive encodes");
-        version_four[8..10].copy_from_slice(&4_u16.to_le_bytes());
-
-        assert_eq!(
-            SessionInputCaptureArchive::from_bytes(&version_four)
-                .expect("version four records without lifecycle releases remain readable")
-                .records(),
-            records.as_slice()
         );
     }
 
@@ -1301,14 +1125,6 @@ mod tests {
             SessionInputCaptureArchive::from_bytes(&bad_magic)
                 .expect_err("bad magic is rejected")
                 .contains("magic")
-        );
-
-        let mut unsupported_version = bytes.clone();
-        unsupported_version[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert!(
-            SessionInputCaptureArchive::from_bytes(&unsupported_version)
-                .expect_err("unknown archive schema is rejected")
-                .contains("version")
         );
 
         let mut excessive_record_count = bytes.clone();

@@ -610,7 +610,9 @@ impl ApiQueryProvider for CompileStatusProvider {
         let (is_compiled, is_compiling, paused, running, run_stale, current_time) = run_entity
             .and_then(|e| world.get::<ModelicaModel>(e))
             .map(|m| {
-                let stale = !m.is_compiled || m.compiled_generation != doc_generation;
+                let stale = !m.is_compiled
+                    || m.compiled_generation != doc_generation
+                    || !lunco_modelica_core::source_snapshot::model_is_current(world, m);
                 (
                     m.is_compiled,
                     m.is_compiling,

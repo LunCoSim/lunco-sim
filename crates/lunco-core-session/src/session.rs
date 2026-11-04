@@ -651,19 +651,44 @@ impl PendingReplicatedSpawns {
     }
 }
 
-/// One sampled vessel input, stamped with a dense per-vessel sequence number and
-/// the client `SimTick` it was sampled at. Buffered for client-prediction replay:
-/// after a snapshot snaps the owned body to the authoritative state, the reconcile
-/// re-applies the still-unacked frames in order to advance back to "now".
-#[derive(Clone, Debug, Default, PartialEq)]
+/// One ordered input action shared by live control and prediction replay.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PortControlAction {
+    /// Atomically replace the named persistent controller levels.
+    Writes(Vec<(String, f64)>),
+    /// Release both hold layers of one named input.
+    ReleasePort(String),
+    /// Release every hold layer addressed to this endpoint.
+    ReleaseControl,
+}
+
+/// One successfully applied vessel action and its complete controller levels.
+/// The snapshot lets replay remove levels established by a later frame before
+/// applying an earlier frame; authored-program layers retain their own owner.
+#[derive(Clone, Debug, PartialEq)]
 pub struct InputFrame {
     pub seq: u32,
     pub tick: u64,
-    /// Complete latched set of authored control-port values at this input
-    /// boundary. Keep the command's stable order so rollback writes the same
-    /// port sequence as live control dispatch.
-    pub writes: Vec<(String, f64)>,
+    pub producer: SessionId,
+    pub action: PortControlAction,
+    pub control_levels: Vec<(String, f64)>,
+    /// Declared/enrolled control input values, including their unheld baselines.
+    pub input_values: Vec<(String, f64)>,
 }
+
+/// A co-simulation owner has committed one client control action. Network
+/// capture and controller presentation consume this receipt, never an intent
+/// whose validation or fixed-tick admission is still pending.
+#[derive(Event, Clone, Debug)]
+pub struct PortControlCommitted {
+    pub target: Entity,
+    pub frame: InputFrame,
+}
+
+/// Maximum retained client frames; an acknowledgement retires their prefix.
+pub const MAX_PREDICTED_INPUT_FRAMES: usize = 128;
+/// Activity threshold used by prediction membership for an admitted input.
+pub const PREDICTION_INPUT_ACTIVITY_EPS: f64 = 1e-3;
 
 /// Per-vessel input log: a monotonic `seq` counter plus the unacked frames.
 #[derive(Default)]
@@ -748,6 +773,8 @@ pub enum SessionInputProducer {
     },
     /// In-process typed command with a caller assigned stable identity.
     DirectCommand { producer_id: u64 },
+    /// Authenticated network peer session.
+    Network { session_id: SessionId },
     /// Local user interaction associated with the current peer session.
     LocalUser { session_id: SessionId },
     /// Internal simulation-owner lifecycle action, such as releasing disconnected input holds.
@@ -776,6 +803,14 @@ impl SessionInputProducer {
                     format!("API {input_name} requires a stable nonzero producer_id")
                 })?;
                 Ok(Self::ApiTransport { producer_id })
+            }
+            Some(lunco_core::CommandOrigin::Network { session_id }) => {
+                if requested_producer_id.is_some() {
+                    return Err(format!(
+                        "network {input_name} uses its authenticated session; omit producer_id"
+                    ));
+                }
+                Ok(Self::Network { session_id })
             }
             Some(lunco_core::CommandOrigin::LocalUser { session_id }) => {
                 if requested_producer_id.is_some() {
@@ -828,6 +863,7 @@ impl SessionInputProducer {
             Self::Rhai { .. } => "rhai",
             Self::DirectCommand { .. } => "direct_command",
             Self::LocalUser { .. } => "local_user",
+            Self::Network { .. } => "network",
             Self::RuntimeLifecycle => "runtime_lifecycle",
         }
     }
@@ -840,9 +876,10 @@ impl SessionInputProducer {
                 Some(producer_id)
             }
             Self::Rhai { producer_id, .. } => producer_id,
-            Self::PhysicalController { .. } | Self::LocalUser { .. } | Self::RuntimeLifecycle => {
-                None
-            }
+            Self::PhysicalController { .. }
+            | Self::LocalUser { .. }
+            | Self::Network { .. }
+            | Self::RuntimeLifecycle => None,
         }
     }
 }
@@ -1240,7 +1277,8 @@ fn validate_session_input(
             SessionInputProducer::ApiTransport { .. }
             | SessionInputProducer::DirectCommand { .. }
             | SessionInputProducer::Rhai { .. }
-            | SessionInputProducer::LocalUser { .. },
+            | SessionInputProducer::LocalUser { .. }
+            | SessionInputProducer::Network { .. },
             SessionInputPayload::ModelicaInputChange { .. }
             | SessionInputPayload::PortInputWrites { .. }
             | SessionInputPayload::PortInputTransaction { .. },
@@ -1248,7 +1286,9 @@ fn validate_session_input(
         | (
             SessionInputProducer::ApiTransport { .. }
             | SessionInputProducer::DirectCommand { .. }
-            | SessionInputProducer::Rhai { .. },
+            | SessionInputProducer::Rhai { .. }
+            | SessionInputProducer::LocalUser { .. }
+            | SessionInputProducer::Network { .. },
             SessionInputPayload::PortInputRelease { .. }
             | SessionInputPayload::ControlInputRelease { .. },
         )
@@ -1267,7 +1307,7 @@ fn validate_session_input(
                 "control input lifecycle release requires a runtime lifecycle producer".to_owned(),
             );
         }
-        (SessionInputProducer::LocalUser { .. }, _) => {
+        (SessionInputProducer::LocalUser { .. } | SessionInputProducer::Network { .. }, _) => {
             return Err(
                 "local user session inputs require a Modelica or port input change".to_owned(),
             );
@@ -1893,7 +1933,7 @@ impl SessionInputStream {
 }
 
 /// CLIENT-side latest local drive input per owned gid `(throttle, steer)`, captured
-/// from the outbound `SetPorts` in `record_control_input`. The render-lead
+/// from committed control receipts. The render-lead
 /// (`lead_owned_rover_render`) reads it to visually anticipate the rover's motion —
 /// leading the *rendered* pose forward/turning by ~RTT so driving feels responsive
 /// even though physics stays 100% host-authoritative (see the visual-prediction
@@ -1901,118 +1941,79 @@ impl SessionInputStream {
 #[derive(Resource, Default)]
 pub struct LocalDriveInput(pub HashMap<u64, (f64, f64)>);
 
-/// HOST-side per-tick input jitter buffer for CLIENT-owned (predicted) rovers.
-///
-/// The owning client emits a **contiguous, per-fixed-tick, `seq`-stamped**
-/// `SetPorts` stream (see `drive_from_bindings`). Without this buffer the host
-/// applied each forwarded `SetPorts` immediately in `drain_sync_inbox` (`Update` =
-/// RENDER cadence) and the port latched — so when the host's render rate lagged
-/// the fixed rate it *subsampled* the input stream, integrating a DIFFERENT input
-/// sequence than the client predicted with. Harmless for a held (constant) input,
-/// but during a turn the changing steer is subsampled → the authoritative yaw
-/// diverges from the prediction → the reconcile snap = the post-turn wobble.
-///
-/// The host consumer ([`BufferedClientInputs::next_for_tick`], run once per
-/// `FixedUpdate` tick BEFORE the drive/physics) applies exactly ONE buffered input
-/// per tick, in `seq` order, latching the last one when none is newer — so the
-/// host integrates the SAME sequence the client did, regardless of its render FPS.
-/// `BTreeMap` keeps `seq` order (absorbing reorder on the unreliable
-/// `ControlStream`). Empty on client/standalone.
+/// Host-side ordered actions from authenticated controlling sessions.
+/// Each action is consumed once. Persistent levels belong exclusively to
+/// `PortHolds`; the network queue does not retain a competing latched writer.
 #[derive(Resource, Default)]
 pub struct BufferedClientInputs {
-    /// gid → (seq → the `SetPorts` writes stamped with that seq), still unapplied.
-    pub pending: HashMap<u64, std::collections::BTreeMap<u32, Vec<(String, f64)>>>,
-    /// gid → highest `seq` consumed so far (the per-tick cursor).
+    pub pending: HashMap<u64, std::collections::BTreeMap<u32, InputFrame>>,
     pub applied: HashMap<u64, u32>,
-    /// gid → the most recently consumed writes, re-applied (latched) on a tick
-    /// with no newer input so the consumer stays the body's sole port authority.
-    pub last_writes: HashMap<u64, Vec<(String, f64)>>,
 }
 
 impl BufferedClientInputs {
-    /// Record a forwarded client input (`seq` → `writes`) for `gid`. `seq` 0 is
-    /// reserved ("no input") and ignored.
-    ///
-    /// **Server-side seq validation** (review N1): a `seq` at or below the cursor is
-    /// already integrated (a duplicate, or a reorder on the lossy `ControlStream`),
-    /// and once a stream is established a `seq` more than [`MAX_SEQ_JUMP`] ahead of
-    /// the cursor is not a plausible continuation of a once-per-fixed-tick stream.
-    /// Both are dropped. Without the upper check a single `SetPorts { seq: u32::MAX }`
-    /// would park the cursor at the top of the range and every genuine input after it
-    /// would sit in the queue unconsumed forever.
-    ///
-    /// The window is NOT applied at cursor 0 (no stream yet): a client's `seq` counter
-    /// is per (vessel, client) and does not restart when the vessel changes hands, so
-    /// a peer re-possessing a rover it drove earlier legitimately resumes at a high
-    /// seq against a freshly-cleared buffer. See `AppliedInputSeq::record`.
-    pub fn push(&mut self, gid: u64, seq: u32, writes: Vec<(String, f64)>) {
-        if seq == 0 {
-            return;
+    /// Bound each vessel's queue without skipping authoritative input actions.
+    pub const MAX_PENDING_PER_TARGET: usize = 256;
+
+    pub fn push(&mut self, gid: u64, frame: InputFrame) -> Result<(), String> {
+        if frame.seq == 0 || frame.seq == u32::MAX {
+            return Err("network input sequence must be in 1..u32::MAX".into());
         }
         let cursor = self.cursor(gid);
-        if seq <= cursor {
-            return; // already integrated (duplicate / reorder behind the cursor)
+        if frame.seq <= cursor {
+            return Err("network input sequence has already committed".into());
         }
-        // Reference = the highest seq we already know about for this gid (consumed or
-        // queued). Zero only before the very first input, where any seq is the
-        // stream's baseline.
-        let highest = self
-            .pending
-            .get(&gid)
-            .and_then(|m| m.keys().next_back().copied())
-            .unwrap_or(0)
+        let pending = self.pending.entry(gid).or_default();
+        let highest = pending
+            .keys()
+            .next_back()
+            .copied()
+            .unwrap_or(cursor)
             .max(cursor);
-        if highest != 0 && seq > highest && seq - highest > MAX_SEQ_JUMP {
-            return;
+        if highest != 0 && frame.seq > highest && frame.seq - highest > MAX_SEQ_JUMP {
+            return Err("network input sequence exceeds the admitted window".into());
         }
-        self.pending.entry(gid).or_default().insert(seq, writes);
+        if pending.contains_key(&frame.seq) {
+            return Err("network input sequence is already pending".into());
+        }
+        if pending.len() >= Self::MAX_PENDING_PER_TARGET {
+            return Err("network input queue is full".into());
+        }
+        pending.insert(frame.seq, frame);
+        Ok(())
     }
 
-    /// The highest `seq` actually consumed for `gid` so far (0 = none). This — not
-    /// `max(seq)` over everything the wire delivered — is the honest reconcile ack:
-    /// the host integrates ONE buffered input per fixed tick, so a render frame that
-    /// drains K forwarded `SetPorts` has still only run one of them.
     pub fn cursor(&self, gid: u64) -> u32 {
         self.applied.get(&gid).copied().unwrap_or(0)
     }
 
-    /// Forget everything buffered for `gid` (despawn / ownership change).
+    /// Inspect the earliest action without consuming it before owner commit.
+    pub fn peek_for_tick(&self, gid: u64) -> Option<&InputFrame> {
+        self.pending
+            .get(&gid)?
+            .first_key_value()
+            .map(|(_, frame)| frame)
+    }
+
+    /// Advance only the successfully applied ordered prefix.
+    pub fn commit(&mut self, gid: u64, seq: u32) -> Result<(), String> {
+        let pending = self
+            .pending
+            .get_mut(&gid)
+            .ok_or("network input queue is missing")?;
+        if pending.first_key_value().map(|(&first, _)| first) != Some(seq) {
+            return Err("network input commit is not the earliest pending sequence".into());
+        }
+        pending.remove(&seq);
+        if pending.is_empty() {
+            self.pending.remove(&gid);
+        }
+        self.applied.insert(gid, seq);
+        Ok(())
+    }
+
     pub fn clear_gid(&mut self, gid: u64) {
         self.pending.remove(&gid);
         self.applied.remove(&gid);
-        self.last_writes.remove(&gid);
-    }
-
-    /// Consume ONE input for `gid` this fixed tick, in `seq` order: the smallest
-    /// buffered `seq` past the cursor. Returns the latched last input when none is
-    /// newer (so the caller always writes → stays the port authority). When the
-    /// backlog exceeds `cap` (host fell behind), skips to the newest to bound added
-    /// latency. Returns `None` only before the first input for `gid` ever arrives.
-    pub fn next_for_tick(&mut self, gid: u64, cap: usize) -> Option<Vec<(String, f64)>> {
-        let cursor = self.applied.get(&gid).copied().unwrap_or(0);
-        let target = {
-            let Some(map) = self.pending.get(&gid) else {
-                return self.last_writes.get(&gid).cloned();
-            };
-            match map
-                .range(cursor.saturating_add(1)..)
-                .next()
-                .map(|(s, _)| *s)
-            {
-                None => return self.last_writes.get(&gid).cloned(),
-                Some(ns) if map.len() > cap => *map.keys().next_back().unwrap_or(&ns),
-                Some(ns) => ns,
-            }
-        };
-        let map = self.pending.get_mut(&gid)?;
-        let writes = map.get(&target).cloned();
-        // Drop everything up to and including the consumed seq.
-        *map = map.split_off(&(target + 1));
-        self.applied.insert(gid, target);
-        if let Some(w) = &writes {
-            self.last_writes.insert(gid, w.clone());
-        }
-        writes
     }
 }
 
@@ -2616,6 +2617,17 @@ pub fn may_take_control(
 
 #[cfg(test)]
 mod tests {
+    fn control_frame(seq: u32, writes: Vec<(String, f64)>) -> super::InputFrame {
+        super::InputFrame {
+            seq,
+            tick: u64::from(seq),
+            producer: A,
+            action: super::PortControlAction::Writes(writes.clone()),
+            input_values: writes.clone(),
+            control_levels: writes,
+        }
+    }
+
     use super::*;
     use lunco_command_contracts::SessionId;
 
@@ -2992,15 +3004,18 @@ mod tests {
         buf.clear_gid(R1);
 
         // A's client picks up where ITS counter left off — far past the zeroed slot.
-        buf.push(R1, 5001, vec![("throttle".into(), 1.0)]);
-        buf.push(R1, 5002, vec![("throttle".into(), 1.0)]);
+        buf.push(R1, control_frame(5001, vec![("throttle".into(), 1.0)]))
+            .unwrap();
+        buf.push(R1, control_frame(5002, vec![("throttle".into(), 1.0)]))
+            .unwrap();
         assert!(
-            buf.next_for_tick(R1, 8).is_some(),
+            buf.peek_for_tick(R1).is_some(),
             "the returning owner must be able to drive"
         );
+        buf.commit(R1, 5001).unwrap();
         applied.record(R1, Some(A), buf.cursor(R1));
         assert_eq!(applied.ack(R1), 5001);
-        buf.next_for_tick(R1, 8);
+        buf.commit(R1, 5002).unwrap();
         applied.record(R1, Some(A), buf.cursor(R1));
         assert_eq!(applied.ack(R1), 5002, "and to keep being acked");
     }
@@ -3035,13 +3050,25 @@ mod tests {
         let mut buf = BufferedClientInputs::default();
         let mut applied = AppliedInputSeq::default();
         // One render frame delivers three ticks' worth of steering input.
-        buf.push(R1, 1, vec![("steer".into(), 0.0)]);
-        buf.push(R1, 2, vec![("steer".into(), 0.5)]);
-        buf.push(R1, 3, vec![("steer".into(), 1.0)]);
+        buf.push(R1, control_frame(1, vec![("steer".into(), 0.0)]))
+            .unwrap();
+        buf.push(R1, control_frame(2, vec![("steer".into(), 0.5)]))
+            .unwrap();
+        buf.push(R1, control_frame(3, vec![("steer".into(), 1.0)]))
+            .unwrap();
         assert_eq!(buf.cursor(R1), 0, "nothing integrated yet");
 
         for expected_seq in 1..=3u32 {
-            let writes = buf.next_for_tick(R1, 8).expect("one input per fixed tick");
+            let frame = buf
+                .peek_for_tick(R1)
+                .expect("one input per fixed tick")
+                .clone();
+            assert_eq!(buf.cursor(R1), expected_seq - 1);
+            assert!(
+                buf.commit(R1, expected_seq + 1).is_err(),
+                "cannot skip an earlier action"
+            );
+            buf.commit(R1, expected_seq).unwrap();
             assert_eq!(buf.cursor(R1), expected_seq);
             applied.record(R1, Some(A), buf.cursor(R1));
             assert_eq!(
@@ -3050,12 +3077,14 @@ mod tests {
                 "the ack must name the seq physics actually ran this tick"
             );
             // …and each tick sees its OWN steer value, not just the last one.
+            let super::PortControlAction::Writes(writes) = frame.action else {
+                panic!("expected writes")
+            };
             let steer = writes.iter().find(|(n, _)| n == "steer").map(|(_, v)| *v);
             assert_eq!(steer, Some((expected_seq as f64 - 1.0) * 0.5));
         }
-        // Nothing new: the last input latches (the consumer stays the port authority)
-        // and the ack does NOT advance past what was integrated.
-        assert!(buf.next_for_tick(R1, 8).is_some());
+        // The queue consumes an action once; persistent values belong to the port owner.
+        assert!(buf.peek_for_tick(R1).is_none());
         assert_eq!(applied.slot(R1).seq, 3);
     }
 
@@ -3065,14 +3094,44 @@ mod tests {
     #[test]
     fn buffered_inputs_are_dropped_when_a_vessel_changes_hands() {
         let mut buf = BufferedClientInputs::default();
-        buf.push(R1, 1, vec![("throttle".into(), 1.0)]);
-        buf.push(R1, 2, vec![("throttle".into(), 1.0)]);
+        buf.push(R1, control_frame(1, vec![("throttle".into(), 1.0)]))
+            .unwrap();
+        buf.push(R1, control_frame(2, vec![("throttle".into(), 1.0)]))
+            .unwrap();
         buf.clear_gid(R1);
         assert!(
-            buf.next_for_tick(R1, 8).is_none(),
+            buf.peek_for_tick(R1).is_none(),
             "A's inputs must not drive B's vessel"
         );
         assert_eq!(buf.cursor(R1), 0);
+    }
+
+    #[test]
+    fn ordered_control_release_fences_late_writes_without_latching() {
+        let mut buf = BufferedClientInputs::default();
+        buf.push(R1, control_frame(1, vec![("force_x".into(), 12.0)]))
+            .unwrap();
+        buf.push(
+            R1,
+            super::InputFrame {
+                seq: 3,
+                tick: 3,
+                producer: A,
+                action: super::PortControlAction::ReleasePort("force_x".into()),
+                control_levels: Vec::new(),
+                input_values: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(buf.peek_for_tick(R1).unwrap().seq, 1);
+        buf.commit(R1, 1).unwrap();
+        buf.commit(R1, 3).unwrap();
+        assert!(
+            buf.push(R1, control_frame(2, vec![("force_x".into(), 4.0)]))
+                .is_err()
+        );
+        assert!(buf.peek_for_tick(R1).is_none());
+        assert_eq!(buf.cursor(R1), 3);
     }
 
     #[test]
@@ -3405,6 +3464,23 @@ mod session_input_stream_tests {
         SessionInputStream, SessionInputStreamState,
     };
     use lunco_command_contracts::SessionId;
+
+    #[test]
+    fn network_input_uses_authenticated_session_and_rejects_claimed_producer() {
+        let origin = lunco_core::CommandOrigin::Network {
+            session_id: SessionId(7),
+        };
+        assert_eq!(
+            SessionInputProducer::from_command_origin(Some(origin), None, "ReleasePort"),
+            Ok(SessionInputProducer::Network {
+                session_id: SessionId(7)
+            })
+        );
+        assert!(
+            SessionInputProducer::from_command_origin(Some(origin), Some(8), "ReleasePort")
+                .is_err()
+        );
+    }
 
     #[test]
     fn local_user_input_uses_the_local_session_as_its_producer_identity() {

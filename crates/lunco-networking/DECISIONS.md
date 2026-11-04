@@ -1,64 +1,39 @@
 # Networking — resolved decisions (canonical log)
 
-Decisions locked. This is the source of truth; the "open questions"
-sections in the other docs point here. Phase-local implementation/tuning choices
-are intentionally **not** here — they're decided in-phase with real code (listed
-at the bottom).
+This file records the current ownership and integration decisions. Runtime
+mechanisms are detailed in `SYNC_ARCHITECTURE.md`; deployment and validation
+procedures are maintained in `DEPLOY.md`.
 
 ---
 
-## D1 — Backend: **lightyear** (committed)
-`lightyear 0.26.4` (Bevy 0.18). It ships exactly what's hardest to hand-roll:
-M2 Predicted/Interpolated roles, M6 tick-sync (`lightyear_sync`), proven f64-avian,
-wasm WebTransport, host-client. The `Mutation`/`OpId` envelope remains the M3
-payload regardless of backend, so fallback cost is bounded.
-- **Host-client risk is closed on the native path.** Built
-  clean on Bevy 0.18; host-client boots, remote client completes the
-  netcode/WebTransport handshake, replication + prediction engage, tick-sync stable
-  30 s under the default latency conditioner, zero panics across 3 runs. The only
-  anomaly (a single capped 252-tick rollback) was a late-join transient that did not
-  recur on a normal-timing join.
-- **Browser/wasm leg also PASSED:** the wasm client builds, boots
-  (WebGL/ANGLE), and **connects over WebTransport + receives replicated server state**
-  (verified twice, plus clean reconnect). The only remaining item is the subjective
-  in-browser input-feel (non-gating; CDP-driving backgrounds the tab and Chrome's
-  throttle drops the keepalive before movement can be captured — a tab-lifecycle
-  artifact, not a lightyear issue). The cert pain along the way was a stale
-  baked-in digest in the example (dev-cert gotchas now captured in `DEPLOY.md` →
-  *Appendix — local / self-signed dev cert*), not a backend problem. **Net: D1 (lightyear) fully validated for our topology — native host-client
-  AND browser WebTransport.**
-## D2 — Reconciliation: **input-replay reconciliation, re-stepping our own avian for the owned rover**
-Predict the owned rover by running real **f64 avian** dynamics locally. On each
-snapshot that acks an input sequence number, snap the owned body's 4 integrator
-components (`Position`/`Rotation`/`LinearVelocity`/`AngularVelocity`) to authoritative
-state and re-step avian over the unacked-input buffer (~3–6 fixed ticks). This is
-**state replication + re-anchoring** (NOT deterministic lockstep), so f64 non-determinism
-only matters across the unacked window before the next snapshot snaps back to truth. All
-**remote** bodies stay `Kinematic`-pinned + interpolated, unchanged. As-built summary:
-README → *Client-Side Prediction*.
+## D1 — Backend: Lightyear transport and messaging
 
-**Why the old D2 was reopened:** continuous smooth-correction toward the latest snapshot is
-an *unfixable rubber-band* — the authoritative echo is always one link-latency behind a
-forward-moving client, so blending toward it is a permanent backward tug (no `CORRECTION_RATE`
-is both responsive and smooth). The old "full rollback ruled out by construction" premises
-(global solver, cross-platform non-determinism) do **not** apply here: on a *client* the owned
-chassis is the **only `Dynamic` body** (every other replicated rover is `Kinematic`-pinned,
-wheel systems early-out on `Kinematic`), so a replay tick solves a **1-body island** — no
-coupling to replay — and re-anchoring bounds drift to the unacked window.
+Lightyear 0.31 provides WebTransport, netcode connections, typed message channels
+and connection clock synchronization. The workspace disables its optional ECS
+replication, prediction and interpolation features. `lunco-networking` ferries
+LunCoSim's versioned `SyncEnvelope` through one `Frame` message on the declared
+command, snapshot and bulk channels.
 
-**Why NOT lightyear-native prediction** (the natural "do it via lightyear" instinct): hard-blocked,
-verified firsthand — `lightyear_avian3d`/`lightyear_replication` 0.26.4 require **avian `^0.5`**
-(we're on 0.6.1) and are **f32-only** (`default = [..,"avian3d/parry-f32"]`, no `f64`/`parry-f64`
-feature; `.f32()` hardcoded in the correction path). Going native would force downgrading avian
-**and** de-precisioning the whole physics stack to f32 — reversing the f64 double-precision that
-big-space/lunar-orbital coordinates depend on. lightyear release notes (through 0.26.0, 2026-01)
-have **never mentioned f64**. **lightyear stays the
-transport/netcode/sync substrate (D1); prediction is hand-rolled over our own f64 avian** — the
-exact Source/Overwatch predict+reconcile algorithm, minus the f64/version wall. Re-open native
-only if a future lightyear targets avian 0.6 **and** ships a `parry-f64` path.
+`lunco-networking-sync` owns snapshot capture/application, identity translation,
+authorization, journals and asset transfer. `lunco-networking-core` owns physics
+prediction and reconciliation. These owners share the same contracts on native
+and browser targets. Validate the current composition through the bounded
+host/client smoke and the browser build/runtime gates described in `DEPLOY.md`.
 
-- Rover-rover contact corrections remain deferred; accept the authoritative snap
-  until a dedicated collision-prediction contract is implemented.
+## D2 — Reconciliation: LunCoSim owns Avian state and control replay
+
+Locally predicted bodies run the application's Avian dynamics. Snapshot
+acknowledgements identify the committed control sequence used for reconciliation;
+correction changes physics state through the networking prediction owner.
+Ordinary owned-body reconciliation is the default. `LUNCO_ROLLBACK=1` explicitly
+enables bounded assembly replay over unacknowledged committed control frames.
+Replay restores only the enrolled control inputs and controller holds, preserving
+unrelated authoritative state; an incompatible input surface rejects visibly.
+
+LunCoSim's typed snapshot and control-frame owners remain authoritative regardless
+of the transport dependency's optional physics integrations. Do not install a
+second ECS replication or interpolation owner. See README → *Client-Side
+Prediction* and `SYNC_ARCHITECTURE.md` for membership and correction boundaries.
 
 ## D3 — Identity: **deterministic from provenance** (confirmed)
 Network id = pure function of provenance. Content/Derived → deterministic hash
@@ -94,32 +69,21 @@ are spawned by the server, which allocates the id and replicates the spawn.
   stack can't be fast-forwarded). Hard rule.
 - Matches KSP (forbids MP warp) / Factorio (speed tied to lockstep, voted).
 
-## D6 — Clock seam: **drive lightyear's `Tick` from our `SimTick`** (one clock)
-The sim owns time; the netcode tick is *derived* from it (same idea as ROS
-`use_sim_time`). Do not run two independent clocks. This is a Ph3/Ph4 integration
-detail — finalize the exact wiring once lightyear's `Tick` API is in hand, but the
-*direction of authority* is decided: SimTick is authoritative.
+## D6 — Clock seam: transport and simulation retain their owners
 
-## D7 — Networking is an **opt-in Cargo feature** (`networking`), gating the sync layer only
-Networking must not be linked into a default/local build. `lightyear` is an
-**`optional` dependency** behind `feature = "networking"`; the sync layer
-(replication/transport/prediction systems, `lunco-networking` guts that import
-lightyear) compiles only when the feature is on.
+Lightyear's connection timelines pace the transport and synchronize network
+connections. `SimTick` identifies authoritative simulation boundaries and travels
+in LunCoSim's snapshot and control-frame contracts. Connection clocks do not
+replace the simulation clock or independently admit simulation work. Local
+pause/rate and committed scene-generation rules remain at their runtime owners.
 
-**The substrate stays always-on** (NOT gated): `Provenance`, the locked
-`GlobalEntityId`, `SimTick`, `IsServer` (the Ph1 `PH1_CORE_CHANGES` patch). They are
-plain data + cheap systems, valuable standalone (deterministic ids, `Local` opt-out,
-discrete tick), and — critically — keep domain crates **byte-identical** whether or
-not the feature is set. The `app.sync::<T>()` / `register_command` facade is also
-always present, compiling to a **no-op registration** when the feature is off, so
-domain crates call it unconditionally and never `#[cfg]`-fork.
+## D7 — Networking is an opt-in Cargo feature
 
-Rationale: if the substrate were also gated, domain code would split into two
-compile paths and every networking toggle would force a full `lunco-core` rebuild.
-Gating only the sync layer means flipping `networking` rebuilds just the sync layer. This
-is the facade pattern the architecture already assumes ("domain crates never import a
-backend" — IMPLEMENTATION_PLAN invariants).
-- Supersedes the implicit "always-linked" assumption in earlier docs.
+The `networking` feature enables the optional Lightyear dependency and its
+transport adapter. Default local launches do not create a multiplayer host.
+`lunco-core` and `lunco-core-session` retain identity, command-origin, authority,
+ordered-input and lifecycle contracts independently of the transport. Domain
+crates consume those typed contracts rather than importing Lightyear.
 
 ---
 
@@ -140,14 +104,10 @@ either — these are correctly out of MVP scope.
 
 ---
 
-## NOT decided here — phase-local (decided in-phase, with code)
-These are implementation/tuning, wrong to fix on paper:
-- **Ph3:** how `CellCoord` rides alongside lightyear `Transform` replication; offset
-  quantization scheme.
-- **Ph3 (gap H):** fold interpolation into existing
-  `TranslationInterpolation`/`RotationInterpolation` vs use lightyear's `Interpolated`.
-- **Ph4:** input redundancy depth N; server jitter-buffer size (measured under real
-  latency).
-- **Ph6:** late-join handshake payload details.
+## Tuning boundaries
 
-These do not block; the architecture is complete without them.
+Transport latency, redundant input transmission and queue budgets require
+measurements through the real host/client path. They do not change ownership of
+snapshot coordinates, committed input ordering or physics interpolation. Current
+mechanisms and remaining delivery gaps are documented in `SYNC_ARCHITECTURE.md`
+and README → *Known gaps*.

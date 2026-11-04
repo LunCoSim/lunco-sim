@@ -74,6 +74,18 @@ impl LiveStepper {
             Self::Fixed(session) => session.input_names(),
         }
     }
+
+    /// Parameter values belong to the initialized common host, independent of
+    /// whether the numerical backend uses fixed or adaptive steps.
+    pub fn parameter_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
+        match self {
+            Self::Adaptive(session) => session
+                .parameter_values()
+                .map(|values| values.into_iter().collect())
+                .map_err(adaptive_error),
+            Self::Fixed(session) => session.parameter_values(),
+        }
+    }
 }
 
 /// Build the real-time co-simulation session.

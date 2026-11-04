@@ -4396,28 +4396,11 @@ size alone does not establish an application-thread stall. Clean acceptance,
 loading-tail attribution, shadow reuse and the existing raycast drive failure
 remain open.
 
-## Limit raycast mass additions to eligible carriers — 2026-10-11
+## Raycast mass qualification
 
-`lunco-mobility::fold_raycast_wheel_mass` retains the shared ordering validator
-for every wheel and reduced-part source, including already-folded or unavailable
-carriers. Its existing `Mass`/`RaycastWheelMassFolded` query now excludes those
-carriers before allocating and populating per-carrier additions. Eligible
-additions retain their validated order and native values. The unread copied
-key is removed from the addition tuple. Pending parameters, mass, centre of
-mass, parallel-axis inertia, commands and the once-only marker keep their
-existing calculations and boundary. This is preparation inside the mechanical
-owner; no cache, policy hook, public API or external-library change is needed.
-
-The private settled resource benchmark uses 128 folded carriers, 768 ordered
-sources and 2,000 updates. Observed preparation time is 182.331/88.827 ms, a
-51.3% reduction, with exact carrier mass bits and markers unchanged. All seven
-native mechanism checks pass, including pending-parameter deferral and
-mass/inertia assertions. The valid 252,307,291/251,446,854-byte application
-captures pass native exports. Their settled system self costs are 484/551
-calls, 0.052012/0.045483 ms mean and 0.105809/0.086792 ms p95. Export selection
-excludes the separate command-application spans. Warm windows follow the
-inactive visual-projection gap. Concurrent workloads differ, so these timings
-are diagnostics, not clean loading, visual FPS or physics-throughput acceptance.
+The current reduction follows the canonical
+[physical mass contract](../architecture/41-axes-and-units.md#physical-mounts-and-reduced-mass).
+Its performance requires qualification against that owner.
 
 Normal artifact
 `d84101dd9e4f7247a699cb268fdc66191614f7aa3506037ae0c18978cb0d0c28`

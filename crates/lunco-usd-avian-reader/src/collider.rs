@@ -1,6 +1,6 @@
 use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
-use bevy::math::DVec3;
+use bevy::math::{DMat4, DVec3};
 use bevy::prelude::*;
 use lunco_usd_avian_contracts::AvianMeshApproximation;
 use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_with_refinement_limit;
@@ -361,12 +361,18 @@ pub fn collect_body_colliders_from_usd(
     // each prim's transform composed in the root's frame; recursion stops at a
     // nested-body boundary (see `gather_body_collider_candidates`).
     let mut candidates = Vec::new();
-    gather_body_collider_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates)?;
+    gather_body_collider_candidates(
+        reader,
+        parent_path,
+        parent_path,
+        DMat4::IDENTITY,
+        &mut candidates,
+    )?;
     // `PhysicsCollisionAPI` is valid on the rigid-body prim itself. When that
     // prim carries geometry, include it at identity in body space. Its local
     // transform already belongs to the ECS body.
     if reader.has_api_schema(parent_path, ptok::PHYSICS_COLLISION_API) {
-        candidates.insert(0, (parent_path.clone(), Transform::IDENTITY));
+        candidates.insert(0, (parent_path.clone(), DMat4::IDENTITY));
     }
     // Equivalent composed readers must produce the same collider admission
     // and mass-property reduction order. USD child presentation order does not
@@ -396,7 +402,7 @@ pub fn collect_body_colliders_from_usd(
         .iter()
         .any(|(_, _, purpose)| *purpose == Purpose::Proxy);
 
-    for (child_path, mut child_tf, purpose) in candidates {
+    for (child_path, child_matrix, purpose) in candidates {
         // A typed trigger zone owns an overlap sensor entity of its own.  It is
         // deliberately not part of an ancestor body's solid collider set: doing
         // both would create a second, solid copy attached to the rigid body and
@@ -449,6 +455,18 @@ pub fn collect_body_colliders_from_usd(
         if !child_collision {
             continue;
         }
+        if child_matrix.determinant() == 0.0
+            || !child_matrix.determinant().is_finite()
+            || !child_matrix.row(3).abs_diff_eq(bevy::math::DVec4::W, 1e-6)
+        {
+            return Err(ColliderProjectionError::Backend {
+                prim: child_path.to_string(),
+                detail: "compound collider requires a nonsingular affine transform".to_owned(),
+            });
+        }
+        let mut child_tf =
+            lunco_usd_bevy_stage::project_transform_matrix_d(child_matrix, &child_path)
+                .map_err(ColliderProjectionError::Transform)?;
 
         // A geometry axis is a collider-local basis, independent of the body's
         // authored pose. Every shape, including geometry on the body prim,
@@ -553,9 +571,10 @@ pub fn collect_body_colliders_from_usd(
 ///   `process_usd_avian_prims`.
 fn gather_body_collider_candidates(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    body_path: &SdfPath,
     path: &SdfPath,
-    acc: Transform,
-    out: &mut Vec<(SdfPath, Transform)>,
+    acc: DMat4,
+    out: &mut Vec<(SdfPath, DMat4)>,
 ) -> Result<(), ColliderProjectionError> {
     for child in reader.children(path) {
         // Child enumeration retains inactive prims for authoring. Deactivation
@@ -581,12 +600,30 @@ fn gather_body_collider_candidates(
         }
         // Local transform in the canonical decoder shared with usd-bevy, folded
         // into the accumulated root-relative frame.
-        let local = local_transform_at(reader, &child, 0.0)
+        let local = reader
+            .local_transform_matrix_d_at(&child, 0.0)
             .map_err(ColliderProjectionError::Transform)?
-            .unwrap_or(Transform::IDENTITY);
-        let tf = acc.mul_transform(local);
+            .unwrap_or(DMat4::IDENTITY);
+        let tf = if reader
+            .resets_xform_stack(&child)
+            .map_err(ColliderProjectionError::Transform)?
+        {
+            let body = lunco_usd_bevy_stage::world_transform_matrix_d_at(reader, body_path, 0.0)
+                .map_err(ColliderProjectionError::Transform)?;
+            if !body.determinant().is_finite() || body.determinant() == 0.0 {
+                return Err(ColliderProjectionError::Backend {
+                    prim: body_path.to_string(),
+                    detail: "singular compound body transform".to_owned(),
+                });
+            }
+            body.inverse()
+                * lunco_usd_bevy_stage::world_transform_matrix_d_at(reader, &child, 0.0)
+                    .map_err(ColliderProjectionError::Transform)?
+        } else {
+            acc * local
+        };
         out.push((child.clone(), tf));
-        gather_body_collider_candidates(reader, &child, tf, out)?;
+        gather_body_collider_candidates(reader, body_path, &child, tf, out)?;
     }
     Ok(())
 }

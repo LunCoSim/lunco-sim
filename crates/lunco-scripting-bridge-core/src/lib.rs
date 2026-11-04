@@ -843,24 +843,12 @@ fn command_result_error(id: u64, status: &str, error: impl Into<String>) -> ApiV
     ])
 }
 
-fn insert_map_value(value: &mut ApiValue, key: &str, replacement: ApiValue) -> bool {
-    let HookValue::Map(entries) = value else {
-        return false;
-    };
-    if let Some((_, value)) = entries.iter_mut().find(|(name, _)| name == key) {
-        *value = replacement;
-    } else {
-        entries.push((key.to_owned(), replacement));
-    }
-    true
-}
-
 /// Fire a typed command through `ApiCommandEvent` (the same entry point the
 /// HTTP API / MCP use) and return its typed `{ id, ok, status, data?, error? }`
 /// result. The bridge drains a bounded number of command queues; genuinely
 /// asynchronous work returns `status = "pending"` and can be checked with
 /// [`command_result`].
-pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
+pub fn cmd_value(name: &str, params: ApiValue) -> ApiValue {
     let id = OpId::new().0;
     with_world(|world| {
         if let Err(error) = ensure_script_command_allowed(name) {
@@ -959,34 +947,6 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
                     "rejected",
                     format!("`{name}` is not permitted from a client-targeted script"),
                 );
-            }
-            // Thread a real `seq`/`tick` for a client-owned control command so it
-            // engages the PREDICT-OWN path the same way keyboard input does
-            // (`drive_from_bindings`). A scenario/API `drive()` sends `seq:0`/
-            // `tick:0`; `record_control_input` only buffers an input frame when
-            // `seq != 0`, and `maintain_owned_locally`'s activity signal needs a
-            // real tick — so without this the owned rover never predicts locally
-            // (it stays a snapshot proxy and only crawls from the host's authority).
-            // Stamping the next per-vessel seq here — at the origin, BEFORE
-            // `capture_command` serializes the command for the wire — means the
-            // client and host agree on the seq the reconcile acks against.
-            if owns_target && name == "SetPorts" {
-                if let Some(gid) = target_gids.first().copied() {
-                    let tick = world
-                        .get_resource::<lunco_core_runtime::SimTick>()
-                        .map_or(0, |t| t.0);
-                    let seq = world
-                        .get_resource_mut::<lunco_core_session::OwnedInputLog>()
-                        .map(|mut log| {
-                            let entry = log.0.entry(gid).or_default();
-                            entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
-                            entry.next_seq
-                        });
-                    if let Some(seq) = seq {
-                        insert_map_value(&mut params, "seq", api_value_from_u64(seq.into()));
-                        insert_map_value(&mut params, "tick", api_value_from_u64(tick));
-                    }
-                }
             }
         }
         // §3.4: a script launched by a remote session must not exceed that

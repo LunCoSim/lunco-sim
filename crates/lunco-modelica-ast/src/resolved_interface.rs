@@ -88,6 +88,9 @@ pub struct ModelicaScalarDeclaration {
     /// Exact checked Parameter role, distinct from parameter-valued expressions.
     pub is_parameter: bool,
     pub is_tunable: bool,
+    /// Source-level mutability admitted by the compiler's resolved declaration
+    /// query. DAE-only interfaces cannot authorize source edits.
+    pub source_edit_error: Option<String>,
     /// Numeric coordinate published as a participant output, including local
     /// states/algebraics/discretes. Constants, inputs and parameters are excluded.
     pub observable: bool,
@@ -98,6 +101,16 @@ pub struct ModelicaScalarDeclaration {
 }
 
 impl ModelicaScalarDeclaration {
+    /// Check an authored parameter edit before changing its source or session.
+    pub fn parameter_edit_source(&self, value: f64) -> Result<String, String> {
+        if !self.is_parameter {
+            return Err("selected coordinate is not a parameter".into());
+        }
+        if let Some(error) = &self.source_edit_error {
+            return Err(error.clone());
+        }
+        self.numeric_binding_source(value)
+    }
     pub fn numeric_binding_value(&self, value: f64) -> Result<ModelicaScalarValue, String> {
         if !self.is_parameter && self.causality != ModelicaCausality::Input {
             return Err("Modelica numeric binding target is not a parameter or input".into());

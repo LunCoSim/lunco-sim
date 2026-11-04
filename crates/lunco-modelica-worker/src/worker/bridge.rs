@@ -1175,12 +1175,56 @@ pub fn handle_modelica_responses(
                 continue;
             }
 
+            if (result.is_new_model || result.is_parameter_update)
+                && result.error.is_none()
+                && let Some(snapshot) = model.source_snapshot.as_ref()
+            {
+                let current =
+                    documents
+                        .as_deref()
+                        .zip(source)
+                        .is_some_and(|(documents, primary)| {
+                            lunco_modelica_core::source_snapshot::is_current(
+                                snapshot,
+                                documents,
+                                primary,
+                                workspace.as_deref().map(|workspace| &workspace.0),
+                                replication.as_ref(),
+                                source_roots.as_deref(),
+                            )
+                        });
+                if !current {
+                    result.error = Some("Modelica source closure changed before session installation; compile the current sources".into());
+                    result.detected_symbols.clear();
+                    result.outputs.clear();
+                }
+            }
+
             if lifecycle_result && result.error.is_none() && result.variable_metadata.is_none() {
                 result.error = Some(
                     "Modelica worker omitted the checked scalar metadata inventory".to_owned(),
                 );
                 result.detected_symbols.clear();
                 result.outputs.clear();
+            }
+            if lifecycle_result && result.error.is_none() {
+                if result.checked_interface.is_none() {
+                    result.error =
+                        Some("Modelica worker omitted its checked parameter interface".into());
+                } else if let Some(missing) = result.detected_parameter_names.iter().find(|name| {
+                    !result
+                        .detected_symbols
+                        .iter()
+                        .any(|(symbol, value)| symbol == *name && value.is_finite())
+                }) {
+                    result.error = Some(format!(
+                        "Modelica worker omitted initialized parameter '{missing}'"
+                    ));
+                }
+                if result.error.is_some() {
+                    result.detected_symbols.clear();
+                    result.outputs.clear();
+                }
             }
 
             // Retain the worker's resolved plan only after session fencing.
@@ -1189,10 +1233,12 @@ pub fn handle_modelica_responses(
             // system returns. Failures cannot leave facts for a dead stepper.
             if result.error.is_some() {
                 model.live_solver_snapshot = None;
+                model.checked_interface = None;
                 model.construction_profile = None;
                 model.variable_metadata = None;
             } else if lifecycle_result {
                 model.live_solver_snapshot = result.live_solver_snapshot.clone();
+                model.checked_interface = result.checked_interface.clone();
             } else if let Some(snapshot) = result.live_solver_snapshot.as_ref() {
                 model.live_solver_snapshot = Some(snapshot.clone());
             }
@@ -1484,6 +1530,16 @@ pub fn handle_modelica_responses(
                 }
             }
 
+            if lifecycle_result {
+                model.compiled_parameter_names =
+                    result.detected_parameter_names.iter().cloned().collect();
+                model.parameters = result
+                    .detected_symbols
+                    .iter()
+                    .filter(|(name, _)| model.compiled_parameter_names.contains(name))
+                    .cloned()
+                    .collect();
+            }
             if result.is_new_model || result.is_parameter_update {
                 let values = &mut variables.bypass_change_detection().values;
                 variables_changed |= !values.is_empty();
@@ -1524,17 +1580,6 @@ pub fn handle_modelica_responses(
                 // here would overwrite them on the first simulation step.
                 let ui_inputs = std::mem::take(&mut model.inputs);
                 model.compiled_input_names = result.detected_input_names.iter().cloned().collect();
-                model.compiled_parameter_names =
-                    result.detected_parameter_names.iter().cloned().collect();
-                let parameter_names = model.compiled_parameter_names.clone();
-                model
-                    .parameters
-                    .retain(|name, _| parameter_names.contains(name));
-                if let Some(snapshot) = &result.live_solver_snapshot {
-                    for (name, value) in &snapshot.parameter_overrides {
-                        model.parameters.insert(name.clone(), *value);
-                    }
-                }
                 if result.error.is_none()
                     && let Some(mut component) = component
                 {
@@ -1574,7 +1619,8 @@ pub fn handle_modelica_responses(
                 let values = &mut variables.bypass_change_detection().values;
                 variables_changed |= !values.is_empty();
                 values.clear();
-                // Preserve inputs and parameters
+                // Inputs retain their admitted owner; parameters above come
+                // from this reset's initialized observation.
             }
 
             // Align the native ordered map to each admitted observation. Check
@@ -1896,6 +1942,7 @@ mod compile_fault_tests {
                         entity,
                         session_id: 4,
                         is_new_model: true,
+                        checked_interface: Some(crate::worker::test_checked_interface()),
                         variable_metadata: Some(std::collections::BTreeMap::new()),
                         live_solver_snapshot: Some(test_solver_snapshot()),
                         ..Default::default()
@@ -2038,6 +2085,7 @@ mod compile_fault_tests {
                     entity,
                     session_id,
                     is_new_model: true,
+                    checked_interface: Some(crate::worker::test_checked_interface()),
                     variable_metadata: Some(std::collections::BTreeMap::new()),
                     live_solver_snapshot: Some(test_solver_snapshot()),
                     outputs: vec![("x".to_owned(), 1.0)],
@@ -2249,6 +2297,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 1,
                 is_reset: true,
+                checked_interface: Some(crate::worker::test_checked_interface()),
                 variable_metadata: Some(std::collections::BTreeMap::new()),
                 outputs: vec![("x".to_owned(), 3.0)],
                 ..Default::default()
@@ -2391,6 +2440,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 1,
                 is_new_model: true,
+                checked_interface: Some(crate::worker::test_checked_interface()),
                 variable_metadata: Some(metadata.clone()),
                 live_solver_snapshot: Some(snapshot.clone()),
                 ..Default::default()
@@ -2429,6 +2479,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 0,
                 is_new_model: true,
+                checked_interface: Some(crate::worker::test_checked_interface()),
                 variable_metadata: Some(std::collections::BTreeMap::new()),
                 ..Default::default()
             })
@@ -2513,6 +2564,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 4,
                 is_new_model: true,
+                checked_interface: Some(crate::worker::test_checked_interface()),
                 variable_metadata: Some(std::collections::BTreeMap::new()),
                 error: Some("authored equation did not compile".to_owned()),
                 ..Default::default()
@@ -2607,6 +2659,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 4,
                 is_new_model: true,
+                checked_interface: Some(crate::worker::test_checked_interface()),
                 variable_metadata: Some(std::collections::BTreeMap::new()),
                 live_solver_snapshot: Some(test_solver_snapshot()),
                 ..Default::default()
@@ -2833,6 +2886,7 @@ mod document_runtime_owner_tests {
                 entity: geometry,
                 session_id: 1,
                 is_new_model: true,
+                checked_interface: Some(crate::worker::test_checked_interface()),
                 variable_metadata: Some(std::collections::BTreeMap::new()),
                 outputs: vec![("x".into(), 99.0)],
                 ..Default::default()

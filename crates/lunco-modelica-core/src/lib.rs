@@ -93,6 +93,7 @@ pub mod sim_target;
 /// bounds resolution — shared by the egui workbench and the headless API server.
 pub mod model_commands;
 mod parameter_commands;
+pub mod source_snapshot;
 
 /// Per-Twin Modelica domain engine: long-lived `rumoca_compile::Session`
 /// + per-doc URI mapping. Provides cross-file inheritance-merged queries.

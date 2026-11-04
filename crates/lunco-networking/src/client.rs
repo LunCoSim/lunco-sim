@@ -19,6 +19,10 @@ use crate::shared::{PROTOCOL_ID, netcode_key};
 use lunco_networking_sync::codec::{deserialize_env, serialize_env};
 use lunco_networking_sync::sync::{SyncInbox, SyncOutbox};
 
+/// Exact connection attempt admitted after the native client's initial state exists.
+#[derive(Component)]
+struct ClientConnectionAttempt;
+
 /// **Build-time**: register the client ferry systems, the disconnect observer,
 /// the `JoinServer`/`LeaveServer` command observers, and (wasm) the URL-dialing
 /// plugin. Called once when the networking plugin builds for a client-capable
@@ -167,6 +171,9 @@ pub(crate) fn spawn_client(commands: &mut Commands, prepared: PreparedClient) ->
             io,
         ))
         .id();
+    // NetcodeClient requires an initial Disconnected component. Install this
+    // lease after that spawn edge, before Connect can begin or fail the attempt.
+    commands.entity(client).insert(ClientConnectionAttempt);
     commands.trigger(Connect { entity: client });
     client
 }
@@ -298,6 +305,7 @@ fn update_client_netstatus(local: Res<LocalSession>, mut status: ResMut<NetStatu
 /// `LocalSession` on subsequent frames.
 fn on_client_disconnected(
     trigger: On<Add<Disconnected>>,
+    attempts: Query<(), With<ClientConnectionAttempt>>,
     mut local: ResMut<LocalSession>,
     mut connection: ResMut<ClientConnection>,
     mut status: ResMut<NetStatus>,
@@ -305,6 +313,12 @@ fn on_client_disconnected(
     global_ids: Query<&lunco_core::GlobalEntityId>,
     mut commands: Commands,
 ) {
+    if attempts.get(trigger.entity).is_err() {
+        return;
+    }
+    commands
+        .entity(trigger.entity)
+        .remove::<ClientConnectionAttempt>();
     if connection.0 != Some(trigger.entity) {
         return;
     }
@@ -450,5 +464,82 @@ fn client_recv_inbox(
                     envelope: env,
                 });
         }
+    }
+}
+
+#[cfg(test)]
+mod connection_lifecycle_tests {
+    use super::*;
+
+    fn queue_attempt(world: &mut World) -> Entity {
+        let entity = {
+            let mut commands = world.commands();
+            let entity = commands.spawn((Client, Disconnected::default())).id();
+            commands.entity(entity).insert(ClientConnectionAttempt);
+            entity
+        };
+        world.resource_mut::<ClientConnection>().0 = Some(entity);
+        world.flush();
+        entity
+    }
+
+    #[test]
+    fn client_attempt_lease_ignores_initial_state_and_retires_only_its_connection() {
+        let mut app = App::new();
+        app.init_resource::<LocalSession>()
+            .init_resource::<ClientConnection>()
+            .init_resource::<NetStatus>()
+            .init_resource::<NetworkingMetadata>()
+            .add_observer(on_client_disconnected);
+        let world = app.world_mut();
+        let failed = queue_attempt(world);
+        assert_eq!(world.resource::<ClientConnection>().0, Some(failed));
+        assert!(world.get::<ClientConnectionAttempt>(failed).is_some());
+        world
+            .entity_mut(failed)
+            .remove::<Disconnected>()
+            .insert(Connecting);
+        world.flush();
+        world.entity_mut(failed).insert(Disconnected {
+            reason: DisconnectedReason::TransportError("fixture refused".into()),
+        });
+        world.flush();
+        assert_eq!(world.resource::<ClientConnection>().0, None);
+        assert!(world.get::<ClientConnectionAttempt>(failed).is_none());
+
+        let dropped = queue_attempt(world);
+        world
+            .entity_mut(dropped)
+            .insert((RemoteId(PeerId::Server), Connected));
+        world.flush();
+        world.resource_mut::<LocalSession>().0 = SessionId(7);
+        world.resource_mut::<NetStatus>().connected = true;
+        world.resource_mut::<NetStatus>().peers = 1;
+        world.entity_mut(dropped).insert(Disconnected {
+            reason: DisconnectedReason::ByPeer(None),
+        });
+        world.flush();
+        assert_eq!(world.resource::<ClientConnection>().0, None);
+        assert_eq!(world.resource::<LocalSession>().0, SessionId::LOCAL);
+        assert!(!world.resource::<NetStatus>().connected);
+        assert_eq!(world.resource::<NetStatus>().peers, 0);
+        assert!(world.get::<ClientConnectionAttempt>(dropped).is_none());
+
+        let old = queue_attempt(world);
+        let replacement = queue_attempt(world);
+        world.resource_mut::<LocalSession>().0 = SessionId(9);
+        world.resource_mut::<NetStatus>().connected = true;
+        world.resource_mut::<NetStatus>().peers = 1;
+        world.entity_mut(old).remove::<Disconnected>();
+        world.entity_mut(old).insert(Disconnected {
+            reason: DisconnectedReason::ByPeer(None),
+        });
+        world.flush();
+        assert_eq!(world.resource::<ClientConnection>().0, Some(replacement));
+        assert_eq!(world.resource::<LocalSession>().0, SessionId(9));
+        assert!(world.resource::<NetStatus>().connected);
+        assert_eq!(world.resource::<NetStatus>().peers, 1);
+        assert!(world.get::<ClientConnectionAttempt>(old).is_none());
+        assert!(world.get::<ClientConnectionAttempt>(replacement).is_some());
     }
 }

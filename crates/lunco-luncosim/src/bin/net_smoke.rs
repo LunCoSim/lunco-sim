@@ -18,7 +18,8 @@
 //!   1. possesses **G2** (free → granted; host records the client as owner),
 //!   2. *also* tries to possess **G1** (owned by the host → must be **denied**
 //!      under the default `Exclusive` policy),
-//!   3. continuously drives **both** G1 and G2 forward.
+//!   3. drives **both** G1 and G2, then releases G2's named throttle input,
+//!   4. submits stale, malformed and unauthorized control probes.
 //!
 //! The host authorizes each drive against ownership: G2's drives are applied (a
 //! synthetic integrator moves it) and snapshotted back; G1's drives are
@@ -35,6 +36,8 @@
 //!   - G2 proxy moved   (owned + driven + snapshot round-trip works);
 //!   - G1 proxy did NOT move (unauthorized drive correctly rejected);
 //!   - synced ownership shows G2 = me, G1 = host (`SessionId::LOCAL`);
+//!   - named release is acknowledged, stops G2 and survives stale packets/replay;
+//!   - shared client batches and undeclared wire batches reject without mutation;
 //!   - the host's journal edit reached the client (journal-plane sync);
 //!   - the scripted merge policy is active and drives the convergent order.
 //!
@@ -78,8 +81,8 @@ const G3_DESPAWN_AT: f32 = 10.0;
 /// The host's `Update` is throttled below its fixed rate, so without the buffer
 /// its `drain`+latch *subsamples* the sweep and its integrated distance falls
 /// short of the client's ideal integral — the cadence divergence behind the
-/// post-turn wobble. With `LUNCO_INPUT_BUFFER=1` the host consumes the buffer one
-/// input per fixed tick, in seq order, and the distance matches.
+/// post-turn wobble. The production consumer commits one ordered input action
+/// per fixed tick, with persistent levels owned by co-simulation.
 ///
 /// Host `Update` target rate (below the 64 Hz fixed rate → forces subsampling).
 const HOST_UPDATE_HZ: f64 = 40.0;
@@ -93,10 +96,253 @@ fn cadence_throttle(seq: u32) -> f64 {
     0.575 + 0.425 * ((seq as f64) * 0.20).sin()
 }
 
-/// Whether the host consumes the per-tick input buffer (`LUNCO_INPUT_BUFFER=1`)
-/// instead of the latched, render-cadence-subsampled `DriveVel`.
-#[derive(Resource)]
-struct BufferEnabled(bool);
+#[derive(Resource, Default)]
+struct ReleaseProof {
+    sent: bool,
+    seq: Option<u32>,
+    acknowledged: bool,
+    stopped_x: Option<f64>,
+    stable: bool,
+    replay_ok: bool,
+    replay_attempted: bool,
+    batch_attempted: bool,
+    batch_rejected: bool,
+}
+
+/// Own an explicitly empty scene before runtime-generated fixture entities enter it.
+fn initialize_empty_smoke_scene(world: &mut World) {
+    use lunco_core::{
+        SceneTransition, SceneTransitionAdmission, SceneTransitionCoordinator,
+        SceneTransitionRequest,
+    };
+    let transition = SceneTransition::Clear;
+    let id = {
+        let mut coordinator = world.resource_mut::<SceneTransitionCoordinator>();
+        assert_eq!(
+            coordinator.admit(SceneTransitionRequest::Clear),
+            SceneTransitionAdmission::Admitted
+        );
+        assert_eq!(
+            coordinator.take_admitted(),
+            Some(SceneTransitionRequest::Clear)
+        );
+        coordinator.start(transition.clone())
+    };
+    world.trigger(lunco_core::SceneTransitionStarted {
+        id,
+        transition: transition.clone(),
+    });
+    lunco_core::run_scene_teardown(world);
+    assert!(
+        world
+            .resource_mut::<SceneTransitionCoordinator>()
+            .complete(id)
+    );
+    world.trigger(lunco_core::SceneTransitionCompleted { id, transition });
+    world.trigger(lunco_core::SceneTransitionCommitted { id });
+}
+
+fn setup_smoke_frame(mut commands: Commands, grids: Query<Entity, With<lunco_spatial::WorldGrid>>) {
+    let grid = grids
+        .single()
+        .expect("smoke requires the production world shell");
+    commands
+        .entity(grid)
+        .insert(lunco_celestial::ReferenceFrame::World);
+    commands.insert_resource(lunco_spatial::ActivePhysicsFrame(grid));
+}
+
+fn install_zero_wiring(commands: &mut Commands, targets: &[Entity]) {
+    let source = commands
+        .spawn((
+            lunco_core::GlobalEntityId::from_raw(0x00AB_C000),
+            lunco_port_core::Port::with_contract(
+                0.0,
+                lunco_port_core::ScalarPortContract::default(),
+            )
+            .expect("smoke zero source has a valid contract"),
+        ))
+        .id();
+    for &target in targets {
+        commands.spawn((
+            lunco_cosim_core::SimConnection {
+                start_element: source,
+                start_connector: "value".into(),
+                start_is_input: false,
+                end_element: target,
+                end_connector: "throttle".into(),
+                scale: 1.0,
+                offset: 0.0,
+            },
+            ChildOf(target),
+        ));
+    }
+}
+
+fn record_release_receipt(
+    trigger: On<lunco_core_session::PortControlCommitted>,
+    mut proof: ResMut<ReleaseProof>,
+) {
+    let receipt = trigger.event();
+    if matches!(&receipt.frame.action, lunco_core_session::PortControlAction::ReleasePort(name) if name == "throttle")
+    {
+        proof.seq = Some(receipt.frame.seq);
+    }
+}
+
+/// Send malformed/unauthorized data through the real external wire boundary.
+fn enqueue_control_probe(
+    outbox: &mut lunco_networking_sync::sync::SyncOutbox,
+    producer: SessionId,
+    target: u64,
+    seq: u32,
+    writes: Vec<(&str, f64)>,
+) {
+    let mut mutation = lunco_command_contracts::Mutation::local(lunco_networking_sync::sync::SyncCommand {
+        type_name: "SetPorts".into(),
+        data: serde_json::json!({"target": target, "writes": writes, "seq": seq, "tick": 1, "producer_id": null}).to_string(),
+    });
+    mutation.origin = producer;
+    outbox.0.push((
+        lunco_command_contracts::SyncChannel::ControlStream,
+        lunco_networking_sync::sync::SyncEnvelope::Command(mutation),
+    ));
+}
+
+fn client_replay_probe(world: &mut World) {
+    if !world.resource::<ReleaseProof>().sent || world.resource::<ReleaseProof>().replay_attempted {
+        return;
+    }
+    let Some(rovers) = world.get_resource::<Rovers>().copied() else {
+        return;
+    };
+    let frames = world
+        .resource::<lunco_core_session::OwnedInputLog>()
+        .0
+        .get(&G2_GID)
+        .map(|log| log.frames.iter().rev().take(2).cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    if frames.len() != 2
+        || !matches!(
+            &frames[0].action,
+            lunco_core_session::PortControlAction::ReleasePort(_)
+        )
+    {
+        return;
+    }
+    world.resource_mut::<ReleaseProof>().replay_attempted = true;
+    let result = (|| {
+        lunco_cosim::replay_control_frame(world, rovers.g2, &frames[1])?;
+        lunco_cosim::systems::propagate::propagate_connections(world);
+        let historical = frames[1]
+            .control_levels
+            .iter()
+            .find(|(name, _)| name == "throttle")
+            .map(|(_, value)| *value)
+            .ok_or("historical frame is missing throttle")?;
+        if world
+            .get::<lunco_port_core::InputPorts>(rovers.g2)
+            .ok_or("missing control surface")?
+            .cmd("throttle")
+            != historical
+        {
+            return Err("historical controller level was overwritten".to_owned());
+        }
+        lunco_cosim::replay_control_frame(world, rovers.g2, &frames[0])?;
+        lunco_cosim::systems::propagate::propagate_connections(world);
+        if world
+            .resource::<lunco_cosim_core::PortHolds>()
+            .get(rovers.g2, "throttle")
+            .is_some()
+            || world
+                .get::<lunco_port_core::InputPorts>(rovers.g2)
+                .ok_or("missing control surface")?
+                .cmd("throttle")
+                != 0.0
+        {
+            return Err("replayed release did not restore authored zero wiring".into());
+        }
+        Ok::<(), String>(())
+    })();
+    world.resource_mut::<ReleaseProof>().replay_ok = result.is_ok();
+    if let Err(error) = result {
+        error!("[test] replay contract failed: {error}");
+    }
+}
+
+fn client_batch_rejection_probe(world: &mut World) {
+    if !world.resource::<ReleaseProof>().acknowledged
+        || world.resource::<ReleaseProof>().batch_attempted
+    {
+        return;
+    }
+    world.resource_mut::<ReleaseProof>().batch_attempted = true;
+    let Some(rovers) = world.get_resource::<Rovers>().copied() else {
+        return;
+    };
+    let targets = [rovers.g1, rovers.g2];
+    let values = |world: &World| {
+        targets
+            .iter()
+            .map(|target| {
+                world
+                    .get::<lunco_port_core::InputPorts>(*target)
+                    .map(|ports| ports.cmd("throttle"))
+            })
+            .collect::<Option<Vec<_>>>()
+    };
+    let logs = |world: &World| {
+        [G1_GID, G2_GID].map(|gid| {
+            world
+                .resource::<lunco_core_session::OwnedInputLog>()
+                .0
+                .get(&gid)
+                .map(|log| (log.next_seq, log.frames.len()))
+        })
+    };
+    let before_values = values(world);
+    let before_logs = logs(world);
+    let before_holds = world.resource::<lunco_cosim_core::PortHolds>().snapshot();
+    let before_pending = world
+        .resource::<lunco_core_session::PendingSessionInputs>()
+        .len();
+    let id = lunco_command_contracts::OpId::new().0;
+    let previous = world.resource::<lunco_core::ActiveCommandId>().clone();
+    let session = world.resource::<lunco_core_session::LocalSession>().0;
+    world
+        .resource_mut::<lunco_core::ActiveCommandId>()
+        .set_with_origin(
+            id,
+            Some(lunco_core::CommandOrigin::LocalUser {
+                session_id: session,
+            }),
+        );
+    world.trigger(lunco_cosim_core::commands::SetPortsBatch {
+        batches: targets
+            .into_iter()
+            .map(|target| lunco_cosim_core::commands::PortInputBatch {
+                target,
+                writes: vec![("throttle".into(), 0.75)],
+            })
+            .collect(),
+        producer_id: None,
+    });
+    world.flush();
+    *world.resource_mut::<lunco_core::ActiveCommandId>() = previous;
+    let rejected = matches!(world.resource::<lunco_core::CommandResults>().get(id),
+        Some(lunco_core::CommandOutcome::Rejected(lunco_command_contracts::Reject::InvalidOp(message)))
+            if message.contains("ordered network controls are single-target"));
+    let unchanged = before_values.is_some()
+        && values(world) == before_values
+        && logs(world) == before_logs
+        && world.resource::<lunco_cosim_core::PortHolds>().snapshot() == before_holds
+        && world
+            .resource::<lunco_core_session::PendingSessionInputs>()
+            .len()
+            == before_pending;
+    world.resource_mut::<ReleaseProof>().batch_rejected = rejected && unchanged;
+    info!("[test] local shared batch terminal_rejected={rejected} unchanged={unchanged}");
+}
 
 /// Client-side running integral of the sweep it SENT — the distance the host
 /// should reach if it applied every input (the cadence ground truth).
@@ -110,10 +356,6 @@ struct TestRover;
 /// apart on both peers).
 #[derive(Component, Clone, Copy)]
 struct RoverGid(u64);
-
-/// Host: forward speed last commanded by an *applied* (authorized) `SetPorts`.
-#[derive(Component, Default)]
-struct DriveVel(f32);
 
 /// The local stand-in rover entities (host's authoritative ones / client proxies).
 #[derive(Resource, Clone, Copy)]
@@ -193,7 +435,25 @@ fn main() {
     app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
     app.add_plugins(lunco_core_session::LunCoCoreSessionPlugin);
     app.add_plugins(lunco_api_transport::LunCoApiPlugin::default());
+    app.init_resource::<lunco_core::SceneTransitionCoordinator>();
+    app.add_systems(
+        Startup,
+        initialize_empty_smoke_scene.before(lunco_spatial::world::WorldShellSet),
+    );
+    app.add_plugins(lunco_spatial::WorldShellPlugin);
+    app.init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>();
+    app.add_systems(
+        Startup,
+        setup_smoke_frame.after(lunco_spatial::world::WorldShellSet),
+    );
+    app.add_systems(
+        PreUpdate,
+        lunco_celestial_spatial_core::update_reference_frame_index,
+    );
+    app.add_plugins(lunco_cosim::CoSimPlugin);
     app.add_plugins(LunCoNetworkingPlugin { mode: Some(mode) });
+    app.init_resource::<ReleaseProof>();
+    app.add_observer(record_release_receipt);
 
     // Register the command types so the wire reflect (de)serialize + trigger
     // path works (the domain plugins normally do this; the harness skips them).
@@ -205,22 +465,20 @@ fn main() {
     app.add_systems(Startup, activate_smoke_merge_policy);
 
     if is_host {
-        let buffer_on = std::env::var("LUNCO_INPUT_BUFFER").as_deref() == Ok("1");
-        info!(
-            "[test] HOST input buffer: {}",
-            if buffer_on {
-                "ON"
-            } else {
-                "OFF (render-cadence subsample)"
-            }
-        );
-        app.insert_resource(BufferEnabled(buffer_on));
-        app.add_systems(Startup, host_spawn_rovers);
+        app.add_systems(Startup, host_spawn_rovers.after(setup_smoke_frame));
         app.add_observer(host_on_possess);
-        app.add_observer(host_on_drive);
         // Integrate per FIXED tick (not render Update): the cadence divergence is a
         // fixed-vs-render-rate artifact, so the integrator must live on the fixed clock.
-        app.add_systems(FixedUpdate, host_apply_and_integrate);
+        app.add_systems(
+            FixedUpdate,
+            (
+                lunco_networking_core::prediction::apply_buffered_client_inputs
+                    .after(lunco_core_runtime::SimTickSet)
+                    .after(lunco_core_session::SessionInputCommitSet)
+                    .before(lunco_core_runtime::ControlDacSet),
+                host_apply_and_integrate.after(lunco_core_runtime::ControlDacSet),
+            ),
+        );
         app.add_systems(
             Update,
             (
@@ -233,9 +491,15 @@ fn main() {
     } else {
         app.init_resource::<MaxProxyX>();
         app.init_resource::<ClientIdealX>();
-        app.add_systems(Startup, client_spawn_proxies);
+        app.add_systems(Startup, client_spawn_proxies.after(setup_smoke_frame));
         // The cadence drive runs on the FIXED clock (one seq-stamped input per tick).
-        app.add_systems(FixedUpdate, client_drive_cadence);
+        app.add_systems(
+            FixedUpdate,
+            client_drive_cadence
+                .after(lunco_core_runtime::SimTickSet)
+                .before(lunco_core_runtime::ControlDacSet),
+        );
+        app.add_systems(Update, (client_replay_probe, client_batch_rejection_probe));
         app.add_systems(
             Update,
             (
@@ -253,7 +517,7 @@ fn main() {
 
 // ── Host (authoritative) ──────────────────────────────────────────────────────
 
-fn host_spawn_rovers(mut commands: Commands) {
+fn host_spawn_rovers(mut commands: Commands, grid: Res<lunco_spatial::ActivePhysicsFrame>) {
     let spawn = |commands: &mut Commands, name: &str, gid: u64| {
         commands
             .spawn((
@@ -264,13 +528,18 @@ fn host_spawn_rovers(mut commands: Commands) {
                 lunco_core_session::NetReplicate,
                 TestRover,
                 RoverGid(gid),
-                DriveVel::default(),
+                lunco_port_core::InputPorts::new(&["throttle", "steer"]),
+                avian3d::prelude::Position::default(),
+                avian3d::prelude::Rotation::default(),
+                big_space::prelude::CellCoord::default(),
+                ChildOf(grid.0),
             ))
             .id()
     };
     let g1 = spawn(&mut commands, "HostRover_G1", G1_GID);
     let g2 = spawn(&mut commands, "HostRover_G2", G2_GID);
     let g3 = spawn(&mut commands, "HostRover_G3", G3_GID);
+    install_zero_wiring(&mut commands, &[g1, g2, g3]);
     commands.insert_resource(Rovers { g1, g2, g3 });
 
     // The host claims its own rover (G1) through the real possession observer.
@@ -311,26 +580,6 @@ fn host_on_possess(
     }
 }
 
-/// Applied (authorized) drive → set the rover's synthetic forward speed from the
-/// `"throttle"` port write. An *unauthorized* drive never reaches here —
-/// `apply_sync_command` rejects it at the authority gate before triggering.
-fn host_on_drive(
-    trigger: On<lunco_cosim_core::commands::SetPorts>,
-    mut q: Query<(&lunco_core::GlobalEntityId, &mut DriveVel)>,
-    mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
-) {
-    let cmd = trigger.event();
-    if let Ok((gid, mut v)) = q.get_mut(cmd.target) {
-        if let Some((_, throttle)) = cmd.writes.iter().find(|(n, _)| n == "throttle") {
-            // Latched value — what the render-cadence path uses (buffer OFF): the
-            // LAST input seen this Update wins, dropping the intervening sweep.
-            v.0 = *throttle as f32;
-        }
-        // Buffered by seq — the per-tick path uses this (buffer ON).
-        buf.push(gid.get(), cmd.seq, cmd.writes.clone());
-    }
-}
-
 /// Despawn the replicated G3 rover mid-run. `broadcast_despawns` should emit a
 /// `Despawn(G3_GID)` over the wire, which the client's `drain_sync_inbox` Despawn
 /// arm resolves (via `ApiEntityRegistry`) and uses to remove its G3 proxy. This is
@@ -351,49 +600,47 @@ fn host_despawn_g3(
     }
 }
 
-/// Synthetic physics on the FIXED clock: integrate forward speed into the rover's
-/// x. When the buffer is ON, pull this tick's throttle from the per-tick input
-/// buffer (seq-ordered, one per fixed tick) instead of the render-cadence-latched
-/// `DriveVel` — so the host integrates the client's full input sequence.
+/// The fixture's integrator reads the production port owner after propagation.
 fn host_apply_and_integrate(
     time: Res<Time>,
-    buffer_on: Res<BufferEnabled>,
-    mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
-    mut q: Query<(&RoverGid, &mut DriveVel, &mut Transform), With<TestRover>>,
+    mut q: Query<
+        (
+            &lunco_port_core::InputPorts,
+            &mut avian3d::prelude::Position,
+            &mut Transform,
+        ),
+        With<TestRover>,
+    >,
 ) {
-    let dt = time.delta_secs();
-    for (gid, mut v, mut tf) in q.iter_mut() {
-        if buffer_on.0 {
-            if let Some(writes) = buf.next_for_tick(gid.0, 8) {
-                if let Some((_, throttle)) = writes.iter().find(|(n, _)| n == "throttle") {
-                    v.0 = *throttle as f32;
-                }
-            }
-        }
-        tf.translation.x += v.0 * FWD_SPEED * dt;
+    for (inputs, mut position, mut transform) in &mut q {
+        position.0.x += inputs.cmd("throttle") * f64::from(FWD_SPEED) * time.delta_secs_f64();
+        transform.translation = position.0.as_vec3();
     }
 }
 
 fn host_report(
     time: Res<Time>,
-    mut t: Local<f32>,
-    q: Query<(&RoverGid, &Transform, &DriveVel), With<TestRover>>,
+    mut timer: Local<f32>,
+    q: Query<(&RoverGid, &Transform, &lunco_port_core::InputPorts), With<TestRover>>,
 ) {
-    *t += time.delta_secs();
-    if *t > 1.0 {
-        *t = 0.0;
-        for (gid, tf, v) in q.iter() {
-            info!(
-                "[test] host rover {:#x} x={:.2} drive={:.2}",
-                gid.0, tf.translation.x, v.0
-            );
-        }
+    *timer += time.delta_secs();
+    if *timer <= 1.0 {
+        return;
+    }
+    *timer = 0.0;
+    for (gid, transform, inputs) in &q {
+        info!(
+            "[test] host rover {:#x} x={:.2} drive={:.2}",
+            gid.0,
+            transform.translation.x,
+            inputs.cmd("throttle")
+        );
     }
 }
 
 // ── Client (proxy) ────────────────────────────────────────────────────────────
 
-fn client_spawn_proxies(mut commands: Commands) {
+fn client_spawn_proxies(mut commands: Commands, grid: Res<lunco_spatial::ActivePhysicsFrame>) {
     let spawn = |commands: &mut Commands, name: &str, gid: u64| {
         commands
             .spawn((
@@ -403,12 +650,18 @@ fn client_spawn_proxies(mut commands: Commands) {
                 lunco_core::GlobalEntityId::from_raw(gid),
                 TestRover,
                 RoverGid(gid),
+                lunco_port_core::InputPorts::new(&["throttle", "steer"]),
+                avian3d::prelude::Position::default(),
+                avian3d::prelude::Rotation::default(),
+                big_space::prelude::CellCoord::default(),
+                ChildOf(grid.0),
             ))
             .id()
     };
     let g1 = spawn(&mut commands, "ClientProxy_G1", G1_GID);
     let g2 = spawn(&mut commands, "ClientProxy_G2", G2_GID);
     let g3 = spawn(&mut commands, "ClientProxy_G3", G3_GID);
+    install_zero_wiring(&mut commands, &[g1, g2, g3]);
     commands.insert_resource(Rovers { g1, g2, g3 });
     info!("[test] client proxies spawned g1={G1_GID:#x} g2={G2_GID:#x} g3={G3_GID:#x}");
 }
@@ -422,6 +675,7 @@ fn client_act(
     rovers: Option<Res<Rovers>>,
     mut commands: Commands,
     mut acted: Local<bool>,
+    mut outbox: ResMut<lunco_networking_sync::sync::SyncOutbox>,
 ) {
     if local.0.0 == 0 {
         return; // handshake not yet received
@@ -443,50 +697,70 @@ fn client_act(
             bind_camera: true,
         });
         *acted = true;
+        // Reach the real host gate independently of local ownership rejection.
+        enqueue_control_probe(&mut outbox, local.0, G1_GID, 1, vec![("throttle", 1.0)]);
+        let mut mutation =
+            lunco_command_contracts::Mutation::local(lunco_networking_sync::sync::SyncCommand {
+                type_name: "SetPortsBatch".into(),
+                data: serde_json::json!({"batches":[
+                {"target":G1_GID,"writes":[["throttle",1.0]]},
+                {"target":G2_GID,"writes":[["throttle",1.0]]}
+            ],"producer_id":null})
+                .to_string(),
+            });
+        mutation.origin = local.0;
+        outbox.0.push((
+            lunco_command_contracts::SyncChannel::CommandBus,
+            lunco_networking_sync::sync::SyncEnvelope::Command(mutation),
+        ));
         info!("[test] client requested possession of G2 (free) and G1 (host-owned)");
     }
-    // Drive G1 (host-owned) — must be REJECTED by the host authority gate (the
-    // client never owns it). G2 (owned) is driven by `client_drive_cadence` on the
-    // fixed clock — the seq-stamped sweep that the cadence sub-test measures.
-    commands.trigger(lunco_cosim_core::commands::SetPorts {
-        target: rovers.g1,
-        writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)],
-        seq: 0,
-        tick: 0,
-        producer_id: None,
-    });
 }
 
 /// Client cadence drive (FIXED clock): once possessed, send ONE seq-stamped
 /// `SetPorts` per fixed tick for G2 with a CHANGING throttle sweep, and accumulate
 /// the ideal x (integral of the sweep) — the distance the host reaches iff it
-/// applies EVERY input. The host's actual G2 x (adopted back via snapshot into the
-/// client's own G2 proxy) is compared against this in `client_report`: they match
-/// with the buffer, and fall short without it.
+/// applies every input. Explicit named release then restores the fixture's
+/// authored zero wire, which must remain zero after delayed and invalid packets.
 fn client_drive_cadence(
     time: Res<Time>,
     local: Res<lunco_core_session::LocalSession>,
+    ownership: Res<lunco_core_session::SessionRegistry>,
     rovers: Option<Res<Rovers>>,
     mut seq: Local<u32>,
     mut ideal: ResMut<ClientIdealX>,
+    mut release: ResMut<ReleaseProof>,
     mut commands: Commands,
 ) {
-    if local.0.0 == 0 {
-        return; // handshake not yet received
+    if local.0.0 == 0 || !ownership.owns(local.0, G2_GID) {
+        return;
     }
     let Some(rovers) = rovers else {
         return;
     };
+    if time.elapsed_secs() >= 8.0 {
+        if !release.sent {
+            release.sent = true;
+            commands.trigger(lunco_cosim_core::commands::ReleasePort {
+                target: rovers.g2,
+                name: "throttle".into(),
+                seq: 0,
+                tick: 0,
+                producer_id: None,
+            });
+        }
+        return;
+    }
     *seq += 1;
     let throttle = cadence_throttle(*seq);
     commands.trigger(lunco_cosim_core::commands::SetPorts {
         target: rovers.g2,
         writes: vec![("throttle".into(), throttle)],
-        seq: *seq,
-        tick: *seq as u64,
+        seq: 0,
+        tick: 0,
         producer_id: None,
     });
-    ideal.0 += (throttle as f32) * FWD_SPEED * time.delta_secs();
+    ideal.0 += throttle as f32 * FWD_SPEED * time.delta_secs();
 }
 
 /// Client-side snapshot apply for this stand-in rover. The production path is
@@ -494,16 +768,44 @@ fn client_drive_cadence(
 fn test_apply_snapshots(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     mut snaps: ResMut<lunco_networking_core::session::IncomingSnapshots>,
-    mut q: Query<&mut Transform>,
+    mut q: Query<(&mut Transform, &mut avian3d::prelude::Position)>,
+    mut proof: ResMut<ReleaseProof>,
+    mut outbox: ResMut<lunco_networking_sync::sync::SyncOutbox>,
+    local: Res<lunco_core_session::LocalSession>,
 ) {
     if snaps.0.is_empty() {
         return;
     }
     for s in snaps.0.drain(..) {
         if let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(s.gid)) {
-            if let Ok(mut tf) = q.get_mut(e) {
+            if let Ok((mut tf, mut position)) = q.get_mut(e) {
+                position.0 = bevy::math::DVec3::from_array(s.pos);
                 tf.translation = Vec3::from(s.t);
                 tf.rotation = Quat::from_array(s.r);
+                if s.gid == G2_GID && proof.seq.is_some_and(|seq| s.last_input_seq >= seq) {
+                    if let Some(previous) = proof.stopped_x {
+                        proof.stable &= (s.pos[0] - previous).abs() < 1e-6;
+                    } else {
+                        proof.stopped_x = Some(s.pos[0]);
+                        proof.stable = true;
+                        let seq = proof.seq.unwrap();
+                        enqueue_control_probe(
+                            &mut outbox,
+                            local.0,
+                            G2_GID,
+                            seq.saturating_sub(1),
+                            vec![("throttle", 1.0)],
+                        );
+                        enqueue_control_probe(
+                            &mut outbox,
+                            local.0,
+                            G2_GID,
+                            seq + 1,
+                            vec![("throttle", 1.0), ("unknown_input", 1.0)],
+                        );
+                    }
+                    proof.acknowledged = true;
+                }
             }
         }
     }
@@ -537,7 +839,7 @@ fn client_report(
         *t = 0.0;
         // CADENCE metric: host's actual G2 x (via snapshot) vs the client's ideal
         // integral of the sweep it sent. ratio → 1.0 means the host applied every
-        // input (buffer ON / no subsample); ratio < 1 is dropped-input cadence loss.
+        // input; ratio < 1 is dropped-input cadence loss.
         let ratio = if ideal.0 > 0.01 {
             g2_now / ideal.0
         } else {
@@ -681,8 +983,15 @@ fn exit_after_timeout(
     registry: Option<Res<lunco_core_session::SessionRegistry>>,
     q_proxies: Query<&RoverGid, With<TestRover>>,
     journal: Option<Res<JournalResource>>,
+    proof: Res<ReleaseProof>,
+    faults: Res<lunco_core::RuntimeFaults>,
 ) {
     if time.elapsed_secs() <= RUN_SECS {
+        return;
+    }
+    if faults.active() {
+        error!("[test] RESULT: FAIL — runtime fault: {:?}", faults.first);
+        exit.write(AppExit::error());
         return;
     }
     // Only the client renders a verdict (it's the peer that observes both the
@@ -752,7 +1061,15 @@ fn exit_after_timeout(
             m.g2, m.g1
         );
 
-        if g2_moved
+        info!(
+            "[test] CONTROL release_ack={} stable={} replay={} batch_rejected={}",
+            proof.acknowledged, proof.stable, proof.replay_ok, proof.batch_rejected
+        );
+        if proof.acknowledged
+            && proof.stable
+            && proof.replay_ok
+            && proof.batch_rejected
+            && g2_moved
             && g1_still
             && g2_mine
             && g1_host
@@ -765,6 +1082,8 @@ fn exit_after_timeout(
             );
         } else {
             warn!("[test] RESULT: FAIL — see checks above");
+            exit.write(AppExit::error());
+            return;
         }
     }
     info!("[smoke] timeout reached, exiting");

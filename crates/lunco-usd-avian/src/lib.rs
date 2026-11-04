@@ -47,6 +47,7 @@ use avian3d::dynamics::solver::islands::PhysicsIslands;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
+mod mass;
 mod source_contacts;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::DVec3;
@@ -77,7 +78,7 @@ use lunco_usd_avian_reader::{
         collect_body_colliders_from_usd,
     },
     joint::{has_rigid_body_ancestor, read_joint_spec},
-    read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
+    read_authored_bool_or_default, read_authored_real, read_authored_vec3,
 };
 use openusd_schemas::physics::tokens as ptok;
 
@@ -1371,15 +1372,9 @@ fn extract_avian_prim(
     }
 
     if has_rigid_body_api {
-        // FIRST, before the `Collider` and `RigidBody` below, and that order is
-        // load-bearing. `Commands` apply in insertion order and observers fire at
-        // apply time, so avian's `On<Add<RigidBody>>` mass observer (avian3d
-        // `dynamics/rigid_body/mass_properties/mod.rs:284-289`) runs the instant
-        // `RigidBody` lands. The overrides and their `NoAuto*` markers must already
-        // be on the entity by then, or that observer derives
-        // `ComputedAngularInertia` from collider geometry at `ColliderDensity` 1.0
-        // and the authored values never take effect. Authoring the overrides first
-        // means the observer's very first pass sees `NoAuto*` and honours them.
+        // Prepare complete validated native caches before inserting RigidBody:
+        // Avian's synchronous insertion observer must never construct computed
+        // properties from unchecked intermediate geometry or mass rescaling.
         let simulated = match read_authored_bool_or_default(
             reader,
             sdf_path,
@@ -1430,13 +1425,6 @@ fn extract_avian_prim(
                 return;
             }
         };
-        if apply_rigid_body_mass_props(commands, entity, reader, sdf_path).is_err() {
-            error!(
-                "[usd-avian] {sdf_path} has malformed rigid-body mass properties — refusing projection"
-            );
-            commands.entity(entity).try_insert(UsdPhysicsProjected);
-            return;
-        }
 
         // Prepare the complete body geometry before admitting any of its native
         // colliders. Each USD source retains its own collider identity.
@@ -1455,7 +1443,47 @@ fn extract_avian_prim(
                 return;
             }
         };
+        let body_scale = match lunco_usd_bevy_stage::world_transform_matrix_d_at(
+            reader, sdf_path, 0.0,
+        ) {
+            Ok(matrix)
+                if matrix.determinant().is_finite()
+                    && matrix.determinant() != 0.0
+                    && matrix.row(3).abs_diff_eq(bevy::math::DVec4::W, 1e-6) =>
+            {
+                let (scale, _, _) = matrix.to_scale_rotation_translation();
+                let native = scale.as_vec3();
+                if !native.is_finite() || !native.cmpne(Vec3::ZERO).all() {
+                    report_physics_runtime_fault(
+                        faults,
+                        holds,
+                        entity,
+                        sdf_path.to_string(),
+                        "usd-rigid-body-mass-invalid",
+                        format!(
+                            "body world scale {scale:?} exceeds the native collider representation"
+                        ),
+                    );
+                    commands.entity(entity).try_insert(UsdPhysicsProjected);
+                    return;
+                }
+                native
+            }
+            _ => {
+                report_physics_runtime_fault(
+                    faults,
+                    holds,
+                    entity,
+                    sdf_path.to_string(),
+                    "usd-rigid-body-mass-invalid",
+                    "body mass requires a nonsingular affine world transform".to_owned(),
+                );
+                commands.entity(entity).try_insert(UsdPhysicsProjected);
+                return;
+            }
+        };
         let mut prepared_colliders = Vec::with_capacity(body_colliders.len());
+        let mut geometry_mass = Vec::with_capacity(body_colliders.len());
         for part in body_colliders {
             let source_path = SdfPath::new(&part.source_path)
                 .expect("collider source was validated by the composed reader");
@@ -1464,7 +1492,6 @@ fn extract_avian_prim(
                 .and_then(|material| {
                     collider_density_from_usd(reader, &source_path, sdf_path)
                         .map(|density| (material, density))
-                        .map_err(|()| "malformed collider density".to_owned())
                 });
             let (material, density) = match prepared {
                 Ok(prepared) => prepared,
@@ -1483,8 +1510,110 @@ fn extract_avian_prim(
                     return;
                 }
             };
-            prepared_colliders.push((part, source_path, material, density));
+            let overrides = if source_path == *sdf_path {
+                Ok(lunco_physics::body_mass::ColliderMassOverrides::default())
+            } else {
+                mass::overrides(reader, &source_path)
+            };
+            let overrides = overrides.and_then(|mut overrides| {
+                let basis = lunco_usd_bevy_scene::read_geometry_orientation(reader, &source_path)
+                    .ok_or_else(|| "invalid collider geometry basis".to_owned())?
+                    .inverse();
+                if let Some(center) = overrides.center {
+                    overrides.center = Some(basis * center);
+                }
+                if overrides.principal.is_some() {
+                    overrides.principal_axes = Some(
+                        basis
+                            * overrides
+                                .principal_axes
+                                .unwrap_or(bevy::math::DQuat::IDENTITY),
+                    );
+                } else if let Some(axes) = overrides.principal_axes {
+                    overrides.principal_axes = Some(basis * axes * basis.inverse());
+                    overrides.rotate_geometry_frame = true;
+                }
+                Ok(overrides)
+            });
+            let properties = overrides.and_then(|overrides| {
+                let mut world_collider = part.collider.clone();
+                // Match Avian's maintained collider-scale cooking boundary.
+                world_collider.set_scale(body_scale, 10);
+                if world_collider.scale() != body_scale {
+                    return Err("native collider could not apply the body world scale".to_owned());
+                }
+                if !lunco_physics::avian_backend_collider_shape_is_valid(&world_collider)
+                    || !lunco_physics::avian_backend_point_is_valid(
+                        part.position.0 * body_scale.as_dvec3(),
+                    )
+                {
+                    return Err(
+                        "body-scaled collider geometry or offset exceeds the native representation"
+                            .to_owned(),
+                    );
+                }
+                let geometry = world_collider
+                    .shape_scaled()
+                    .mass_properties(f64::from(density.0));
+                overrides
+                    .apply(geometry)
+                    .map(|properties| (overrides, properties))
+                    .map_err(str::to_owned)
+            });
+            let (overrides, properties) = match properties {
+                Ok(properties) => properties,
+                Err(detail) => {
+                    report_physics_runtime_fault(
+                        faults,
+                        holds,
+                        entity,
+                        source_path.to_string(),
+                        "usd-rigid-body-mass-invalid",
+                        detail,
+                    );
+                    commands.entity(entity).try_insert(UsdPhysicsProjected);
+                    return;
+                }
+            };
+            geometry_mass.push(
+                properties.transform_by(&avian3d::parry::math::Pose::from_parts(
+                    part.position.0 * body_scale.as_dvec3(),
+                    part.rotation.0.as_dquat(),
+                )),
+            );
+            prepared_colliders.push((part, source_path, material, density, overrides));
         }
+        let geometry = match lunco_physics::body_mass::sum_mass_properties(geometry_mass) {
+            Ok(properties) => properties,
+            Err(detail) => {
+                report_physics_runtime_fault(
+                    faults,
+                    holds,
+                    entity,
+                    sdf_path.to_string(),
+                    "usd-rigid-body-mass-invalid",
+                    detail.to_owned(),
+                );
+                commands.entity(entity).try_insert(UsdPhysicsProjected);
+                return;
+            }
+        };
+        let automatic =
+            match apply_rigid_body_mass_props(commands, entity, reader, sdf_path, geometry) {
+                Ok(automatic) => automatic,
+                Err(detail) => {
+                    report_physics_runtime_fault(
+                        faults,
+                        holds,
+                        entity,
+                        sdf_path.to_string(),
+                        "usd-rigid-body-mass-invalid",
+                        detail,
+                    );
+                    commands.entity(entity).try_insert(UsdPhysicsProjected);
+                    return;
+                }
+            };
         apply_collision_groups(commands, entity, groups, sdf_path);
         commands
             .entity(entity)
@@ -1514,9 +1643,15 @@ fn extract_avian_prim(
             body,
             mobility,
             lunco_core::SelectableRoot,
-            lunco_physics::body_mass::BodyMassFromColliders,
+            lunco_physics::body_mass::BodyMassFromColliders {
+                mass: automatic.0,
+                inertia: automatic.1,
+                center: automatic.2,
+            },
         ));
-        for (part, source_path, material, density) in prepared_colliders {
+        // The native observer sees complete validated caches. The application
+        // geometry owner retains automatic fields through typed ownership.
+        for (part, source_path, material, density, overrides) in prepared_colliders {
             let mut collider = commands.spawn((
                 Name::new(format!("USD collider {}", part.source_path)),
                 Transform::from_translation(part.position.0.as_vec3())
@@ -1547,8 +1682,29 @@ fn extract_avian_prim(
                     source_contacts::bind_native_collider(world, collider_entity)
                 });
             });
-            if let Some(density) = density {
-                commands.entity(collider_entity).try_insert(density);
+            commands
+                .entity(collider_entity)
+                .try_insert((density, overrides));
+            if let Some(mass) = overrides.mass {
+                commands
+                    .entity(collider_entity)
+                    .try_insert(Mass(mass as f32));
+            }
+            if let Some(principal) = overrides.principal {
+                commands
+                    .entity(collider_entity)
+                    .try_insert(AngularInertia::new_with_local_frame(
+                        principal.as_vec3(),
+                        overrides
+                            .principal_axes
+                            .unwrap_or(bevy::math::DQuat::IDENTITY)
+                            .as_quat(),
+                    ));
+            }
+            if let Some(center) = overrides.center {
+                commands
+                    .entity(collider_entity)
+                    .try_insert(CenterOfMass(center.as_vec3()));
             }
             apply_collision_groups(commands, collider_entity, groups, &source_path);
             insert_physics_material(commands, collider_entity, material);
@@ -2105,18 +2261,24 @@ fn collider_density_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     source: &SdfPath,
     body: &SdfPath,
-) -> Result<Option<ColliderDensity>, ()> {
+) -> Result<ColliderDensity, String> {
     let mut path = source.to_string();
     let mut density = None;
     loop {
-        let prim = SdfPath::new(&path).map_err(|_| ())?;
-        match read_authored_real(reader, &prim, ptok::PHYSICS_DENSITY)? {
+        let prim = SdfPath::new(&path).map_err(|error| error.to_string())?;
+        match read_authored_real(reader, &prim, ptok::PHYSICS_DENSITY)
+            .map_err(|()| format!("{prim}.physics:density has an unreadable authored type"))?
+        {
             None | Some(0.0) => {}
             Some(value) if value.is_finite() && value > 0.0 => {
                 density = Some(value);
                 break;
             }
-            Some(_) => return Err(()),
+            Some(value) => {
+                return Err(format!(
+                    "{prim}.physics:density={value:?} must be finite and positive, or zero for automatic density"
+                ));
+            }
         }
         if path == body.as_str() {
             break;
@@ -2124,29 +2286,34 @@ fn collider_density_from_usd(
         path = path
             .rsplit_once('/')
             .map(|(parent, _)| parent.to_owned())
-            .ok_or(())?;
+            .ok_or_else(|| "collider density ancestry does not reach its body".to_owned())?;
         if path.is_empty() {
-            return Err(());
+            return Err("collider density ancestry does not reach its body".to_owned());
         }
     }
     if density.is_none() {
         density = read_physics_material(reader, source)
-            .map_err(|_| ())?
+            .map_err(|error| error.to_string())?
             .and_then(|material| material.density)
-            .filter(|density| *density > 0.0)
-            .map(f64::from);
+            .filter(|density| *density > 0.0);
     }
     let scale = lunco_usd_bevy_stage::stage_convention(reader)
-        .map_err(|_| ())?
+        .map_err(|error| error.to_string())?
         .length(1.0);
-    let Some(density) = density else {
-        return Ok(None);
-    };
-    let density = density / scale.powi(3);
+    // The normative omitted density is already expressed in canonical SI.
+    let density = density.map(|value| value / scale.powi(3)).unwrap_or(1000.0);
     if !density.is_finite() || density <= 0.0 || density > f32::MAX as f64 {
-        return Err(());
+        return Err(format!(
+            "{source}.physics:density resolves to {density:?} kg/m³, outside the finite positive native range"
+        ));
     }
-    Ok(Some(ColliderDensity(density as f32)))
+    let native = density as f32;
+    if native <= 0.0 || !native.recip().is_finite() {
+        return Err(format!(
+            "{source}.physics:density={density:?} kg/m³ cannot form a finite positive native density and reciprocal"
+        ));
+    }
+    Ok(ColliderDensity(native))
 }
 
 fn apply_rigid_body_mass_props(
@@ -2154,165 +2321,108 @@ fn apply_rigid_body_mass_props(
     entity: Entity,
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
-) -> Result<(), ()> {
-    // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
-    // matching `NoAuto*` marker is present. Install each override and marker
-    // together before body admission. Co-simulation mass-property ports write
-    // the same components; the body-owned geometry reduction respects them.
-    //
-    // Note the interaction, which is why `NoAutoMass` alone fixes the common case:
-    // with mass authored and inertia NOT authored, Avian runs
-    // `set_mass(mass, /*update_angular_inertia*/ !no_auto_inertia)` — it RESCALES the
-    // collider-derived inertia to the authored mass. So a body that authors only
-    // `physics:mass` still gets a consistent tensor, which is the UsdPhysics
-    // expectation.
-    // `NoAutoMass` goes on ONLY when the mass was actually authored. An omitted
-    // mass stays automatic, exactly as the UsdPhysics/Avian contract specifies.
-    //
-    // MassAPI's ZERO is a sentinel, not a value: `mass = 0`, `density = 0` and
-    // `diagonalInertia = (0,0,0)` all mean "unauthored — compute me". Treating
-    // them as overrides hands the solver a degenerate body.
-    let conv = lunco_usd_bevy_stage::stage_convention(reader).map_err(|_| ())?;
+    geometry: avian3d::parry::mass_properties::MassProperties,
+) -> Result<(bool, bool, bool), String> {
+    let conv = lunco_usd_bevy_stage::stage_convention(reader).map_err(|error| error.to_string())?;
     let mpu = conv.length(1.0);
     if !mpu.is_finite() || mpu <= 0.0 {
-        return Err(());
+        return Err("stage metersPerUnit must resolve to a finite positive length".to_owned());
     }
-    let mass = match read_authored_real(reader, sdf_path, ptok::PHYSICS_MASS)? {
-        None | Some(0.0) => None,
-        Some(value) if value.is_finite() && value > 0.0 && value <= f32::MAX as f64 => {
-            Some(value as f32)
-        }
-        Some(_) => return Err(()),
-    };
-    let body_density = match read_authored_real(reader, sdf_path, ptok::PHYSICS_DENSITY)? {
-        None | Some(0.0) => None,
-        Some(value) if value.is_finite() && value > 0.0 => Some(value),
-        Some(_) => return Err(()),
-    };
-    let diagonal_inertia =
-        match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_DIAGONAL_INERTIA)? {
-            None => None,
-            Some(value) if value == DVec3::ZERO => None,
-            Some(value) if value.x > 0.0 && value.y > 0.0 && value.z > 0.0 => Some(value),
-            Some(_) => return Err(()),
-        };
-    let principal_axes = read_authored_quat(reader, sdf_path, ptok::PHYSICS_PRINCIPAL_AXES)?;
-    let center_of_mass = read_authored_vec3(reader, sdf_path, ptok::PHYSICS_CENTER_OF_MASS)?;
-    let linear_damping = match read_authored_real(reader, sdf_path, PHYSX_LINEAR_DAMPING)? {
+    let overrides = mass::overrides(reader, sdf_path)?;
+    let has_volume = geometry.mass() > 0.0;
+    let candidate = mass::body_candidate(geometry, overrides).map_err(str::to_owned)?;
+    let native = lunco_physics::body_mass::native_mass_properties(&candidate).map_err(|reason| format!(
+        "physics:mass={:?}, physics:diagonalInertia={:?}, physics:centerOfMass={:?}: {reason}",
+        overrides.mass, overrides.principal, overrides.center,
+    ))?;
+    let linear_damping = match read_authored_real(reader, sdf_path, PHYSX_LINEAR_DAMPING)
+        .map_err(|()| format!("{} has an unreadable authored value", PHYSX_LINEAR_DAMPING))?
+    {
         None => None,
         Some(value) if value.is_finite() && value >= 0.0 && value <= f64::from(f32::MAX) => {
             Some(value as f32)
         }
-        Some(_) => return Err(()),
+        Some(value) => {
+            return Err(format!(
+                "authored damping={value:?} must be finite, nonnegative and native-representable"
+            ));
+        }
     };
-    let angular_damping = match read_authored_real(reader, sdf_path, PHYSX_ANGULAR_DAMPING)? {
+    let angular_damping = match read_authored_real(reader, sdf_path, PHYSX_ANGULAR_DAMPING)
+        .map_err(|()| format!("{} has an unreadable authored value", PHYSX_ANGULAR_DAMPING))?
+    {
         None => None,
         Some(value) if value.is_finite() && value >= 0.0 && value <= f64::from(f32::MAX) => {
             Some(value as f32)
         }
-        Some(_) => return Err(()),
+        Some(value) => {
+            return Err(format!(
+                "authored damping={value:?} must be finite, nonnegative and native-representable"
+            ));
+        }
     };
-    let authored_linear = match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_VELOCITY)? {
+    let authored_linear = match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_VELOCITY)
+        .map_err(|()| {
+            format!(
+                "{} has an unreadable authored value",
+                ptok::PHYSICS_VELOCITY
+            )
+        })? {
         Some(vel) => {
-            let vel = local_vector_to_world(reader, sdf_path, conv.point_d(vel)).map_err(|_| ())?;
+            let vel = local_vector_to_world(reader, sdf_path, conv.point_d(vel))
+                .map_err(|error| error.to_string())?;
             if !lunco_physics::avian_backend_vector_is_valid(vel) {
-                return Err(());
+                return Err("authored velocity exceeds the finite native vector range".to_owned());
             }
             Some(vel)
         }
         None => None,
     };
-    let authored_angular =
-        match read_authored_vec3(reader, sdf_path, ptok::PHYSICS_ANGULAR_VELOCITY)? {
-            Some(ang) => {
-                let ang = local_vector_to_world(
-                    reader,
-                    sdf_path,
-                    conv.dir_d(ang) * std::f64::consts::PI / 180.0,
-                )
-                .map_err(|_| ())?;
-                if !lunco_physics::avian_backend_vector_is_valid(ang) {
-                    return Err(());
-                }
-                Some(ang)
+    let authored_angular = match read_authored_vec3(
+        reader,
+        sdf_path,
+        ptok::PHYSICS_ANGULAR_VELOCITY,
+    )
+    .map_err(|()| {
+        format!(
+            "{} has an unreadable authored value",
+            ptok::PHYSICS_ANGULAR_VELOCITY
+        )
+    })? {
+        Some(ang) => {
+            let ang = local_vector_to_world(
+                reader,
+                sdf_path,
+                conv.dir_d(ang) * std::f64::consts::PI / 180.0,
+            )
+            .map_err(|error| error.to_string())?;
+            if !lunco_physics::avian_backend_vector_is_valid(ang) {
+                return Err("authored velocity exceeds the finite native vector range".to_owned());
             }
-            None => None,
-        };
-    let material_density = read_physics_material(reader, sdf_path)
-        .map_err(|_| ())?
-        .and_then(|pm| pm.density)
-        .filter(|d| *d > 0.0)
-        .map(f64::from);
-    let collider_density = if let Some(density) = body_density.or(material_density) {
-        let collider_density = density / (mpu * mpu * mpu);
-        if !collider_density.is_finite() || collider_density > f32::MAX as f64 {
-            return Err(());
+            Some(ang)
         }
-        Some(collider_density as f32)
-    } else {
-        None
+        None => None,
     };
-
-    if let Some(mass) = mass {
-        commands.entity(entity).try_insert((Mass(mass), NoAutoMass));
-    }
-
-    // `physics:density` — on the body's MassAPI, else on the bound physics
-    // material — feeds avian's collider-mass derivation. Precedence is the
-    // spec's: authored mass > body density > material density (an authored mass
-    // still wins via `NoAutoMass` above). Stage units are mass per unit³.
-    if let Some(collider_density) = collider_density {
-        commands
-            .entity(entity)
-            .try_insert(ColliderDensity(collider_density));
-    }
-
-    // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
-    // of the inertia tensor in the principal frame, `physics:principalAxes` (a
-    // quat, identity when unauthored) rotates that frame. Off-diagonal inertia is
-    // not representable here (Avian stores principal + frame), matching the
-    // UsdPhysics schema. Units are mass · distance², and the diagonal permutes
-    // with the stage's axes exactly as a direction does.
-    if let Some(diag) = diagonal_inertia {
-        let local_frame = principal_axes
-            .map(|q| conv.rotation_d(q).as_quat())
-            .unwrap_or(Quat::IDENTITY);
-        let principal = (conv.dir_d(diag).abs() * (mpu * mpu)).as_vec3();
-        if !principal.is_finite()
-            || principal.x <= 0.0
-            || principal.y <= 0.0
-            || principal.z <= 0.0
-            || !local_frame.is_finite()
-        {
-            return Err(());
-        }
-        commands.entity(entity).try_insert((
-            AngularInertia {
-                principal,
-                local_frame,
-            },
-            NoAutoAngularInertia,
-        ));
-    }
-
-    // G2 — authored centre of mass (body-frame offset, a POINT in stage units).
-    if let Some(com) = center_of_mass {
-        let com = conv.point_d(com).as_vec3();
-        if !com.is_finite() {
-            return Err(());
-        }
-        commands
-            .entity(entity)
-            .try_insert((CenterOfMass(com), NoAutoCenterOfMass));
-    }
-
+    let material = read_physics_material(reader, sdf_path)
+        .map_err(|error| format!("physics material: {error}"))?;
+    // Seed all three properties before RigidBody's OnAdd observer. A partial
+    // override can otherwise rescale zero/invalid native geometry on insertion.
+    commands.entity(entity).try_insert((
+        native.0,
+        native.1,
+        native.2,
+        NoAutoMass,
+        NoAutoAngularInertia,
+        NoAutoCenterOfMass,
+        overrides,
+    ));
     if let Some(d) = linear_damping {
         commands.entity(entity).try_insert(LinearDamping(d));
     }
     if let Some(d) = angular_damping {
         commands.entity(entity).try_insert(AngularDamping(d));
     }
-    apply_physics_material(commands, entity, reader, sdf_path)?;
+    insert_physics_material(commands, entity, material);
     // The spec frames both velocities in the BODY's local space: convert the
     // components by the stage convention (`physics:velocity` is units/s so it
     // scales like a point; `physics:angularVelocity` is DEG/s about local axes),
@@ -2324,7 +2434,11 @@ fn apply_rigid_body_mass_props(
             angular: authored_angular,
         });
     }
-    Ok(())
+    Ok((
+        has_volume && overrides.mass.is_none(),
+        has_volume && overrides.principal.is_none(),
+        has_volume && overrides.center.is_none(),
+    ))
 }
 
 /// Project the surface properties of the USD physics material bound to a prim.
@@ -2706,7 +2820,7 @@ def Xform "World"
     }
 
     #[test]
-    fn omitted_mass_is_left_to_avian_computed_mass() {
+    fn omitted_mass_retains_checked_geometry_ownership() {
         let source = FIXTURE.replace("    double physics:mass = 500\n", "");
         let stage = stage_from_source(&source);
         let view = stage.view();
@@ -2723,8 +2837,9 @@ def Xform "World"
             "collider remains available for Avian mass derivation"
         );
         assert_eq!(
-            live.2, None,
-            "the USD projector must not invent the old 1000 kg mass seed"
+            live.2,
+            Some(0.008),
+            "the two-centimetre cube must retain its volume-times-standard-density mass"
         );
     }
 

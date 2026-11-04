@@ -45,14 +45,19 @@ pub fn set_parameter(
     let expr = parse_value_fragment(value_text)?;
 
     let span_of = |e: &rumoca_ir_ast::Expression| {
-        e.get_location()
-            .filter(|l| l.end > l.start)
-            .map(|l| l.start as usize..l.end as usize)
+        let span = e.span();
+        let range = span.start.0..span.end.0;
+        (range.end > range.start && source.get(range.clone()).is_some()).then_some(range)
     };
 
     match param {
-        "" => match comp.binding.as_ref().and_then(&span_of) {
-            Some(range) => edit.replace(range, value_text),
+        "" => match comp.binding.as_ref() {
+            Some(binding) => {
+                let range = span_of(binding).ok_or_else(|| AstMutError::AnchorNotFound {
+                    what: format!("binding of component `{component}`"),
+                })?;
+                edit.replace(range, value_text);
+            }
             None => {
                 // No binding yet — add one after the modifier list (or the name).
                 let at = text::component_modifier_group(source, comp)
@@ -67,8 +72,13 @@ pub fn set_parameter(
             })?;
             edit.replace(range, value_text);
         }
-        _ => match comp.modifications.get(param).and_then(&span_of) {
-            Some(range) => edit.replace(range, value_text),
+        _ => match comp.modifications.get(param) {
+            Some(value) => {
+                let range = span_of(value).ok_or_else(|| AstMutError::AnchorNotFound {
+                    what: format!("`{param}` modifier of component `{component}`"),
+                })?;
+                edit.replace(range, value_text);
+            }
             None => {
                 let rendered = format!("{param} = {value_text}");
                 match text::component_modifier_group(source, comp) {

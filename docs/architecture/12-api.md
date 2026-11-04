@@ -11,6 +11,14 @@ lightweight in-process values and request/response types; `lunco-api` owns
 ECS execution and discovery; `lunco-api-codec` owns JSON conversion at wire
 boundaries; and `lunco-api-transport` exposes HTTP and browser adapters.
 
+Command admission validates the supplied typed values and their concrete serde
+construction before triggering an event. This catches numeric overflow introduced
+by narrowing inside tagged enums or opaque native vectors. Every `Entity` input
+must resolve through the global registry; unknown IDs reject without falling
+through to process-local entity bits. Peer serialization similarly rejects an
+entity without a global identity. The explicit `sync_local` role substitutes the
+local placeholder at that boundary.
+
 `EnginePerformance` exposes the core runtime's bounded render-frame history,
 latest FPS/frame diagnostics, retained capacity and process-scoped sample counter.
 Use this render-cadence query for frame distributions, including while simulation

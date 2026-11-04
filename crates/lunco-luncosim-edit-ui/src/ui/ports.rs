@@ -1008,6 +1008,8 @@ impl PortPanelState {
                             target: row.entity,
                             name: info.name.clone(),
                             producer_id: None,
+                            seq: 0,
+                            tick: 0,
                         },
                         origin,
                     );

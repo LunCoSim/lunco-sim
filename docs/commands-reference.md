@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**306 commands** across **58** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**317 commands** across **60** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -61,6 +61,10 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-doc-bevy`](#lunco-doc-bevy) (11 commands)
 
+**Networking**
+
+- [`lunco-networking`](#lunco-networking) (2 commands)
+
 **Time & clock**
 
 - [`lunco-time`](#lunco-time) (6 commands)
@@ -89,7 +93,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-assets-datasets`](#lunco-assets-datasets) (4 commands)
 - [`lunco-camera-core`](#lunco-camera-core) (7 commands)
-- [`lunco-capture`](#lunco-capture) (12 commands)
+- [`lunco-capture`](#lunco-capture) (13 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
 - [`lunco-control-core`](#lunco-control-core) (2 commands)
 - [`lunco-core-runtime`](#lunco-core-runtime) (1 command)
@@ -104,6 +108,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-modelica-runtime`](#lunco-modelica-runtime) (1 command)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
+- [`lunco-networking-sync`](#lunco-networking-sync) (8 commands)
 - [`lunco-notifications-core`](#lunco-notifications-core) (1 command)
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
@@ -674,7 +679,7 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `CompileModel`
 
  Compile a document: rumoca front-end → DAE → simulator setup. Idempotent —
- an already-compiled, unmodified model skips the worker dispatch unless
+ an already-compiled model with the same current source closure and target skips the worker dispatch unless
  `force`. A dispatched compile leaves the model paused/ready unless the
  request carries explicit Run intent; failures use `DocumentDiagnostics`.
 
@@ -684,7 +689,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `doc_id` | `DocumentId` |  The document to compile. Unassigned (`0` over the API) means the  **active** document, which is what a toolbar click and a headless  `cmd("CompileModel", #{})` both want. |
 | `class` | `Option < String >` |  Optional explicit target class. When `Some`, bypass both the  drilled-in pin and the picker — compile this exact class.  Used by API callers that need deterministic behaviour without  a GUI (cf. spec 033 User Story 1.5). |
-| `force` | `bool` |  Force a recompile even if the model is already compiled and  clean (same document generation). Defaults to `false` so a  Compile on an up-to-date model is an idempotent no-op. |
+| `force` | `bool` |  Force a recompile even if the model is already compiled and  current (same source closure and selected target). Defaults to `false` so a  Compile on an up-to-date model is an idempotent no-op. |
 | `resume_after_compile` | `bool` |  When `true`, the post-compile success handler unpauses the model  so it starts live-stepping the instant the stepper is installed.  Set by `RunActiveModel` ("Run live") so a single click compiles  *and* plays — crucially including the first-ever compile, where  no model entity yet exists to carry the resume intent. Defaults  to `false`: a plain Compile leaves the model paused/ready. |
 
 #### `ConfirmClassPicker`
@@ -976,12 +981,13 @@ actually call, with the fields the deserializer actually accepts. See the
  Start a live realtime simulation: compile-if-stale, then play.
 
  This is the user-facing "Run" verb. If the model is already
- compiled and clean (same document generation), it simply unpauses —
- no recompile. Otherwise it sets [`ModelicaModel::resume_after_compile`]
+ compiled for the requested class and its admitted source context is current,
+ it unpauses without recompiling. Otherwise it sets [`ModelicaModel::resume_after_compile`]
  and triggers a [`CompileModel`]; the post-compile success handler in
  the worker then unpauses, so play begins as soon as the stepper is
  installed. Contrast with [`CompileModel`] (compile only, never auto-
  starts) and [`ResumeActiveModel`] (unpause only, never compiles).
+ Invalid document, parse or class selection rejects before changing run intent.
 
 - *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
@@ -1472,6 +1478,11 @@ actually call, with the fields the deserializer actually accepts. See the
    document's [`lunco_doc::DocumentOrigin`] to the new writable `File` variant,
    updates `last_saved_generation`, and fires [`DocumentSaved`].
 
+ The owning Modelica handler records terminal native write or browser download
+ admission results. Interactive picker admission returns `picker_requested:
+ true` without marking the document saved. Failed writes retain the original
+ origin and saved-generation marker and report `modelica-save-failed`.
+
  This single shape covers UI dialogs, recents, drag-drop, HTTP
  automation, and the Untitled-promotion path (Ctrl+S on a draft
  routes to `SaveAsDocument { doc, path: "" }`).
@@ -1489,9 +1500,13 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Handled per-domain: the owning registry resolves the document's
  canonical path, writes the source, and fires [`DocumentSaved`] on
- success. No-ops if the document has no canonical path (Save-As
- needed — separate command, not defined yet) or if the backing
- library is read-only (source library, Bundled in Modelica's case).
+ success. The owning domain validates write authority and selects its
+ storage operation. Modelica documents without a writable native path request
+ the Save-As picker; browser documents admit a download.
+
+ Modelica write/download completion has a terminal command result. Picker
+ admission returns `picker_requested: true`; the later save owns its write
+ result. Failures preserve the document origin and saved-generation marker.
 
  Dirty state (generation vs. last-saved generation) is a per-document
  concern; the owning domain updates its internal tracker in the
@@ -1519,6 +1534,31 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `doc_id` | `DocumentId` |  The document whose most recent history group should be undone. |
+
+## Networking
+
+### `lunco-networking` <a id="lunco-networking"></a>
+
+#### `JoinServer`
+
+ Join a networked session at `address` (`host:port` — a hostname like
+ `lunica.lunco.space:5888` or an `ip:port`). The same typed command the
+ in-sim *Connect* button, the HTTP API, MCP, and the CLI all dispatch — the
+ networking internals establish the connection. Replaces any current one.
+
+- *defined in:* `crates/lunco-networking/src/client.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `address` | `String` |   |
+| `digest` | `String` |  Optional self-signed cert SHA-256 digest to pin (hex; colons/whitespace  tolerated). Empty ⇒ fall back to the ambient digest source  ([`client_cert_digest`]: `LUNCO_CERT_DIGEST` on native, the URL `#hash` on  wasm). A browser joining a self-signed LAN host by IP must supply this. |
+
+#### `LeaveServer`
+
+ Leave the current session and return to single-player (local sandbox).
+
+- *defined in:* `crates/lunco-networking/src/client.rs`
+- *fields:* none — call with `LeaveServer` (no params)
 
 ## Time & clock
 
@@ -2151,6 +2191,18 @@ actually call, with the fields the deserializer actually accepts. See the
 | `feed` | `Option < u64 >` |   |
 | `source` | `Option < GlobalEntityId >` |   |
 
+#### `ProjectCameraFeedSubject`
+
+ Project an exact scene subject into a live feed's image coordinates.
+ Frustum inclusion is reported; this does not claim geometric occlusion.
+
+- *defined in:* `crates/lunco-capture/src/camera_feed.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `feed` | `u64` |   |
+| `subject` | `GlobalEntityId` |   |
+
 #### `RemoveCameraFeed`
 
  Release one window, its render camera and image.
@@ -2176,6 +2228,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `label` | `String` |   |
 | `width` | `Option < u32 >` |   |
 | `height` | `Option < u32 >` |   |
+| `minimum_scene_items` | `Option < u32 >` |  Require submitted scene geometry before admitting the image. Zero also  permits intentional sky/empty observations. Omitted retains the view's policy. |
 
 #### `SetCameraFeedResolution`
 
@@ -2370,6 +2423,8 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  The endpoint whose local input holds are released. |
+| `seq` | `u32` |  Network input sequence; zero requests assignment at local commit. |
+| `tick` | `u64` |  Producer simulation tick; zero uses the local committed tick. |
 | `producer_id` | `Option < u64 >` |  Stable producer identity for external API, actorless Rhai, and direct  typed releases admitted to the session's next fixed tick. Twin Rhai uses  its stable actor identity and omits this field. |
 
 #### `ReleasePort`
@@ -2382,6 +2437,8 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `target` | `Entity` |  The entity whose hold is released. |
 | `name` | `String` |  Input-port name. |
+| `seq` | `u32` |  Network input sequence; zero requests assignment at local commit. |
+| `tick` | `u64` |  Producer simulation tick; zero uses the local committed tick. |
 | `producer_id` | `Option < u64 >` |  Stable producer identity for API, actorless Rhai, and direct typed  releases admitted to the session's next fixed tick. Internal releases  omit this field because their cause is owned by another fixed-step or  lifecycle boundary. |
 
 #### `SetPorts`
@@ -2406,12 +2463,15 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `SetPortsBatch`
 
  Apply named input writes to several entities as one validated fixed-tick transaction.
+ Available on authoritative simulation hosts, or exclusively local embodiments.
+ Shared client and authenticated network batches reject without mutation;
+ ordered network controls use single-target SetPorts, ReleasePort and ReleaseControl.
 
 - *defined in:* `crates/lunco-cosim-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `batches` | `Vec < PortInputBatch >` |  Every target whose ownership is required by the host authority gate. |
+| `batches` | `Vec < PortInputBatch >` |  Every endpoint participating in the atomic transaction and local authority checks. |
 | `producer_id` | `Option < u64 >` |  Stable producer identity for external producers admitted to session inputs. |
 
 ### `lunco-fmi` <a id="lunco-fmi"></a>
@@ -2804,6 +2864,92 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `qualified` | `String` |  Fully-qualified class path, for example  `Modelica.Blocks.Examples.PID_Controller`. |
 | `action` | `ClassAction` |  Whether to view or duplicate the class. |
+
+### `lunco-networking-sync` <a id="lunco-networking-sync"></a>
+
+#### `PromoteScenario`
+
+ Command: materialize the currently-loaded downloaded scenario into an
+ **editable** on-disk Twin at `folder`, add it to the workspace, and swap the
+ running scene to it. The counterpart to the default read-only consume — "keep
+ & edit this scenario". Empty `folder` = a GUI should present a folder picker
+ first. Native-only in effect: web has no ambient folder filesystem (File
+ System Access is a TODO); the wasm path logs and no-ops.
+
+ Local action (not networked) — it promotes *this* peer's local download.
+
+- *defined in:* `crates/lunco-networking-sync/src/scenario_sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `folder` | `String` |  Target folder that becomes the new Twin's root. |
+
+#### `SetAllowFreeMovement`
+
+ Set Allow Free Movement command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetFollowMode`
+
+ Set Follow Mode command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetFollowOptIn`
+
+ Set Follow Opt-In command: local consent to be locked by a broadcasting tutor.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetObserveMode`
+
+ Set Observe Mode command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetTargetClient`
+
+ Set Target Client command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Option < u64 >` |   |
+
+#### `SetTeachMode`
+
+ Set Teach Mode command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SharePerspective`
+
+ Share Perspective command (Look-At).
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+- *fields:* none — call with `SharePerspective` (no params)
 
 ### `lunco-notifications-core` <a id="lunco-notifications-core"></a>
 
@@ -4572,7 +4718,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 306 commands from the runtime schema; scanned 1073 .rs files for docs (0 parse failure(s) skipped).
+<!-- 317 commands from the runtime schema; scanned 1077 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetVisualLead, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

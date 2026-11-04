@@ -1037,68 +1037,74 @@ fn lead_owned_rover_render(
     }
 }
 
-/// HOST (FixedFirst): apply EXACTLY ONE buffered client input per fixed tick, in
-/// seq order, to each remote-owned rover — so the host integrates the same input
-/// sequence one-input-per-physics-step as the owning client predicted with. Without
-/// this the host applied forwarded `SetPorts` at render cadence (`on_set_ports` in
-/// `Update`, port-latched), so its rover saw a DIFFERENT number of drive steps than
-/// the client's local prediction → the two deterministic sims diverged → the
-/// reconcile had to fight it (the wobble). Runs before the drive reads the ports;
-/// `on_set_ports`' later `Update` write is harmlessly overwritten next tick (the
-/// consumer latches the last input, so it stays the port authority). Host-only.
-fn apply_buffered_client_inputs(
-    role: Res<lunco_core_session::NetworkRole>,
-    mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
-    registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    ports: Res<lunco_port_core::ports::PortRegistry>,
-    // The reconcile ack is stamped HERE, from the seq this tick actually integrated
-    // (review N2) — see the comment in the loop.
-    sessions: Res<lunco_core_session::SessionRegistry>,
-    mut applied: ResMut<lunco_core_session::AppliedInputSeq>,
-    mut commands: Commands,
-) {
-    if !role.is_host() {
+/// Commit one earliest authenticated action per vessel and fixed tick.
+/// The co-simulation owner applies both backend values and persistent holds;
+/// the acknowledgement advances only after that whole action succeeds.
+pub fn apply_buffered_client_inputs(world: &mut World) {
+    if world.resource::<lunco_core_session::NetworkRole>() != &lunco_core_session::NetworkRole::Host
+    {
         return;
     }
-    for gid in buffered_input_targets(&buf) {
-        let Some(writes) = buf.next_for_tick(gid, 8) else {
-            continue;
-        };
-        // THE ACK (review N2). `next_for_tick` advanced the per-gid cursor by at most
-        // ONE seq — the input this fixed tick will integrate — so the cursor is the
-        // honest "how far the authoritative sim has consumed your input" watermark.
-        // Stamped even if the entity fails to resolve below: the input was consumed
-        // either way, and a stalled ack would strand the owner's reconcile.
-        // `record` also re-keys the slot to the current owner and rejects an
-        // implausible seq (review N1).
-        applied.record(gid, sessions.owner_of(gid), buf.cursor(gid));
-        let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(gid)) else {
-            continue;
-        };
-        let reg = ports.clone();
-        commands.queue(move |world: &mut World| {
-            for (port, value) in &writes {
-                if let Err(error) = reg.write_port(world, e, port, *value) {
-                    warn!("remote input for entity {gid} port `{port}` was rejected: {error}");
-                }
-            }
-        });
-    }
-}
-
-/// Return each vessel with a pending or latched remote frame once, in stable
-/// global-identity order. These writes enter the same fixed-step boundary; hash
-/// iteration must not decide their command-queue order.
-fn buffered_input_targets(buf: &lunco_core_session::BufferedClientInputs) -> Vec<u64> {
-    let mut gids = buf
+    let mut gids = world
+        .resource::<lunco_core_session::BufferedClientInputs>()
         .pending
         .keys()
-        .chain(buf.last_writes.keys())
         .copied()
         .collect::<Vec<_>>();
     gids.sort_unstable();
-    gids.dedup();
-    gids
+    for gid in gids {
+        let Some(frame) = world
+            .resource::<lunco_core_session::BufferedClientInputs>()
+            .peek_for_tick(gid)
+            .cloned()
+        else {
+            continue;
+        };
+        let target = world
+            .resource::<lunco_api::registry::ApiEntityRegistry>()
+            .resolve(&lunco_core::GlobalEntityId::from_raw(gid));
+        let result = target
+            .ok_or_else(|| format!("network input target {gid} no longer exists"))
+            .and_then(|target| lunco_cosim::apply_network_control_frame(world, target, &frame));
+        if let Err(detail) = result {
+            reject_control_frame(world, gid, detail);
+            return;
+        }
+        if let Err(detail) = world
+            .resource_mut::<lunco_core_session::BufferedClientInputs>()
+            .commit(gid, frame.seq)
+        {
+            reject_control_frame(world, gid, detail);
+            return;
+        }
+        world
+            .resource_mut::<lunco_core_session::AppliedInputSeq>()
+            .record(gid, Some(frame.producer), frame.seq);
+    }
+}
+
+fn reject_control_frame(world: &mut World, gid: u64, detail: String) {
+    let message = format!("control frame for {gid} rejected: {detail}");
+    world.trigger(lunco_core::RuntimeError {
+        name: "network-control-frame".into(),
+        message: message.clone(),
+    });
+    if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+        faults.raise(
+            "network-control-frame-invalid",
+            None,
+            "network input",
+            message,
+        );
+    }
+    if let Some(mut holds) = world.get_resource_mut::<lunco_physics::PhysicsHolds>() {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+    }
+    if let Some(mut time) = world.get_resource_mut::<Time<Physics>>() {
+        use lunco_physics::PhysicsTime;
+        time.pause();
+        time.advance_by(std::time::Duration::ZERO);
+    }
 }
 
 /// Cap on the predicted-state history ring (~2 s at 60 Hz). Only the recent tail
@@ -1353,18 +1359,10 @@ fn collect_assembly_links(
 /// (`RollbackReplay`), then step `PhysicsSchedule` by the fixed delta.
 fn replay_one_tick(
     world: &mut World,
-    ports: &lunco_port_core::ports::PortRegistry,
     chassis: Entity,
     input: &lunco_core_session::InputFrame,
-) {
-    // Feed the RECORDED setpoints by writing the ports directly. Deliberately
-    // NOT a `SetPorts` trigger: that would fire `record_control_input`, re-logging
-    // an input we are merely re-simulating (and bumping host ack bookkeeping).
-    for (name, value) in &input.writes {
-        if let Err(error) = ports.write_port(world, chassis, name, *value) {
-            warn!("recorded prediction input `{name}` was rejected during replay: {error}");
-        }
-    }
+) -> Result<(), String> {
+    lunco_cosim::replay_control_frame(world, chassis, input)?;
 
     let dt = world.resource::<Time<Fixed>>().delta();
 
@@ -1381,6 +1379,7 @@ fn replay_one_tick(
         .advance_by(dt.div_f64(substeps as f64));
     *world.resource_mut::<Time>() = world.resource::<Time<Physics>>().as_generic();
     world.run_schedule(PhysicsSchedule);
+    Ok(())
 }
 
 /// **Deterministic rollback reconciliation** for the owned, locally-predicted rover.
@@ -1544,9 +1543,6 @@ pub fn rollback_owned_prediction(world: &mut World) {
             }
 
             let steps = unacked.len().min(MAX_REPLAY_STEPS);
-            let ports = world
-                .resource::<lunco_port_core::ports::PortRegistry>()
-                .clone();
             if !apply_states(world, &restore) {
                 return;
             }
@@ -1555,7 +1551,14 @@ pub fn rollback_owned_prediction(world: &mut World) {
                 .resource_mut::<lunco_core_runtime::RollbackInProgress>()
                 .0 = true;
             for input in unacked.iter().take(steps) {
-                replay_one_tick(world, &ports, chassis, input);
+                if let Err(detail) = replay_one_tick(world, chassis, input) {
+                    world
+                        .resource_mut::<lunco_core_runtime::RollbackInProgress>()
+                        .0 = false;
+                    *world.resource_mut::<Time>() = saved_time;
+                    reject_control_frame(world, gid, detail);
+                    return;
+                }
             }
             // Put the frozen world back exactly as it was (they moved under gravity /
             // their own velocity during the replay steps).
@@ -2535,7 +2538,14 @@ impl Plugin for NetcodePredictionPlugin {
         // HOST: apply one buffered client input per fixed tick BEFORE the drive
         // reads the ports, so the host steps the client's input sequence in lockstep
         // (the divergence fix behind proper prediction+reconciliation).
-        app.add_systems(FixedFirst, apply_buffered_client_inputs);
+        app.add_systems(
+            FixedUpdate,
+            apply_buffered_client_inputs
+                .after(lunco_core_runtime::SimTickSet)
+                .after(lunco_core_session::SessionInputCommitSet)
+                .before(lunco_core_runtime::ControlDacSet)
+                .run_if(lunco_core_runtime::not_rolling_back),
+        );
         // Visual prediction (`LUNCO_VISUAL_PREDICT=1`): lead the owned rover's
         // RENDERED pose in `Last` — after ALL transform propagation (incl.
         // big_space), before render extraction — so physics stays authoritative
@@ -2691,18 +2701,21 @@ mod tests {
     }
 
     #[test]
-    fn buffered_input_targets_use_stable_global_identity_order() {
+    fn buffered_control_frames_commit_in_stable_target_order_once() {
         #[derive(Resource, Default)]
         struct AppliedTargets(Vec<u64>);
-
         let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(lunco_cosim::CoSimPlugin);
         app.insert_resource(NetworkRole::Host)
-            .insert_resource(BufferedClientInputs::default())
+            .init_resource::<BufferedClientInputs>()
             .init_resource::<lunco_core_session::AppliedInputSeq>()
             .init_resource::<lunco_core_session::SessionRegistry>()
             .init_resource::<lunco_api::registry::ApiEntityRegistry>()
             .init_resource::<lunco_port_core::ports::PortRegistry>()
             .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
+            .init_resource::<lunco_cosim_core::PortHolds>()
+            .init_resource::<lunco_cosim_core::CosimDiagnostics>()
             .init_resource::<AppliedTargets>();
         app.world_mut()
             .resource_mut::<lunco_port_core::ports::PortRegistry>()
@@ -2714,7 +2727,7 @@ mod tests {
                         out.declare("frame", lunco_port_core::ports::PortDirection::In, Some(0));
                     }
                 },
-                metadata: |_, _, _, direction, _slot| {
+                metadata: |_, _, _, direction, _| {
                     lunco_port_core::ports::PortMetadata::scalar(
                         direction,
                         None,
@@ -2729,19 +2742,17 @@ mod tests {
                 read_output: |_, _, _| None,
                 read_input: |_, _, _| None,
                 initial_expression: None,
-
                 read_slot: None,
                 read_input_slot: None,
-                write_slot: Some(|world, entity, slot, _value| {
-                    assert_eq!(slot, 0, "prepared prediction test slot is valid");
+                write_slot: Some(|world, entity, _, _| {
                     let gid = world
                         .get::<lunco_core::GlobalEntityId>(entity)
-                        .map(|gid| gid.get())
-                        .expect("prepared prediction target retains its stable identity");
+                        .unwrap()
+                        .get();
                     world.resource_mut::<AppliedTargets>().0.push(gid);
                 }),
             });
-
+        let producer = lunco_command_contracts::SessionId(7);
         for gid in [30, 10, 20, 5] {
             let entity = app
                 .world_mut()
@@ -2750,29 +2761,45 @@ mod tests {
             app.world_mut()
                 .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
                 .assign(entity, lunco_core::GlobalEntityId::from_raw(gid));
-        }
-        {
-            let mut inputs = app.world_mut().resource_mut::<BufferedClientInputs>();
-            inputs.pending.insert(
-                30,
-                [(1, vec![("frame".into(), 30.0)])].into_iter().collect(),
-            );
-            inputs.pending.insert(
-                10,
-                [(1, vec![("frame".into(), 10.0)])].into_iter().collect(),
-            );
-            inputs.pending.insert(
-                20,
-                [(1, vec![("frame".into(), 20.0)])].into_iter().collect(),
-            );
-            inputs.last_writes.insert(5, vec![("frame".into(), 5.0)]);
-            inputs.last_writes.insert(20, vec![("frame".into(), 20.0)]);
+            app.world_mut()
+                .resource_mut::<lunco_core_session::SessionRegistry>()
+                .claim(producer, gid)
+                .unwrap();
+            app.world_mut()
+                .resource_mut::<BufferedClientInputs>()
+                .push(
+                    gid,
+                    lunco_core_session::InputFrame {
+                        seq: 1,
+                        tick: 1,
+                        producer,
+                        action: lunco_core_session::PortControlAction::Writes(vec![(
+                            "frame".into(),
+                            gid as f64,
+                        )]),
+                        control_levels: Vec::new(),
+                        input_values: Vec::new(),
+                    },
+                )
+                .unwrap();
         }
         app.add_systems(FixedFirst, super::apply_buffered_client_inputs);
-
         app.world_mut().run_schedule(FixedFirst);
-
         assert_eq!(app.world().resource::<AppliedTargets>().0, [5, 10, 20, 30]);
+        for gid in [5, 10, 20, 30] {
+            assert_eq!(
+                app.world()
+                    .resource::<lunco_core_session::AppliedInputSeq>()
+                    .ack(gid),
+                1
+            );
+        }
+        app.world_mut().run_schedule(FixedFirst);
+        assert_eq!(
+            app.world().resource::<AppliedTargets>().0,
+            [5, 10, 20, 30],
+            "held values are not replayed by the network queue"
+        );
     }
 }
 

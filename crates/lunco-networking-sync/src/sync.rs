@@ -5,8 +5,9 @@
 //! compile or register it, so they carry no networking resources at all.
 //!
 //! Flow:
-//! - **capture** (`capture_command::<C>`, registered by [`DeclareChannelExt`]):
-//!   a global `On<C>` observer for each declared command. On a *client* it
+//! - **capture**: sequenced port controls consume co-simulation's committed
+//!   receipts; other declared commands use `capture_command::<C>`, registered
+//!   by [`DeclareChannelExt`]. On a client it
 //!   reflect-serializes the command (symmetric with the apply path), rewrites
 //!   local `Entity` refs → portable `GlobalEntityId` using the reflected command schema,
 //!   wraps a [`Mutation`], and pushes onto [`SyncOutbox`]. Suppressed for
@@ -32,7 +33,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
-use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
+use bevy::reflect::serde::TypedReflectSerializer;
 use big_space::prelude::{CellCoord, Grid};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -55,7 +56,7 @@ use lunco_api::executor::{
 };
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api_codec::{value_from_json, value_to_json};
-use lunco_api_core::{ApiValue, ApiValueDeserializer, api_value_from_serializable};
+use lunco_api_core::{ApiValue, api_value_from_serializable};
 use lunco_celestial::ReferenceFrame;
 use lunco_doc_bevy::JournalResource;
 pub use lunco_doc_bevy::{Presence, PresenceInfo, UserId};
@@ -232,23 +233,19 @@ pub struct DespawnReplicationMsg {
     pub gid: u64,
 }
 
-/// The wire-format version, checked in the handshake (review N4).
-///
-/// **Why this exists.** The envelope codec is `bincode` — positional and NOT
-/// self-describing. A peer built against a different field layout does not fail to
-/// decode; it decodes *wrong*, field-for-field. A stale cached wasm bundle against
-/// a fresh host mis-reads `SnapshotEntry` and applies garbage coordinates — every
-/// body teleports silently, with no error anywhere. The enum-discriminant tests
-/// below lock variant ORDER; nothing detected field-layout skew until this.
-///
-/// **BUMP THIS whenever any wire type's field layout changes** — a field added,
-/// removed, reordered, or retyped in `SyncEnvelope` or anything it transitively
-/// contains. Appending a new `SyncEnvelope` *variant* at the end is the one
-/// backward-compatible edit and does not require a bump (see the note on the enum).
-///
-/// The handshake is the host's first reliable message, so a mismatched peer is
-/// rejected before it can apply a single snapshot.
-pub const WIRE_VERSION: u32 = 6;
+/// Current positional codec and ordered-control contract.
+/// Bump for wire shape or semantics changes, including command input ordering.
+/// Only this exact version may enter a session.
+pub const WIRE_VERSION: u32 = 7;
+
+fn validate_wire_version(version: u32) -> Result<(), String> {
+    if version != WIRE_VERSION {
+        return Err(format!(
+            "wire version {version} is unsupported; expected {WIRE_VERSION}; session refused"
+        ));
+    }
+    Ok(())
+}
 
 /// Host → a freshly-connected client: the **wire version**, the **server-assigned**
 /// session id, the connection-bound journal author, and the current tick. The
@@ -833,7 +830,8 @@ pub struct SyncCommandEvent {
 // ── Channel declaration + capture ─────────────────────────────────────────────
 
 /// Declare which [`SyncChannel`] a command type rides, and (unless `Local`)
-/// register its capture observer. Called by `lunco-networking` for each
+/// register its capture path. Sequenced port controls capture committed owner
+/// receipts; other commands capture the typed event. Called by `lunco-networking` for each
 /// networked command (e.g. `SetPorts` → `ControlStream`, `AcquireControl` →
 /// `CommandBus`). No-op-on-the-wire commands need not be declared.
 pub trait DeclareChannelExt {
@@ -853,12 +851,85 @@ impl DeclareChannelExt for App {
         self.world_mut()
             .resource_mut::<SyncChannelRegistry>()
             .0
-            .insert(name, channel);
-        if channel != SyncChannel::Local {
+            .insert(name.clone(), channel);
+        if channel != SyncChannel::Local && !is_sequenced_port_control(&name) {
             self.add_observer(capture_command::<C>);
         }
         self
     }
+}
+
+fn is_sequenced_port_control(type_name: &str) -> bool {
+    matches!(type_name, "SetPorts" | "ReleasePort" | "ReleaseControl")
+}
+
+/// Replicate only an action accepted at the local co-simulation boundary.
+/// The producer session and dense sequence are assigned by that owner.
+fn capture_port_control(
+    trigger: On<lunco_core_session::PortControlCommitted>,
+    role: Res<NetworkRole>,
+    local: Res<LocalSession>,
+    entities: Res<ApiEntityRegistry>,
+    channels: Res<SyncChannelRegistry>,
+    mut outbox: ResMut<SyncOutbox>,
+) {
+    if *role != NetworkRole::Client {
+        return;
+    }
+    let receipt = trigger.event();
+    if receipt.frame.producer != local.0 {
+        return;
+    }
+    let Some(gid) = entities.api_id_for(receipt.target) else {
+        warn!("[sync] committed control target has no stable API identity");
+        return;
+    };
+    use lunco_core_session::PortControlAction;
+    let (type_name, mut fields) = match &receipt.frame.action {
+        PortControlAction::Writes(writes) => (
+            "SetPorts",
+            vec![(
+                "writes",
+                ApiValue::Array(
+                    writes
+                        .iter()
+                        .map(|(name, value)| {
+                            ApiValue::Array(vec![ApiValue::str(name), ApiValue::Float(*value)])
+                        })
+                        .collect(),
+                ),
+            )],
+        ),
+        PortControlAction::ReleasePort(name) => {
+            ("ReleasePort", vec![("name", ApiValue::str(name))])
+        }
+        PortControlAction::ReleaseControl => ("ReleaseControl", Vec::new()),
+    };
+    fields.extend([
+        ("target", ApiValue::UInt(gid.get())),
+        ("seq", ApiValue::UInt(u64::from(receipt.frame.seq))),
+        ("tick", ApiValue::UInt(receipt.frame.tick)),
+        ("producer_id", ApiValue::Unit),
+    ]);
+    let Some(&channel) = channels.0.get(type_name) else {
+        warn!("[sync] committed control command {type_name} has no declared channel");
+        return;
+    };
+    let data = match value_to_json(&ApiValue::map(fields))
+        .and_then(|value| serde_json::to_string(&value).map_err(|error| error.to_string()))
+    {
+        Ok(data) => data,
+        Err(error) => {
+            warn!("[sync] committed control encode failed: {error}");
+            return;
+        }
+    };
+    let mut mutation = Mutation::local(SyncCommand {
+        type_name: type_name.to_owned(),
+        data,
+    });
+    mutation.origin = local.0;
+    outbox.0.push((channel, SyncEnvelope::Command(mutation)));
 }
 
 /// Global `On<C>` observer: serialize a locally-originated command and enqueue
@@ -922,6 +993,14 @@ fn capture_command<C: Event + Reflect + TypePath>(
         return;
     }
     drop(type_reg);
+    // The authenticated peer session owns network producer identity.
+    if is_control_command(&type_name)
+        && let ApiValue::Map(fields) = &mut data
+    {
+        if let Some((_, value)) = fields.iter_mut().find(|(name, _)| name == "producer_id") {
+            *value = ApiValue::Unit;
+        }
+    }
 
     // JSON is the network protocol representation; in-memory command events
     // retain the typed value and never carry serde_json::Value.
@@ -946,7 +1025,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
 /// the end of a frame's batch so a possession that arrives alongside them is
 /// recorded first (see [`drain_sync_inbox`]).
 fn is_control_command(type_name: &str) -> bool {
-    matches!(type_name, "SetPorts" | "SetPortsBatch" | "ReleaseControl")
+    matches!(type_name, "SetPorts" | "ReleasePort" | "ReleaseControl")
 }
 
 fn is_declared_wire_command(channels: &SyncChannelRegistry, type_name: &str) -> bool {
@@ -1091,38 +1170,30 @@ pub fn apply_sync_command(
                 return;
             }
         }
-        let deserializer = TypedReflectDeserializer::new(registration, &type_reg);
-        use serde::de::DeserializeSeed;
-        let reflected = match deserializer.deserialize(ApiValueDeserializer::new(params)) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("[sync] deserialize '{type_name}' failed: {e}");
-                return;
-            }
-        };
-        // Guard against a panic in `ReflectEvent::trigger`: it builds the concrete
-        // type via `FromReflect`, falling back to `Default`/`FromWorld` and
-        // PANICKING when none apply (e.g. a struct still missing a no-`Default`
-        // field). Verify the value is fully constructible first so a malformed
-        // *wire* command logs and is dropped instead of killing the host. Mirrors
-        // the same guard in `lunco-api`'s `api_command_dispatcher`. A command
-        // without a registered constructor is not safe to trigger and is dropped.
-        let constructible = registration
-            .data::<bevy::reflect::ReflectFromReflect>()
-            .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
-        if !constructible {
-            warn!("[sync] command '{type_name}' not constructible from params (missing/invalid fields); dropped");
-            return;
-        }
+        let reflected =
+            match lunco_api::deserialize_command_params_value(params, registration, &type_reg) {
+                Ok(reflected) => reflected,
+                Err(error) => {
+                    warn!("[sync] invalid command '{type_name}': {error}");
+                    return;
+                }
+            };
         // Guard set → the capture observer for this command suppresses the echo,
         // and possession skips local camera-bind for a remote origin. Set/clear is
         // balanced without RAII: every early `return` above happens *before* the set,
         // and the only step between set and clear is `trigger` itself — whose sole
         // panic source (`FromReflect`) is pre-checked above, and any panic in Bevy's
         // command queue aborts the process anyway, so a stuck guard can't outlive it.
+        let previous_command = world.resource::<lunco_core::ActiveCommandId>().clone();
+        world
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set_origin(Some(lunco_core::CommandOrigin::Network {
+                session_id: origin,
+            }));
         world.resource_mut::<SyncApplyGuard>().0 = Some(origin);
         reflect_event.trigger(world, reflected.as_ref(), &type_reg);
         world.resource_mut::<SyncApplyGuard>().0 = None;
+        *world.resource_mut::<lunco_core::ActiveCommandId>() = previous_command;
     });
 }
 
@@ -1445,21 +1516,10 @@ pub fn drain_sync_inbox(
             }
             SyncEnvelope::Handshake(h) => {
                 if !role.is_host() {
-                    // WIRE-VERSION GATE (review N4). bincode is positional: a peer
-                    // built against a different field layout decodes every later
-                    // message WRONG rather than failing — a mis-read `cell` times
-                    // `cell_edge` teleports every body by kilometres. Refuse the
-                    // session loudly instead of rendering a corrupt world. The
-                    // handshake is the first reliable message, so nothing has been
-                    // applied yet.
-                    if h.wire_version != WIRE_VERSION {
-                        error!(
-                            "[net] WIRE VERSION MISMATCH — host speaks v{}, this build speaks v{}. \
-                             Refusing the session: the codec is positional, so continuing would \
-                             silently mis-decode every snapshot (bodies teleporting by kilometres). \
-                             Update the client (a stale cached web bundle is the usual cause).",
-                            h.wire_version, WIRE_VERSION
-                        );
+                    // Require the exact codec and ordered-control contract
+                    // before admitting this connection's state or commands.
+                    if let Err(message) = validate_wire_version(h.wire_version) {
+                        error!("[net] {message}");
                         commands.trigger(lunco_core_session::NetDisconnectRequest {});
                         break;
                     }
@@ -3707,6 +3767,8 @@ impl Plugin for SyncPlugin {
         // LunCoCoreSessionPlugin (lunco-core-session), never here. SyncPlugin is
         // behind the `networking` feature, so initializing substrate here panics
         // single-player builds.
+        app.init_resource::<lunco_core::ActiveCommandId>();
+        app.add_observer(capture_port_control);
         app.init_resource::<SyncOutbox>()
             .init_resource::<SyncInbox>()
             .init_resource::<SyncDedup>()
@@ -4167,18 +4229,13 @@ mod codec_roundtrip {
             _ => panic!("wrong variant after round-trip"),
         }
 
-        // A peer from a different build is refused rather than mis-decoding forever.
-        let stale = HandshakeMsg {
-            session: 1,
-            tick: 0,
-            journal_author: "net-session-0000000000000001".into(),
-            wire_version: WIRE_VERSION - 1,
-        };
-        assert_ne!(
-            stale.wire_version, WIRE_VERSION,
-            "a version-skewed handshake must be distinguishable — this is the check \
-             `drain_sync_inbox` makes before it applies a single message"
-        );
+        assert!(super::validate_wire_version(WIRE_VERSION).is_ok());
+        for version in [0, WIRE_VERSION - 1, WIRE_VERSION + 1, u32::MAX] {
+            let error = super::validate_wire_version(version).unwrap_err();
+            assert!(error.contains(&format!(
+                "wire version {version} is unsupported; expected {WIRE_VERSION}"
+            )));
+        }
     }
 
     #[test]

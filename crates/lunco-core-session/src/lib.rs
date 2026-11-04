@@ -33,6 +33,7 @@ impl Plugin for LunCoCoreSessionPlugin {
             .init_resource::<SessionProfiles>()
             .init_resource::<SessionRbac>()
             .init_resource::<CommandPolicyRegistry>()
+            .init_resource::<ControlPathRegistry>()
             .init_resource::<PendingReplicatedSpawns>()
             .init_resource::<PendingSessionInputs>()
             .init_resource::<OwnedInputLog>()
@@ -72,7 +73,6 @@ fn reset_session_scene_state(
     owned.0.clear();
     buffered.pending.clear();
     buffered.applied.clear();
-    buffered.last_writes.clear();
     local_drive.0.clear();
     applied.retain_gids(|_| false);
     pending_session_inputs.clear();
@@ -88,7 +88,16 @@ pub fn sync_applied_seq_owners(
     if !role.is_host() || !registry.is_changed() {
         return;
     }
-    for gid in applied.changed_owner_gids(&registry) {
+    let mut changed = applied.changed_owner_gids(&registry);
+    changed.extend(buffered.pending.iter().filter_map(|(&gid, frames)| {
+        frames
+            .values()
+            .any(|frame| registry.owner_of(gid) != Some(frame.producer))
+            .then_some(gid)
+    }));
+    changed.sort_unstable();
+    changed.dedup();
+    for gid in changed {
         buffered.clear_gid(gid);
     }
     applied.sync_owners(&registry);
@@ -197,11 +206,20 @@ mod tests {
             .resource_mut::<OwnedInputLog>()
             .0
             .insert(1, VesselInputLog::default());
-        app.world_mut().resource_mut::<BufferedClientInputs>().push(
-            1,
-            1,
-            vec![("throttle".into(), 1.0)],
-        );
+        app.world_mut()
+            .resource_mut::<BufferedClientInputs>()
+            .push(
+                1,
+                InputFrame {
+                    seq: 1,
+                    tick: 1,
+                    producer: lunco_command_contracts::SessionId::LOCAL,
+                    action: PortControlAction::Writes(vec![("throttle".into(), 1.0)]),
+                    control_levels: Vec::new(),
+                    input_values: Vec::new(),
+                },
+            )
+            .unwrap();
         app.world_mut()
             .resource_mut::<LocalDriveInput>()
             .0
@@ -234,7 +252,6 @@ mod tests {
         let buffered = app.world().resource::<BufferedClientInputs>();
         assert!(buffered.pending.is_empty());
         assert!(buffered.applied.is_empty());
-        assert!(buffered.last_writes.is_empty());
         assert!(app.world().resource::<LocalDriveInput>().0.is_empty());
         assert!(app.world().resource::<AppliedInputSeq>().is_empty());
         assert!(app.world().resource::<PendingSessionInputs>().is_empty());

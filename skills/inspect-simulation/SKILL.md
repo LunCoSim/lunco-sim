@@ -180,6 +180,15 @@ Native force and torque inputs must fit their published native range; a finite
 Run `LUNCOSIM_BIN=target/debug/luncosim python3 scripts/api/test_simulation_core_contracts.py`
 for the focused production gates: command decoding, mass tensors, mount
 precision, input priority, parameter replacement and terminal admission errors.
+`scripts/api/test_simulation_core_second_pass.py` adds authored gates for live
+stage-unit rejection, invalid native mass/inertia, retired held endpoints,
+actuator axes, compound transforms, USD mass precedence, wheel mass resync, and
+API numeric/identity rejection. Its physical edits use unsaved typed document
+operations and verify source preservation. Invalid mass reports
+`usd-rigid-body-mass-invalid` with the prim, property and rejected value;
+invalid live conventions retain the admitted body and report
+`usd-stage-projection-reset`. Both stop integration and reach Recent Events
+through the shared runtime-fault status bridge.
 For `cosim-joint-effort-order-invalid`, inspect the affected joint's
 `PhysicsOrderKey`: the effort owner rejects missing/empty/duplicate identity
 before applying any torque or feedback update.

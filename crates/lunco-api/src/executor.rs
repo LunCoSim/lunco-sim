@@ -142,8 +142,6 @@ pub fn validate_command_params_value(
     type_reg: &TypeRegistry,
     entities: &ApiEntityRegistry,
 ) -> Result<(), String> {
-    use serde::de::DeserializeSeed;
-
     let mut resolved = params.clone();
     if matches!(resolved, ApiValue::Unit) {
         resolved = ApiValue::Map(Vec::new());
@@ -151,19 +149,36 @@ pub fn validate_command_params_value(
     validate_reflection_value(&resolved)?;
     resolve_command_ids_value(&mut resolved, registration.type_id(), type_reg, entities)?;
 
-    let deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, type_reg);
-    let reflected = deserializer
-        .deserialize(ApiValueDeserializer::new(resolved))
-        .map_err(|error| format!("Command '{command}': invalid params: {error}"))?;
+    deserialize_command_params_value(resolved, registration, type_reg)
+        .map(|_| ())
+        .map_err(|error| format!("Command '{command}': invalid params: {error}"))
+}
+
+/// Construct a command from identity-resolved values at the shared API and
+/// peer admission boundary. Serde's buffered enum decoding can narrow numbers
+/// without calling the input's f32 visitor, so validate its concrete result too.
+pub fn deserialize_command_params_value(
+    params: ApiValue,
+    registration: &bevy::reflect::TypeRegistration,
+    type_reg: &TypeRegistry,
+) -> Result<Box<dyn bevy::reflect::PartialReflect>, String> {
+    use serde::de::DeserializeSeed;
+    validate_reflection_value(&params)?;
+    let reflected = bevy::reflect::serde::TypedReflectDeserializer::new(registration, type_reg)
+        .deserialize(ApiValueDeserializer::new(params))
+        .map_err(|error| error.to_string())?;
+    let serializer =
+        bevy::reflect::serde::TypedReflectSerializer::new(reflected.as_ref(), type_reg);
+    let concrete = api_value_from_serializable(&serializer)
+        .map_err(|error| format!("could not validate constructed command: {error}"))?;
+    validate_reflection_value(&concrete)?;
     let constructible = registration
         .data::<bevy::reflect::ReflectFromReflect>()
         .is_some_and(|from_reflect| from_reflect.from_reflect(reflected.as_ref()).is_some());
     if !constructible {
-        return Err(format!(
-            "Command '{command}': params are not constructible into the command type (a required field is missing or invalid)"
-        ));
+        return Err("params are not constructible into the command type (a required field is missing or invalid)".into());
     }
-    Ok(())
+    Ok(reflected)
 }
 
 fn record_rejected_command(
@@ -397,11 +412,7 @@ pub fn api_command_dispatcher(
     }
 
     // 3. Deserialize the typed value into the reflected struct.
-    let reflect_deserializer =
-        bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
-
-    use serde::de::DeserializeSeed;
-    match reflect_deserializer.deserialize(ApiValueDeserializer::new(resolved_params.clone())) {
+    match deserialize_command_params_value(resolved_params.clone(), registration, &type_reg) {
         Ok(_reflected) => {
             // 4. Trigger the event dynamically via commands.queue to access World
             let cmd_name = event.command.clone();
@@ -422,18 +433,21 @@ pub fn api_command_dispatcher(
                         return;
                     }
                 };
-                let Some(reflect_event) = registration.data::<bevy::ecs::reflect::ReflectEvent>() else {
-                    let message = format!("Command '{cmd_name}' has no reflected event registration");
+                let Some(reflect_event) = registration.data::<bevy::ecs::reflect::ReflectEvent>()
+                else {
+                    let message =
+                        format!("Command '{cmd_name}' has no reflected event registration");
                     warn!("[lunco-api] {message}");
                     record_rejected_command(world, cmd_id, message, correlation_id);
                     return;
                 };
 
                 // Re-deserialize inside the world queue where we have access to everything
-                let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
-                let reflected = match reflect_deserializer
-                    .deserialize(ApiValueDeserializer::new(resolved_params))
-                {
+                let reflected = match deserialize_command_params_value(
+                    resolved_params,
+                    registration,
+                    &type_reg,
+                ) {
                     Ok(r) => r,
                     Err(e) => {
                         let msg = format!("command '{cmd_name}': invalid params: {e}");
@@ -443,26 +457,6 @@ pub fn api_command_dispatcher(
                     }
                 };
                 {
-                    // Guard against a panic in `ReflectEvent::trigger`: it builds
-                    // the concrete type via `FromReflect`, falling back to
-                    // `Default`/`FromWorld` and panicking when none apply. Verify
-                    // the value is fully constructible first so malformed
-                    // commands are logged and dropped instead of killing the
-                    // process. Types without a registered `ReflectFromReflect`
-                    // use Bevy's normal reflected-event path.
-                    let constructible = registration
-                        .data::<bevy::reflect::ReflectFromReflect>()
-                        .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
-                    if !constructible {
-                        let msg = format!(
-                            "command '{cmd_name}' not constructible from params (missing/invalid fields)"
-                        );
-                        warn!("[lunco-api] {msg}; dropped");
-                        // Record a terminal internal outcome for scripts and
-                        // in-process result handlers.
-                        record_rejected_command(world, cmd_id, msg, correlation_id);
-                        return;
-                    }
                     // Scope the command id and producer origin around the
                     // reflected trigger so result and occurrence observers can
                     // retain those facts. Observers run synchronously inside
@@ -474,10 +468,16 @@ pub fn api_command_dispatcher(
                         .get_resource::<DeferredCommands>()
                         .is_some_and(|commands| commands.contains(registration.type_id()));
                     if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
-                        pending.correlation_id = if deferred { correlation_id.unwrap_or(0) } else { 0 };
+                        pending.correlation_id = if deferred {
+                            correlation_id.unwrap_or(0)
+                        } else {
+                            0
+                        };
                     }
                     reflect_event.trigger(world, reflected.as_ref(), &type_reg);
-                    world.resource_mut::<lunco_core::ActiveCommandId>().set(None);
+                    world
+                        .resource_mut::<lunco_core::ActiveCommandId>()
+                        .set(None);
                     // The pending correlation is a per-dispatch handoff to a
                     // deferred command handler. Clear it immediately after
                     // the reflected event so a later in-process trigger cannot
@@ -488,8 +488,13 @@ pub fn api_command_dispatcher(
                     let admission_failed = world
                         .get_resource::<lunco_core::CommandResults>()
                         .and_then(|results| results.get(cmd_id))
-                        .is_some_and(|outcome| matches!(outcome,
-                            lunco_core::CommandOutcome::Rejected(_) | lunco_core::CommandOutcome::Failed(_)));
+                        .is_some_and(|outcome| {
+                            matches!(
+                                outcome,
+                                lunco_core::CommandOutcome::Rejected(_)
+                                    | lunco_core::CommandOutcome::Failed(_)
+                            )
+                        });
                     if !deferred || admission_failed {
                         emit_command_response(world, correlation_id, cmd_id);
                     }
@@ -697,25 +702,30 @@ fn convert_value_node(
     if type_id == TypeId::of::<Entity>() {
         match direction {
             EntityIdDirection::Resolve => {
-                if let Some(gid) = api_value_u64(value) {
-                    if let Some(entity) =
-                        entities.resolve(&lunco_core::GlobalEntityId::from_raw(gid))
-                    {
-                        *value = api_value_from_u64(entity.to_bits());
-                    }
+                let gid = api_value_u64(value)
+                    .ok_or_else(|| "entity reference must be an unsigned global ID".to_owned())?;
+                if sync_local {
+                    *value = api_value_from_u64(Entity::PLACEHOLDER.to_bits());
+                } else {
+                    let entity = entities
+                        .resolve(&lunco_core::GlobalEntityId::from_raw(gid))
+                        .ok_or_else(|| format!("unknown global entity ID {gid}"))?;
+                    *value = api_value_from_u64(entity.to_bits());
                 }
             }
             EntityIdDirection::Globalize if sync_local => {
                 *value = api_value_from_u64(Entity::PLACEHOLDER.to_bits());
             }
             EntityIdDirection::Globalize => {
-                if let Some(bits) = api_value_u64(value) {
-                    if let Some(entity) = Entity::try_from_bits(bits) {
-                        if let Some(gid) = entities.api_id_for(entity) {
-                            *value = api_value_from_u64(gid.get());
-                        }
-                    }
-                }
+                let bits = api_value_u64(value).ok_or_else(|| {
+                    "entity reference must contain unsigned entity bits".to_owned()
+                })?;
+                let entity = Entity::try_from_bits(bits)
+                    .ok_or_else(|| format!("invalid local entity bits {bits}"))?;
+                let gid = entities
+                    .api_id_for(entity)
+                    .ok_or_else(|| format!("entity {entity:?} has no global identity"))?;
+                *value = api_value_from_u64(gid.get());
             }
         }
         return Ok(());
@@ -1304,6 +1314,27 @@ mod tests {
         pub operations: Vec<NestedCommandOperation>,
     }
 
+    #[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+    #[reflect(Serialize, Deserialize)]
+    #[serde(tag = "kind")]
+    enum NumericGraphic {
+        Text { font_size: f32 },
+    }
+
+    #[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+    #[reflect(opaque)]
+    struct NumericOpaque {
+        value: f32,
+    }
+
+    #[Command]
+    struct TestNumericCommand {
+        pub x: f32,
+        pub graphics: Vec<NumericGraphic>,
+        pub position: Vec3,
+        pub opaque: NumericOpaque,
+    }
+
     #[derive(Reflect)]
     #[reflect(from_reflect = false)]
     struct NoConstructor {
@@ -1882,6 +1913,43 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn concrete_numeric_validation_covers_tagged_serde_and_opaque_vectors() {
+        let mut reg = TypeRegistry::new();
+        reg.register::<TestNumericCommand>();
+        let registration = reg.get_with_short_type_path("TestNumericCommand").unwrap();
+        let params = |x, font_size, position| {
+            api_value!({
+                "x": x,
+                "graphics": ApiValue::Array(vec![api_value!({"kind": "Text", "font_size": font_size})]),
+                "position": ApiValue::Array(vec![ApiValue::Float(position), ApiValue::Float(0.0), ApiValue::Float(0.0)]),
+                "opaque": api_value!({"value": 1.0}),
+            })
+        };
+        for (x, font, position) in [(1.0, 12.0, 0.0), (1e30, 1e30, 1e30)] {
+            validate_command_params_value(
+                "TestNumericCommand",
+                &params(x, font, position),
+                registration,
+                &reg,
+                &ApiEntityRegistry::default(),
+            )
+            .unwrap();
+        }
+        for (x, font, position) in [(1e300, 12.0, 0.0), (1.0, 1e300, 0.0), (1.0, 12.0, 1e300)] {
+            assert!(
+                validate_command_params_value(
+                    "TestNumericCommand",
+                    &params(x, font, position),
+                    registration,
+                    &reg,
+                    &ApiEntityRegistry::default()
+                )
+                .is_err()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1974,6 +2042,29 @@ mod id_codec_tests {
         assert_eq!(
             value.get("source"),
             Some(&api_value_from_u64(Entity::PLACEHOLDER.to_bits()))
+        );
+        resolve_command_ids_value(&mut value, TypeId::of::<TControl>(), &reg, &ent)
+            .expect("local-only placeholders do not require a global identity");
+        assert_eq!(value.get("target"), Some(&api_value_from_u64(e.to_bits())));
+    }
+
+    #[test]
+    fn unknown_identity_never_passes_through_as_local_entity_bits() {
+        let (reg, entities, entity, _) = setup();
+        let mut value = ApiValue::map([("target", api_value_from_u64(entity.to_bits()))]);
+        let error = resolve_command_ids_value(&mut value, TypeId::of::<TDrive>(), &reg, &entities)
+            .expect_err("local entity bits are not a global identity");
+        assert!(error.contains("unknown global entity ID"), "{error}");
+        let mut value = ApiValue::map([("target", api_value_from_u64(entity.to_bits()))]);
+        assert!(
+            globalize_command_ids_value(
+                &mut value,
+                TypeId::of::<TDrive>(),
+                &reg,
+                &ApiEntityRegistry::default()
+            )
+            .unwrap_err()
+            .contains("no global identity")
         );
     }
 

@@ -286,6 +286,22 @@ impl PortHolds {
             .expect("the proposed write supplies one hold layer")
     }
 
+    /// Controller levels owned by this endpoint, ordered by port name.
+    pub fn control_levels(&self, entity: Entity) -> Vec<(String, f64)> {
+        let mut levels = self
+            .holds
+            .get(&entity)
+            .into_iter()
+            .flat_map(|ports| {
+                ports
+                    .iter()
+                    .filter_map(|(name, hold)| hold.control.map(|value| (name.clone(), value)))
+            })
+            .collect::<Vec<_>>();
+        levels.sort_by(|left, right| left.0.cmp(&right.0));
+        levels
+    }
+
     /// Read one live intent by borrowed port name.
     #[inline]
     pub fn get(&self, entity: Entity, port: &str) -> Option<f64> {

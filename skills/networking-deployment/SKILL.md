@@ -16,6 +16,11 @@ replication runtime; the deployment guide owns service and TLS facts.
 - Build the required production target with the documented `networking` feature
   and use the resulting binary; do not infer network behavior from a GUI-only
   build.
+- Preserve the transport-only Lightyear composition in the workspace dependency:
+  LunCoSim owns typed snapshots, control-frame replay and interpolation. Do not
+  enable Lightyear's optional ECS replication, prediction or interpolation stack
+  alongside those owners. Native and browser peers use the same message/channel
+  registration contract.
 - Networking is explicit on every launcher: use `--host` or `--connect` only
   for an authorized network session. Headless desktop, scene tests and the
   dedicated launcher stay local otherwise. Follow the
@@ -32,6 +37,23 @@ replication runtime; the deployment guide owns service and TLS facts.
   [`scripts/run_host_client.sh`](../../scripts/run_host_client.sh) for the
   narrowest real host/client check. Give every controllable process an explicit
   free API port and clean up through the API `Exit` command.
+  The bounded smoke harness reserves its QUIC port and the following two API
+  ports, verifies process ownership, and verifies release when both peers exit.
+  It covers shared-client batch rejection, undeclared wire-batch refusal, ordered writes and reliable release,
+  delayed/invalid packet refusal, and replay preservation of authoritative state.
+  The harness commits an empty scene through the shared Clear lifecycle before
+  creating runtime fixtures, so session inputs have a real scene generation.
+- The current wire handshake and session-input archive are each version 7;
+  mismatched versions reject. Writes and releases use one per-vessel sequence.
+  Incoming packets only buffer; the fixed co-simulation owner commits the earliest
+  action once and acknowledges after success. Prediction and wire capture consume
+  committed receipts. Replay requires the enrolled control surface to match and
+  preserves unrelated pose/velocity state. Use the generic control-frame and
+  lifecycle tests before the real two-peer gate.
+- `SetPortsBatch` is an atomic authoritative simulation operation, with an
+  existing local-embodiment exemption only when every client target is local.
+  It has no network channel. Shared client and authenticated peer batches reject
+  before mutation; use single-target sequenced controls for network input.
 - Keep `--api` local unless the deployment contract explicitly requires a
   tunnel or authenticated remote boundary. Never expose the admin API merely
   to make WebTransport work.
@@ -54,6 +76,10 @@ replication runtime; the deployment guide owns service and TLS facts.
   cancellation, and prediction-buffer teardown at their generic owners. The
   scene-free `net_smoke` harness covers Application traffic; it does not prove
   Twin reload behavior. Use an owned host/client session for that acceptance.
+  The native client's initial Disconnected component is not a failed attempt:
+  the adapter installs its exact attempt lease after spawn and before Connect.
+  Cover initial publication, failed attempts, connected drops and replaced-client
+  callbacks with `client_attempt_lease_ignores_initial_state_and_retires_only_its_connection`.
 - Preserve `SyncInboxEntry` connection provenance through deferral and retry.
   Host journal replay reads `JournalIngressOrigins` rather than guessing an
   owner from retained history. Run status requires the immutable experiment

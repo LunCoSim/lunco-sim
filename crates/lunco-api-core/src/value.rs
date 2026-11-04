@@ -416,12 +416,19 @@ impl<'de> serde::de::Deserializer<'de> for ApiValueDeserializer {
     where
         V: serde::de::Visitor<'de>,
     {
-        match self.0 {
-            ApiValue::Int(value) => visitor.visit_f32(value as f32),
-            ApiValue::UInt(value) => visitor.visit_f32(value as f32),
-            ApiValue::Float(value) => visitor.visit_f32(value as f32),
-            value => Err(expected_api_value(&value, "a number")),
+        let value = match self.0 {
+            ApiValue::Int(value) => value as f64,
+            ApiValue::UInt(value) => value as f64,
+            ApiValue::Float(value) => value,
+            value => return Err(expected_api_value(&value, "a number")),
+        };
+        let narrowed = value as f32;
+        if !narrowed.is_finite() {
+            return Err(ApiValueError(format!(
+                "number {value} is outside the finite f32 range"
+            )));
         }
+        visitor.visit_f32(narrowed)
     }
 
     fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error>

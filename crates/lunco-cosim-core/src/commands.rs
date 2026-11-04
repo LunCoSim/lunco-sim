@@ -60,9 +60,12 @@ pub struct PortInputBatch {
 }
 
 /// Apply named input writes to several entities as one validated fixed-tick transaction.
+/// Available on authoritative simulation hosts, or exclusively local embodiments.
+/// Shared client and authenticated network batches reject without mutation;
+/// ordered network controls use single-target SetPorts, ReleasePort and ReleaseControl.
 #[Command]
 pub struct SetPortsBatch {
-    /// Every target whose ownership is required by the host authority gate.
+    /// Every endpoint participating in the atomic transaction and local authority checks.
     pub batches: Vec<PortInputBatch>,
     /// Stable producer identity for external producers admitted to session inputs.
     #[serde(default)]
@@ -78,6 +81,14 @@ pub struct ReleasePort {
     pub target: Entity,
     /// Input-port name.
     pub name: String,
+    /// Network input sequence; zero requests assignment at local commit.
+    #[serde(default)]
+    #[reflect(default)]
+    pub seq: u32,
+    /// Producer simulation tick; zero uses the local committed tick.
+    #[serde(default)]
+    #[reflect(default)]
+    pub tick: u64,
     /// Stable producer identity for API, actorless Rhai, and direct typed
     /// releases admitted to the session's next fixed tick. Internal releases
     /// omit this field because their cause is owned by another fixed-step or
@@ -94,6 +105,14 @@ pub struct ReleaseControl {
     /// The endpoint whose local input holds are released.
     #[authz_target]
     pub target: Entity,
+    /// Network input sequence; zero requests assignment at local commit.
+    #[serde(default)]
+    #[reflect(default)]
+    pub seq: u32,
+    /// Producer simulation tick; zero uses the local committed tick.
+    #[serde(default)]
+    #[reflect(default)]
+    pub tick: u64,
     /// Stable producer identity for external API, actorless Rhai, and direct
     /// typed releases admitted to the session's next fixed tick. Twin Rhai uses
     /// its stable actor identity and omits this field.

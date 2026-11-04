@@ -150,14 +150,12 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<DifferentialCoupling>()
             .register_type::<SuspensionPiston>()
             .register_type::<SuspensionSpring>()
-            .register_type::<RaycastWheelMassFolded>()
             .register_type::<WheelBodyMount>()
             .register_type::<RaycastMassContribution>()
             .add_observer(mark_wheel_ports_causal)
             .add_observer(mark_raycast_support_geometry_dirty)
             // A vehicle's mass must not depend on which `drivetrain` variant
-            // realizes its wheels. Ungated: this is a one-shot mass-property
-            // correction per chassis, not a force, so it must land even while
+            // realizes its wheels. Mass preparation must land even while
             // physics is held — a rover that spawns during a cinematic hold is
             // still the same rover.
             .add_systems(FixedUpdate, fold_raycast_wheel_mass)
@@ -418,11 +416,52 @@ where
         })
 }
 
-/// Marks a rigid-body carrier whose raycast-wheel mass has already been folded
-/// in, so the fold happens exactly once per carrier.
-#[derive(Component, Debug, Reflect)]
-#[reflect(Component)]
-pub struct RaycastWheelMassFolded;
+/// Independent carrier baseline and the last admitted ordered source set.
+/// Native aggregate overrides must never become their own next baseline.
+#[derive(Component, Debug, Clone)]
+pub struct ReducedMassState {
+    baseline: avian3d::parry::mass_properties::MassProperties,
+    sources: Vec<(Entity, avian3d::parry::mass_properties::MassProperties)>,
+    automatic: (bool, bool, bool),
+    geometry_owner: Option<lunco_physics::body_mass::BodyMassFromColliders>,
+    inputs: ReducedComputedInputs,
+}
+
+/// Computed co-simulation inputs are complete body properties, independent of
+/// the aggregate's native caches. A missing cache identifies that typed owner.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ReducedComputedInputs {
+    mass: Option<ComputedMass>,
+    inertia: Option<ComputedAngularInertia>,
+    center: Option<ComputedCenterOfMass>,
+}
+
+impl ReducedComputedInputs {
+    #[allow(clippy::too_many_arguments)]
+    fn read(
+        mass: Option<&Mass>,
+        computed_mass: Option<&ComputedMass>,
+        mass_override: bool,
+        inertia: Option<&AngularInertia>,
+        computed_inertia: Option<&ComputedAngularInertia>,
+        inertia_override: bool,
+        center: Option<&CenterOfMass>,
+        computed_center: Option<&ComputedCenterOfMass>,
+        center_override: bool,
+    ) -> Self {
+        Self {
+            mass: (mass_override && mass.is_none())
+                .then(|| computed_mass.copied())
+                .flatten(),
+            inertia: (inertia_override && inertia.is_none())
+                .then(|| computed_inertia.copied())
+                .flatten(),
+            center: (center_override && center.is_none())
+                .then(|| computed_center.copied())
+                .flatten(),
+        }
+    }
+}
 
 /// The authored rigid body that owns a wheel realization and the wheel's pose
 /// in that body's frame. USD hierarchy is allowed to contain non-body carrier
@@ -754,7 +793,7 @@ fn publish_raycast_wheel_contact_diagnostics(
     }
 }
 
-/// Fold reduced masses into their resolved rigid-body owner exactly once.
+/// Recompute reduced mass from an independent baseline when its source set changes.
 ///
 /// Parry reduces complete body-frame tensors and centres of mass in stable
 /// source order. A proxy wheel contributes its mass at the suspension mount;
@@ -773,8 +812,13 @@ pub fn fold_raycast_wheel_mass(
         Option<&lunco_physics::PhysicsOrderKey>,
     )>,
     q_contributions: Query<(Entity, &RaycastMassContribution)>,
+    changed_contributions: Query<Entity, Changed<RaycastMassContribution>>,
+    changed_mounts: Query<Entity, Changed<WheelBodyMount>>,
+    changed_keys: Query<Entity, Changed<lunco_physics::PhysicsOrderKey>>,
+    mut removed_keys: RemovedComponents<lunco_physics::PhysicsOrderKey>,
     mut q_body: Query<
         (
+            Entity,
             Option<&mut Mass>,
             Option<&ComputedMass>,
             Has<NoAutoMass>,
@@ -783,11 +827,11 @@ pub fn fold_raycast_wheel_mass(
             Option<&CenterOfMass>,
             Option<&ComputedCenterOfMass>,
             Option<&ComputedAngularInertia>,
+            Has<NoAutoCenterOfMass>,
+            Option<&ReducedMassState>,
+            Option<&lunco_physics::body_mass::BodyMassFromColliders>,
         ),
-        (
-            Without<RaycastWheelMassFolded>,
-            Or<(With<RigidBody>, With<Mass>, With<ComputedMass>)>,
-        ),
+        Or<(With<RigidBody>, With<Mass>, With<ComputedMass>)>,
     >,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -795,6 +839,69 @@ pub fn fold_raycast_wheel_mass(
 ) {
     use avian3d::parry::{mass_properties::MassProperties, math::Pose};
     use lunco_physics::body_mass::{checked_mass_properties, native_mass_properties};
+
+    // WheelRaycast also contains continuously updated spin/contact state.
+    // Compare only its physical mass to the admitted source, so settled ticks
+    // do not allocate, sort identities, or reconstruct tensors.
+    let source_count = q_wheels.iter().count() + q_contributions.iter().count();
+    let admitted_count: usize = q_body
+        .iter()
+        .filter_map(|(_, _, _, _, _, _, _, _, _, _, state, _)| {
+            state.map(|state| state.sources.len())
+        })
+        .sum();
+    let inputs_changed = q_body.iter().any(
+        |(
+            _,
+            mass,
+            computed_mass,
+            mass_override,
+            inertia,
+            inertia_override,
+            center,
+            computed_center,
+            computed_inertia,
+            center_override,
+            state,
+            _,
+        )| {
+            state.is_some_and(|state| {
+                state.inputs
+                    != ReducedComputedInputs::read(
+                        mass,
+                        computed_mass,
+                        mass_override,
+                        inertia,
+                        computed_inertia,
+                        inertia_override,
+                        center,
+                        computed_center,
+                        center_override,
+                    )
+            })
+        },
+    );
+    let keys_removed = removed_keys.read().count() != 0;
+    let changed = source_count != admitted_count
+        || inputs_changed
+        || !changed_contributions.is_empty()
+        || !changed_mounts.is_empty()
+        || !changed_keys.is_empty()
+        || keys_removed
+        || q_wheels.iter().any(|(entity, wheel, mount, _)| {
+            let Ok((_, _, _, _, _, _, _, _, _, _, Some(state), _)) = q_body.get(mount.body) else {
+                return true;
+            };
+            let Some((_, source)) = state.sources.iter().find(|(source, _)| *source == entity)
+            else {
+                return true;
+            };
+            source.inv_mass != wheel.mass.recip()
+                || source.local_com != mount.local.translation.as_dvec3()
+        });
+    if !changed {
+        return;
+    }
 
     let order = match lunco_physics::ordered_physics_entities(
         q_wheels
@@ -821,8 +928,10 @@ pub fn fold_raycast_wheel_mass(
     };
     let mut carriers = Vec::new();
     let mut pending = HashSet::new();
-    let mut additions_by_carrier =
-        std::collections::HashMap::<Entity, Vec<Result<MassProperties, &'static str>>>::new();
+    let mut additions_by_carrier = std::collections::HashMap::<
+        Entity,
+        Vec<(Entity, Result<MassProperties, &'static str>)>,
+    >::new();
     for entity in order {
         let (owner, contribution) = if let Ok((_, wheel, mount, _)) = q_wheels.get(entity) {
             if wheel.mass == 0.0 {
@@ -870,13 +979,21 @@ pub fn fold_raycast_wheel_mass(
         additions_by_carrier
             .entry(owner)
             .or_default()
-            .push(contribution);
+            .push((entity, contribution));
+    }
+    // Sources can be deleted or reparented. Carriers with no remaining source
+    // must still restore their independent baseline and native ownership.
+    for (entity, _, _, _, _, _, _, _, _, _, state, _) in q_body.iter() {
+        if state.is_some() && !carriers.contains(&entity) {
+            carriers.push(entity);
+        }
     }
     for carrier in carriers {
         if pending.contains(&carrier) {
             continue;
         }
         let Ok((
+            _,
             mass,
             computed_mass,
             mass_authored,
@@ -885,52 +1002,99 @@ pub fn fold_raycast_wheel_mass(
             com_override,
             com_computed,
             computed_inertia,
+            center_authored,
+            state,
+            geometry_owner,
         )) = q_body.get_mut(carrier)
         else {
             continue;
         };
-        let candidate = (|| {
-            let carrier_mass = if let Some(mass) = mass.as_deref().filter(|_| mass_authored) {
-                f64::from(mass.0)
-            } else {
-                f64::from(
-                    computed_mass
-                        .filter(|mass| mass.is_finite())
-                        .ok_or("carrier has no admitted mass baseline")?
-                        .value(),
-                )
-            };
-            let center = com_override
-                .map(|c| c.0.as_dvec3())
-                .or_else(|| com_computed.map(|c| c.0.as_dvec3()))
-                .ok_or("carrier has no admitted centre-of-mass baseline")?;
-            let (principal, frame) =
-                if let Some(inertia) = inertia.as_deref().filter(|_| inertia_authored) {
-                    (inertia.principal, inertia.local_frame)
-                } else {
-                    computed_inertia
-                        .filter(|inertia| inertia.is_finite())
-                        .ok_or("carrier has no admitted inertia baseline")?
-                        .principal_angular_inertia_with_local_frame()
-                };
-            if !frame.is_finite() || !frame.is_normalized() {
-                return Err("carrier has an invalid principal frame");
+        let inputs = ReducedComputedInputs::read(
+            mass.as_deref(),
+            computed_mass,
+            mass_authored,
+            inertia.as_deref(),
+            computed_inertia,
+            inertia_authored,
+            com_override,
+            com_computed,
+            center_authored,
+        );
+        let mass_authored = mass_authored && !geometry_owner.is_some_and(|owner| owner.mass);
+        let inertia_authored =
+            inertia_authored && !geometry_owner.is_some_and(|owner| owner.inertia);
+        let center_authored = center_authored && !geometry_owner.is_some_and(|owner| owner.center);
+        let sources = additions_by_carrier
+            .remove(&carrier)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(entity, properties)| properties.map(|properties| (entity, properties)))
+            .collect::<Result<Vec<_>, _>>();
+        if let (Some(state), Ok(sources)) = (state, &sources) {
+            if state.sources == *sources && state.inputs == inputs {
+                continue;
             }
-            let baseline = checked_mass_properties(
-                center,
-                carrier_mass,
-                principal.as_dvec3(),
-                frame.as_dquat().normalize(),
+        }
+        let candidate = (|| {
+            let sources = sources?;
+            let baseline = if let Some(state) = state {
+                state.baseline
+            } else {
+                let carrier_mass = if let Some(mass) = mass.as_deref().filter(|_| mass_authored) {
+                    f64::from(mass.0)
+                } else {
+                    f64::from(
+                        computed_mass
+                            .filter(|mass| mass.is_finite())
+                            .ok_or("carrier has no admitted mass baseline")?
+                            .value(),
+                    )
+                };
+                let center = com_override
+                    .map(|c| c.0.as_dvec3())
+                    .or_else(|| com_computed.map(|c| c.0.as_dvec3()))
+                    .ok_or("carrier has no admitted centre-of-mass baseline")?;
+                let (principal, frame) = if let Some(inertia) = inertia.as_deref() {
+                    (inertia.principal.as_dvec3(), inertia.local_frame.as_dquat())
+                } else {
+                    lunco_physics::body_mass::computed_inertia_principal_d(
+                        computed_inertia
+                            .filter(|inertia| inertia.is_finite())
+                            .ok_or("carrier has no admitted inertia baseline")?,
+                    )?
+                };
+                if !frame.is_finite() || !frame.is_normalized() {
+                    return Err("carrier has an invalid principal frame");
+                }
+                checked_mass_properties(center, carrier_mass, principal, frame.normalize())?
+            };
+            let mut total = lunco_physics::body_mass::sum_mass_properties(
+                std::iter::once(baseline).chain(sources.iter().map(|(_, properties)| *properties)),
             )?;
-            let additions = additions_by_carrier
-                .remove(&carrier)
-                .expect("carrier was collected with its contributions")
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?;
-            let total: MassProperties = std::iter::once(baseline).chain(additions).sum();
-            native_mass_properties(&total)
+            if let Some(mass) = inputs.mass {
+                let automatic_inertia = state
+                    .map(|state| state.automatic.1)
+                    .unwrap_or(!inertia_authored);
+                total.set_mass(
+                    f64::from(mass.value()),
+                    automatic_inertia && inputs.inertia.is_none(),
+                );
+            }
+            let (principal, frame) = if let Some(inertia) = inputs.inertia {
+                lunco_physics::body_mass::computed_inertia_principal_d(&inertia)?
+            } else {
+                (DVec3::ZERO, DQuat::IDENTITY)
+            };
+            let total = lunco_physics::body_mass::ColliderMassOverrides {
+                principal: inputs.inertia.map(|_| principal),
+                principal_axes: inputs.inertia.map(|_| frame),
+                center: inputs.center.map(|center| center.0.as_dvec3()),
+                ..default()
+            }
+            .apply(total)?;
+            native_mass_properties(&total).map(|native| (native, baseline, sources))
         })();
-        let (new_mass, new_inertia, new_center) = match candidate {
+        let ((new_mass, new_inertia, new_center), baseline, sources) = match candidate {
             Ok(candidate) => candidate,
             Err(detail) => {
                 if let Some(holds) = holds.as_deref_mut() {
@@ -953,23 +1117,72 @@ pub fn fold_raycast_wheel_mass(
                 return;
             }
         };
-        if let Some(mut mass) = mass {
-            *mass = new_mass;
-        } else {
-            commands.entity(carrier).try_insert(new_mass);
+        if inputs.mass.is_none() {
+            if let Some(mut mass) = mass {
+                *mass = new_mass;
+            } else {
+                commands.entity(carrier).try_insert(new_mass);
+            }
         }
-        if let Some(mut inertia) = inertia {
-            *inertia = new_inertia;
-        } else {
-            commands.entity(carrier).try_insert(new_inertia);
+        if inputs.inertia.is_none() {
+            if let Some(mut inertia) = inertia {
+                *inertia = new_inertia;
+            } else {
+                commands.entity(carrier).try_insert(new_inertia);
+            }
         }
-        commands.entity(carrier).try_insert((
-            new_center,
-            NoAutoMass,
-            NoAutoCenterOfMass,
-            NoAutoAngularInertia,
-            RaycastWheelMassFolded,
+        let automatic = state.map(|state| state.automatic).unwrap_or((
+            !mass_authored,
+            !inertia_authored,
+            !center_authored,
         ));
+        let original_geometry_owner = state
+            .map(|state| state.geometry_owner)
+            .unwrap_or(geometry_owner.copied());
+        if inputs.center.is_none() {
+            commands.entity(carrier).try_insert(new_center);
+        }
+        if sources.is_empty() {
+            commands.entity(carrier).try_remove::<ReducedMassState>();
+            if let Some(mut owner) = original_geometry_owner {
+                owner.mass &= inputs.mass.is_none();
+                owner.inertia &= inputs.inertia.is_none();
+                owner.center &= inputs.center.is_none();
+                commands.entity(carrier).try_insert(owner);
+            } else {
+                if automatic.0 && inputs.mass.is_none() {
+                    commands.entity(carrier).try_remove::<(Mass, NoAutoMass)>();
+                }
+                if automatic.1 && inputs.inertia.is_none() {
+                    commands
+                        .entity(carrier)
+                        .try_remove::<(AngularInertia, NoAutoAngularInertia)>();
+                }
+                if automatic.2 && inputs.center.is_none() {
+                    commands
+                        .entity(carrier)
+                        .try_remove::<(CenterOfMass, NoAutoCenterOfMass)>();
+                }
+            }
+        } else {
+            if geometry_owner.is_some() {
+                commands
+                    .entity(carrier)
+                    .try_insert(lunco_physics::body_mass::BodyMassFromColliders::default());
+            }
+            commands.entity(carrier).try_insert((
+                NoAutoMass,
+                NoAutoCenterOfMass,
+                NoAutoAngularInertia,
+                ReducedMassState {
+                    baseline,
+                    sources,
+                    automatic,
+                    geometry_owner: original_geometry_owner,
+                    inputs,
+                },
+            ));
+        }
     }
 }
 
@@ -3039,63 +3252,6 @@ mod raycast_wheel_mass_tests {
         );
     }
 
-    #[test]
-    #[ignore = "manual settled mass-fold preparation benchmark"]
-    fn settled_mass_fold_preparation_benchmark() {
-        let mut app = App::new();
-        app.add_systems(Update, fold_raycast_wheel_mass);
-        let mut carriers = Vec::new();
-        for carrier in 0..128 {
-            let entity = app
-                .world_mut()
-                .spawn((Mass(1106.0), RaycastWheelMassFolded))
-                .id();
-            carriers.push(entity);
-            for wheel in 0..4 {
-                app.world_mut().spawn((
-                    WheelRaycast {
-                        mass: 25.0,
-                        ..default()
-                    },
-                    WheelBodyMount {
-                        body: entity,
-                        local: Transform::IDENTITY,
-                    },
-                    lunco_physics::PhysicsOrderKey(format!(
-                        "inline-carrier/{carrier:04}/wheel/{wheel}"
-                    )),
-                ));
-            }
-            for part in 0..2 {
-                app.world_mut().spawn(RaycastMassContribution {
-                    owner: entity,
-                    order_key: lunco_physics::PhysicsOrderKey(format!(
-                        "inline-carrier/{carrier:04}/part/{part}"
-                    )),
-                    local: Transform::IDENTITY,
-                    mass: 3.0,
-                    center_of_mass: DVec3::ZERO,
-                    principal: DVec3::ZERO,
-                    principal_axes: DQuat::IDENTITY,
-                });
-            }
-        }
-        app.update();
-        let began = std::time::Instant::now();
-        for _ in 0..2000 {
-            app.update();
-        }
-        let elapsed_ms = began.elapsed().as_secs_f64() * 1000.0;
-        for entity in carriers {
-            assert_eq!(
-                app.world().get::<Mass>(entity).unwrap().0.to_bits(),
-                1106.0_f32.to_bits()
-            );
-            assert!(app.world().get::<RaycastWheelMassFolded>(entity).is_some());
-        }
-        println!("settled mass fold: 128 carriers, 768 sources, 2000 updates, {elapsed_ms:.3} ms");
-    }
-
     /// Build a skid-rover-shaped chassis with four raycast wheels at the mounts
     /// `skid_rover.usda` authors — (±1.0, −0.65, ±1.225), the SAME mounts the
     /// `physical` variant's wheel bodies get, because the wheel prim is the axle
@@ -3231,8 +3387,8 @@ mod raycast_wheel_mass_tests {
     #[test]
     fn a_wheel_whose_parameters_have_not_landed_yet_defers_the_fold() {
         // `WheelParams::apply_to_raycast` can land a tick after the component. A
-        // wheel still reading zero mass means the vehicle is not ready — folding
-        // then would permanently pin the rover at a fraction of its real mass.
+        // wheel still reading zero mass means the vehicle is not ready; wait
+        // for its parameters rather than publishing a partial aggregate.
         let (mass, inertia, com) = fold_a_four_wheel_rover(0.0);
         assert_eq!(mass, 1000.0, "folded before the wheel parameters arrived");
         assert_eq!(inertia, Vec3::new(1028.0, 1354.0, 341.0));

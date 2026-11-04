@@ -157,6 +157,12 @@ siblings and transient document paths. Generated and authored declarations use
 this same content contract. Identifiers, strings, annotations, and numeric
 literals remain unchanged throughout source admission and cache identity.
 
+Interactive reuse additionally checks the exact document runtime leases,
+candidate source generations and URIs, admitted source-root operations and requested
+class. Compile, Run, status queries and deferred installation consume that same
+source snapshot. A sibling edit invalidates reuse even when the primary
+document's generation is unchanged.
+
 The worker prepares one checked `FmiComponent`, borrowing it for live session
 construction. Its FMI inventory and executable model come from the same
 correlated lowering. Prepared cache version 13 stores the exact clean compiler
@@ -177,6 +183,18 @@ Run inputs and tunable parameters enter `SimOptions::initial_inputs` and
 parameter dependents. The compiled DAE stays immutable across sweep points. Reset carries current
 admitted inputs explicitly across the worker boundary, including values changed
 while the participant is paused.
+The session's `parameter_values` reader supplies initialized numeric parameters
+through checked FMI storage identities, including expressions, inherited values
+and initialization-solved parameters. The numeric editing inventory excludes
+String declarations. Source edits validate checked scalar type, visibility,
+finality and bounds before changing either source or session. Reset refreshes
+that inventory from its own settled initialization.
+Parameter source edits replace the complete expression span supplied by Rumoca;
+token locations identify only an anchor and cannot define the replacement range.
+Modelica `SaveDocument` and `SaveAsDocument` record terminal owned write/download
+results. Picker admission reports `picker_requested: true`; the follow-up save
+owns its write result. Failed writes preserve origin and saved-generation state
+and publish `modelica-save-failed` through the shared status bridge.
 Native and browser workers apply every admitted input through Rumoca's checked
 session API. Input rejection, integration failure, incomplete advancement, and
 observation failure terminate the step without publishing values or a stream

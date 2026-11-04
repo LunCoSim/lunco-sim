@@ -253,9 +253,13 @@ pub struct RedoDocument {
 ///
 /// Handled per-domain: the owning registry resolves the document's
 /// canonical path, writes the source, and fires [`DocumentSaved`] on
-/// success. No-ops if the document has no canonical path (Save-As
-/// needed — separate command, not defined yet) or if the backing
-/// library is read-only (source library, Bundled in Modelica's case).
+/// success. The owning domain validates write authority and selects its
+/// storage operation. Modelica documents without a writable native path request
+/// the Save-As picker; browser documents admit a download.
+///
+/// Modelica write/download completion has a terminal command result. Picker
+/// admission returns `picker_requested: true`; the later save owns its write
+/// result. Failures preserve the document origin and saved-generation marker.
 ///
 /// Dirty state (generation vs. last-saved generation) is a per-document
 /// concern; the owning domain updates its internal tracker in the
@@ -278,6 +282,11 @@ pub struct SaveDocument {
 /// - **Non-empty** → the observer writes directly, rebinds the
 ///   document's [`lunco_doc::DocumentOrigin`] to the new writable `File` variant,
 ///   updates `last_saved_generation`, and fires [`DocumentSaved`].
+///
+/// The owning Modelica handler records terminal native write or browser download
+/// admission results. Interactive picker admission returns `picker_requested:
+/// true` without marking the document saved. Failed writes retain the original
+/// origin and saved-generation marker and report `modelica-save-failed`.
 ///
 /// This single shape covers UI dialogs, recents, drag-drop, HTTP
 /// automation, and the Untitled-promotion path (Ctrl+S on a draft

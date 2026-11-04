@@ -35,6 +35,16 @@ pub struct SetModelicaParameter {
     pub value: f64,
 }
 
+/// Exact document and admitted library revisions supplied to a live compile.
+/// The core document owner captures and validates this lease; solver workers
+/// retain the corresponding immutable source bytes independently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelicaSourceSnapshot {
+    /// Exact runtime lease, text generation and compiler URI for each source.
+    pub documents: Vec<(lunco_workspace::PinnedDocumentRuntimeOwner, u64, String)>,
+    pub source_roots: Vec<(String, u64)>,
+}
+
 /// Facts for one scalar identity in the installed checked FMI component.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelicaScalarMetadata {
@@ -495,6 +505,9 @@ pub struct ModelicaResult {
     /// Parameter declarations from the checked DAE, independent of whether
     /// their source binding was a literal or an inherited expression.
     pub detected_parameter_names: Vec<String>,
+    /// Checked type and source-edit authority for the exact installed instance.
+    pub checked_interface:
+        Option<Arc<lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface>>,
     #[serde(default)]
     pub experiment_start_time: Option<f64>,
     #[serde(default)]
@@ -570,6 +583,7 @@ impl Default for ModelicaResult {
             is_reset: false,
             detected_input_names: Vec::new(),
             detected_parameter_names: Vec::new(),
+            checked_interface: None,
             experiment_start_time: None,
             experiment_stop_time: None,
             experiment_tolerance: None,
@@ -826,6 +840,9 @@ pub struct ModelicaModel {
     #[reflect(ignore)]
     pub compiled_parameter_names: BTreeSet<String>,
     #[reflect(ignore)]
+    pub checked_interface:
+        Option<Arc<lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface>>,
+    #[reflect(ignore)]
     pub last_error: Option<String>,
     #[reflect(ignore)]
     pub document: lunco_doc::DocumentId,
@@ -844,6 +861,9 @@ pub struct ModelicaModel {
     pub is_compiled: bool,
     #[reflect(ignore)]
     pub compiled_generation: u64,
+    /// Source closure admitted for the pending or installed document session.
+    #[reflect(ignore)]
+    pub source_snapshot: Option<ModelicaSourceSnapshot>,
     /// Exact live solver plan that produced the installed stepper.
     #[reflect(ignore)]
     pub live_solver_snapshot: Option<Arc<ModelicaLiveSolverSnapshot>>,
@@ -878,6 +898,7 @@ impl Default for ModelicaModel {
             pending_step_inputs: None,
             compiled_input_names: BTreeSet::new(),
             compiled_parameter_names: BTreeSet::new(),
+            checked_interface: None,
             last_error: None,
             document: lunco_doc::DocumentId::default(),
             is_stepping: false,
@@ -887,6 +908,7 @@ impl Default for ModelicaModel {
             is_compiling: false,
             is_compiled: false,
             compiled_generation: 0,
+            source_snapshot: None,
             live_solver_snapshot: None,
             variable_metadata: None,
             construction_profile: None,

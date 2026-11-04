@@ -1,6 +1,7 @@
 //! Document-level operations: Undo, Redo, Save, and Format.
 
 use bevy::prelude::*;
+use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentSaved, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument};
@@ -154,81 +155,183 @@ pub fn sync_editor_buffer_to_source(
     workbench.editor_buffer = source.to_string();
 }
 
+fn finish_modelica_save(
+    command_id: Option<u64>,
+    result: Result<Ack, String>,
+    results: &mut lunco_core::CommandResults,
+    console: &mut lunco_ui::log::LogBuffer,
+    commands: &mut Commands,
+) {
+    if let Err(message) = &result {
+        warn!("[Modelica save] {message}");
+        console.error(message.clone());
+        commands.trigger(lunco_core::RuntimeError {
+            name: "modelica-save-failed".into(),
+            message: message.clone(),
+        });
+    }
+    if let Some(id) = command_id {
+        results.record(id, result);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_modelica_source(
+    registry: &ModelicaDocuments,
+    doc: DocumentId,
+    path: &std::path::Path,
+) -> Result<usize, String> {
+    let document = registry
+        .host(doc)
+        .ok_or("Modelica save source document is closed")?
+        .document();
+    let source = document.source();
+    let storage = lunco_storage::FileStorage::new();
+    lunco_storage::Storage::write_sync(
+        &storage,
+        &lunco_storage::StorageHandle::File(path.to_path_buf()),
+        source.as_bytes(),
+    )
+    .map_err(|error| format!("Save failed: {}: {error}", path.display()))?;
+    Ok(source.len())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn request_modelica_save_picker(
+    doc: DocumentId,
+    document: &lunco_modelica_document::ModelicaDocument,
+    workspace: &lunco_workspace::Workspace,
+    replication: Option<&lunco_workspace::ReplicationOwner>,
+    commands: &mut Commands,
+) -> Result<Ack, String> {
+    let name = document.origin().display_name();
+    let suggested_name = if name.ends_with(".mo") {
+        name
+    } else {
+        format!("{name}.mo")
+    };
+    let start_dir = workspace
+        .active_twin
+        .and_then(|id| workspace.twin(id))
+        .map(|twin| lunco_storage::StorageHandle::File(twin.root.clone()));
+    let pin = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(doc, Some(workspace))?;
+    if !pin.is_current(Some(workspace), replication) {
+        return Err(format!(
+            "Save As document {doc} belongs to a retired source owner"
+        ));
+    }
+    lunco_workbench_file_dialog::request_pick(
+        commands,
+        lunco_workbench_file_dialog::PickMode::SaveFile(lunco_workbench_file_dialog::SaveHint {
+            suggested_name: Some(suggested_name),
+            start_dir,
+            filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
+                "Modelica models",
+                &["mo"],
+            )],
+        }),
+        lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
+        pin,
+    );
+    Ok(Ack::with_data(
+        OpId::new(),
+        lunco_hooks::HookValue::map([("picker_requested", lunco_hooks::HookValue::Bool(true))]),
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn download_modelica_source(
+    document: &lunco_modelica_document::ModelicaDocument,
+    requested_name: &str,
+    picker: Option<&lunco_workbench_file_dialog::BrowserPicker>,
+) -> Result<String, String> {
+    let name = if requested_name.is_empty() {
+        let name = document.origin().display_name();
+        if name.ends_with(".mo") {
+            name
+        } else {
+            format!("{name}.mo")
+        }
+    } else {
+        requested_name.to_owned()
+    };
+    let picker = picker.ok_or("browser download capability is not installed")?;
+    lunco_workbench_file_dialog::download_file(picker, &name, document.source())?;
+    Ok(format!(
+        "Downloaded {name} ({} bytes)",
+        document.source().len()
+    ))
+}
+
 #[on_command(SaveDocument)]
 pub fn on_save_document(
     trigger: On<SaveDocument>,
-    registry: ResMut<ModelicaDocuments>,
-    console: ResMut<lunco_ui::log::LogBuffer>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
+    active: Res<lunco_core::ActiveCommandId>,
+    mut results: ResMut<lunco_core::CommandResults>,
+    #[cfg(target_arch = "wasm32")] picker: Option<
+        NonSend<lunco_workbench_file_dialog::BrowserPicker>,
+    >,
+    #[cfg(not(target_arch = "wasm32"))] workspace: Res<lunco_workspace::WorkspaceResource>,
+    #[cfg(not(target_arch = "wasm32"))] connection: Option<
+        Res<lunco_core_session::ClientConnection>,
+    >,
+    #[cfg(not(target_arch = "wasm32"))] replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
     let doc = trigger.event().doc_id;
-
-    // No writable filesystem in the browser — every save is a
-    // download. Delegate to Save-As, which picks a sensible file name
-    // and triggers the browser download.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (&registry, &console);
-        commands.trigger(SaveAsDocument {
-            doc_id: doc,
-            path: String::new(),
-        });
+    if registry.host(doc).is_none() {
         return;
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let mut registry = registry;
-        let mut console = console;
-        let to_save = {
-            let Some(host) = registry.host(doc) else {
-                return;
-            };
-            let document = host.document();
+    let result = (|| -> Result<Ack, String> {
+        let document = registry
+            .host(doc)
+            .ok_or("Modelica save source document is closed")?
+            .document();
+        #[cfg(target_arch = "wasm32")]
+        let message = download_modelica_source(document, "", picker.as_deref())?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let message = {
             if document.origin().is_untitled() {
-                commands.trigger(SaveAsDocument {
-                    doc_id: doc,
-                    path: String::new(),
-                });
-                return;
+                let replication = lunco_core_session::current_replication_owner(
+                    connection.as_deref(),
+                    replica.as_deref(),
+                );
+                return request_modelica_save_picker(
+                    doc,
+                    document,
+                    &workspace.0,
+                    replication.as_ref(),
+                    &mut commands,
+                );
             }
-            let Some(path) = document.canonical_path() else {
-                console.warn(format!("Save skipped — doc {doc} has no canonical path"));
-                return;
-            };
             if document.is_read_only() {
-                let name = document.origin().display_name();
-                let msg =
-                    format!("Save blocked — '{name}' is read-only (library / bundled example).");
-                warn!("[Save] {msg}");
-                console.warn(msg);
-                return;
+                return Err(format!(
+                    "Save blocked: '{}' is read-only; use SaveAsDocument",
+                    document.origin().display_name()
+                ));
             }
-            (path.to_path_buf(), document.source().to_string())
+            let path = document
+                .canonical_path()
+                .ok_or("Modelica save source has no canonical file path")?
+                .to_path_buf();
+            let bytes = write_modelica_source(&registry, doc, &path)?;
+            format!("Saved {bytes} bytes to {}", path.display())
         };
-
-        let (path, source) = to_save;
-        let storage = lunco_storage::FileStorage::new();
-        let handle = lunco_storage::StorageHandle::File(path.clone());
-        if let Err(e) = bevy::tasks::futures_lite::future::block_on(
-            <lunco_storage::FileStorage as lunco_storage::Storage>::write(
-                &storage,
-                &handle,
-                source.as_bytes(),
-            ),
-        ) {
-            let msg = format!("Save failed: {}: {e}", path.display());
-            error!("[Save] {msg}");
-            console.error(msg);
-            return;
-        }
-        let msg = format!("Saved {} bytes to {}", source.len(), path.display());
-        info!("[Save] {msg}");
-        console.info(msg);
-
         registry.mark_document_saved(doc);
+        info!("[Save] {message}");
+        console.info(message);
         commands.trigger(DocumentSaved::local(doc));
-    }
+        Ok(Ack::new(OpId::new()))
+    })();
+    finish_modelica_save(
+        active.get(),
+        result,
+        &mut results,
+        &mut console,
+        &mut commands,
+    );
 }
 
 #[on_command(SaveAsDocument)]
@@ -238,6 +341,8 @@ pub fn on_save_as_document(
     workspace: Res<lunco_workspace::WorkspaceResource>,
     mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
+    active: Res<lunco_core::ActiveCommandId>,
+    mut results: ResMut<lunco_core::CommandResults>,
     #[cfg(target_arch = "wasm32")] picker: Option<
         NonSend<lunco_workbench_file_dialog::BrowserPicker>,
     >,
@@ -248,154 +353,63 @@ pub fn on_save_as_document(
 ) {
     let doc = trigger.event().doc_id;
     let target_path = trigger.event().path.clone();
-
-    // wasm: no filesystem, and the browser's save flow can't hand back
-    // a writable path — so Save-As is a download triggered right here,
-    // never a two-phase picker round-trip.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = &workspace;
-        let (name, source) = {
-            let Some(host) = registry.host(doc) else {
-                return;
-            };
-            let document = host.document();
-            let name = if !target_path.is_empty() {
-                target_path.clone()
-            } else {
-                let raw = document.origin().display_name();
-                if raw.ends_with(".mo") {
-                    raw
-                } else {
-                    format!("{raw}.mo")
-                }
-            };
-            (name, document.source().to_string())
-        };
-        let admission = picker
-            .as_deref()
-            .ok_or_else(|| "browser download capability is not installed".to_owned())
-            .and_then(|picker| lunco_workbench_file_dialog::download_file(picker, &name, &source));
-        if let Err(message) = admission {
-            warn!("[SaveAs] {message}");
-            console.error(message.clone());
-            commands.trigger(lunco_core::RuntimeError {
-                name: "modelica-save-failed".into(),
-                message,
-            });
-            return;
-        }
-        registry.mark_document_saved(doc);
-        let msg = format!("Downloaded {} ({} bytes)", name, source.len());
-        info!("[SaveAs] {msg}");
-        console.info(msg);
-        commands.trigger(DocumentSaved::local(doc));
+    if registry.host(doc).is_none() {
         return;
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if target_path.is_empty() {
-            let Some(host) = registry.host(doc) else {
-                return;
-            };
-            let document = host.document();
-            let suggested_name = {
-                let raw = document.origin().display_name();
-                if raw.ends_with(".mo") {
-                    raw
-                } else {
-                    format!("{raw}.mo")
-                }
-            };
-            let start_dir = workspace
-                .active_twin
-                .and_then(|id| workspace.twin(id))
-                .map(|t| lunco_storage::StorageHandle::File(t.root.clone()));
-            let pin = match lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
-                doc,
-                Some(&workspace.0),
-            ) {
-                Ok(pin) => pin,
-                Err(message) => {
-                    warn!("[SaveAs] {message}");
-                    console.error(message.clone());
-                    commands.trigger(lunco_core::RuntimeError {
-                        name: "modelica-save-failed".into(),
-                        message,
-                    });
-                    return;
-                }
-            };
-            let replication = lunco_core_session::current_replication_owner(
-                connection.as_deref(),
-                replica.as_deref(),
-            );
-            if !pin.is_current(Some(&workspace.0), replication.as_ref()) {
-                let message = format!("Save As document {doc} belongs to a retired source owner");
-                warn!("[SaveAs] {message}");
-                console.error(message.clone());
-                commands.trigger(lunco_core::RuntimeError {
-                    name: "modelica-save-failed".into(),
-                    message,
-                });
-                return;
-            }
-            lunco_workbench_file_dialog::request_pick(
-                &mut commands,
-                lunco_workbench_file_dialog::PickMode::SaveFile(
-                    lunco_workbench_file_dialog::SaveHint {
-                        suggested_name: Some(suggested_name),
-                        start_dir,
-                        filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
-                            "Modelica models",
-                            &["mo"],
-                        )],
-                    },
-                ),
-                lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
-                pin,
-            );
-            return;
-        }
-
-        let path = std::path::PathBuf::from(&target_path);
-        let source = {
-            let Some(host) = registry.host(doc) else {
-                return;
-            };
-            host.document().source().to_string()
+    let result = (|| -> Result<Ack, String> {
+        #[cfg(target_arch = "wasm32")]
+        let message = {
+            let _ = &workspace;
+            let document = registry
+                .host(doc)
+                .ok_or("Modelica save source document is closed")?
+                .document();
+            download_modelica_source(document, &target_path, picker.as_deref())?
         };
-
-        let storage = lunco_storage::FileStorage::new();
-        let handle = lunco_storage::StorageHandle::File(path.clone());
-        if let Err(e) = bevy::tasks::futures_lite::future::block_on(
-            <lunco_storage::FileStorage as lunco_storage::Storage>::write(
-                &storage,
-                &handle,
-                source.as_bytes(),
-            ),
-        ) {
-            let msg = format!("Save-As failed: {}: {e}", path.display());
-            error!("[SaveAs] {msg}");
-            console.error(msg);
-            return;
-        }
-
-        if let Some(host) = registry.host_mut(doc) {
-            host.document_mut()
+        #[cfg(not(target_arch = "wasm32"))]
+        let message = {
+            if target_path.is_empty() {
+                let document = registry
+                    .host(doc)
+                    .ok_or("Modelica save source document is closed")?
+                    .document();
+                let replication = lunco_core_session::current_replication_owner(
+                    connection.as_deref(),
+                    replica.as_deref(),
+                );
+                return request_modelica_save_picker(
+                    doc,
+                    document,
+                    &workspace.0,
+                    replication.as_ref(),
+                    &mut commands,
+                );
+            }
+            let path = std::path::PathBuf::from(&target_path);
+            let bytes = write_modelica_source(&registry, doc, &path)?;
+            registry
+                .host_mut(doc)
+                .ok_or("Modelica save source document is closed")?
+                .document_mut()
                 .set_origin(lunco_doc::DocumentOrigin::File {
                     path: path.clone(),
                     writable: true,
                 });
-        }
+            format!("Saved {bytes} bytes to {}", path.display())
+        };
         registry.mark_document_saved(doc);
-        let msg = format!("Saved {} bytes to {}", source.len(), path.display());
-        info!("[SaveAs] {msg}");
-        console.info(msg);
-
+        info!("[SaveAs] {message}");
+        console.info(message);
         commands.trigger(DocumentSaved::local(doc));
-    }
+        Ok(Ack::new(OpId::new()))
+    })();
+    finish_modelica_save(
+        active.get(),
+        result,
+        &mut results,
+        &mut console,
+        &mut commands,
+    );
 }
 
 #[on_command(FormatDocument)]
