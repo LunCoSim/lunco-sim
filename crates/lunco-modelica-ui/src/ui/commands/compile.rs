@@ -804,6 +804,11 @@ pub fn on_compile_model(
                 compile_states.set_error_message(doc, error.clone());
             }
             console.error(error.clone());
+            bevy::log::warn!("Modelica compile rejected: {error}");
+            commands.trigger(lunco_core::RuntimeError {
+                name: "modelica-compile-rejected".into(),
+                message: error.clone(),
+            });
             commands.queue(move |world: &mut World| {
                 finish_modelica_command(world, command_id, correlation_id, Err(error));
             });
@@ -993,7 +998,8 @@ pub fn on_run_active_model(
 ) {
     let source = run_control_source(trigger.event().doc_id, workspace.as_deref());
     let class = trigger.event().class.clone();
-    let command_id = active.as_ref().and_then(|active| active.get());
+    let context = active.as_deref().cloned().unwrap_or_default();
+    let command_id = context.get();
     #[cfg(feature = "api")]
     let correlation_id = pending
         .as_ref()
@@ -1006,7 +1012,30 @@ pub fn on_run_active_model(
             validate_run_control_source(world, &source)?;
             run_active_model(world, source.document, class)
         });
-        finish_run_control(world, command_id, correlation_id, result);
+        match result {
+            Ok(Some(compile)) => {
+                let previous =
+                    std::mem::replace(&mut *world.resource_mut::<ActiveCommandId>(), context);
+                #[cfg(feature = "api")]
+                let previous_correlation =
+                    world
+                        .get_resource_mut::<PendingApiRequest>()
+                        .map(|mut pending| {
+                            std::mem::replace(
+                                &mut pending.correlation_id,
+                                correlation_id.unwrap_or(0),
+                            )
+                        });
+                world.trigger(compile);
+                *world.resource_mut::<ActiveCommandId>() = previous;
+                #[cfg(feature = "api")]
+                if let Some(previous) = previous_correlation {
+                    world.resource_mut::<PendingApiRequest>().correlation_id = previous;
+                }
+            }
+            Ok(None) => finish_run_control(world, command_id, correlation_id, Ok(())),
+            Err(error) => finish_run_control(world, command_id, correlation_id, Err(error)),
+        }
     });
 }
 
@@ -1016,7 +1045,7 @@ fn run_active_model(
     world: &mut World,
     raw: DocumentId,
     class: Option<String>,
-) -> Result<(), String> {
+) -> Result<Option<CompileModel>, String> {
     let doc =
         resolve_doc_or_active(world, raw).ok_or("Run requires a selected Modelica document")?;
     let documents = world
@@ -1045,13 +1074,12 @@ fn run_active_model(
         })
         .transpose()?;
     let Some(entity) = entity_for_doc(world, doc) else {
-        world.trigger(CompileModel {
+        return Ok(Some(CompileModel {
             doc_id: doc,
             class,
             force: false,
             resume_after_compile: true,
-        });
-        return Ok(());
+        }));
     };
     let (is_compiled, is_compiling, stale) = world
         .get::<ModelicaModel>(entity)
@@ -1066,15 +1094,15 @@ fn run_active_model(
         })
         .ok_or("Run document has no Modelica participant")?;
     if is_compiled && !stale && !is_compiling {
-        return lunco_modelica_execution::set_modelica_document_run_intent(world, doc, true);
+        lunco_modelica_execution::set_modelica_document_run_intent(world, doc, true)?;
+        return Ok(None);
     }
-    world.trigger(CompileModel {
+    Ok(Some(CompileModel {
         doc_id: doc,
         class,
         force: false,
         resume_after_compile: true,
-    });
-    Ok(())
+    }))
 }
 
 #[on_command(RestartActiveModel)]

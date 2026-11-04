@@ -209,8 +209,15 @@ that inventory from its own settled initialization.
 Pause and Resume record terminal applied/rejected outcomes and replace the
 document's exact-source-leased run intent, including before a compile creates
 its participant. Compile and Reset installation consume the latest intent.
+Paused intent does not withdraw an already admitted Step: its exact in-flight
+receipt independently retains the shared-clock barrier until admission or fault.
 Restart owns one Reset completion, requests running, and reports the exact
 installation or failure; a subsequent Pause or Resume supersedes that intent.
+Run delegates compilation with its original typed command context and external
+correlation, so the existing lifecycle completion reports initialization success
+or failure to the original caller. External ambiguity rejects before opening a
+picker. Compile admission preserves arrival order and only coalesces consecutive
+identical source/participant/class requests, retaining every listener.
 Parameter source edits replace the complete expression span supplied by Rumoca;
 token locations identify only an anchor and cannot define the replacement range.
 Modelica `SaveDocument` and `SaveAsDocument` record terminal owned write/download
@@ -311,6 +318,11 @@ parameter command itself is registered by the headless core.
 ordered Pause/Resume across compilation and Reset, terminal run-control failures,
 single-session Restart, and pending/invalid/recovered sibling source generations
 through the windowed production command surface.
+`simulation_core_fifth_modelica.rhai` covers failed and ambiguous Run completion,
+ordered target replacement, consecutive identical compile coalescing and settled
+Pause through that same surface. A low-level bridge seam controls the otherwise
+unobservable outstanding worker receipt: no result and a stale result keep its
+paused barrier held; only the exact current result releases it.
 
 ## Source-preserving editing and lint
 

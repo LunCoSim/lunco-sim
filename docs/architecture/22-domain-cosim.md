@@ -414,6 +414,25 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 
 ## The port surface (one telemetry + actuation API)
 
+Native force application is an ordered transaction. `lunco-physics` reads the
+actual Avian state through `AvianForceState`, validates a `BodyForce` batch with
+`prepare_force_batch`, then applies that same batch through `apply_force_batch`.
+Admission checks inverse-mass/inertia products, point-force moments, raw native
+accumulator sums, and combined local/world acceleration before any contribution
+is written. Reused `ForceBatchScratch` retains allocation capacity. Contact
+points use grid-absolute `GridPos`; body-local forces remain local through
+Avian's substeps. Co-simulation, joint effort, and physical/raycast tire contact
+consume this shared boundary. Each consumer owns its structured fault, Recent
+Events error, and physics hold; co-simulation uses `cosim-native-force-range`
+with the affected body's authored name and rejected numerical state.
+
+A prim carrying both force and torque actuator APIs has independent
+`PendingActuatorCommands.force_n` and `.torque_nm` values. Their ports and
+consumers retain separate physical quantities throughout the same batch.
+Live mass, inertia, or COM input changes wake a sleeping dynamic island through
+Avian's supported wake command only when the admitted native property changes.
+An unchanged held input does not prevent sleeping.
+
 Every participant's state is exposed as **named scalar ports** through the shared
 **`PortRegistry`** — the single surface wires, the HTTP API (`ListPorts`/`ReadPorts`/
 `GetPort`/`SetPorts`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,

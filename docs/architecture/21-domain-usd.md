@@ -1060,6 +1060,30 @@ grip; for an upright wheel this is identical to the flat basis. The heading axis
 fork authors e.g. `(0, 0.91, 0.42)`. The final heading is an authored output, not a
 vehicle-type rule in Rust.
 
+### PhysicsScene gravity
+
+`lunco-usd-avian` owns standard `PhysicsScene` gravity admission and live
+refresh. Its settings entity carries `UsdPhysicsSceneSettings`; initial
+projection and coalesced composed change notices use the same canonical reader
+and application boundary. Only admitted settings entities affected by a prim or
+ancestor notice are revisited. Unchanged magnitude/direction do not rewrite the
+environment resources or wake native bodies.
+
+Magnitude converts from stage units/s² to m/s² and direction from stage axes
+to canonical axes. Omitted or finite negative magnitude selects standard Earth
+gravity; an omitted or zero direction selects stage down. Authored malformed,
+nonfinite or native-out-of-range values, and conflicting scenes in one physical
+world, report `usd-physics-gravity-invalid` with the offending prim/property/value
+through RuntimeFaults and Recent Events and hold physics. The previous valid
+environment remains intact. A queued candidate must still own its exact entity,
+USD path, stage generation and mounted root; previews and retired mounts cannot
+write global gravity. Celestial takeover retains its `Gravity::Surface` model
+while refreshed PhysicsScene facts remain available for diagnostics.
+
+`simulation_core_fifth_gravity.rhai` qualifies live magnitude and direction,
+native body response, unchanged settings, and invalid-value containment through
+typed unsaved document edits on the contracts fixture.
+
 ### Physics Joints
 
 All USD-authored Avian joints are translated by **`lunco-usd-avian`** from standard `UsdPhysics`
@@ -1095,11 +1119,32 @@ The queued replacement checks its exact entity, USD path and canonical stage
 generation. An unchanged rigid assembly move does not replace its joints.
 Invalid new frames leave the admitted body state intact and fault visibly.
 
+Joint seating preserves world, static and kinematic endpoint authority. Declared
+`Mobility::Dynamic` identifies a movable endpoint even while initial admission
+holds its native body kinematic. The owner moves endpoint 1 when eligible,
+otherwise endpoint 0 with the corresponding reversed frames and signed slider
+bounds. Fixed frames close their constrained pose error; prismatic frames retain
+the nearest allowed axial coordinate, and distance frames retain the nearest
+allowed radial separation. Free velocity authored at admission or already live
+on a dynamic endpoint survives projection. A separated slider inherits the
+reference frame's angular transport at its own anchor.
+
+The complete seated pose and velocity are validated before either is published.
+Incompatible prescribed endpoints and coincident distance anchors requiring a
+positive minimum separation report `physics-joint-seating-invalid`, appear in
+Recent Events and hold physics without constructing a native constraint.
+Compatible all-static definitions remain native-disabled because they have no
+solver island; they do not retain pending admission.
+
 Production regression entry points are
 `simulation_core_fourth_physics_wheel.rhai` (tiny native reciprocal and initial
 parameter rejection) and `simulation_core_fourth_physics_joints.rhai` (live
 socket translation, rotation, nonuniform scale, body scale, and singular-frame
 rejection). Fixtures are edited through typed unsaved document operations.
+`simulation_core_fifth_joints.rhai` additionally qualifies symmetric world
+endpoints, prescribed real bodies, legal slider/distance coordinates and free
+velocity, nearest-bound correction, and rejection of incompatible prescribed
+poses without advancing physics.
 
 The native 3D prismatic solver couples the two blocked translations and three
 blocked rotations. Its moving-axis Jacobian includes the anchor separation;

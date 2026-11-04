@@ -252,13 +252,6 @@ pub fn dispatch_modelica_compile_requests(
         .unwrap_or_default();
     queued.extend(requests.read().cloned());
     let mut requests = queued;
-    requests.sort_by_key(|request| {
-        (
-            request.source.document.raw(),
-            request.entity.map(Entity::to_bits),
-            request.class.clone(),
-        )
-    });
     requests.dedup_by(|later, earlier| {
         if later.source == earlier.source
             && later.entity == earlier.entity

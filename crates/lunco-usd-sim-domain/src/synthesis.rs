@@ -108,6 +108,8 @@ pub struct SynthesisPlan {
     pub interface: ModelInterface,
     /// Public causal inputs of the generated model.
     pub inputs: BTreeSet<String>,
+    /// Generated input name to its authoritative USD/native source property.
+    pub input_bindings: BTreeMap<String, String>,
     /// Public causal outputs of the generated model.
     pub outputs: BTreeSet<String>,
     /// Composed USD paths absorbed into this unit.
@@ -427,6 +429,7 @@ impl HookSynthesizer {
             source: source.to_string(),
             interface,
             inputs: network.inputs.clone(),
+            input_bindings: BTreeMap::new(),
             outputs: network.outputs.keys().cloned().collect(),
             component_paths: network
                 .components
@@ -539,6 +542,69 @@ fn hook_map_string(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| format!("{context} must contain a non-empty string `{key}`"))
+}
+
+fn parse_policy_input_bindings(
+    value: Option<&lunco_hooks::HookValue>,
+) -> Result<BTreeMap<String, String>, String> {
+    let Some(lunco_hooks::HookValue::Map(entries)) = value else {
+        return Err("synthesis policy must return an input_bindings map".into());
+    };
+    let mut bindings = BTreeMap::new();
+    for (name, value) in entries {
+        if !is_modelica_identifier(name) {
+            return Err(format!(
+                "generated binding input `{name}` is not a Modelica identifier"
+            ));
+        }
+        let source = value
+            .as_str()
+            .ok_or_else(|| format!("binding `{name}` must name a source property"))?;
+        let path = SdfPath::new(source)
+            .map_err(|error| format!("binding `{name}` source `{source}`: {error}"))?;
+        if !path.is_property() || !source.starts_with('/') {
+            return Err(format!(
+                "binding `{name}` must name an absolute source property"
+            ));
+        }
+        if bindings.insert(name.clone(), source.to_string()).is_some() {
+            return Err(format!("generated binding input `{name}` is repeated"));
+        }
+    }
+    Ok(bindings)
+}
+
+#[cfg(test)]
+mod input_binding_tests {
+    use super::*;
+
+    #[test]
+    fn generated_input_bindings_require_unique_identifiers_and_absolute_properties() {
+        use lunco_hooks::HookValue;
+        let pair = ("body_com_x".into(), HookValue::str("/Body.inputs:com_x"));
+        let value = HookValue::Map(vec![pair.clone()]);
+        assert_eq!(
+            parse_policy_input_bindings(Some(&value)).unwrap()["body_com_x"],
+            "/Body.inputs:com_x"
+        );
+        assert!(parse_policy_input_bindings(None).is_err());
+        assert!(
+            parse_policy_input_bindings(Some(&HookValue::Map(vec![pair.clone(), pair]))).is_err()
+        );
+        for (name, source) in [
+            ("bad-name", "/Body.inputs:com_x"),
+            ("body_com_x", "/Body"),
+            ("body_com_x", "Body.inputs:com_x"),
+        ] {
+            assert!(
+                parse_policy_input_bindings(Some(&HookValue::Map(vec![(
+                    name.into(),
+                    HookValue::str(source)
+                )])))
+                .is_err()
+            );
+        }
+    }
 }
 
 fn hook_map_string_array(
@@ -1597,6 +1663,7 @@ struct ActuatorWrenchNetwork {
     inputs: BTreeSet<String>,
     outputs: BTreeSet<String>,
     actuators: BTreeMap<String, (String, lunco_cosim_core::ForceActuator)>,
+    body: String,
 }
 
 impl ActuatorWrenchSynthesizer {
@@ -1637,6 +1704,7 @@ impl ActuatorWrenchSynthesizer {
         };
 
         let mut actuators = BTreeMap::new();
+        let mut body = None;
         for path in members {
             if path.is_property() || path.is_variant_selection() {
                 continue;
@@ -1685,6 +1753,23 @@ impl ActuatorWrenchSynthesizer {
                         .into(),
                 }]);
             };
+            let member_body = lunco_usd_actuation::actuator_body_path(view, &path)
+                .ok_or_else(|| {
+                    vec![DomainProjectionError {
+                        path: path.to_string(),
+                        message: "force actuator has no rigid-body owner".into(),
+                    }]
+                })?
+                .to_string();
+            if body.as_ref().is_some_and(|owner| owner != &member_body) {
+                return Err(vec![DomainProjectionError {
+                    path: root_string.clone(),
+                    message:
+                        "actuator-wrench members must share the same rigid body and COM reference"
+                            .into(),
+                }]);
+            }
+            body = Some(member_body);
             if actuators
                 .insert(command.clone(), (path.to_string(), actuator))
                 .is_some()
@@ -1742,6 +1827,12 @@ impl ActuatorWrenchSynthesizer {
             inputs,
             outputs,
             actuators,
+            body: body.ok_or_else(|| {
+                vec![DomainProjectionError {
+                    path: root.to_string(),
+                    message: "actuator collection has no rigid-body owner".into(),
+                }]
+            })?,
         }))
     }
 
@@ -1756,23 +1847,37 @@ impl ActuatorWrenchSynthesizer {
             inputs,
             outputs,
             actuators,
+            body,
         } = network;
         let columns = actuators
             .values()
             .map(|(_, actuator)| *actuator)
             .collect::<Vec<_>>();
-        let (wrench_matrix, allocation_step) =
-            actuator_wrench_matrix(&columns).map_err(|message| {
-                vec![DomainProjectionError {
-                    path: root_string.clone(),
-                    message,
-                }]
-            })?;
+        let wrench_matrix = actuator_wrench_matrix(&columns).map_err(|message| {
+            vec![DomainProjectionError {
+                path: root_string.clone(),
+                message,
+            }]
+        })?;
         let component_paths = actuators
             .values()
             .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
         let facts = lunco_hooks::HookValue::Map(vec![
+            (
+                "center_of_mass_sources".into(),
+                lunco_hooks::HookValue::Map(
+                    ["x", "y", "z"]
+                        .into_iter()
+                        .map(|axis| {
+                            (
+                                axis.into(),
+                                lunco_hooks::HookValue::str(format!("{body}.inputs:com_{axis}")),
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
             (
                 "model_name".to_string(),
                 lunco_hooks::HookValue::str(&model_name),
@@ -1827,10 +1932,6 @@ impl ActuatorWrenchSynthesizer {
                 ),
             ),
             (
-                "allocation_step".to_string(),
-                lunco_hooks::HookValue::Float(allocation_step),
-            ),
-            (
                 "actuator_count".to_string(),
                 lunco_hooks::HookValue::Int(wrench_matrix.len() as i64),
             ),
@@ -1867,6 +1968,32 @@ impl ActuatorWrenchSynthesizer {
                 message: "actuator-wrench synthesis policy returned no string `source` key".into(),
             }]);
         };
+        let input_bindings = parse_policy_input_bindings(hook_map_value(&map, "input_bindings"))
+            .map_err(|message| {
+                vec![DomainProjectionError {
+                    path: root_string.clone(),
+                    message,
+                }]
+            })?;
+        let expected_sources: BTreeSet<_> = ["x", "y", "z"]
+            .into_iter()
+            .map(|axis| format!("{body}.inputs:com_{axis}"))
+            .collect();
+        if input_bindings.len() != 3
+            || input_bindings.values().cloned().collect::<BTreeSet<_>>() != expected_sources
+            || input_bindings
+                .keys()
+                .any(|name| inputs.contains(name) || outputs.contains(name))
+        {
+            return Err(vec![DomainProjectionError {
+                path: root_string.clone(),
+                message: "actuator-wrench policy must bind three distinct generated COM inputs to the owning body's native COM sources without overriding authored ports".into(),
+            }]);
+        }
+        let inputs: BTreeSet<_> = inputs
+            .into_iter()
+            .chain(input_bindings.keys().cloned())
+            .collect();
         let interface = parse_validated_root_interface(source, &model_name, &inputs, &outputs, &[])
             .map_err(|message| {
                 vec![DomainProjectionError {
@@ -1901,6 +2028,7 @@ impl ActuatorWrenchSynthesizer {
             source: source.to_string(),
             interface,
             inputs,
+            input_bindings,
             outputs,
             component_paths,
             source_roots,
@@ -1953,13 +2081,11 @@ fn strip_connection_suffix(name: &str) -> String {
     name.strip_suffix(".connect").unwrap_or(name).to_string()
 }
 
-/// Return the authored six-component wrench matrix and a stable projected-
-/// gradient step for the bounded actuator solve. Each column is one actuator's
-/// maximum body force and torque, so the Modelica allocator solves the actual
-/// one-sided least-squares problem instead of clamping a signed pseudo-inverse.
+/// Return maximum body-local wrench columns about the body origin. The runtime
+/// Modelica allocator shifts them to the live COM before its bounded solve.
 pub(super) fn actuator_wrench_matrix(
     actuators: &[lunco_cosim_core::ForceActuator],
-) -> Result<(Vec<[f64; 6]>, f64), String> {
+) -> Result<Vec<[f64; 6]>, String> {
     let columns: Vec<[f64; 6]> = actuators
         .iter()
         .map(|actuator| {
@@ -1976,17 +2102,16 @@ pub(super) fn actuator_wrench_matrix(
         return Err("actuator-wrench geometry produced a non-finite torque column".into());
     }
 
-    let gram_trace = columns
+    let squared_norm = columns
         .iter()
         .flatten()
         .map(|value| value * value)
         .sum::<f64>();
-    if !gram_trace.is_finite() || gram_trace <= f64::EPSILON {
+    if !squared_norm.is_finite() || squared_norm == 0.0 {
         return Err("actuator-wrench geometry has no finite physical wrench authority".into());
     }
-    // `||B||_F²` bounds the largest eigenvalue of BᵀB. A 0.9 margin keeps the
-    // fixed projected-gradient solve stable for every authored arrangement.
-    Ok((columns, 0.9 / gram_trace))
+
+    Ok(columns)
 }
 
 /// Stable Modelica name for a causal output promoted from a generated member.

@@ -1238,18 +1238,27 @@ deduplication and dependency discovery consume its bytes. A requested target ent
 removed is rejected; it cannot create an editor actor implicitly. Completion
 admission continues while the fixed clock is held, so readiness can observe
 the terminal worker result and release its preparation hold.
+Compile requests retain admission order. Only consecutive requests for the same
+source owner, participant and class coalesce; they share completion listeners
+and the later run intent. A later different target supersedes the earlier
+session and terminates its listeners explicitly. Class spelling is not priority.
 
 Verb semantics:
 
 | Verb | Effect |
 |---|---|
 | `CompileModel` | Deferred terminal result after the exact checked session is accepted, or an explicit rejection/cancellation. An already compiled, unchanged exact class reuses its session; `force: true` dispatches again. Success leaves the model paused/ready unless explicit Run intent was requested. |
-| `RunActiveModel` | Compile-if-stale, then play. If already compiled & clean, just sets `paused = false` (no recompile); otherwise sets `resume_after_compile = true` and triggers `CompileModel`, which resumes on success. |
+| `RunActiveModel` | Compile-if-stale, then play. A clean installed target resumes immediately. Otherwise the compile owner retains the original command identity, origin and API correlation until exact session installation or rejection. External ambiguous targets require an explicit class. |
 | `ResumeActiveModel` | Apply running intent to an installed or admitted participant, including a pending compile; terminal applied/rejected result, without compiling. |
 | `PauseActiveModel` | Apply paused intent to an installed or admitted participant, including a pending compile; terminal applied/rejected result. |
 | `ResetActiveModel` | Validate the installed target, prepare its retained checked DAE with current inputs, and complete after exact session installation or rejection. Zero time and retain the latest run intent; no source compilation. |
 | `RestartActiveModel` | One checked Reset transaction with running intent. Complete after its installation or propagate its failure. A later Pause/Resume replaces the intent. |
 | `FastRunActiveModel` | Orthogonal: batch compile + simulate off-thread → `Experiment`. Never touches live run-state. |
+
+Pause applies future run intent without cancelling an admitted communication
+transaction. An outstanding Step retains the shared-clock barrier even while
+the participant is paused; only its accepted result or terminal fault retires
+that boundary. The paused child clock remains frozen after the endpoint settles.
 
 Strict DAE compilation failures remain terminal. Rumoca's checked phase
 report supplies the balance and source diagnostics, which reach the Modelica

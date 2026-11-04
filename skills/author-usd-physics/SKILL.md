@@ -55,6 +55,14 @@ after the edit, including a singular-frame rejection that preserves the prior
 valid body state. Reduced mass contributions use standard scaled COM facts
 before rigid reduction into the body frame.
 
+An `actuator-wrench` collection has one rigid-body owner. Generated allocation
+binds all three live native `com_*` ports through its typed input bindings and
+computes torque about that COM in Modelica. Keep desired torques in the same
+body-local COM frame; changing live propellant COM must not regenerate source
+or use a cached authored COM. Check the generated bindings with
+`GeneratedModelicaSource` and run `simulation_core_fifth_allocator.rhai` for
+live COM, mixed/saturated demand and mixed-owner rejection.
+
 For assets intended for Omniverse, independently moving rigid bodies nested
 under another body need `!resetXformStack!` and explicit initial world poses.
 Author both joint local frames explicitly: portable UsdPhysics defaults are
@@ -149,6 +157,20 @@ body ready. USD joints
 are projected in `JointPreparation` during `Update`, after USD simulation
 projection and before the generic `JointAdmission` owner. This phase must not
 wait for a first physics step to resolve bodies or seat a joint.
+
+Seating preserves prescribed world, static and kinematic endpoint poses and
+corrects an eligible dynamic endpoint. Either joint endpoint may reference the
+world. A slider's authored coordinate is retained when inside its signed travel
+bounds; a distance joint retains any separation inside its radial interval.
+Out-of-range coordinates move only to the nearest bound. Keep meaningful initial
+separation for a positive-minimum distance joint: coincident anchors do not
+define a direction and are rejected. Incompatible prescribed poses likewise
+report `physics-joint-seating-invalid` in Recent Events and hold physics before
+any pose mutation. Compatible all-static definitions remain native-disabled
+without blocking admission. Authored free-axis velocity and live dynamic free
+motion are preserved. Qualify these contracts with
+`assets/scenarios/tests/simulation_core_fifth_joints.rhai` through the production
+scene runner and its typed unsaved document fixture operations.
 
 Initial body admission validates raycast-wheel support footprints against the
 composed Avian collider geometry and its hit normal. It does not require a
@@ -568,13 +590,23 @@ def PhysicsScene "PhysicsScene"
   otherwise. The vehicles' drivetrains, struts and propellant budgets are sized
   for it.
 - **ONE per scene.** Two prims that disagree are an authoring error and are
-  reported as one; the last read wins, which depends on prim order.
-- USD's sentinels are honoured: a NEGATIVE magnitude means "earth gravity", a
+  rejected visibly without replacing the admitted environment.
+- USD's sentinels are honoured: a finite NEGATIVE magnitude means "earth gravity", a
   ZERO direction means "the stage's down axis".
 - **An orbital scene authors NO `PhysicsScene`.** Gravity there is per-body and
   position-dependent (`Gravity::Surface` + the celestial point-mass model). A
   flat vector would override that and pin every spacecraft to a fictitious
   "down". `assets/scenes/celestial/artemis_2_review.usda` is the worked example.
+
+Edits to an admitted PhysicsScene refresh through the same composed gravity
+owner as initial admission. Magnitude/direction changes take effect without
+reloading the scene; unchanged settings do not rewrite native acceleration.
+Malformed, nonfinite and native-out-of-range values report
+`usd-physics-gravity-invalid` in Recent Events and hold physics while retaining
+the last valid environment. Preview and retired source leases cannot write
+global gravity, and celestial takeover keeps its selected surface model.
+Run `simulation_core_fifth_gravity.rhai` to verify typed live magnitude/direction
+edits and invalid-value containment in the production runtime.
 
 **Traction is gravity-dependent, and test thresholds must be too.** At 1.62 a
 rover is traction-limited well below its drivetrain's `omega_max * r` ceiling

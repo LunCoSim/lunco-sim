@@ -241,7 +241,7 @@ impl Plugin for CoSimPlugin {
             .register_type::<ForceActuator>()
             .register_type::<TorqueActuator>()
             .register_type::<lunco_physics::joint::JointTorqueActuator>()
-            .register_type::<PendingActuatorCommand>()
+            .register_type::<PendingActuatorCommands>()
             .register_type::<SimConnection>()
             .register_type::<lunco_cosim_core::initialization::PendingInputConnections>()
             .register_type::<RealtimeSafe>()

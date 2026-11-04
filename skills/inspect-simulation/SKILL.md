@@ -185,6 +185,14 @@ The production `cosim_input_contracts` observer checks priority, atomic rejectio
 release, and force persistence after its API driver admits a controller mass hold.
 Native force and torque inputs must fit their published native range; a finite
 `f64` outside that range rejects the entire command batch before any writes.
+Finite operands must also produce finite native dynamics. `cosim-native-force-range`
+identifies the body and rejected inverse-mass/inertia product or accumulator
+sum; it reaches Recent Events and holds integration before native mutation.
+Check both local and world force channels, paired contact reactions, and an
+unchanged finite `QueryPhysicsState` after rejection. A dual force/torque
+actuator prim retains independent command values. After changing a naturally
+sleeping body's mass, inertia or COM, require renewed physical response; an
+unchanged held property must still allow ordinary sleeping.
 Run `LUNCOSIM_BIN=target/debug/luncosim python3 scripts/api/test_simulation_core_contracts.py`
 for the focused production gates: command decoding, mass tensors, mount
 precision, input priority, parameter replacement and terminal admission errors.

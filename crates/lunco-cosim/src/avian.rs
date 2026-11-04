@@ -22,7 +22,7 @@ use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties, ColliderOf,
     ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Forces, JointDisabled,
     LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
-    RevoluteJoint, RigidBody, RigidBodyDisabled, Rotation, Sleeping, WriteRigidBodyForces,
+    RevoluteJoint, RigidBody, RigidBodyDisabled, Rotation, Sleeping,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -94,8 +94,12 @@ pub fn apply_joint_torque_actuators(
             Has<RigidBodyDisabled>,
         )>,
         Query<Forces, lunco_physics::Integrable>,
+        Query<lunco_physics::AvianForceState, lunco_physics::Integrable>,
     )>,
     mut commands: Commands,
+    mut pending: Local<Vec<lunco_physics::BodyForce>>,
+    mut admission: Local<lunco_physics::ForceBatchScratch>,
+    q_names: Query<&Name>,
 ) {
     if !lunco_physics::physics_is_live_state(&physics_time, &virtual_time, faults.as_deref()) {
         return;
@@ -121,6 +125,7 @@ pub fn apply_joint_torque_actuators(
         }
     };
 
+    pending.clear();
     previous_axle_speed.retain(|entity, _| q_actuators.contains(*entity));
     for entity in ordered {
         let (entity, actuator, joint, joint_forces, disabled, _) = q_actuators
@@ -346,7 +351,7 @@ pub fn apply_joint_torque_actuators(
             }
             return;
         }
-        let mut q_forces = bodies.p1();
+        let q_forces = bodies.p1();
         let receivers = [
             (joint.body1, dynamic[0], -1.0),
             (joint.body2, dynamic[1], 1.0),
@@ -368,10 +373,14 @@ pub fn apply_joint_torque_actuators(
         }
         for (body, dynamic, sign) in receivers {
             if dynamic {
-                q_forces
-                    .get_mut(body)
-                    .expect("validated native force receiver")
-                    .apply_torque((world_torque * sign).as_vec3());
+                pending.push(lunco_physics::BodyForce {
+                    body,
+                    force: DVec3::ZERO,
+                    local_force: DVec3::ZERO,
+                    point: None,
+                    torque: world_torque * sign,
+                    wake: true,
+                });
             }
         }
         if q_sleeping.contains(joint.body1) {
@@ -380,6 +389,17 @@ pub fn apply_joint_torque_actuators(
         if q_sleeping.contains(joint.body2) {
             commands.queue(avian3d::dynamics::solver::islands::WakeBody(joint.body2));
         }
+    }
+    let result = lunco_physics::prepare_force_batch(&bodies.p2(), &pending, &mut admission)
+        .and_then(|()| lunco_physics::apply_force_batch(&mut bodies.p1(), &pending));
+    if let Err(error) = result {
+        reject_native_force_batch(
+            &mut commands,
+            holds.as_deref_mut(),
+            faults.as_deref_mut(),
+            error,
+            &q_names,
+        );
     }
 }
 
@@ -486,13 +506,14 @@ fn reject_joint_torque_coupling(
     }
 }
 
-/// One tick's command for a [`ForceActuator`] or [`TorqueActuator`].
+/// Independent force and torque commands for one authored actuator prim.
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component, Default)]
-pub struct PendingActuatorCommand {
-    /// Commanded magnitude in the actuator's physical unit. The actuator
-    /// clamps it to its authored limit before Avian integration.
-    pub value: f64,
+pub struct PendingActuatorCommands {
+    /// Commanded force, clamped to its authored limit at native application.
+    pub force_n: f64,
+    /// Commanded torque, clamped to its authored limit at native application.
+    pub torque_nm: f64,
 }
 
 /// Reused per-system scratch for the deterministic actuator transaction. The
@@ -503,6 +524,8 @@ pub struct PendingActuatorCommand {
 pub struct ActuatorCommandScratch {
     force: Vec<(Option<u64>, u64, u64, Entity, ForceActuator, f64)>,
     torque: Vec<(Option<u64>, u64, u64, Entity, TorqueActuator, f64)>,
+    batch: Vec<lunco_physics::BodyForce>,
+    admission: lunco_physics::ForceBatchScratch,
 }
 
 /// Stable, allocation-free FNV-1a hash for a local authored name. Networked
@@ -534,16 +557,20 @@ fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut Pending
 }
 
 /// Ensure an actuator command exists, then update it from the port write.
-fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) {
+fn with_pending_actuator_command(
+    world: &mut World,
+    entity: Entity,
+    set: impl FnOnce(&mut PendingActuatorCommands),
+) {
     let mut em = world
         .get_entity_mut(entity)
         .expect("prepared actuator command still has its owning entity");
-    if !em.contains::<PendingActuatorCommand>() {
-        em.insert(PendingActuatorCommand::default());
+    if !em.contains::<PendingActuatorCommands>() {
+        em.insert(PendingActuatorCommands::default());
     }
-    em.get_mut::<PendingActuatorCommand>()
-        .expect("PendingActuatorCommand was inserted before applying the port write")
-        .value = value;
+    set(&mut em
+        .get_mut::<PendingActuatorCommands>()
+        .expect("PendingActuatorCommands was inserted before applying the port write"));
 }
 
 /// Contact as a PHYSICS fact, on any collider — no instrument required.
@@ -704,10 +731,10 @@ pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
         contract: AvianPortContract::FORCE_ACTUATOR,
         dir: PortDirection::In,
         read: Some(|w, e| {
-            w.get::<PendingActuatorCommand>(e)
-                .map(|command| command.value)
+            w.get::<PendingActuatorCommands>(e)
+                .map(|command| command.force_n)
         }),
-        write: Some(with_pending_actuator_command),
+        write: Some(|w, e, v| with_pending_actuator_command(w, e, |command| command.force_n = v)),
     }],
     install_topology: register_force_actuator_topology,
 };
@@ -759,10 +786,10 @@ pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
         contract: AvianPortContract::TORQUE_ACTUATOR,
         dir: PortDirection::In,
         read: Some(|w, e| {
-            w.get::<PendingActuatorCommand>(e)
-                .map(|command| command.value)
+            w.get::<PendingActuatorCommands>(e)
+                .map(|command| command.torque_nm)
         }),
-        write: Some(with_pending_actuator_command),
+        write: Some(|w, e, v| with_pending_actuator_command(w, e, |command| command.torque_nm = v)),
     }],
     install_topology: register_torque_actuator_topology,
 };
@@ -1490,6 +1517,34 @@ fn write_mass(w: &mut World, e: Entity, v: f64) {
         || w.get::<Mass>(e).is_some()
     {
         w.entity_mut(e).remove::<Mass>().insert((mass, NoAutoMass));
+        wake_changed_mass_properties(w, e);
+    }
+}
+
+fn wake_changed_mass_properties(world: &mut World, entity: Entity) {
+    if world
+        .get::<RigidBody>(entity)
+        .is_some_and(RigidBody::is_dynamic)
+        && world.get::<Sleeping>(entity).is_some()
+        && let Err(error) = <avian3d::dynamics::solver::islands::WakeBody as Command>::apply(
+            avian3d::dynamics::solver::islands::WakeBody(entity),
+            world,
+        )
+    {
+        let detail = format!("mass-property update could not wake native body {entity:?}: {error}");
+        world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+            "cosim-mass-property-wake-failed",
+            Some(entity),
+            "mass properties",
+            detail.clone(),
+        );
+        world
+            .resource_mut::<lunco_physics::PhysicsHolds>()
+            .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        world.commands().trigger(lunco_core::RuntimeError {
+            name: "cosim-mass-property-wake-failed".into(),
+            message: detail,
+        });
     }
 }
 
@@ -1542,6 +1597,7 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
         w.entity_mut(e)
             .remove::<AngularInertia>()
             .insert((inertia, NoAutoAngularInertia));
+        wake_changed_mass_properties(w, e);
     }
 }
 
@@ -1571,6 +1627,7 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
         w.entity_mut(e)
             .remove::<CenterOfMass>()
             .insert((center, NoAutoCenterOfMass));
+        wake_changed_mass_properties(w, e);
     }
 }
 
@@ -1586,7 +1643,7 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) {
 pub fn apply_pending_forces(
     physics_time: Res<Time<Physics>>,
     virtual_time: Res<Time<Virtual>>,
-    mut q_pending: Query<(Entity, &mut PendingForces)>,
+    mut q_pending: Query<(Entity, &mut PendingForces, Has<RigidBodyDisabled>)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut scratch: Local<ActuatorCommandScratch>,
@@ -1595,30 +1652,35 @@ pub fn apply_pending_forces(
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut forces: Query<Forces, lunco_physics::Integrable>,
+    mut forces: ParamSet<(
+        Query<lunco_physics::AvianForceState, lunco_physics::Integrable>,
+        Query<Forces, lunco_physics::Integrable>,
+    )>,
     mut actuator_commands: ParamSet<(
         Query<(
             Entity,
             &ForceActuator,
-            &mut PendingActuatorCommand,
+            &mut PendingActuatorCommands,
             Option<&lunco_core::GlobalEntityId>,
             Option<&Name>,
         )>,
         Query<(
             Entity,
             &TorqueActuator,
-            &mut PendingActuatorCommand,
+            &mut PendingActuatorCommands,
             Option<&lunco_core::GlobalEntityId>,
             Option<&Name>,
         )>,
     )>,
     q_parents: Query<&ChildOf>,
     q_poses: Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
-    q_centers: Query<&ComputedCenterOfMass>,
+    q_names: Query<&Name>,
+    q_body_owners: Query<&RigidBody>,
 ) {
     let physics_live =
         lunco_physics::physics_is_live_state(&physics_time, &virtual_time, faults.as_deref());
-    for (e, mut pf) in &mut q_pending {
+    scratch.batch.clear();
+    for (e, mut pf, disabled) in &mut q_pending {
         if ![pf.f, pf.f_local, pf.torque]
             .into_iter()
             .all(lunco_physics::avian_backend_vector_is_valid)
@@ -1630,33 +1692,26 @@ pub fn apply_pending_forces(
             pf.f = DVec3::ZERO;
             pf.f_local = DVec3::ZERO;
             pf.torque = DVec3::ZERO;
-            if let Some(holds) = holds.as_deref_mut() {
-                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-            }
-            if let Some(faults) = faults.as_deref_mut() {
-                if faults.raise("cosim-nonfinite-force", Some(e), "PendingForces", detail) {
-                    error!(
-                        "[cosim] terminal runtime failure: non-finite force accumulator on {e:?}"
-                    );
-                }
-            }
-            continue;
+            reject_native_force_batch(
+                &mut commands,
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                lunco_physics::ForceAdmissionError { body: e, detail },
+                &q_names,
+            );
+            return;
         }
         let has_pending_force =
             pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO;
-        if physics_live && has_pending_force {
-            if let Ok(mut f) = forces.get_mut(e) {
-                if pf.f != DVec3::ZERO {
-                    f.apply_force(pf.f.as_vec3());
-                }
-                if pf.f_local != DVec3::ZERO {
-                    // Avian rotates this into world by the body's attitude.
-                    f.apply_local_force(pf.f_local.as_vec3());
-                }
-                if pf.torque != DVec3::ZERO {
-                    f.apply_torque(pf.torque.as_vec3());
-                }
-            }
+        if physics_live && !disabled && has_pending_force {
+            scratch.batch.push(lunco_physics::BodyForce {
+                local_force: pf.f_local,
+                body: e,
+                force: pf.f,
+                point: None,
+                torque: pf.torque,
+                wake: true,
+            });
         }
         if has_pending_force {
             pf.f = DVec3::ZERO;
@@ -1681,9 +1736,9 @@ pub fn apply_pending_forces(
             entity.to_bits(),
             entity,
             *actuator,
-            command.value,
+            command.force_n,
         ));
-        command.value = 0.0;
+        command.force_n = 0.0;
     }
     scratch
         .force
@@ -1697,9 +1752,9 @@ pub fn apply_pending_forces(
             entity.to_bits(),
             entity,
             *actuator,
-            command.value,
+            command.torque_nm,
         ));
-        command.value = 0.0;
+        command.torque_nm = 0.0;
     }
 
     scratch
@@ -1718,34 +1773,31 @@ pub fn apply_pending_forces(
     // the nearest rigid body, then Avian receives the actual world-space force
     // and point. Avian owns the resulting r×F torque calculation and the live
     // center of mass.
-    for (_, _, _, actuator_entity, actuator, force_n) in scratch.force.drain(..) {
+    for i in 0..scratch.force.len() {
+        let (_, _, _, actuator_entity, actuator, force_n) = scratch.force[i];
         if !force_n.is_finite()
             || force_n.abs() > f64::from(f32::MAX)
             || !actuator.local_position.is_finite()
             || !actuator.direction_local.is_finite()
             || !actuator.max_force_n.is_finite()
         {
-            if let Some(holds) = holds.as_deref_mut() {
-                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-            }
-            if let Some(faults) = faults.as_deref_mut() {
-                if faults.raise(
-                    "cosim-nonfinite-force-actuator",
-                    Some(actuator_entity),
-                    "ForceActuator",
-                    format!(
+            reject_native_force_batch(
+                &mut commands,
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                lunco_physics::ForceAdmissionError {
+                    body: actuator_entity,
+                    detail: format!(
                         "command={force_n:?}, position={:?}, direction={:?}, max_force={:?}",
                         actuator.local_position, actuator.direction_local, actuator.max_force_n
                     ),
-                ) {
-                    error!(
-                        "[cosim] terminal runtime failure: non-finite force actuator command on {actuator_entity:?}"
-                    );
-                }
-            }
-            continue;
+                },
+                &q_names,
+            );
+            return;
         }
-        let Some(body) = nearest_rigid_body(actuator_entity, &q_parents, &q_poses) else {
+        let Some(body) = nearest_rigid_body(actuator_entity, &q_parents, &q_body_owners, &q_poses)
+        else {
             // The actuator may arrive one frame before its body. Propagation will
             // issue the command again on the next tick; dropping this value is
             // preferable to applying it to a guessed body.
@@ -1754,9 +1806,7 @@ pub fn apply_pending_forces(
         let Ok((_, position, rotation)) = q_poses.get(body) else {
             continue;
         };
-        let Ok(mut body_forces) = forces.get_mut(body) else {
-            continue;
-        };
+
         let direction = actuator.direction_local.normalize_or_zero();
         if direction == DVec3::ZERO || actuator.max_force_n <= 0.0 {
             continue;
@@ -1768,67 +1818,46 @@ pub fn apply_pending_forces(
         let local_position = actuator.local_position;
         let world_point = position.0 + rotation.0.as_dquat() * local_position;
         let world_force = rotation.0.as_dquat() * (direction * thrust);
-        let local_center = q_centers
-            .get(body)
-            .expect("native Forces requires computed COM");
-        let center = position.0 + (rotation.0 * local_center.0).as_dvec3();
-        if !lunco_physics::avian_backend_force_at_point_is_valid(world_force, world_point, center) {
-            let detail = format!(
-                "force actuator {actuator_entity:?} exceeds the native force/torque range: command_n={force_n}, local_position_m={local_position:?}, offset_m={:?}, world_force_n={world_force:?}",
-                world_point - center,
-            );
-            if let Some(holds) = holds.as_deref_mut() {
-                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-            }
-            if let Some(faults) = faults.as_deref_mut() {
-                faults.raise(
-                    "cosim-force-actuator-range",
-                    Some(actuator_entity),
-                    "ForceActuator",
-                    detail.clone(),
-                );
-            }
-            lunco_core::trigger_runtime_error(&mut commands, "cosim-force-actuator-range", detail);
-            return;
-        }
-        body_forces.apply_force_at_point(world_force.as_vec3(), world_point);
+        scratch.batch.push(lunco_physics::BodyForce {
+            local_force: DVec3::ZERO,
+            body,
+            force: world_force,
+            point: Some(lunco_spatial::coords::GridPos(world_point)),
+            torque: DVec3::ZERO,
+            wake: true,
+        });
     }
 
     // Torque actuators (reaction wheels, CMGs, and future devices) use the
     // same description-driven command path. Avian owns the torque integration;
     // no actuator-specific Rust or Modelica r×F calculation is involved.
-    for (_, _, _, actuator_entity, actuator, torque_nm) in scratch.torque.drain(..) {
+    for i in 0..scratch.torque.len() {
+        let (_, _, _, actuator_entity, actuator, torque_nm) = scratch.torque[i];
         if !torque_nm.is_finite()
             || torque_nm.abs() > f64::from(f32::MAX)
             || !actuator.axis_local.is_finite()
             || !actuator.max_torque_nm.is_finite()
         {
-            if let Some(holds) = holds.as_deref_mut() {
-                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-            }
-            if let Some(faults) = faults.as_deref_mut() {
-                if faults.raise(
-                    "cosim-nonfinite-torque-actuator",
-                    Some(actuator_entity),
-                    "TorqueActuator",
-                    format!(
+            reject_native_force_batch(
+                &mut commands,
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                lunco_physics::ForceAdmissionError {
+                    body: actuator_entity,
+                    detail: format!(
                         "command={torque_nm:?}, axis={:?}, max_torque={:?}",
                         actuator.axis_local, actuator.max_torque_nm
                     ),
-                ) {
-                    error!(
-                        "[cosim] terminal runtime failure: non-finite torque actuator command on {actuator_entity:?}"
-                    );
-                }
-            }
-            continue;
+                },
+                &q_names,
+            );
+            return;
         }
-        let Some(body) = nearest_rigid_body(actuator_entity, &q_parents, &q_poses) else {
+        let Some(body) = nearest_rigid_body(actuator_entity, &q_parents, &q_body_owners, &q_poses)
+        else {
             continue;
         };
-        let Ok(mut body_forces) = forces.get_mut(body) else {
-            continue;
-        };
+
         let axis = actuator.axis_local.normalize_or_zero();
         if axis == DVec3::ZERO || actuator.max_torque_nm <= 0.0 {
             continue;
@@ -1836,21 +1865,69 @@ pub fn apply_pending_forces(
         let torque = torque_nm.clamp(-actuator.max_torque_nm, actuator.max_torque_nm);
         if torque != 0.0 {
             let (_, _, rotation) = q_poses.get(body).expect("body found in pose query");
-            body_forces.apply_torque((rotation.0.as_dquat() * (axis * torque)).as_vec3());
+            scratch.batch.push(lunco_physics::BodyForce {
+                local_force: DVec3::ZERO,
+                body,
+                force: DVec3::ZERO,
+                point: None,
+                torque: rotation.0.as_dquat() * (axis * torque),
+                wake: true,
+            });
         }
+    }
+    let scratch = &mut *scratch;
+    let result =
+        lunco_physics::prepare_force_batch(&forces.p0(), &scratch.batch, &mut scratch.admission)
+            .and_then(|()| lunco_physics::apply_force_batch(&mut forces.p1(), &scratch.batch));
+    if let Err(error) = result {
+        reject_native_force_batch(
+            &mut commands,
+            holds.as_deref_mut(),
+            faults.as_deref_mut(),
+            error,
+            &q_names,
+        );
     }
 }
 
-/// Find the nearest rigid-body ancestor of a physical mount.
+fn reject_native_force_batch(
+    commands: &mut Commands,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+    error: lunco_physics::ForceAdmissionError,
+    names: &Query<&Name>,
+) {
+    let subject = names.get(error.body).map_or_else(
+        |_| format!("entity {:?}", error.body),
+        |name| name.as_str().to_owned(),
+    );
+    let detail = error.detail;
+    if let Some(holds) = holds {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+    }
+    if let Some(faults) = faults {
+        faults.raise(
+            "cosim-native-force-range",
+            Some(error.body),
+            subject,
+            detail.clone(),
+        );
+    }
+    lunco_core::trigger_runtime_error(commands, "cosim-native-force-range", detail);
+}
+
+/// Resolve the nearest body owner; suspension does not transfer its actuator
+/// to an enclosing body.
 fn nearest_rigid_body(
     start: Entity,
     parents: &Query<&ChildOf>,
+    owners: &Query<&RigidBody>,
     bodies: &Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
 ) -> Option<Entity> {
     let mut current = start;
     for _ in 0..64 {
-        if bodies.get(current).is_ok() {
-            return Some(current);
+        if owners.contains(current) {
+            return bodies.contains(current).then_some(current);
         }
         current = parents.get(current).ok()?.parent();
     }

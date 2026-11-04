@@ -17,7 +17,8 @@ const TORQUE_ACTUATOR_API: &str = "LunCoTorqueActuatorAPI";
 const TORQUE_AXIS_ATTR: &str = "lunco:torqueActuator:axis";
 const TORQUE_MAX_ATTR: &str = "lunco:torqueActuator:maxTorque";
 
-fn actuator_body_path(reader: &dyn UsdReadObject, actuator_path: &SdfPath) -> Option<SdfPath> {
+/// Resolve the rigid-body owner used by the native actuator and its generated control model.
+pub fn actuator_body_path(reader: &dyn UsdReadObject, actuator_path: &SdfPath) -> Option<SdfPath> {
     let mut current = actuator_path.parent();
     while let Some(path) = current {
         if path.is_abs_root() {

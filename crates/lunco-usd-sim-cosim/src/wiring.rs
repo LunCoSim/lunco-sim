@@ -279,20 +279,26 @@ fn mark_wiring_dirty_for_path_remove(
 }
 
 pub(super) fn install_wiring_invalidation_observers(app: &mut App) {
-    app.add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::PortSurfaceReady>)
-        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::PortSurface>)
-        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::OutputPorts>)
-        .add_observer(mark_wiring_dirty_for_endpoint_add::<SimComponent>)
-        .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdPrimPath>)
-        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_core::GlobalEntityId>)
-        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_usd_sim_core::UsdSimProcessed>)
-        .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
-        .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
-        .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::OutputPorts>)
-        .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
-        .add_observer(mark_wiring_dirty_on_remove::<lunco_usd_sim_core::UsdSimProcessed>)
-        .add_observer(mark_wiring_dirty_for_path_remove)
-        .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<lunco_core::GlobalEntityId>);
+    app.add_observer(
+        |_: On<Insert<GeneratedModelicaSource>>, mut dirty: ResMut<UsdWiringDirty>| {
+            dirty.0 = true;
+        },
+    )
+    .add_observer(mark_wiring_dirty_on_remove::<GeneratedModelicaSource>)
+    .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::PortSurfaceReady>)
+    .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::PortSurface>)
+    .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::OutputPorts>)
+    .add_observer(mark_wiring_dirty_for_endpoint_add::<SimComponent>)
+    .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdPrimPath>)
+    .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_core::GlobalEntityId>)
+    .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_usd_sim_core::UsdSimProcessed>)
+    .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
+    .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
+    .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::OutputPorts>)
+    .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
+    .add_observer(mark_wiring_dirty_on_remove::<lunco_usd_sim_core::UsdSimProcessed>)
+    .add_observer(mark_wiring_dirty_for_path_remove)
+    .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<lunco_core::GlobalEntityId>);
 }
 
 /// Last published Modelica participant status. `SimComponent` also carries
@@ -666,7 +672,7 @@ pub(super) fn rewire_usd_connections(
 
     {
         let _span = bevy::log::info_span!("usd_cosim_wiring_derive_connections").entered();
-        for (entity, prim_path, has_modelica, _, _, _, _, wheel_endpoints) in
+        for (entity, prim_path, has_modelica, generated, _, _, _, wheel_endpoints) in
             live_endpoints.iter().copied()
         {
             let id = prim_path.stage_handle.id();
@@ -732,7 +738,20 @@ pub(super) fn rewire_usd_connections(
 
             // Resolve this prim's wires within its OWN instance — a source path names a
             // prim of the same spawn, never a same-named prim of a different one.
-            for attribute in &prim_facts.attributes {
+            let generated_attributes = generated
+                .into_iter()
+                .flat_map(|source| source.input_bindings.iter())
+                .map(|(name, source)| AttributeWiringFacts {
+                    name: format!("inputs:{name}"),
+                    connections: vec![source.clone()],
+                    value: None,
+                    scale: 1.0,
+                    offset: 0.0,
+                    is_network_boundary_output: false,
+                    feeds_internal_network_input: false,
+                })
+                .collect::<Vec<_>>();
+            for attribute in prim_facts.attributes.iter().chain(&generated_attributes) {
                 let attr = attribute.name.as_str();
                 // An `outputs:X.connect` is a FORWARD: this prim publishes an interior
                 // node's result as its own X. It is how a component REPLACES a producer

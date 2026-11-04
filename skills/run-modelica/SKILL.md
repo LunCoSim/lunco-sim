@@ -820,12 +820,26 @@ post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc_id"
 `RunActiveModel` compiles the selected class when its admitted source context is
 stale, then plays it. Reuse requires the exact requested class, document leases,
 candidate source generations and admitted source-root operations to match.
+When compilation is needed, Run keeps its original receipt pending until the
+checked session installs or fails. Await `command_result(id)` just as for
+Compile; an external ambiguous target rejects and requires `class`.
 `CompileStatus.stale` reads that same source owner. `CompileModel` compiles only (stays paused);
 `ResumeActiveModel` unpauses only. Pause and Resume also update the latest run
 intent while source analysis or compilation is pending; installation preserves
 that intent. Await terminal outcomes for Pause, Resume and Restart, including
 invalid targets. Restart is one checked Reset followed by its requested running
 state, and a failed Reset must reject Restart.
+Pause changes future run intent; an already dispatched Step still owns the
+shared-clock barrier until its exact result is admitted. Wait for that endpoint
+to settle before asserting frozen observations. Compile commands retain arrival
+order, including different classes in one document; only consecutive identical
+requests share an installation and all their completion listeners.
+Use `simulation_core_fifth_modelica.rhai` in a windowed production host for failed
+and ambiguous Run, explicit target ordering, coalescing and settled Pause.
+The focused launcher is
+`python3 scripts/api/test_simulation_core_fifth_pass.py --case modelica --port 4943`
+with `LUNCOSIM_BIN` pointing to the production binary. Its failed-Run negative
+case runs last and requires its terminal compiler rejection before the verdict.
 Generated-source regeneration fences its own document and library operations;
 unrelated editor namespace publication or retirement does not stale that unit.
 Editable document libraries remain protected by the ordinary source-document
@@ -1071,7 +1085,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 |---|---|---|
 | `CompileModel` | `{doc_id, class?, force?, resume_after_compile?}` | terminal result after initialized session installation; paused unless resume requested |
 | `SetModelicaParameter` | `{entity, key, value}` | checked edit of the selected participant's mutable source parameter; terminal success after exact replacement installation |
-| `RunActiveModel` | `{doc_id, class?}` | compile-if-stale + play (live) |
+| `RunActiveModel` | `{doc_id, class?}` | resume a clean target or complete after checked compilation/initialization; external ambiguity rejects |
 | `PauseActiveModel` / `ResumeActiveModel` / `ResetActiveModel` | `{doc_id}` | checked live stepping control with terminal outcomes |
 | `RestartActiveModel` | `{doc_id}` | checked reset t=0 and running intent; terminal outcome after replacement installation |
 | `FastRunActiveModel` | `{doc, class?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?}` | batch, bounds from UI draft |

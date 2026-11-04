@@ -47,6 +47,7 @@ use avian3d::dynamics::solver::islands::PhysicsIslands;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
+mod gravity;
 mod joint_frames;
 mod mass;
 mod source_contacts;
@@ -509,6 +510,17 @@ impl Plugin for UsdAvianPlugin {
         // authored joints, so this app must be able to land them.
         app.add_plugins(lunco_usd_avian_joints::JointAttachPlugin);
         app.init_resource::<lunco_core::RuntimeFaults>();
+        {
+            use lunco_core::AppSceneExt;
+            app.init_scene_resource::<gravity::PhysicsSceneGravityOwner>();
+        }
+        app.add_observer(gravity::project_initial_gravity);
+        app.add_systems(
+            PreUpdate,
+            gravity::refresh_gravity
+                .after(lunco_core::RuntimeCycleSet::Lifecycle)
+                .before(lunco_physics::apply_physics_holds),
+        );
         app.add_systems(
             PreUpdate,
             joint_frames::refresh_joint_frames
@@ -986,33 +998,51 @@ fn process_usd_avian_prims(
 fn read_physics_scene_gravity(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
-) -> Result<(f64, DVec3), &'static str> {
+) -> Result<(f64, DVec3), String> {
     let convention = lunco_usd_bevy_stage::stage_convention(reader)
-        .map_err(|_| "stage convention metadata is invalid")?;
-    let magnitude = match reader.real(sdf_path, ptok::PHYSICS_GRAVITY_MAGNITUDE) {
-        Some(value) if value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
+        .map_err(|error| format!("{sdf_path}: stage convention metadata is invalid: {error:?}"))?;
+    let magnitude_attr = ptok::PHYSICS_GRAVITY_MAGNITUDE;
+    let magnitude = match reader.real(sdf_path, magnitude_attr) {
+        Some(value) if value.is_finite() && value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
         Some(value) if value.is_finite() => {
             let converted = convention.length(value);
             if !converted.is_finite() {
-                return Err("gravity magnitude is not finite after stage-unit conversion");
+                return Err(format!(
+                    "{sdf_path}.{magnitude_attr}={value:?} is not finite after stage-unit conversion"
+                ));
             }
             converted
         }
-        Some(_) => return Err("gravity magnitude must be finite or negative for Earth gravity"),
-        None if !reader.has_authored_attribute(sdf_path, ptok::PHYSICS_GRAVITY_MAGNITUDE) => {
+        Some(value) => {
+            return Err(format!(
+                "{sdf_path}.{magnitude_attr}={value:?} must be finite; a finite negative value selects Earth gravity"
+            ));
+        }
+        None if !reader.has_authored_attribute(sdf_path, magnitude_attr) => {
             lunco_environment::EARTH_SURFACE_GRAVITY
         }
-        None => return Err("gravity magnitude has an unsupported authored value type"),
-    };
-    let raw_direction = match reader.vec3_f64(sdf_path, ptok::PHYSICS_GRAVITY_DIRECTION) {
-        Some(value) => DVec3::from_array(value),
-        None if !reader.has_authored_attribute(sdf_path, ptok::PHYSICS_GRAVITY_DIRECTION) => {
-            DVec3::ZERO
+        None => {
+            return Err(format!(
+                "{sdf_path}.{magnitude_attr}={:?} has an unsupported authored value type",
+                reader.attr_value(sdf_path, magnitude_attr)
+            ));
         }
-        None => return Err("gravity direction has an unsupported authored value type"),
+    };
+    let direction_attr = ptok::PHYSICS_GRAVITY_DIRECTION;
+    let raw_direction = match reader.vec3_f64(sdf_path, direction_attr) {
+        Some(value) => DVec3::from_array(value),
+        None if !reader.has_authored_attribute(sdf_path, direction_attr) => DVec3::ZERO,
+        None => {
+            return Err(format!(
+                "{sdf_path}.{direction_attr}={:?} has an unsupported authored value type",
+                reader.attr_value(sdf_path, direction_attr)
+            ));
+        }
     };
     if !raw_direction.is_finite() {
-        return Err("gravity direction must be finite");
+        return Err(format!(
+            "{sdf_path}.{direction_attr}={raw_direction:?} must be finite"
+        ));
     }
     let direction = if raw_direction == DVec3::ZERO {
         DVec3::NEG_Y
@@ -1020,59 +1050,17 @@ fn read_physics_scene_gravity(
         convention
             .dir_d(raw_direction)
             .try_normalize()
-            .ok_or("gravity direction must not be degenerate")?
+            .ok_or_else(|| {
+                format!("{sdf_path}.{direction_attr}={raw_direction:?} must not be degenerate")
+            })?
     };
+    if !lunco_physics::avian_backend_vector_is_valid(direction * magnitude) {
+        return Err(format!(
+            "{sdf_path}.{magnitude_attr} produces acceleration {:?} m/s² outside the finite native range",
+            direction * magnitude
+        ));
+    }
     Ok((magnitude, direction))
-}
-
-fn apply_physics_scene_gravity(
-    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
-    sdf_path: &SdfPath,
-    commands: &mut Commands,
-) {
-    let (magnitude, direction) = match read_physics_scene_gravity(reader, sdf_path) {
-        Ok(values) => values,
-        Err(reason) => {
-            error!(
-                "[usd-avian] {sdf_path} has malformed PhysicsScene gravity data ({reason}); refusing gravity projection"
-            );
-            return;
-        }
-    };
-
-    let prim = sdf_path.as_str().to_string();
-    commands.queue(move |world: &mut World| {
-        // A scene has ONE gravity, so two `PhysicsScene` prims that disagree are
-        // an authoring error. Report it, then apply anyway: the write must be
-        // unconditional or a scene RELOAD — whose prims are a different set from
-        // the outgoing scene's — would be refused its own gravity and inherit
-        // the previous scene's.
-        if let Some(existing) = world.get_resource::<lunco_environment::PhysicsSceneGravity>() {
-            let disagrees = (existing.magnitude - magnitude).abs() > 1e-9
-                || !existing.direction.abs_diff_eq(direction, 1e-9);
-            if existing.prim != prim && disagrees {
-                error!(
-                    "[usd-avian] two PhysicsScene prims disagree about gravity: `{}` set \
-                     {:.4} m/s² along {:?}, `{}` sets {:.4} m/s² along {:?}. The last one \
-                     read wins, which depends on prim order — a scene has one gravity, so \
-                     author a single PhysicsScene.",
-                    existing.prim,
-                    existing.magnitude,
-                    existing.direction,
-                    prim,
-                    magnitude,
-                    direction
-                );
-            }
-        }
-        info!("[usd-avian] {prim} sets gravity to {magnitude:.4} m/s² along {direction:?}");
-        world.insert_resource(lunco_environment::Gravity::flat(magnitude, direction));
-        world.insert_resource(lunco_environment::PhysicsSceneGravity {
-            prim,
-            magnitude,
-            direction,
-        });
-    });
 }
 
 /// Map a single composed USD prim to its Avian physics components through the
@@ -1172,8 +1160,9 @@ fn extract_avian_prim(
     // collider, so it is handled here and the body/collider reads below are
     // skipped entirely.
     if reader.type_name(sdf_path).as_deref() == Some(ptok::PHYSICS_SCENE) {
-        apply_physics_scene_gravity(reader, sdf_path, commands);
-        commands.entity(entity).try_insert(UsdPhysicsProjected);
+        commands
+            .entity(entity)
+            .try_insert((gravity::UsdPhysicsSceneSettings, UsdPhysicsProjected));
         return;
     }
 

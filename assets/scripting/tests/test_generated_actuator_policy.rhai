@@ -16,11 +16,14 @@ fn test_generated_actuator_policy(net) {
     require(source.contains("LunCo.Actuation.WrenchAllocator"),
         "the shared allocator class is missing");
     require(source.contains("wrench_matrix = ["), "wrench matrix is missing");
-    require(source.contains("allocation_step = " + net.allocation_step.to_string()),
-        "allocation step is missing");
+    require(source.contains("allocation_relaxation = 0.9"), "allocation relaxation is missing");
+    for axis in ["x","y","z"] {
+        require(source.contains("center_of_mass_"+axis+" = body_com_"+axis), "live COM equation is missing");
+        require(result.input_bindings["body_com_"+axis]==net.center_of_mass_sources[axis],
+            "native COM source binding is missing");
+    }
     require(source.contains("Force allocation | " + net.actuator_count.to_string()),
         "actuator diagram title is missing");
-    require(!source.contains("RcsValveAllocator"), "legacy allocator leaked into policy output");
     require(!source.contains("\\n"), "literal escaped newlines leaked into Modelica");
 
     require(result.source_roots.contains("LunCo"), "policy did not report its source root");

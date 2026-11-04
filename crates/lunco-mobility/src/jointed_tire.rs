@@ -119,7 +119,7 @@ fn body_state(
 /// substep loop or advance a Modelica participant inside one.
 pub fn apply_jointed_tire_forces(
     mut bodies: ParamSet<(
-        Query<Forces, lunco_physics::Integrable>,
+        Query<Forces>,
         Query<(
             &Position,
             &Rotation,
@@ -127,6 +127,7 @@ pub fn apply_jointed_tire_forces(
             &AngularVelocity,
             &ComputedCenterOfMass,
         )>,
+        Query<lunco_physics::AvianForceState>,
     )>,
     q_tires: Query<
         (
@@ -142,6 +143,9 @@ pub fn apply_jointed_tire_forces(
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,
     collisions: Collisions,
+    mut pending: Local<Vec<lunco_physics::BodyForce>>,
+    mut force_scratch: Local<lunco_physics::ForceBatchScratch>,
+    mut commands: Commands,
     fixed_time: Res<Time<Fixed>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -167,7 +171,7 @@ pub fn apply_jointed_tire_forces(
             return;
         }
     };
-    let mut pending: Vec<(Entity, DVec3, DVec3, bool)> = Vec::new();
+    pending.clear();
 
     {
         let q_state = bodies.p1();
@@ -414,25 +418,14 @@ pub fn apply_jointed_tire_forces(
                 // not a wake-up event. Preserve the command bit with the
                 // pending force so a real drive or brake command can wake a
                 // sleeping wheel island through Avian's regular accumulator.
-                if !lunco_physics::avian_backend_vector_is_valid(force) {
-                    if let Some(holds) = holds.as_deref_mut() {
-                        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-                    }
-                    if let Some(time) = physics_time.as_deref_mut() {
-                        time.pause();
-                        time.advance_by(std::time::Duration::ZERO);
-                    }
-                    if let Some(faults) = faults.as_deref_mut() {
-                        faults.raise(
-                            "mobility-native-force-range-invalid",
-                            Some(wheel),
-                            "wheel force",
-                            "force exceeds the native solver range",
-                        );
-                    }
-                    return;
-                }
-                pending.push((wheel, force, contact.point, drive_torque != 0.0 || braking));
+                pending.push(lunco_physics::BodyForce {
+                    local_force: DVec3::ZERO,
+                    body: wheel,
+                    force,
+                    point: Some(lunco_spatial::coords::GridPos(contact.point)),
+                    torque: DVec3::ZERO,
+                    wake: drive_torque != 0.0 || braking,
+                });
                 // A dynamic support receives the opposite tangential force at
                 // the identical world point. Static, kinematic and disabled
                 // supports prescribe their motion and exchange momentum with
@@ -442,46 +435,38 @@ pub fn apply_jointed_tire_forces(
                         .get(support)
                         .is_ok_and(|(body, disabled)| *body == RigidBody::Dynamic && !disabled)
                 {
-                    pending.push((
-                        support,
-                        -force,
-                        contact.point,
-                        drive_torque != 0.0 || braking,
-                    ));
+                    pending.push(lunco_physics::BodyForce {
+                        local_force: DVec3::ZERO,
+                        body: support,
+                        force: -force,
+                        point: Some(lunco_spatial::coords::GridPos(contact.point)),
+                        torque: DVec3::ZERO,
+                        wake: drive_torque != 0.0 || braking,
+                    });
                 }
             }
         }
     }
 
-    let mut q_forces = bodies.p0();
-    if let Some((body, ..)) = pending.iter().find(|(body, ..)| !q_forces.contains(*body)) {
-        if let Some(holds) = holds.as_deref_mut() {
-            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-        }
-        if let Some(time) = physics_time.as_deref_mut() {
-            time.pause();
-            time.advance_by(std::time::Duration::ZERO);
-        }
-        if let Some(faults) = faults.as_deref_mut() {
-            faults.raise(
-                "mobility-contact-body-unavailable",
-                Some(*body),
-                "wheel contact force",
-                "dynamic contact participant has no native force accumulator",
-            );
-        }
+    if let Err(error) =
+        lunco_physics::prepare_force_batch(&bodies.p2(), &pending, &mut force_scratch)
+    {
+        crate::report_wheel_force_error(
+            &mut commands,
+            error,
+            holds.as_deref_mut(),
+            faults.as_deref_mut(),
+            physics_time.as_deref_mut(),
+        );
         return;
     }
-    for (wheel, force, point, commanded) in pending {
-        let mut forces = q_forces
-            .get_mut(wheel)
-            .expect("contact participants were validated before force application");
-        if commanded {
-            forces.apply_force_at_point(force.as_vec3(), point);
-        } else {
-            forces
-                .non_waking()
-                .apply_force_at_point(force.as_vec3(), point);
-        }
+    if let Err(error) = lunco_physics::apply_force_batch(&mut bodies.p0(), &pending) {
+        crate::report_wheel_force_error(
+            &mut commands,
+            error,
+            holds.as_deref_mut(),
+            faults.as_deref_mut(),
+            physics_time.as_deref_mut(),
+        );
     }
 }

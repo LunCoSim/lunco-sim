@@ -90,28 +90,41 @@ inertia), so they're exposed as one read+write set on `RIGID_BODY_GROUP`: `mass`
 `inertia_xx/yy/zz`, `com_x/y/z` — reachable by wires, API, rhai, python, inspector
 through the unified **`PortRegistry`** (see doc below / `project_port_registry_substrate`).
 
-**The write mechanism** (the real subtlety): Avian splits user *overrides*
-(`Mass`/`AngularInertia`/`CenterOfMass`) from the engine `Computed*` the integrator
-reads. **Reads** return `Computed*` (the effective value). **Writes** set the
-*override* — avian recomputes `Computed*` from it, and an override takes precedence
-over collider-derived mass, so **no `NoAuto*` marker is needed**. (Writing `Computed*`
-directly is wrong: `lunco-usd-avian` inserts a `Mass` override from `physics:mass`,
-and avian recomputes `Computed*` from it each step, clobbering the direct write — this
-was found and fixed during verification.) Overrides are `f32`; principal (diagonal)
-inertia only — off-diagonal left to static USD authoring. Verified: `SetPorts
-mass/inertia_xx/com_y` all stick on read-back while the lander keeps hovering.
+Reads return the effective native `Computed*` value. The co-simulation mass
+property owner validates a complete candidate before writing `ComputedMass`,
+`ComputedAngularInertia` or `ComputedCenterOfMass`. It removes the corresponding
+authored override and installs `NoAuto*` ownership so collider preparation cannot
+clobber a live input. Scalar inertia inputs are body-local tensor diagonal
+entries; the shared f64 tensor reader preserves the other admitted entries.
+The checked native conversion validates finite values and inverse ranges.
+
+Generated force allocation uses this same live COM. All members of an
+`actuator-wrench` collection must belong to one rigid body. Rust supplies the
+origin-based body-local geometry and exact native COM source properties; the
+`synth.actuator-wrench` Rhai policy chooses its wrapper input names and returns
+typed `input_bindings`. `SynthesisPlan` and `GeneratedModelicaSource` retain those
+bindings, and the ordinary USD scalar wiring resolver connects them to the
+body's `inputs:com_x/y/z` ports in the same stage instance. Bindings participate
+in the compilation-plan fingerprint and are inspectable through
+`GeneratedModelicaSource`; live COM values do not change that fingerprint.
+
+`LunCo.Actuation.WrenchAllocator` computes each torque column about the current
+COM as `torque_origin - COM × force`. Its Gram matrix is a runtime equation,
+with bounded coordinate-descent relaxation selected by the policy. Demand
+torques are about that COM in body axes, matching the native point-force
+boundary. The reusable class's explicit zero COM input defaults select the body
+origin; generated wrappers always bind all three native COM inputs. Qualify
+live COM, mixed and saturated demands, unchanged source identity, and mixed-body
+rejection with `simulation_core_fifth_allocator.rhai` on the contracts fixture.
 
 ### G2 (load-time inertia/COM)  **[DONE]**
-`lunco-usd-avian` now reads `physics:diagonalInertia` and `physics:centerOfMass`
-at spawn → Avian `AngularInertia { principal, local_frame }` / `CenterOfMass`
-*override* components (the SAME components the runtime mass-props ports write, so
-authored and model-driven values share one path). Implemented as a single
-`apply_rigid_body_mass_props` helper — the one place mass, inertia and COM are
-read, so every body gets them (and the 1000 kg default) identically.
-`physics:principalAxes` (a quat rotating the principal
-frame) defaults to identity — off-diagonal inertia is left to that quat and is
-almost always identity for landers/rovers. `gravity_accel` is auto-injected into
-models.
+`lunco-usd-avian` reads standard mass, density, inertia, principal axes and COM
+through its composed mass owner. Parry owns geometry mass properties and tensor
+reduction; complete f64 candidates cross the shared checked native boundary
+before body admission. The standard omitted density is 1000 kg/m³; an empty
+body uses the documented no-volume mass/inertia contract rather than a guessed
+1000 kg body. `physics:principalAxes` defaults to identity and rotates principal
+inertia into the body frame. `gravity_accel` is auto-injected into models.
 
 ### G4 — Arbitrary actuator port topology authored in USD  **[wiring DONE; mix = G4b]**
 The wheel→actuator **wiring topology** was hardcoded in two Rust spots: the port

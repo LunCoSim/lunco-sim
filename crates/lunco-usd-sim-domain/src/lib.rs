@@ -391,6 +391,9 @@ pub struct GeneratedModelicaSource {
     /// Public causal inputs on the generated root. Kept separate from
     /// promoted member telemetry so the workbench can explain the interface.
     pub boundary_inputs: Vec<String>,
+    /// Generated input name to an authoritative source property, consumed by
+    /// the ordinary USD scalar connection resolver.
+    pub input_bindings: BTreeMap<String, String>,
     /// Public causal outputs authored on the generated root.
     pub boundary_outputs: Vec<String>,
     /// Unit and member positions selected by the synthesizer policy.
@@ -1310,7 +1313,8 @@ fn commit_domain_projection(
                 .map(|error| format!("{}: {}", error.path, error.message))
                 .collect::<Vec<_>>()
                 .join("; ");
-            let fingerprint = source_fingerprint(&format!("projection-error:{message}"));
+            let fingerprint =
+                source_fingerprint(&format!("projection-error:{message}"), &BTreeMap::new());
             if previous.is_some_and(|state| state.fingerprint == fingerprint) {
                 return false;
             }
@@ -1350,6 +1354,7 @@ fn commit_domain_projection(
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
                     boundary_inputs: Vec::new(),
+                    input_bindings: BTreeMap::new(),
                     boundary_outputs: Vec::new(),
                     layout: SynthesisLayout::default(),
                     projection_error: Some(message),
@@ -1388,7 +1393,7 @@ fn commit_domain_projection(
     let interface = synthesized.interface;
     let source = synthesized.source;
     let source_for_diagnostics = source.clone();
-    let fingerprint = source_fingerprint(&source);
+    let fingerprint = source_fingerprint(&source, &synthesized.input_bindings);
     if previous.is_some_and(|state| state.fingerprint == fingerprint) {
         return false;
     }
@@ -1471,6 +1476,7 @@ fn commit_domain_projection(
         member_output_aliases,
         units: synthesized.units,
         boundary_inputs: synthesized.inputs.iter().cloned().collect(),
+        input_bindings: synthesized.input_bindings,
         boundary_outputs: synthesized.outputs.iter().cloned().collect(),
         layout: synthesized.layout,
         projection_error: None,
@@ -2269,10 +2275,18 @@ fn network_model_name(root: &str, global_id: Option<u64>) -> String {
 }
 
 /// The workspace hashing substrate, not `DefaultHasher`: this value decides
-/// whether a live edit recompiles, and one definition of "same source" is worth
+/// whether a live edit recompiles, and one definition of "same compilation plan" is worth
 /// more than a std default whose stability is unspecified.
-fn source_fingerprint(source: &str) -> u64 {
-    lunco_hash::fnv1a64(source.as_bytes())
+fn source_fingerprint(source: &str, input_bindings: &BTreeMap<String, String>) -> u64 {
+    let mut bytes = Vec::from((source.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(source.as_bytes());
+    for (name, target) in input_bindings {
+        for value in [name, target] {
+            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+        }
+    }
+    lunco_hash::fnv1a64(&bytes)
 }
 
 /// Stable, readable Modelica instance name for a composed USD member.
@@ -3543,6 +3557,7 @@ mod tests {
                 member_output_aliases: Vec::new(),
                 units: Vec::new(),
                 boundary_inputs: Vec::new(),
+                input_bindings: BTreeMap::new(),
                 boundary_outputs: Vec::new(),
                 layout: SynthesisLayout::default(),
                 projection_error: None,
@@ -4123,12 +4138,25 @@ def Scope "Rig"
     }
 
     #[test]
-    fn projection_fingerprint_changes_only_with_generated_source() {
+    fn projection_fingerprint_covers_generated_source_and_input_bindings() {
         let source = "model A\n  Real x;\nend A;\n";
-        assert_eq!(source_fingerprint(source), source_fingerprint(source));
+        assert_eq!(
+            source_fingerprint(source, &BTreeMap::new()),
+            source_fingerprint(source, &BTreeMap::new())
+        );
         assert_ne!(
-            source_fingerprint(source),
-            source_fingerprint("model A\n  Real y;\nend A;\n")
+            source_fingerprint(source, &BTreeMap::new()),
+            source_fingerprint("model A\n  Real y;\nend A;\n", &BTreeMap::new())
+        );
+        let binding = BTreeMap::from([("body_com_x".into(), "/Body.inputs:com_x".into())]);
+        let replacement = BTreeMap::from([("body_com_x".into(), "/Other.inputs:com_x".into())]);
+        assert_ne!(
+            source_fingerprint(source, &binding),
+            source_fingerprint(source, &BTreeMap::new())
+        );
+        assert_ne!(
+            source_fingerprint(source, &binding),
+            source_fingerprint(source, &replacement)
         );
     }
 
@@ -4222,6 +4250,7 @@ def Scope "Rig"
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
                     boundary_inputs: Vec::new(),
+                    input_bindings: BTreeMap::new(),
                     boundary_outputs: Vec::new(),
                     layout: SynthesisLayout::default(),
                     projection_error: None,
@@ -4274,6 +4303,7 @@ def Scope "Rig"
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
                     boundary_inputs: Vec::new(),
+                    input_bindings: BTreeMap::new(),
                     boundary_outputs: Vec::new(),
                     layout: SynthesisLayout::default(),
                     projection_error: None,
@@ -4360,6 +4390,7 @@ def Scope "Rig"
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
                     boundary_inputs: Vec::new(),
+                    input_bindings: BTreeMap::new(),
                     boundary_outputs: Vec::new(),
                     layout: SynthesisLayout::default(),
                     projection_error: None,
@@ -4442,9 +4473,8 @@ def Scope "Rig"
             },
         ];
 
-        let (matrix, step) = synthesis::actuator_wrench_matrix(&actuators).unwrap();
+        let matrix = synthesis::actuator_wrench_matrix(&actuators).unwrap();
         assert_eq!(matrix.len(), 3);
-        assert!(step > 0.0 && step.is_finite());
         assert_eq!(matrix[0], [0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
         assert_eq!(matrix[1], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
         assert_eq!(matrix[2], [0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
@@ -4514,7 +4544,20 @@ def Scope "Rig"
                         .collect(),
                 ),
             ),
-            ("allocation_step".into(), lunco_hooks::HookValue::Float(0.1)),
+            (
+                "center_of_mass_sources".into(),
+                lunco_hooks::HookValue::Map(
+                    ["x", "y", "z"]
+                        .into_iter()
+                        .map(|axis| {
+                            (
+                                axis.into(),
+                                lunco_hooks::HookValue::str(format!("/Lander.inputs:com_{axis}")),
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
             ("actuator_count".into(), lunco_hooks::HookValue::Int(1)),
         ]);
         let value = lunco_hooks::invoke_with_context(
@@ -4534,9 +4577,10 @@ def Scope "Rig"
             .expect("actuator policy source");
         assert!(source.contains("LunCo.Actuation.WrenchAllocator"));
         assert!(source.contains("wrench_matrix = ["));
-        assert!(source.contains("allocation_step = 0.1"));
-        assert!(source.contains("allocator.desired_torque_z = desired_torque_z;"));
-        assert!(source.contains("allocator.desired_force_x = 0.0;"));
+        assert!(source.contains("allocation_relaxation = 0.9"));
+        assert!(source.contains("desired_torque_z = desired_torque_z"));
+        assert!(source.contains("desired_force_x = 0.0"));
+        assert!(source.contains("center_of_mass_x = body_com_x"));
         assert!(source.contains("valve = allocator.command[1];"));
         assert!(source.contains("Force allocation | 1 actuator(s)"));
         let ast = rumoca_phase_parse::parse_to_ast(&source, "wrench.mo")

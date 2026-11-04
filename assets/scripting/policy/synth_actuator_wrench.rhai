@@ -7,6 +7,7 @@
 // Presentation and solver policy belong in Rhai so they can be tuned without
 // changing the Rust host or the generic projection seam.
 const WRENCH_ALLOCATION_ITERATIONS_TEXT = "64";
+const WRENCH_ALLOCATION_RELAXATION_TEXT = "0.9";
 const WRENCH_ICON_COORDINATE_HALF_WIDTH = 100;
 const WRENCH_ICON_COORDINATE_HALF_HEIGHT = 70;
 const WRENCH_ICON_BOX_HALF_WIDTH = 92;
@@ -128,11 +129,20 @@ fn synthesize(net) {
     let source = "model " + net.model_name + "\n";
     let mutable = source;
     for input in net.inputs { mutable += "  input Real " + input + ";\n"; }
+    let input_bindings=#{};
+    for axis in ["x","y","z"] {
+        let name="body_com_"+axis;
+        if net.inputs.contains(name) || net.outputs.contains(name) {
+            throw("generated COM input collides with authored port "+name);
+        }
+        mutable += "  input Real "+name+"(unit = \"m\");\n";
+        input_bindings[name]=net.center_of_mass_sources[axis];
+    }
     for output in net.outputs { mutable += "  output Real " + output + ";\n"; }
     mutable += "  LunCo.Actuation.WrenchAllocator allocator(\n";
     mutable += "    actuator_count = " + net.actuator_count.to_string() + ",\n";
     mutable += "    allocation_iterations = " + WRENCH_ALLOCATION_ITERATIONS_TEXT + ",\n";
-    mutable += "    allocation_step = " + net.allocation_step.to_string() + ",\n";
+    mutable += "    allocation_relaxation = " + WRENCH_ALLOCATION_RELAXATION_TEXT + ",\n";
     mutable += "    wrench_matrix = " + matrix_literal(net.wrench_matrix) + ",\n";
     mutable += "    lower_command = {" + vector_zeros(net.actuator_count) + "},\n";
     let allocator_extent = rect(
@@ -153,6 +163,9 @@ fn synthesize(net) {
         }
         mutable += ",\n    " + name + " = " + value;
     }
+    for axis in ["x","y","z"] {
+        mutable += ",\n    center_of_mass_"+axis+" = body_com_"+axis;
+    }
     mutable += ") annotation(Placement(transformation(origin = {" + WRENCH_ORIGIN_TEXT + "}, extent = "
         + allocator_extent + ")));\n\n";
     mutable += "equation\n";
@@ -165,7 +178,7 @@ fn synthesize(net) {
     mutable += "annotation(" + compact_icon(net.model_name) + ","
         + diagram_annotation(title) + ");\n";
     mutable += "end " + net.model_name + ";\n";
-    #{ source: mutable, source_roots: ["LunCo"] }
+    #{ source: mutable, source_roots: ["LunCo"], input_bindings:input_bindings }
 }
 
 fn vector_ones(count) {

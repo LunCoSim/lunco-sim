@@ -98,6 +98,10 @@ or mixed native/prescribed ownership must stay unavailable. Directions and
 physical solar visibility use this same reader for probe and provider poses.
 The shared
 `lunco-physics::avian_backend` contract owns numeric backend admission; the
+force transaction uses typed `lunco-spatial::coords::GridPos` contact points and
+keeps body-local forces local through native substeps. Its read/admit/apply
+boundary checks actual mass/inertia-scaled native accumulation before mutation.
+The
 bridge owns lifecycle admission and raises the runtime fault when changed poses
 or collider AABBs are invalid. It gates the nested physics phases before Avian
 grows AABBs or runs a query; `GridSpatialQuery` reuses the same point check

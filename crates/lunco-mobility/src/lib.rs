@@ -2215,6 +2215,35 @@ fn refresh_dynamically_fixed_bodies(
     }
 }
 
+fn report_wheel_force_error(
+    commands: &mut Commands,
+    error: lunco_physics::ForceAdmissionError,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+    physics_time: Option<&mut Time<Physics>>,
+) {
+    if let Some(holds) = holds {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+    }
+    if let Some(time) = physics_time {
+        time.pause();
+        time.advance_by(std::time::Duration::ZERO);
+    }
+    if let Some(faults) = faults {
+        faults.raise(
+            "mobility-native-force-range-invalid",
+            Some(error.body),
+            "wheel contact force",
+            error.detail.clone(),
+        );
+    }
+    lunco_core::trigger_runtime_error(
+        commands,
+        "mobility-native-force-range-invalid",
+        error.detail,
+    );
+}
+
 /// System solving the vertical suspension dynamics.
 ///
 /// **Logic**: Performs a ray-world intersection check. If a hit is detected
@@ -2246,11 +2275,12 @@ fn apply_wheel_suspension(
         ),
         Without<lunco_core::SimulationObjectPaused>,
     >,
-    // Force must land only on a body the solver will integrate. A disabled body
-    // (frozen while its program compiles, say) never has its accumulators
-    // cleared, so force applied to it is stored, not spent, and discharges in
-    // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut q_chassis: Query<(Forces, &RigidBody), lunco_physics::Integrable>,
+    mut bodies: ParamSet<(Query<lunco_physics::AvianForceState>, Query<Forces>)>,
+    q_modes: Query<(&RigidBody, Has<RigidBodyDisabled>)>,
+    owners: Query<&ColliderOf>,
+    mut pending: Local<Vec<lunco_physics::BodyForce>>,
+    mut force_scratch: Local<lunco_physics::ForceBatchScratch>,
+    mut commands: Commands,
     fixed_dynamic_bodies: Res<DynamicFixedBodies>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -2272,101 +2302,107 @@ fn apply_wheel_suspension(
             return;
         }
     };
-    for entity in order {
-        let Ok((_, _, mut wheel, susp, hits, mount, stop)) = q_wheels.get_mut(entity) else {
-            continue;
-        };
-        let parent_entity = mount.body;
-        if let Ok((mut forces, body)) = q_chassis.get_mut(parent_entity) {
-            // A Kinematic chassis (a client's replicated proxy rover, or a body
-            // mid gizmo-drag) must NOT receive the suspension spring force — its
-            // pose is authoritative (snapshot-driven) and a local force would fight
-            // it. But the wheel GROUND PLACEMENT + normal force below are pure
-            // animation derived from the downward raycast, so they STILL run: that's
-            // what lets a proxy's wheels rest on the terrain and report `on_ground`
-            // to the spin model instead of floating at their authored rest offset.
-            let apply_force = !matches!(body, RigidBody::Kinematic)
-                && !fixed_dynamic_bodies.0.contains(&parent_entity);
-            let (world_pos, world_rot) = wheel_hub_pose(
-                GridPos(forces.position()),
-                GridRot(forces.rotation().as_dquat()),
+    pending.clear();
+    {
+        let states = bodies.p0();
+        for entity in order {
+            let Ok((_, _, mut wheel, susp, hits, mount, stop)) = q_wheels.get_mut(entity) else {
+                continue;
+            };
+            wheel.last_normal_force = 0.0;
+            let Ok(carrier) = states.get(mount.body) else {
+                continue;
+            };
+            let (hub, heading) = wheel_hub_pose(
+                carrier.position(),
+                GridRot(carrier.rotation().as_dquat()),
                 mount.local.translation,
                 mount.local.rotation * wheel.heading_rotation,
             );
-
-            // An inside-collider hit with a degenerate normal cannot supply
-            // support. Publish zero load unless the native hit has a valid
-            // contact normal, so tire consumers use the same physical contact.
             let contact = hits
                 .iter_sorted()
                 .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
-            if let Some(hit) = contact {
-                let distance = f64::from(hit.distance);
-                if distance < susp.rest_length {
-                    // Suspension is compressed: apply spring-damper force.
-                    let compression = susp.rest_length - distance;
-                    // Damping is measured along the CONTACT NORMAL — the same
-                    // axis the spring force is applied on below. Projecting on
-                    // chassis-frame down instead put damper and spring on
-                    // different axes on any slope, under-damping exactly the
-                    // tilted contacts that ring hardest.
-                    // Positive relative_vel = wheel moving toward ground (compressing).
-                    // Negative relative_vel = wheel moving away from ground (extending).
-                    let velocity_at_wheel = forces.velocity_at_point(world_pos.0);
-                    let relative_vel = -f64::from(velocity_at_wheel.dot(hit.normal));
-
-                    let total_force_mag = suspension_force_mag(
-                        compression,
-                        susp.spring_k,
-                        relative_vel,
-                        susp.damping_c,
-                    );
-
-                    let force_vec = hit.normal.as_dvec3() * total_force_mag;
-                    if !lunco_physics::avian_backend_vector_is_valid(force_vec) {
-                        if let Some(holds) = holds.as_deref_mut() {
-                            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-                        }
-                        if let Some(time) = physics_time.as_deref_mut() {
-                            time.pause();
-                            time.advance_by(std::time::Duration::ZERO);
-                        }
-                        if let Some(faults) = faults.as_deref_mut() {
-                            faults.raise(
-                                "mobility-native-force-range-invalid",
-                                Some(parent_entity),
-                                "wheel force",
-                                "force exceeds the native solver range",
-                            );
-                        }
-                        return;
-                    }
-                    if apply_force {
-                        // Suspension is a persistent contact-support reaction,
-                        // not a wake-up event. The chassis can remain asleep
-                        // while this force balances its persistent gravity;
-                        // Avian will still apply it whenever the island is
-                        // awake. Drive, tire, and actuator forces below keep
-                        // the waking path for actual commanded motion.
-                        forces.non_waking().apply_force_at_point(
-                            force_vec.as_vec3(),
-                            raycast_contact_point(
-                                world_pos.0,
-                                world_rot.0,
-                                susp.rest_length,
-                                wheel.wheel_radius,
-                                distance,
-                            ),
-                        );
-                    }
-                    wheel.last_normal_force = total_force_mag + stop.map_or(0.0, |load| load.0);
-                } else {
-                    wheel.last_normal_force = 0.0;
-                }
-            } else {
-                wheel.last_normal_force = 0.0;
+            let Some(hit) = contact else {
+                continue;
+            };
+            let support = raycast_travel::support_body(hit.entity, &owners);
+            if support == mount.body {
+                continue;
+            }
+            let Ok(support_state) = states.get(support) else {
+                continue;
+            };
+            let distance = f64::from(hit.distance);
+            if distance >= susp.rest_length {
+                continue;
+            }
+            let point = raycast_contact_point(
+                hub.0,
+                heading.0,
+                susp.rest_length,
+                wheel.wheel_radius,
+                distance,
+            );
+            let relative_velocity = carrier.velocity_at_point(GridPos(point)).as_dvec3()
+                - support_state.velocity_at_point(GridPos(point)).as_dvec3();
+            let force_magnitude = suspension_force_mag(
+                susp.rest_length - distance,
+                susp.spring_k,
+                -relative_velocity.dot(hit.normal.as_dvec3()),
+                susp.damping_c,
+            );
+            let force = hit.normal.as_dvec3() * force_magnitude;
+            wheel.last_normal_force = force_magnitude + stop.map_or(0.0, |load| load.0);
+            let carrier_dynamic = q_modes
+                .get(mount.body)
+                .is_ok_and(|(mode, disabled)| *mode == RigidBody::Dynamic && !disabled)
+                && !fixed_dynamic_bodies.0.contains(&mount.body);
+            if !carrier_dynamic {
+                continue;
+            }
+            pending.push(lunco_physics::BodyForce {
+                local_force: DVec3::ZERO,
+                body: mount.body,
+                force,
+                point: Some(lunco_spatial::coords::GridPos(point)),
+                torque: DVec3::ZERO,
+                wake: false,
+            });
+            if q_modes
+                .get(support)
+                .is_ok_and(|(mode, disabled)| *mode == RigidBody::Dynamic && !disabled)
+            {
+                pending.push(lunco_physics::BodyForce {
+                    local_force: DVec3::ZERO,
+                    body: support,
+                    force: -force,
+                    point: Some(lunco_spatial::coords::GridPos(point)),
+                    torque: DVec3::ZERO,
+                    wake: false,
+                });
             }
         }
+        if let Err(error) =
+            lunco_physics::prepare_force_batch(&states, &pending, &mut force_scratch)
+        {
+            report_wheel_force_error(
+                &mut commands,
+                error,
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                physics_time.as_deref_mut(),
+            );
+            return;
+        }
+    }
+    if let Err(error) = lunco_physics::apply_force_batch(&mut bodies.p1(), &pending) {
+        report_wheel_force_error(
+            &mut commands,
+            error,
+            holds.as_deref_mut(),
+            faults.as_deref_mut(),
+            physics_time.as_deref_mut(),
+        );
     }
 }
 
@@ -2609,16 +2645,19 @@ fn apply_wheel_drive(
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut q_chassis: Query<
-        (
-            Forces,
-            &RigidBody,
-            &ComputedMass,
-            Option<&InputPorts>,
-            Option<&lunco_physics::kinematics::LocalGravity>,
-        ),
-        lunco_physics::Integrable,
-    >,
+    mut bodies: ParamSet<(Query<lunco_physics::AvianForceState>, Query<Forces>)>,
+    q_traits: Query<(
+        &RigidBody,
+        Has<RigidBodyDisabled>,
+        &ComputedMass,
+        Option<&InputPorts>,
+        Option<&lunco_physics::kinematics::LocalGravity>,
+    )>,
+    owners: Query<&ColliderOf>,
+    mut pending: Local<Vec<lunco_physics::BodyForce>>,
+    mut force_scratch: Local<lunco_physics::ForceBatchScratch>,
+    mut total_normal_load: Local<std::collections::HashMap<Entity, f64>>,
+    mut commands: Commands,
     fixed_dynamic_bodies: Res<DynamicFixedBodies>,
     time: Res<Time<Fixed>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -2642,162 +2681,198 @@ fn apply_wheel_drive(
         }
     };
     let dt = time.delta_secs_f64();
+    pending.clear();
+    {
+        let states = bodies.p0();
 
-    // Stable summation in the same physics order used to apply contact forces.
-    let mut total_normal_load = std::collections::HashMap::<Entity, f64>::new();
-    for entity in &order {
-        if let Ok((_, _, wheel, _, hits, mount, _)) = q_wheels.get(*entity) {
-            if hits
-                .iter_sorted()
-                .any(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12)
-                && contact_has_positive_load(wheel.last_normal_force)
-            {
-                *total_normal_load.entry(mount.body).or_default() += wheel.last_normal_force;
+        // Stable summation in the same physics order used to apply contact forces.
+        total_normal_load.clear();
+        for entity in &order {
+            if let Ok((_, _, wheel, _, hits, mount, _)) = q_wheels.get(*entity) {
+                if hits
+                    .iter_sorted()
+                    .any(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12)
+                    && contact_has_positive_load(wheel.last_normal_force)
+                {
+                    *total_normal_load.entry(mount.body).or_default() += wheel.last_normal_force;
+                }
             }
         }
-    }
-    for entity in order {
-        let Ok((_, _, wheel, susp, hits, mount, heat_ports)) = q_wheels.get(entity) else {
-            continue;
-        };
-        let parent_entity = mount.body;
-        if let Ok((mut forces, body, mass, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
-            if fixed_dynamic_bodies.0.contains(&parent_entity) {
+        for entity in order {
+            let Ok((_, _, wheel, susp, hits, mount, heat_ports)) = q_wheels.get(entity) else {
                 continue;
-            }
-            // Skip forces if body is kinematic
-            if matches!(body, RigidBody::Kinematic) {
-                continue;
-            }
-            let drive_torque = q_ports
-                .p0()
-                .get(wheel.drive_port)
-                .map(|port| port.value)
-                .ok();
-            if let Some(drive_torque) = drive_torque {
-                let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
-                    GridPos(forces.position()),
-                    GridRot(forces.rotation().as_dquat()),
-                    mount.local.translation,
-                    mount.local.rotation * wheel.heading_rotation,
-                );
-                // Traction only exists when the ray is hitting the ground.
-                let Some(hit) = hits
-                    .iter_sorted()
-                    .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12)
-                else {
+            };
+            let parent_entity = mount.body;
+            if let (Ok(forces), Ok((body, disabled, mass, inputs, gravity))) =
+                (states.get(parent_entity), q_traits.get(parent_entity))
+            {
+                if disabled {
                     continue;
-                };
-                {
-                    let normal_force = wheel.last_normal_force;
-                    if !contact_has_positive_load(normal_force) {
-                        continue;
-                    }
-
-                    // The tyre force belongs at the ray's contact point, not at
-                    // the hub. Applying it at the hub erased the wheel-radius
-                    // moment and was only equivalent on a flat, upright contact.
-                    // On a DEM slope that missing moment changes load transfer and
-                    // feeds the next suspension sample, producing the observed
-                    // forward/back contact limit cycle. The ray starts at the
-                    // authored strut top, so reconstruct its hit point in the
-                    // same grid-absolute frame as the chassis and ray query.
-                    let contact_point = raycast_contact_point(
-                        hub_pos_world.0,
-                        hub_rot_world.0,
-                        susp.rest_length,
-                        wheel.wheel_radius,
-                        f64::from(hit.distance),
+                }
+                if fixed_dynamic_bodies.0.contains(&parent_entity) {
+                    continue;
+                }
+                // Prescribed-motion carriers do not receive dynamic tire forces.
+                if *body != RigidBody::Dynamic {
+                    continue;
+                }
+                let drive_torque = q_ports
+                    .p0()
+                    .get(wheel.drive_port)
+                    .map(|port| port.value)
+                    .ok();
+                if let Some(drive_torque) = drive_torque {
+                    let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
+                        forces.position(),
+                        GridRot(forces.rotation().as_dquat()),
+                        mount.local.translation,
+                        mount.local.rotation * wheel.heading_rotation,
                     );
-                    // The tire force was already solved this tick, from the real
-                    // contact slip `ω·r − v` and the wheel's own lateral slip —
-                    // see `update_wheel_spin`. Applying it is all that is left.
-                    // A wheel brake must provide static friction as well as
-                    // spin-down torque.  The old path only damped axle spin,
-                    // so a rover with zero wheel speed still slid down a
-                    // slope: the tire solver produced a few newtons while
-                    // gravity supplied the remaining acceleration.  Project
-                    // gravity onto this contact plane and distribute the
-                    // required support by the measured normal load.  The
-                    // authored tire friction coefficient remains the hard
-                    // limit; a slope steeper than the tire can hold still
-                    // slides naturally.
-                    let parking_force = if inputs.is_some_and(|i| i.brake_active) {
-                        gravity
-                            .map(|g| {
-                                parking_brake_force_with_velocity(
-                                    g.acceleration(),
-                                    hit.normal.as_dvec3(),
-                                    normal_force,
-                                    f64::from(mass.value()) * normal_force
-                                        / total_normal_load[&parent_entity],
-                                    wheel.friction_mu,
-                                    forces.velocity_at_point(contact_point).as_dvec3(),
-                                    dt,
-                                )
-                            })
-                            .unwrap_or(DVec3::ZERO)
-                    } else {
-                        DVec3::ZERO
+                    // Traction only exists when the ray is hitting the ground.
+                    let Some(hit) = hits.iter_sorted().find(|hit| {
+                        hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12
+                    }) else {
+                        continue;
                     };
-                    // A tire patch is a persistent contact reaction. Reapplying
-                    // that reaction must not wake an otherwise settled chassis;
-                    // Avian will consume it whenever the body is already in an
-                    // active island. A drive or brake command is different: it
-                    // is an authored wake-up event and must use the regular
-                    // accumulator so a parked rover responds immediately.
-                    let commanded =
-                        drive_torque != 0.0 || inputs.is_some_and(|input| input.brake_active);
-                    // A locked patch has one Coulomb cone. Adding the dynamic
-                    // tire force again would count its grip twice.
-                    let locked = inputs.is_some_and(|i| i.brake_active)
-                        && wheel.spin_velocity == 0.0
-                        && gravity.is_some();
-                    let force = if locked {
-                        let brake_force = (wheel.brake_torque_max - drive_torque.abs()).max(0.0)
-                            / wheel.wheel_radius;
-                        parking_force.clamp_length_max(brake_force)
-                    } else {
-                        wheel.tire_force
-                    };
-                    if locked {
-                        if let Some(endpoint) = heat_ports.and_then(|ports| ports.tire) {
-                            if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
-                                // This is the delivered locked-patch force and
-                                // its conjugate slip, not the rolling predictor.
-                                port.value =
-                                    -force.dot(forces.velocity_at_point(contact_point).as_dvec3());
+                    {
+                        let normal_force = wheel.last_normal_force;
+                        if !contact_has_positive_load(normal_force) {
+                            continue;
+                        }
+
+                        // The tyre force belongs at the ray's contact point, not at
+                        // the hub. Applying it at the hub erased the wheel-radius
+                        // moment and was only equivalent on a flat, upright contact.
+                        // On a DEM slope that missing moment changes load transfer and
+                        // feeds the next suspension sample, producing the observed
+                        // forward/back contact limit cycle. The ray starts at the
+                        // authored strut top, so reconstruct its hit point in the
+                        // same grid-absolute frame as the chassis and ray query.
+                        let contact_point = raycast_contact_point(
+                            hub_pos_world.0,
+                            hub_rot_world.0,
+                            susp.rest_length,
+                            wheel.wheel_radius,
+                            f64::from(hit.distance),
+                        );
+                        let support = raycast_travel::support_body(hit.entity, &owners);
+                        if support == parent_entity {
+                            continue;
+                        }
+                        let Ok(support_state) = states.get(support) else {
+                            continue;
+                        };
+                        let relative_velocity =
+                            forces.velocity_at_point(GridPos(contact_point)).as_dvec3()
+                                - support_state
+                                    .velocity_at_point(GridPos(contact_point))
+                                    .as_dvec3();
+                        // The tire force was already solved this tick, from the real
+                        // contact slip `ω·r − v` and the wheel's own lateral slip —
+                        // see `update_wheel_spin`. Applying it is all that is left.
+                        // A wheel brake must provide static friction as well as
+                        // spin-down torque.  The old path only damped axle spin,
+                        // so a rover with zero wheel speed still slid down a
+                        // slope: the tire solver produced a few newtons while
+                        // gravity supplied the remaining acceleration.  Project
+                        // gravity onto this contact plane and distribute the
+                        // required support by the measured normal load.  The
+                        // authored tire friction coefficient remains the hard
+                        // limit; a slope steeper than the tire can hold still
+                        // slides naturally.
+                        let parking_force = if inputs.is_some_and(|i| i.brake_active) {
+                            gravity
+                                .map(|g| {
+                                    parking_brake_force_with_velocity(
+                                        g.acceleration(),
+                                        hit.normal.as_dvec3(),
+                                        normal_force,
+                                        f64::from(mass.value()) * normal_force
+                                            / total_normal_load[&parent_entity],
+                                        wheel.friction_mu,
+                                        relative_velocity,
+                                        dt,
+                                    )
+                                })
+                                .unwrap_or(DVec3::ZERO)
+                        } else {
+                            DVec3::ZERO
+                        };
+                        // A tire patch is a persistent contact reaction. Reapplying
+                        // that reaction must not wake an otherwise settled chassis;
+                        // Avian will consume it whenever the body is already in an
+                        // active island. A drive or brake command is different: it
+                        // is an authored wake-up event and must use the regular
+                        // accumulator so a parked rover responds immediately.
+                        let commanded =
+                            drive_torque != 0.0 || inputs.is_some_and(|input| input.brake_active);
+                        // A locked patch has one Coulomb cone. Adding the dynamic
+                        // tire force again would count its grip twice.
+                        let locked = inputs.is_some_and(|i| i.brake_active)
+                            && wheel.spin_velocity == 0.0
+                            && gravity.is_some();
+                        let force = if locked {
+                            let brake_force = (wheel.brake_torque_max - drive_torque.abs())
+                                .max(0.0)
+                                / wheel.wheel_radius;
+                            parking_force.clamp_length_max(brake_force)
+                        } else {
+                            wheel.tire_force
+                        };
+                        if locked {
+                            if let Some(endpoint) = heat_ports.and_then(|ports| ports.tire) {
+                                if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
+                                    // This is the delivered locked-patch force and
+                                    // its conjugate slip, not the rolling predictor.
+                                    port.value = -force.dot(relative_velocity);
+                                }
                             }
                         }
-                    }
-                    if !lunco_physics::avian_backend_vector_is_valid(force) {
-                        if let Some(holds) = holds.as_deref_mut() {
-                            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                        pending.push(lunco_physics::BodyForce {
+                            local_force: DVec3::ZERO,
+                            body: parent_entity,
+                            force,
+                            point: Some(lunco_spatial::coords::GridPos(contact_point)),
+                            torque: DVec3::ZERO,
+                            wake: commanded,
+                        });
+                        if q_traits.get(support).is_ok_and(|(mode, disabled, ..)| {
+                            *mode == RigidBody::Dynamic && !disabled
+                        }) {
+                            pending.push(lunco_physics::BodyForce {
+                                local_force: DVec3::ZERO,
+                                body: support,
+                                force: -force,
+                                point: Some(lunco_spatial::coords::GridPos(contact_point)),
+                                torque: DVec3::ZERO,
+                                wake: commanded,
+                            });
                         }
-                        if let Some(time) = physics_time.as_deref_mut() {
-                            time.pause();
-                            time.advance_by(std::time::Duration::ZERO);
-                        }
-                        if let Some(faults) = faults.as_deref_mut() {
-                            faults.raise(
-                                "mobility-native-force-range-invalid",
-                                Some(parent_entity),
-                                "wheel force",
-                                "force exceeds the native solver range",
-                            );
-                        }
-                        return;
-                    }
-                    if commanded {
-                        forces.apply_force_at_point(force.as_vec3(), contact_point);
-                    } else {
-                        forces
-                            .non_waking()
-                            .apply_force_at_point(force.as_vec3(), contact_point);
                     }
                 }
             }
         }
+        if let Err(error) =
+            lunco_physics::prepare_force_batch(&states, &pending, &mut force_scratch)
+        {
+            report_wheel_force_error(
+                &mut commands,
+                error,
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                physics_time.as_deref_mut(),
+            );
+            return;
+        }
+    }
+    if let Err(error) = lunco_physics::apply_force_batch(&mut bodies.p1(), &pending) {
+        report_wheel_force_error(
+            &mut commands,
+            error,
+            holds.as_deref_mut(),
+            faults.as_deref_mut(),
+            physics_time.as_deref_mut(),
+        );
     }
 }
 

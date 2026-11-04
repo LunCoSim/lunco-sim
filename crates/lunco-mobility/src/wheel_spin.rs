@@ -72,6 +72,7 @@ pub(crate) fn update_wheel_spin(
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     q_child_of: Query<&ChildOf>,
     q_inputs: Query<&InputPorts>,
+    q_collider_owners: Query<&ColliderOf>,
     // THE FIXED CLOCK BY TYPE, NOT BY PLACEMENT. This integrator is only correct
     // on a fixed step (the implicit grip solve and the `τ = I·ω/dt` servo/brake
     // targets are all written against a constant `dt`), so it asks for
@@ -95,9 +96,13 @@ pub(crate) fn update_wheel_spin(
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a
         // fabricated flat normal for one tick at the terrain transition.
-        let contact = hits
-            .iter_sorted()
-            .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
+        let contact = hits.iter_sorted().find(|hit| {
+            let support = crate::raycast_travel::support_body(hit.entity, &q_collider_owners);
+            hit.normal.is_finite()
+                && hit.normal.length_squared() > 1.0e-12
+                && support != mount.body
+                && q_chassis.contains(support)
+        });
 
         // All dynamics coefficients are USD-derived (stored on the component).
         let Some(r) = (wheel.wheel_radius.is_finite() && wheel.wheel_radius > 0.0)
@@ -183,7 +188,7 @@ pub(crate) fn update_wheel_spin(
                     r,
                     f64::from(hit.distance),
                 );
-                let contact_vel = body_point_velocity(
+                let carrier_vel = body_point_velocity(
                     vlin,
                     vang,
                     GridPos(contact_pos),
@@ -191,6 +196,32 @@ pub(crate) fn update_wheel_spin(
                     GridRot(rot.0.as_dquat()),
                     center_of_mass.0.as_dvec3(),
                 );
+                let support = crate::raycast_travel::support_body(hit.entity, &q_collider_owners);
+                let (
+                    support_lin,
+                    support_ang,
+                    support_pos,
+                    support_rot,
+                    support_com,
+                    _,
+                    support_body,
+                    support_motion,
+                ) = q_chassis
+                    .get(support)
+                    .expect("contact support was resolved from this motion query");
+                let (support_lin, support_ang) = match (support_body, support_motion) {
+                    (RigidBody::Kinematic, Some(motion)) => (motion.lin, motion.ang),
+                    _ => (support_lin.0.as_dvec3(), support_ang.0.as_dvec3()),
+                };
+                let support_vel = body_point_velocity(
+                    support_lin,
+                    support_ang,
+                    GridPos(contact_pos),
+                    GridPos(support_pos.0),
+                    GridRot(support_rot.0.as_dquat()),
+                    support_com.0.as_dvec3(),
+                );
+                let contact_vel = carrier_vel - support_vel;
                 basis =
                     crate::contact_plane_basis(wheel_forward, wheel_right, hit.normal.as_dvec3());
                 v_long = contact_vel.dot(basis.0);
@@ -380,6 +411,17 @@ mod tests {
             .world_mut()
             .spawn(lunco_port_core::Port { value: 0.0 })
             .id();
+        let support = app
+            .world_mut()
+            .spawn((
+                RigidBody::Static,
+                Position(DVec3::ZERO),
+                Rotation::default(),
+                LinearVelocity::ZERO,
+                AngularVelocity::ZERO,
+                ComputedCenterOfMass::default(),
+            ))
+            .id();
         let chassis = app
             .world_mut()
             .spawn((
@@ -440,10 +482,9 @@ mod tests {
                 },
             },
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
-            // One hit ⇒ the wheel is on the ground (the integrator only checks
-            // presence, not distance/normal, for the grip path).
+            // A valid stationary support supplies the relative contact frame.
             RayHits(vec![RayHitData {
-                entity: chassis,
+                entity: support,
                 distance: 0.5,
                 normal: Vec3::Y,
             }]),

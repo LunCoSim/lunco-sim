@@ -536,6 +536,20 @@ pub fn spawn_modelica_requests(
             continue;
         }
 
+        if model.is_stepping
+            && (model.in_flight_step.is_some() || (!model.paused && model.is_compiled))
+        {
+            coupling_held |= shared_clock_participant;
+            shared_clock_models += usize::from(shared_clock_participant);
+            live_models += 1;
+            let lag_secs = (model.target_time - model.current_time).abs();
+            if lag_secs > worst_secs {
+                worst_secs = lag_secs;
+                worst_entity = Some(entity);
+            }
+            continue;
+        }
+
         if model.paused {
             // A paused model's clock is frozen WITH the world's: the target does
             // not advance, so unpausing does not trigger a catch-up burst for
@@ -557,18 +571,6 @@ pub fn spawn_modelica_requests(
         // Every admitted participant synchronizes at its own communication
         // points. A slower exchange period changes those points, never the
         // authoritative clock or the requirement to commit the result first.
-        if model.is_stepping {
-            coupling_held = true;
-            shared_clock_models += 1;
-            live_models += 1;
-            let lag_secs = (model.target_time - model.current_time).abs();
-            if lag_secs > worst_secs {
-                worst_secs = lag_secs;
-                worst_entity = Some(entity);
-            }
-            continue;
-        }
-
         // Inputs belong to the interval's start coordinate, including for a
         // subrate participant. Later native ticks may update `model.inputs`,
         // but cannot rewrite the sample that this interval integrates.
@@ -1845,7 +1847,9 @@ pub fn handle_modelica_responses(
             let shared_clock_participant = participants
                 .as_deref()
                 .is_none_or(|participants| participants.requires_barrier(entity));
-            shared_clock_participant && !model.paused && model.is_compiled && model.is_stepping
+            shared_clock_participant
+                && (model.in_flight_step.is_some()
+                    || (!model.paused && model.is_compiled && model.is_stepping))
         });
         if faults
             .as_deref()
@@ -1859,6 +1863,95 @@ pub fn handle_modelica_responses(
 #[cfg(test)]
 mod compile_fault_tests {
     use super::*;
+
+    #[test]
+    fn paused_in_flight_step_holds_until_its_exact_result_is_admitted() {
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .add_message::<ModelicaSessionStarted>()
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .add_systems(First, handle_modelica_responses);
+        let (results, received) = crossbeam_channel::unbounded();
+        let (commands, _requests) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            preparation_rx: crossbeam_channel::never(),
+            tx: commands,
+            rx: received,
+        });
+        let entity = app
+            .world_mut()
+            .spawn((
+                ModelicaModel {
+                    model_name: "Plant".into(),
+                    session_id: 1,
+                    paused: true,
+                    is_compiled: true,
+                    is_stepping: true,
+                    in_flight_step: Some(InFlightModelicaStep {
+                        step_id: 1,
+                        start_time: 0.0,
+                        stop_time: 0.05,
+                        stop_tick: 3,
+                        sampled_inputs: Vec::new(),
+                        submitted_at: web_time::Instant::now(),
+                    }),
+                    ..Default::default()
+                },
+                ModelicaVariables::default(),
+            ))
+            .id();
+        app.world_mut().run_schedule(First);
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 0,
+                step_id: Some(1),
+                new_time: 0.05,
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+        assert!(
+            app.world()
+                .get::<ModelicaModel>(entity)
+                .unwrap()
+                .in_flight_step
+                .is_some()
+        );
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 1,
+                step_id: Some(1),
+                new_time: 0.05,
+                outputs: vec![("x".into(), 1.0)],
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert!(model.paused && !model.is_stepping && model.in_flight_step.is_none());
+        assert_eq!(model.current_time, 0.05);
+        assert_eq!(
+            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
+            1.0
+        );
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+    }
 
     #[test]
     fn communication_sample_fingerprint_retains_names_order_and_float_bits() {

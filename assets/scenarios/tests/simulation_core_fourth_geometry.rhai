@@ -38,8 +38,8 @@ fn on_start(me,ctx) {
         negative:ctx.native_invalid==true,recent:false,frames:0};
 }
 fn on_event(me,event,ctx) {
-    if event.name=="cosim-force-actuator-range" && event.severity=="Error"
-        && event.value.contains("offset_m") && event.value.contains("local_position_m") {
+    if event.name=="cosim-native-force-range" && event.severity=="Error"
+        && event.value.contains("offset_m") && event.value.contains("force=") {
         this.recent=true;
     }
 }
@@ -52,7 +52,7 @@ fn on_tick(me,ctx) {
         let ready=query("GetReadiness");
         if this.phase==5 {
             if !ready.faulted || !this.recent || !clock_snapshot().physics_paused {return;}
-            this.checks.push(t_true(ready.fault.kind=="cosim-force-actuator-range"
+            this.checks.push(t_true(ready.fault.kind=="cosim-native-force-range"
                 && ready.application_available && clock_snapshot().physics_paused,
                 "out-of-range native moment holds physics without crashing: "+ready));
             this.checks.push(t_true(this.recent,"Recent Events identifies the force and lever-arm conversion"));

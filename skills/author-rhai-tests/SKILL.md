@@ -40,6 +40,12 @@ the fixture source files remain unchanged. Negative wheel and joint cases must
 observe the structured owner fault and detailed Error event while the process
 remains available.
 
+`scripts/api/test_simulation_core_fifth_pass.py` covers independent actuator
+quantities, sleeping mass changes, native arithmetic rejection, joint seating,
+live COM allocation, moving-support contacts, and ordered Modelica lifecycle
+commands. Its Python adapter supplies typed unsaved fixtures and process
+lifecycle; every behavioral verdict belongs to the authored Rhai scenario.
+
 The source-of-truth split is:
 
 | Fact or behavior | Authoritative source | Test owner |

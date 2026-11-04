@@ -20,6 +20,12 @@ use bevy::{
 };
 use lunco_spatial::coords::{GridPos, GridRot};
 
+/// Resolve the native rigid body of a delivered ray collider. Standalone
+/// colliders use their own native static body; child colliders use ColliderOf.
+pub(super) fn support_body(hit: Entity, owners: &Query<&ColliderOf>) -> Entity {
+    owners.get(hit).map_or(hit, |owner| owner.body)
+}
+
 pub(super) fn install(app: &mut App) {
     app.add_plugins(JointGraphPlugin::<RaycastTravelLimit>::default())
         .add_systems(
@@ -256,9 +262,7 @@ fn sync_limits(
                 .remove::<(RaycastTravelLimit, TravelSolverData, RaycastStopLoad)>();
             continue;
         };
-        let support = owners
-            .get(hit.entity)
-            .map_or(hit.entity, |owner| owner.body);
+        let support = support_body(hit.entity, &owners);
         let Ok((support_position, support_rotation, support_admitted)) = bodies.get(support) else {
             commands
                 .entity(entity)

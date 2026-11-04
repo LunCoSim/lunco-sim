@@ -76,6 +76,26 @@ the same predicate without an absolute force cutoff. Shared jointed tire forces
 retain the native support body and apply equal and opposite tangential forces
 at the same world contact point when that support is dynamic. Static and
 kinematic supports exchange momentum with their prescribed external constraint.
+Raycast spring, tire and parking forces use the same support-body resolution
+as the native travel stop: a child collider resolves through `ColliderOf`, and
+a standalone collider uses its native body. Damping and tire slip are measured
+from carrier point velocity minus support point velocity at the shared world
+contact point. A common translation of both bodies creates no slip or damping.
+Each force has an equal and opposite contribution on an admitted dynamic
+support; static and kinematic supports retain prescribed motion. A retired
+support supplies no contact force.
+
+Both wheel realizations stage their ordered native force batches before
+application. The physics-owned `prepare_force_batch` validates mass/inertia
+scaling, point moments and accumulated native increments for every receiver.
+Only an admitted complete batch reaches `apply_force_batch`; failure raises a
+structured wheel-force error and physics hold. Reusable owner scratch retains
+capacity without retaining permission for a later write.
+
+`simulation_core_fifth_tires.rhai` observes combined dynamic-deck momentum,
+co-moving support slip/spin, and a stationary-support drive control through
+the public physics/port surface. Its driver authors temporary native initial
+velocity and topology through typed `ApplyUsdOps` without saving the source.
 
 Run `scripts/api/test_simulation_core_third_pass.py --case physics --case mounts
 --case slip-invalid --case mount-invalid --case torque-z --case allocator` with `LUNCOSIM_BIN` set
@@ -337,7 +357,7 @@ gravity axis. Missing support is consumed as an unsupported physical state; it i
 never converted into a permanent activation hold or a guessed world-up placement.
 
 ### 3.3. Physics & Visual Updates (`lunco-mobility`)
-* **`apply_wheel_suspension`:** Queries `(&mut WheelRaycast, &Suspension, &RayHits, &Transform, &ChildOf)` to solve Hooke's spring-damper equations using the `Suspension` component values. The resulting ground reaction is applied at the authored ray contact point, not at the axle mount, so the reduced realization retains the contact lever arm and load-transfer moment of the physical wheel.
+* **`apply_wheel_suspension`:** Uses the composed `WheelBodyMount`, native ray hit and shared read-only force state to solve Hooke's spring-damper equations from contact-relative motion. The ground reaction and its dynamic-support opposite act at the same authored ray contact point, retaining the physical lever arm and load-transfer moment.
 
 The reduced wheel cast follows the solved hub frame, including the mounted
 strut orientation and current steering heading. Its local origin is the

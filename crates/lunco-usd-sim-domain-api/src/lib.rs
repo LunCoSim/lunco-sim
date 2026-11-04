@@ -93,6 +93,9 @@ impl ApiQueryProvider for GeneratedSourceProvider {
                     "doc_uri": generated.doc_uri.clone(),
                     "projection_error": generated.projection_error.clone(),
                     "boundary_inputs": generated.boundary_inputs.clone(),
+                    "input_bindings": ApiValue::Map(generated.input_bindings.iter().map(|(name, source)| {
+                        (name.clone(), ApiValue::str(source.clone()))
+                    }).collect()),
                     "boundary_outputs": generated.boundary_outputs.clone(),
                     "member_output_aliases": generated.member_output_aliases.iter().map(|(member, output, alias)| {
                         api_value!([member.clone(), output.clone(), alias.clone()])

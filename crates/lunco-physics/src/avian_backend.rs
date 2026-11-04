@@ -5,8 +5,208 @@
 //! contract. Callers remain responsible for their lifecycle decision and
 //! diagnostic subject; they must not invent a second representability rule.
 
-use avian3d::prelude::{Collider, SimpleCollider};
-use bevy::math::{DQuat, DVec3};
+use avian3d::dynamics::integrator::VelocityIntegrationData;
+use avian3d::dynamics::rigid_body::{RigidBodyQueryReadOnly, forces::AccumulatedLocalAcceleration};
+use avian3d::prelude::{Collider, Forces, RigidBody, SimpleCollider, WriteRigidBodyForces};
+use bevy::ecs::{
+    query::{QueryData, QueryFilter},
+    system::lifetimeless::Read,
+};
+use bevy::math::{DQuat, DVec3, Quat, Vec3};
+use bevy::prelude::{Entity, Name, Query};
+use lunco_spatial::coords::GridPos;
+
+/// Read native body motion and its dynamic force state without mutation.
+/// Static supports have no solver accumulator; dynamic admission requires one.
+#[derive(QueryData)]
+pub struct AvianForceState {
+    pub body: Read<RigidBody>,
+    name: Option<Read<Name>>,
+    native: RigidBodyQueryReadOnly,
+    integration: Option<Read<VelocityIntegrationData>>,
+    local: Option<Read<AccumulatedLocalAcceleration>>,
+}
+
+impl AvianForceStateItem<'_, '_> {
+    pub fn position(&self) -> GridPos {
+        GridPos(self.native.position.0)
+    }
+    pub fn rotation(&self) -> Quat {
+        self.native.rotation.0
+    }
+    pub fn velocity_at_point(&self, point: GridPos) -> Vec3 {
+        if self.body.is_static() {
+            return Vec3::ZERO;
+        }
+        let center =
+            self.position().0 + (self.rotation() * self.native.center_of_mass.0).as_dvec3();
+        self.native.velocity_at_point((point.0 - center).as_vec3())
+    }
+}
+
+/// One ordered force transaction, with world and body-local quantities explicit.
+#[derive(Clone, Copy, Debug)]
+pub struct BodyForce {
+    pub body: Entity,
+    pub force: DVec3,
+    pub local_force: DVec3,
+    pub point: Option<GridPos>,
+    pub torque: DVec3,
+    pub wake: bool,
+}
+
+#[derive(Debug)]
+pub struct ForceAdmissionError {
+    pub body: Entity,
+    pub detail: String,
+}
+
+#[derive(Default)]
+pub struct ForceBatchScratch {
+    predicted: std::collections::HashMap<Entity, (Vec3, Vec3, Vec3)>,
+}
+
+/// Check the exact native products and accumulated sums for the complete batch.
+/// The caller holds this read lease until admission, then applies the same ordered
+/// batch before any other force producer can mutate its native accumulators.
+pub fn prepare_force_batch<F: QueryFilter>(
+    bodies: &Query<AvianForceState, F>,
+    batch: &[BodyForce],
+    scratch: &mut ForceBatchScratch,
+) -> Result<(), ForceAdmissionError> {
+    scratch.predicted.clear();
+    for contribution in batch {
+        let state = bodies
+            .get(contribution.body)
+            .map_err(|_| ForceAdmissionError {
+                body: contribution.body,
+                detail: format!(
+                    "entity {:?}: native force receiver is unavailable",
+                    contribution.body
+                ),
+            })?;
+        let error = |detail: String| ForceAdmissionError {
+            body: contribution.body,
+            detail: state.name.map_or_else(
+                || format!("entity {:?}: {detail}", contribution.body),
+                |name| format!("{}: {detail}", name.as_str()),
+            ),
+        };
+        if !state.body.is_dynamic() {
+            return Err(error("native force receiver must be dynamic".into()));
+        }
+        let integration = state
+            .integration
+            .ok_or_else(|| error("dynamic body has no native velocity accumulator".into()))?;
+        let local = state.local.ok_or_else(|| {
+            error("dynamic body has no native local acceleration accumulator".into())
+        })?;
+        if !avian_backend_vector_is_valid(contribution.force)
+            || !avian_backend_vector_is_valid(contribution.local_force)
+            || !avian_backend_vector_is_valid(contribution.torque)
+        {
+            return Err(error(format!(
+                "force={:?}, local_force={:?}, torque={:?} exceeds native representation",
+                contribution.force, contribution.local_force, contribution.torque
+            )));
+        }
+        let rotation = state.rotation();
+        let inverse_inertia = state.native.effective_global_angular_inertia().inverse();
+        let force = contribution.force.as_vec3();
+        let moment = if let Some(point) = contribution.point {
+            let center = state.position().0 + (rotation * state.native.center_of_mass.0).as_dvec3();
+            if !avian_backend_force_at_point_is_valid(contribution.force, point.0, center) {
+                return Err(error(format!(
+                    "point={point:?}, center={center:?}, offset_m={:?}, force={:?} exceeds native point-force representation",
+                    point.0 - center,
+                    contribution.force
+                )));
+            }
+            (point.0 - center).as_vec3().cross(force)
+        } else {
+            Vec3::ZERO
+        };
+        let linear = state.native.mass.inverse() * force;
+        let local_linear = state.native.mass.inverse() * contribution.local_force.as_vec3();
+        // Avian applies point force and explicit torque as separate additions.
+        let angular_point = inverse_inertia * moment;
+        let angular_torque = inverse_inertia * contribution.torque.as_vec3();
+        let increments = scratch.predicted.entry(contribution.body).or_insert((
+            integration.linear_increment,
+            integration.angular_increment,
+            local.linear,
+        ));
+        increments.0 += linear;
+        increments.2 += local_linear;
+        increments.1 += angular_point;
+        let point_sum_valid = increments.1.is_finite();
+        increments.1 += angular_torque;
+        let combined_linear = increments.0 + rotation * increments.2;
+        let combined_angular = increments.1 + rotation * local.angular;
+        if !linear.is_finite()
+            || !local_linear.is_finite()
+            || !increments.2.is_finite()
+            || !angular_point.is_finite()
+            || !angular_torque.is_finite()
+            || !point_sum_valid
+            || !increments.0.is_finite()
+            || !increments.1.is_finite()
+            || !combined_linear.is_finite()
+            || !combined_angular.is_finite()
+        {
+            return Err(error(format!(
+                "native force arithmetic overflows: force={:?}, local_force={:?}, torque={:?}, inverse_mass={}, linear_increment={:?}, local_increment={:?}, angular_increment={:?}",
+                contribution.force,
+                contribution.local_force,
+                contribution.torque,
+                state.native.mass.inverse(),
+                increments.0,
+                increments.2,
+                increments.1
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Apply a batch already admitted against the same native state.
+pub fn apply_force_batch<F: QueryFilter>(
+    bodies: &mut Query<Forces, F>,
+    batch: &[BodyForce],
+) -> Result<(), ForceAdmissionError> {
+    for contribution in batch {
+        if !bodies.contains(contribution.body) {
+            return Err(ForceAdmissionError {
+                body: contribution.body,
+                detail: "admitted native force receiver retired before application".into(),
+            });
+        }
+    }
+    for contribution in batch {
+        let mut forces = bodies
+            .get_mut(contribution.body)
+            .expect("batch receivers checked before application");
+        if contribution.wake {
+            if let Some(point) = contribution.point {
+                forces.apply_force_at_point(contribution.force.as_vec3(), point.0);
+            } else {
+                forces.apply_force(contribution.force.as_vec3());
+            }
+            forces.apply_local_force(contribution.local_force.as_vec3());
+            forces.apply_torque(contribution.torque.as_vec3());
+        } else {
+            let mut forces = forces.non_waking();
+            if let Some(point) = contribution.point {
+                forces.apply_force_at_point(contribution.force.as_vec3(), point.0);
+            } else {
+                forces.apply_force(contribution.force.as_vec3());
+            }
+            forces.apply_local_force(contribution.local_force.as_vec3());
+            forces.apply_torque(contribution.torque.as_vec3());
+        }
+    }
+    Ok(())
+}
 
 /// Check a vector before it crosses into an Avian backend value.
 #[inline]

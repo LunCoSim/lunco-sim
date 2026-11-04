@@ -14,7 +14,7 @@ projections of one composed USD design.
 | Sensor frame conversion | USD sensor projection + Modelica sensor component | The control law receives body-local gyro and attitude error, never world-frame pose or wrench |
 | Guidance and control equations | Modelica | `Lander.mo` produces a normalized main-valve request and body-local torque demand; PID tuning is exposed through authored inputs |
 | Propellant hydraulics and engine performance | Modelica | Acausal `LunCo.Propulsion.FluidPort` connections carry pressure, conserved mass flow, and stream specific enthalpy; tanks and one `PressureFedEngine` per engine are reusable package members |
-| Actuator allocation | Generic projection + reusable Modelica allocator | USD actuator geometry is factorized once; `LunCo.Actuation.WrenchAllocator` evaluates normalized valve demands at runtime |
+| Actuator allocation | Generic projection + reusable Modelica allocator | USD origin geometry is prepared once; `LunCo.Actuation.WrenchAllocator` shifts torque columns to the live native COM and evaluates their Gram matrix and normalized valve demands at runtime |
 | Applied force and torque | Avian projection | Each physical actuator applies force at its authored local mount and direction, so adding an actuator requires no vehicle-specific Rust code |
 | Flame and RCS visuals | USD render wiring | Flame throttle/activity is connected to the corresponding Modelica output; no script mirrors actuator state |
 | Mission sequencing | Rhai | Scenario orchestration and event policy; production uses task/events, while authored tests may use `on_tick` for bounded sampled verdicts |
@@ -124,11 +124,12 @@ their moment arms provide pitch and roll, and the horizontal pairs cancel net
 force while providing yaw. No second matrix or vehicle-specific remap is
 authoritative.
 
-The allocator precomputes the fixed Gram matrix `WᵀW` from the authored
+The allocator computes the Gram matrix `WᵀW` from the live COM-shifted
 six-axis wrench columns. Each cyclic coordinate sweep evaluates
 `(WᵀW)q − Wᵀd`, using already updated coordinates earlier in that sweep.
-Only command iterates and the projected demand are live algebraic variables;
-six-axis residuals are not repeated for every coordinate and sweep. Iteration
+The COM-shifted columns, Gram matrix, projected demand, and command iterates
+are live algebraic variables; six-axis residuals are not repeated for every
+coordinate and sweep. Iteration
 count, relaxation, command bounds and actuator order remain source-owned.
 Floating-point reassociation is checked against bounded allocation and physical
 mission acceptance rather than assumed to preserve bitwise results.
