@@ -17,7 +17,7 @@ use bevy::ecs::entity_disabling::Disabled;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_usd_avian_contracts::{AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint};
+use lunco_usd_avian_contracts::{InitialPhysicsVelocity, PendingJointAdmission, PendingUsdJoint};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjectionQueued, UsdSceneRoot, scene_root_ancestor,
@@ -252,8 +252,12 @@ fn prepare_pending_joints<J: Component + Clone>(
     batch: Res<JointPreparationBatch>,
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
-    q_authored_velocity: Query<&AuthoredInitialVelocity>,
-    q_mobility: Query<(&RigidBody, Option<&lunco_core::Mobility>)>,
+    q_initial_velocity: Query<&InitialPhysicsVelocity>,
+    q_mobility: Query<(
+        &RigidBody,
+        Option<&lunco_core::Mobility>,
+        Has<lunco_usd_avian_contracts::ShouldBeDynamic>,
+    )>,
     mut commands: Commands,
 ) {
     if !batch.ready {
@@ -270,7 +274,7 @@ fn prepare_pending_joints<J: Component + Clone>(
                 seat,
                 &mut q_pose,
                 &mut q_vel,
-                &q_authored_velocity,
+                &q_initial_velocity,
                 &q_mobility,
                 &mut commands,
             ) {
@@ -298,7 +302,7 @@ fn prepare_pending_joints<J: Component + Clone>(
         let both_static = [p.body0, p.body1].iter().all(|body| {
             q_mobility
                 .get(*body)
-                .is_ok_and(|(mode, _)| mode.is_static())
+                .is_ok_and(|(mode, _, _)| mode.is_static())
         });
         let release_disabled = !disabled.contains(entity) && !both_static;
         let mut joint = commands.entity(entity);
@@ -818,26 +822,26 @@ fn seated_body1_velocity(
     body1_linear: DVec3,
     body1_angular: DVec3,
     free_linear_axis_world: Option<DVec3>,
-    free_angular_axis_world: Option<DVec3>,
+    free_angular_axes_world: Option<(DVec3, DVec3)>,
     all_angular_free: bool,
-    preserve_authored_free_rates: bool,
+    preserve_free_rates: bool,
 ) -> (DVec3, DVec3) {
     let body0_anchor_offset = anchor_world - body0_position;
     let body1_anchor_offset = anchor_world - body1_position;
     let body0_anchor_velocity = body0_linear + body0_angular.cross(body0_anchor_offset);
     let free_linear_rate = free_linear_axis_world
-        .filter(|_| preserve_authored_free_rates)
+        .filter(|_| preserve_free_rates)
         .map(|axis| {
             let body1_anchor_velocity = body1_linear + body1_angular.cross(body1_anchor_offset);
             (body1_anchor_velocity - body0_anchor_velocity).dot(axis)
         })
         .unwrap_or(0.0);
-    let target_angular = if !preserve_authored_free_rates {
+    let target_angular = if !preserve_free_rates {
         body0_angular
     } else if all_angular_free {
         body1_angular
-    } else if let Some(axis) = free_angular_axis_world {
-        body0_angular + axis * (body1_angular - body0_angular).dot(axis)
+    } else if let Some((reference_axis, moving_axis)) = free_angular_axes_world {
+        body0_angular + reference_axis * (body1_angular - body0_angular).dot(moving_axis)
     } else {
         body0_angular
     };
@@ -855,12 +859,16 @@ fn seat_joint_bodies(
     seat: JointSeat,
     q_pose: &mut Query<(&mut Position, &mut Rotation)>,
     q_vel: &mut Query<(&mut LinearVelocity, &mut AngularVelocity)>,
-    q_authored_velocity: &Query<&AuthoredInitialVelocity>,
-    q_mobility: &Query<(&RigidBody, Option<&lunco_core::Mobility>)>,
+    q_initial_velocity: &Query<&InitialPhysicsVelocity>,
+    q_mobility: &Query<(
+        &RigidBody,
+        Option<&lunco_core::Mobility>,
+        Has<lunco_usd_avian_contracts::ShouldBeDynamic>,
+    )>,
     commands: &mut Commands,
 ) -> Result<(), String> {
     let movable = |body| -> Result<bool, String> {
-        let (native, declared) = q_mobility
+        let (native, declared, _) = q_mobility
             .get(body)
             .map_err(|_| format!("endpoint {body:?} has no rigid-body mobility"))?;
         Ok(declared.map_or_else(
@@ -891,15 +899,28 @@ fn seat_joint_bodies(
     }
 
     let locks_rotation = matches!(seat.kind, JointSeatKind::Fixed | JointSeatKind::Prismatic);
-    let r1_target = r0 * seat.local_rot0 * seat.local_rot1.inverse();
-    let angle = if locks_rotation {
-        r1.angle_between(r1_target)
-    } else {
-        0.0
+    let joint_axis_world = (r0 * seat.local_rot0 * seat.axis).normalize_or_zero();
+    let moving_axis_world = (r1 * seat.local_rot1 * seat.axis).normalize_or_zero();
+    let (r1_target, angle) = match seat.kind {
+        JointSeatKind::Fixed | JointSeatKind::Prismatic => {
+            let target = r0 * seat.local_rot0 * seat.local_rot1.inverse();
+            (target, r1.angle_between(target))
+        }
+        JointSeatKind::Revolute => {
+            if joint_axis_world == DVec3::ZERO || moving_axis_world == DVec3::ZERO {
+                return Err("revolute hinge-axis frames require finite nonzero axes".into());
+            }
+            let swing = DQuat::from_rotation_arc(moving_axis_world, joint_axis_world);
+            (
+                swing * r1,
+                moving_axis_world.angle_between(joint_axis_world),
+            )
+        }
+        _ => (r1, 0.0),
     };
     // Equivalent quaternion signs must give Avian the same locked-frame feedback.
     let opposite_hemisphere = locks_rotation && r1.dot(r1_target) < 0.0;
-    let r1_seated = if locks_rotation && angle > JOINT_SEAT_ANGLE_EPS {
+    let r1_seated = if angle > JOINT_SEAT_ANGLE_EPS {
         r1_target
     } else if can_seat && opposite_hemisphere {
         -r1
@@ -909,7 +930,6 @@ fn seat_joint_bodies(
     let anchor0_world = p0 + r0 * seat.local_pos0;
     let anchor1_world = p1 + r1_seated * seat.local_pos1;
     let separation = anchor1_world - anchor0_world;
-    let joint_axis_world = (r0 * seat.local_rot0 * seat.axis).normalize_or_zero();
     let target_separation = match seat.kind {
         JointSeatKind::Prismatic => {
             if joint_axis_world == DVec3::ZERO {
@@ -943,8 +963,13 @@ fn seat_joint_bodies(
     let seat_rot = angle > JOINT_SEAT_ANGLE_EPS || (can_seat && opposite_hemisphere);
     if !can_seat {
         if seat_pos || angle > JOINT_SEAT_ANGLE_EPS {
+            let angular_constraint = if matches!(seat.kind, JointSeatKind::Revolute) {
+                "hinge-axis alignment"
+            } else {
+                "locked-frame orientation"
+            };
             return Err(format!(
-                "prescribed endpoints {body0:?} and {body1:?} violate {:?} constraints by {} m / {angle} rad; static and kinematic poses cannot be seated",
+                "prescribed endpoints {body0:?} and {body1:?} violate {:?} constraints by {} m; {angular_constraint} error={angle} rad; static and kinematic poses cannot be seated",
                 seat.kind,
                 delta.length()
             ));
@@ -957,30 +982,30 @@ fn seat_joint_bodies(
 
     let seats_anchor_velocity = !matches!(seat.kind, JointSeatKind::Distance);
     let velocity = if seats_anchor_velocity {
-        let authored0 = q_authored_velocity.get(body0).ok().copied();
-        let authored1 = q_authored_velocity.get(body1).ok().copied();
-        let read_velocity = |body, authored: Option<AuthoredInitialVelocity>| {
+        let initial0 = q_initial_velocity.get(body0).ok().copied();
+        let initial1 = q_initial_velocity.get(body1).ok().copied();
+        let read_velocity = |body, initial: Option<InitialPhysicsVelocity>| {
             q_vel
                 .get(body)
                 .map(|(linear, angular)| {
                     (
-                        authored
+                        initial
                             .and_then(|v| v.linear)
                             .unwrap_or(linear.0.as_dvec3()),
-                        authored
+                        initial
                             .and_then(|v| v.angular)
                             .unwrap_or(angular.0.as_dvec3()),
                     )
                 })
                 .map_err(|_| format!("endpoint {body:?} has no prepared native velocity"))
         };
-        let (lin0, ang0) = read_velocity(body0, authored0)?;
-        let (lin1, ang1) = read_velocity(body1, authored1)?;
+        let (lin0, ang0) = read_velocity(body0, initial0)?;
+        let (lin1, ang1) = read_velocity(body1, initial1)?;
         let already_dynamic = q_mobility
             .get(body1)
-            .is_ok_and(|(body, _)| body.is_dynamic());
+            .is_ok_and(|(body, _, _)| body.is_dynamic());
         let preserve_free_rates =
-            already_dynamic || authored1.is_some_and(|v| v.linear.is_some() || v.angular.is_some());
+            already_dynamic || initial1.is_some_and(|v| v.linear.is_some() || v.angular.is_some());
         // A slider's anchors can be separated along its free axis. The moving
         // reference frame carries that separation with its angular velocity.
         let moving_anchor = p1_seated + r1_seated * seat.local_pos1;
@@ -993,7 +1018,8 @@ fn seat_joint_bodies(
             lin1,
             ang1,
             matches!(seat.kind, JointSeatKind::Prismatic).then_some(joint_axis_world),
-            matches!(seat.kind, JointSeatKind::Revolute).then_some(joint_axis_world),
+            matches!(seat.kind, JointSeatKind::Revolute)
+                .then_some((joint_axis_world, moving_axis_world)),
             matches!(seat.kind, JointSeatKind::Spherical),
             preserve_free_rates,
         );
@@ -1004,7 +1030,13 @@ fn seat_joint_bodies(
                 "constraint-compatible endpoint velocity exceeds the finite native range".into(),
             );
         }
-        Some((target_lin, target_ang, lin1, ang1))
+        Some((
+            target_lin,
+            target_ang,
+            lin1,
+            ang1,
+            q_mobility.get(body1).is_ok_and(|(_, _, pending)| pending),
+        ))
     } else {
         None
     };
@@ -1028,7 +1060,7 @@ fn seat_joint_bodies(
             position.0 = p1_seated;
         }
     }
-    if let Some((target_lin, target_ang, lin1, ang1)) = velocity {
+    if let Some((target_lin, target_ang, lin1, ang1, initial_admission)) = velocity {
         if (lin1 - target_lin).length() > JOINT_SEAT_EPS
             || (ang1 - target_ang).length() > JOINT_SEAT_ANGLE_EPS
         {
@@ -1037,9 +1069,12 @@ fn seat_joint_bodies(
                 .map_err(|_| "moving endpoint velocity disappeared".to_owned())?;
             linear.0 = target_lin.as_vec3();
             angular.0 = target_ang.as_vec3();
-            commands
-                .entity(body1)
-                .try_remove::<AuthoredInitialVelocity>();
+        }
+        if initial_admission {
+            commands.entity(body1).try_insert(InitialPhysicsVelocity {
+                linear: Some(target_lin),
+                angular: Some(target_ang),
+            });
         }
     }
     Ok(())
@@ -1214,8 +1249,12 @@ mod joint_pose_tests {
                             &mut LinearVelocity,
                             &mut AngularVelocity,
                         )>,
-                              authored_velocity: Query<&AuthoredInitialVelocity>,
-                              mobility: Query<(&RigidBody, Option<&lunco_core::Mobility>)>,
+                              initial_velocity: Query<&InitialPhysicsVelocity>,
+                              mobility: Query<(
+                            &RigidBody,
+                            Option<&lunco_core::Mobility>,
+                            Has<lunco_usd_avian_contracts::ShouldBeDynamic>,
+                        )>,
                               mut commands: Commands| {
                             seat_joint_bodies(
                                 "test/locked",
@@ -1224,7 +1263,7 @@ mod joint_pose_tests {
                                 seat,
                                 &mut poses,
                                 &mut velocities,
-                                &authored_velocity,
+                                &initial_velocity,
                                 &mobility,
                                 &mut commands,
                             )
@@ -1342,7 +1381,7 @@ mod joint_velocity_tests {
             DVec3::ZERO,
             child_angular,
             None,
-            Some(hinge),
+            Some((hinge, hinge)),
             false,
             true,
         );

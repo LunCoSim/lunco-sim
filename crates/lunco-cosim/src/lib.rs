@@ -345,13 +345,14 @@ impl Plugin for CoSimPlugin {
             )
                 .chain(),
         );
-        let participant_ports = {
+        let (participant_ports, avian_ports) = {
             let mut registry = app
                 .world_mut()
                 .resource_mut::<lunco_port_core::ports::PortRegistry>();
             ports::register_builtin_port_backends(&mut registry)
         };
         app.insert_resource(participant_ports);
+        app.insert_resource(avian_ports);
         app.insert_resource(lunco_cosim_core::LayeredInputWriter(write_layered_inputs));
 
         // Avian state ports are detected by component presence through the
@@ -1239,7 +1240,8 @@ mod binding_lifecycle_tests {
         world.init_resource::<CosimDiagnostics>();
         world.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         let mut registry = lunco_port_core::ports::PortRegistry::default();
-        ports::register_builtin_port_backends(&mut registry);
+        let (_, avian_ports) = ports::register_builtin_port_backends(&mut registry);
+        world.insert_resource(avian_ports);
         let retired = world
             .spawn((
                 GlobalEntityId::from_raw(10),
@@ -2128,7 +2130,13 @@ fn validate_port_input_writes(
     let mut prepared = Vec::with_capacity(writes.len());
     for (port, value) in writes {
         match registry.prepare_input_write(world, target, port.as_str(), *value) {
-            Ok(write) => prepared.push(write),
+            Ok(write) => {
+                avian::validate_force_command_receiver(world, &write).map_err(|message| {
+                    warn!("[cosim] rejected input '{port}' on {label}: {message}");
+                    message
+                })?;
+                prepared.push(write);
+            }
             Err(error) => {
                 if matches!(
                     error.kind,

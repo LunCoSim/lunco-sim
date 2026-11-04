@@ -9,7 +9,7 @@ use lunco_workspace::{PinnedDocumentRuntimeOwner, ReplicationOwner, Workspace};
 
 /// Capture the source candidates supplied by document compilation. Recording
 /// the candidate set also detects a newly opened dependency or a changed
-/// first-wins declaration, before the compiler chooses its reachable subset.
+/// qualified declaration, before the compiler chooses its reachable subset.
 pub fn capture(
     documents: &DocumentRegistry<ModelicaDocument>,
     primary: &PinnedDocumentRuntimeOwner,

@@ -33,6 +33,13 @@ of every dynamic member, rather than treating wheel motion as proof of a
 balanced contact force. The fourth-pass physical tire gate exercises that
 contract through a deck with only vertical and rotational constraint.
 
+For scoped pause, establish nonzero raycast shaft motion before pausing, then
+compare angle, speed, shaft and heat samples while an independent object advances.
+A stationary wheel is insufficient evidence. During prescribed body motion,
+existing force holds retain their identity without accumulating effort; new
+direct native force commands reject terminally with receiver mode/detail. Use
+the sixth-pass pause and prescribed scenarios to observe both boundaries.
+
 Live Modelica and external FMU engineering metadata is owned by
 `lunco-port-core::ScalarPortContracts`. Inspect it through `ReadPorts`/`ListPorts`;
 resolved definitions include `dimension_si`, `angle_power`, `relative_quantity`,

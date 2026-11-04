@@ -107,7 +107,9 @@ Modelica run intent is cleared, and every member receives the core
 `SimulationObjectPaused` component. Modelica, FMI and the shared script driver
 enforce that component independently of their ordinary run controls. Modelica
 child clocks and continuous state remain at their last accepted observation;
-object-owned controllers stop receiving executable callbacks. Supervisors
+object-owned controllers stop receiving executable callbacks. Raycast axle angle,
+speed, shaft samples and heat remain at the accepted boundary in both fixed
+stepping and replay, independently of unrelated live physics. Supervisors
 outside the graph remain available to report failure or request `RestartScene`.
 Restart retires the scene-owned members and their suspension state together.
 
@@ -421,10 +423,31 @@ Admission checks inverse-mass/inertia products, point-force moments, raw native
 accumulator sums, and combined local/world acceleration before any contribution
 is written. Reused `ForceBatchScratch` retains allocation capacity. Contact
 points use grid-absolute `GridPos`; body-local forces remain local through
-Avian's substeps. Co-simulation, joint effort, and physical/raycast tire contact
+Avian's substeps. Avian owns widened `ComputedAngularInertia::tensor_f64()`
+inversion and gyroscopic momentum arithmetic; its relative anisotropy selector
+retains the same physical method across inertia scales. Application tensor
+readers validate this maintained result rather than reconstructing an inverse.
+Co-simulation, joint effort, and physical/raycast tire contact
 consume this shared boundary. Each consumer owns its structured fault, Recent
 Events error, and physics hold; co-simulation uses `cosim-native-force-range`
 with the affected body's authored name and rejected numerical state.
+
+After Avian applies constant producers, gravity and timestep scaling, the physics
+owner checks final native velocity increments before the substep loop. Invalid
+increments raise `physics-native-integration-range`, an Error event and a safety
+hold; substeps, restitution, CCD and solver writeback cannot publish that
+interval. Canonical body state remains finite and queryable. Post-substep cleanup
+still retires transient accumulators. This boundary observes native producer
+results instead of predicting a second persistent-force schedule.
+
+`native_force_receiver_can_integrate` owns force eligibility: enabled dynamic
+bodies consume physical effort. Held or wired effort retains its input identity
+while prescribed/disabled intervals are consumed unused, and never transfers to
+an ancestor. Collector and command admission share the same nearest-body resolver,
+including deep authored hierarchies. New direct native force/actuator commands to such receivers reject
+terminally with their body mode and disabled state. Command admission uses the
+actual selected `PreparedPortWrite.backend_id()` and registered Avian backend,
+so an unrelated Modelica input with the same name keeps its own contract.
 
 A prim carrying both force and torque actuator APIs has independent
 `PendingActuatorCommands.force_n` and `.torque_nm` values. Their ports and

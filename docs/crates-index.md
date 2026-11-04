@@ -1013,8 +1013,9 @@ reader does not rebuild the bridge implementation.
 **`lunco-usd-avian-contracts`**
 Shared ECS carriers crossing the USD physics, vehicle, readiness, query, and
 co-simulation packages. It owns `PendingUsdJoint`, joint-drive data, scene
-ownership, dynamic-admission, authored-velocity, and physics-projection
-lifecycle markers. Its generic invalidation seam lets the live runtime re-arm a
+ownership, dynamic-admission, and physics-projection lifecycle markers.
+`InitialPhysicsVelocity` carries the checked USD/joint-seated physical candidate
+through dynamic promotion. Its generic invalidation seam lets the live runtime re-arm a
 newly composed rigid-body prim without depending on the full USD physics
 projector; that projector remains the owner of stage traversal and
 authored-fact translation.

@@ -149,11 +149,18 @@ transfers those tickets to the exact participant session; the worker bridge
 answers only after accepting that session's source generation and initialized
 outputs, including a compile that remains paused. Admission errors, stale
 sources, worker failure, replacement and retirement terminate the tickets.
-An unchanged exact class/generation can acknowledge its existing checked
+A replacement compile retains the current session, observations, and outstanding
+Step receipt until that exact endpoint is admitted. It stops further old-session
+step admission even if Resume arrives while replacement is pending, then enters
+the ordered compile queue. An unchanged exact class/generation can acknowledge its existing checked
 session. The command adapter drains these replies through `finish_command_result`;
 queued work or a different compiled session cannot acknowledge the request.
 API calls requiring a class choice reject with the available candidates;
-interactive calls retain the class picker.
+interactive calls retain the class picker. Sibling source units use Rumoca
+`declared_class_names()` for qualified identities, including `within` and nested
+classes. Duplicate qualified declarations reject with the class and both document
+identities; distinct qualified classes may share a leaf name. Every declaration
+in an admitted source remains available to compilation.
 
 Native worker, compiler actor, and solve-pool startup are fallible. A startup
 failure or unexpected worker disconnect travels through the typed worker-wide

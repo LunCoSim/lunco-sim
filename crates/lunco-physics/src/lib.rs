@@ -51,7 +51,7 @@ pub use avian_backend::{
     avian_backend_collider_shape_is_valid, avian_backend_collider_shape_kind,
     avian_backend_force_at_point_is_valid, avian_backend_point_is_valid,
     avian_backend_pose_is_valid, avian_backend_rotation_is_valid, avian_backend_vector_is_valid,
-    prepare_force_batch,
+    native_force_receiver_can_integrate, prepare_force_batch,
 };
 pub use escape::{
     EscapeDiagnosticPlugin, PhysicsObjectPaused, UnboundedPhysicsDomain, WorldBounds,
@@ -1194,6 +1194,7 @@ pub struct PhysicsGatePlugin;
 
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
+        avian_backend::install(app);
         joint_reaction::install(app);
         pose::register_spatial_query_providers(app);
         kinematics::install(app);

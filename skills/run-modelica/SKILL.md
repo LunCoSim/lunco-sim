@@ -830,7 +830,11 @@ that intent. Await terminal outcomes for Pause, Resume and Restart, including
 invalid targets. Restart is one checked Reset followed by its requested running
 state, and a failed Reset must reject Restart.
 Pause changes future run intent; an already dispatched Step still owns the
-shared-clock barrier until its exact result is admitted. Wait for that endpoint
+shared-clock barrier until its exact result is admitted. Replacement compilation
+also drains that receipt before retiring its session, and prevents further old
+session steps while queued. Qualified sibling identity comes from Rumoca
+`declared_class_names()`; actual duplicate qualified declarations reject with
+both source document identities instead of dropping a sibling source. Wait for that endpoint
 to settle before asserting frozen observations. Compile commands retain arrival
 order, including different classes in one document; only consecutive identical
 requests share an installation and all their completion listeners.
@@ -1294,8 +1298,9 @@ exchange; outputs are held between those declared points. The worker applies
 the complete ordered input vector as one atomic solver transaction. Each interval
 retains the inputs sampled at its start coordinate, including across intervening
 physics ticks for slower participants. `ReadModelicaStepSamples` reports those
-same inputs and interval coordinates. Pause preserves a pending interval; reset,
-session replacement, and failure retire it.
+same inputs and interval coordinates. Pause preserves a pending interval;
+replacement compilation drains it before changing session. Reset requires a
+settled boundary; terminal worker failure retires the interval visibly.
 
 Input rejection and invalid solver observations stop the affected participant
 with a `modelica-step-failed` runtime fault. Check this boundary through the

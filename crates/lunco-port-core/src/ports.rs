@@ -1477,6 +1477,11 @@ pub struct PreparedPortWrite {
 }
 
 impl PreparedPortWrite {
+    /// Registry-local identity of the precedence-winning input backend.
+    pub fn backend_id(&self) -> PortBackendId {
+        PortBackendId(self.backend)
+    }
+
     /// Target entity prepared by the owner registry.
     pub fn entity(&self) -> Entity {
         self.entity

@@ -521,7 +521,7 @@ pub fn spawn_modelica_requests(
         // Worker completion never decides how much physical time elapsed.
         // The shared barrier prevents another master interval while a step is
         // pending; participant pause/preparation alone freezes its child clock.
-        let active = !model.paused && model.is_compiled;
+        let active = !model.paused && model.is_compiled && !model.is_compiling;
         if let Err(error) = model.observe_master_tick(*master_tick, active) {
             model.paused = true;
             model.last_error = Some(error.clone());
@@ -560,7 +560,7 @@ pub fn spawn_modelica_requests(
         // Compile intent is admitted in the application lifecycle cycle. This
         // fixed-step path only waits for the prepared stepper; it never starts
         // compilation as a side effect of consuming simulation time.
-        if !model.is_compiled {
+        if !model.is_compiled || model.is_compiling {
             // Don't ship a Step this tick either way — let the
             // compile flow run. The model isn't running yet, so its target
             // clock stays put (no phantom catch-up debt accrues while the

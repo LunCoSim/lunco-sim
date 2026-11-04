@@ -92,7 +92,8 @@ def main() -> None:
         os.environ["LUNCOSIM_CONFIG"] = str(evidence / (case + "-config"))
         with ProductionSession(args.port, windowed=True, extra_args=["--scene", str(scene)],
                                log_path=evidence / (case + ".log")) as session:
-            pid = session.process.pid
+            process = session.process
+            pid = process.pid
             assert Path(f"/proc/{pid}/cwd").resolve() == ROOT
             assert Path(f"/proc/{pid}/exe").resolve() == BINARY.resolve()
 
@@ -146,9 +147,12 @@ def main() -> None:
             run_authored_scenario(session, f"lunco://scenarios/tests/{scenario}.rhai", title=title,
                                   check_count=checks, params=params, owner_twin_id=twin,
                                   allow_runtime_fault=case.startswith("wheel-") or case in ("joints", "actuator-range"), timeout_s=150)
-            results.append({"case": case, "checks": checks + (1 if case == "signals" else 0),
+            results.append({"case": case, "authored_verdict": "PASS", "checks": checks + (1 if case == "signals" else 0),
                             "pid": pid, "port": args.port, "readiness": execute("GetReadiness"),
                             "source_sha256": source_hash})
+        if process.returncode != 0:
+            raise RuntimeError(f"production exited with {process.returncode} after {case}")
+        results[-1].update(exit_code=process.returncode, owned_api_exit=True)
         assert hashlib.sha256(scene.read_bytes()).hexdigest() == source_hash
         (evidence / ("result-" + case + ".json")).write_text(json.dumps(results[-1], indent=2) + "\n")
         print(f"PASS {case}: authored verdict, unchanged USD source, owned API Exit", flush=True)

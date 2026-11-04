@@ -46,6 +46,16 @@ live COM allocation, moving-support contacts, and ordered Modelica lifecycle
 commands. Its Python adapter supplies typed unsaved fixtures and process
 lifecycle; every behavioral verdict belongs to the authored Rhai scenario.
 
+`scripts/api/test_simulation_core_sixth_pass.py` covers native accumulated
+increment rejection, finite combined force/gravity, bound static/terrain material
+failure, revolute swing/twist, scoped raycast pause, prescribed force receivers,
+and qualified Modelica source/compile receipt lifecycle. Tiny anisotropic and
+isotropic rotor controls exercise native gyroscopic support at `1e-17` and
+`1e-30` inertia scales. Delayed-worker receipt and in-place native body-mode
+transitions are generic Rust lifecycle seams; authored USD mode edits reproject
+and retire the old input leases, so their production gate admits fresh intent
+against the new dynamic endpoint.
+
 The source-of-truth split is:
 
 | Fact or behavior | Authoritative source | Test owner |

@@ -51,7 +51,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian_contracts::{
-    AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ShouldBeDynamic,
+    InitialPhysicsVelocity, PendingJointAdmission, PendingUsdJoint, ShouldBeDynamic,
 };
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
@@ -4971,7 +4971,7 @@ fn activate_dynamic_bodies(
             Entity,
             &RigidBody,
             &UsdPrimPath,
-            Option<&AuthoredInitialVelocity>,
+            Option<&InitialPhysicsVelocity>,
             Option<&avian3d::prelude::RigidBodyDisabled>,
             Has<lunco_core::PhysicsStateReady>,
             Has<lunco_core::PhysicsStatePending>,
@@ -5056,7 +5056,7 @@ fn activate_dynamic_bodies(
         entity,
         body,
         path,
-        authored_velocity,
+        initial_velocity,
         body_disabled,
         physics_state_ready,
         physics_state_pending,
@@ -5091,7 +5091,7 @@ fn activate_dynamic_bodies(
                 entity,
                 body,
                 path,
-                authored_velocity,
+                initial_velocity,
                 body_disabled,
                 physics_state_ready,
                 physics_state_pending,
@@ -5167,7 +5167,7 @@ fn activate_dynamic_bodies(
             entity,
             body,
             path,
-            authored_velocity,
+            initial_velocity,
             body_disabled,
             physics_state_ready,
             physics_state_pending,
@@ -5257,12 +5257,12 @@ fn activate_dynamic_bodies(
             // A kinematic loading body can carry a bridge-generated velocity from
             // the authored-pose/rebranch handoff. That is a render/pose transport
             // value, not a physical initial condition. Seed the dynamic body from
-            // the only authoritative source: USD's explicitly authored velocity;
-            // absent that, admission starts at rest.
-            let linear = authored_velocity
+            // the checked initial candidate from USD projection and joint seating;
+            // absent an explicit candidate, admission starts at rest.
+            let linear = initial_velocity
                 .and_then(|velocity| velocity.linear)
                 .unwrap_or(DVec3::ZERO);
-            let angular = authored_velocity
+            let angular = initial_velocity
                 .and_then(|velocity| velocity.angular)
                 .unwrap_or(DVec3::ZERO);
             commands.entity(entity).try_insert((
@@ -5294,7 +5294,7 @@ fn activate_dynamic_bodies(
         }
 
         entity_commands
-            .try_remove::<AuthoredInitialVelocity>()
+            .try_remove::<InitialPhysicsVelocity>()
             .try_remove::<ShouldBeDynamic>();
         promoted = true;
     }

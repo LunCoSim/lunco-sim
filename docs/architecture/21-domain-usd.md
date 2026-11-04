@@ -1127,7 +1127,14 @@ bounds. Fixed frames close their constrained pose error; prismatic frames retain
 the nearest allowed axial coordinate, and distance frames retain the nearest
 allowed radial separation. Free velocity authored at admission or already live
 on a dynamic endpoint survives projection. A separated slider inherits the
-reference frame's angular transport at its own anchor.
+reference frame's angular transport at its own anchor. Revolute seating aligns
+the two frame hinge axes using their shortest swing while retaining free twist
+and transporting the moving endpoint's authored relative axial spin. The shared
+`InitialPhysicsVelocity` contract carries the checked projection/seating candidate
+through dynamic promotion; promotion consumes that candidate before retiring it,
+so staged loading cannot overwrite a seated physical rate with a transport value
+or rest default. Prescribed
+endpoints with incompatible hinge axes reject instead of publishing a constraint.
 
 The complete seated pose and velocity are validated before either is published.
 Incompatible prescribed endpoints and coincident distance anchors requiring a
@@ -1144,7 +1151,13 @@ rejection). Fixtures are edited through typed unsaved document operations.
 `simulation_core_fifth_joints.rhai` additionally qualifies symmetric world
 endpoints, prescribed real bodies, legal slider/distance coordinates and free
 velocity, nearest-bound correction, and rejection of incompatible prescribed
-poses without advancing physics.
+poses without advancing physics. `simulation_core_sixth_hinge.rhai` covers hinge
+swing, free twist/spin, local frame axes, and incompatible prescribed endpoints.
+`simulation_core_sixth_material.rhai` covers valid and rejected bound materials
+for static collision and terrain. Malformed material failures identify the
+bound material path, property and authored value through the existing collider
+admission fault and Recent Events; a missing collision surface is never reported
+as a healthy projection.
 
 The native 3D prismatic solver couples the two blocked translations and three
 blocked rotations. Its moving-axis Jacobian includes the anchor separation;

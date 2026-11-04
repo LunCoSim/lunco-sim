@@ -30,7 +30,7 @@ fn on_start(me, ctx) {
         let primary=editor::new_scratch(`model FourthPrimary
           FourthHelper h; output Real y; equation y=h.gain;
         end FourthPrimary;`,"Fourth primary");
-        let sibling=editor::new_scratch("model FourthPrimary parameter Real gain=99; end FourthPrimary;","Fourth sibling");
+        let sibling=editor::new_scratch("model FourthSiblingOld parameter Real gain=99; end FourthSiblingOld;","Fourth sibling");
         let empty=editor::new_scratch("model FourthUncompiled Real x; equation der(x)=0; end FourthUncompiled;","Fourth uncompiled");
         for created in [seed,control,primary,sibling,empty] {
             if created.ok!=true {throw("scratch creation failed: "+created);}
@@ -197,7 +197,7 @@ fn on_tick(me, ctx) {
             let result=terminal(this.pending);if result.status=="pending" {return;}
             let sample=query("SnapshotVariables",#{doc_id:this.primary});
             this.checks.push(t_true(result.ok==true && sample.compiled && near(sample.variables.y,3.0),
-                "compile awaits sibling analysis and includes its new class instead of stale duplicate names: "+result));
+                "compile awaits sibling analysis and includes its current class declarations: "+result));
             let old=query("GetDocumentSource",#{doc_id:this.sibling});
             let source="model FourthHelper parameter Real gain=MissingFourthValue; end FourthHelper;";
             let edited=editor::replace_source(this.sibling,source,old.generation);

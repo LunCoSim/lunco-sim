@@ -312,12 +312,12 @@ impl JointDrive {
 #[reflect(Component, Default)]
 pub struct ShouldBeDynamic;
 
-/// Initial velocity authored on a USD body while it waits for dynamic admission.
+/// Checked physical initial velocity prepared by USD projection and joint seating.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct AuthoredInitialVelocity {
-    /// World-frame linear velocity, if authored.
+pub struct InitialPhysicsVelocity {
+    /// World-frame linear velocity, when explicitly prepared.
     pub linear: Option<DVec3>,
-    /// World-frame angular velocity, if authored.
+    /// World-frame angular velocity, when explicitly prepared.
     pub angular: Option<DVec3>,
 }
 

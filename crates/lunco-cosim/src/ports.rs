@@ -1288,14 +1288,20 @@ pub(crate) fn register_builtin_port_topology(app: &mut App) {
 #[derive(Resource, Clone, Copy)]
 pub struct ParticipantPortBackend(pub lunco_port_core::ports::PortBackendId);
 
-pub fn register_builtin_port_backends(registry: &mut PortRegistry) -> ParticipantPortBackend {
+/// Native backend identity used by command admission after owner resolution.
+#[derive(Resource, Clone, Copy)]
+pub struct AvianPortBackend(pub lunco_port_core::ports::PortBackendId);
+
+pub fn register_builtin_port_backends(
+    registry: &mut PortRegistry,
+) -> (ParticipantPortBackend, AvianPortBackend) {
     let participant = ParticipantPortBackend(registry.register(SIMCOMPONENT_BACKEND));
-    registry.register(AVIAN_BACKEND);
+    let avian = AvianPortBackend(registry.register(AVIAN_BACKEND));
     registry.register(PORT_BACKEND);
     registry.register(PORT_SURFACE_BACKEND);
     registry.register(OUTPUT_PORTS_BACKEND);
     registry.register(PILOTED_BACKEND);
-    participant
+    (participant, avian)
 }
 
 #[cfg(test)]

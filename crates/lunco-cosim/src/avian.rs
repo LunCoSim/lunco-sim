@@ -1675,7 +1675,7 @@ pub fn apply_pending_forces(
     q_parents: Query<&ChildOf>,
     q_poses: Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
     q_names: Query<&Name>,
-    q_body_owners: Query<&RigidBody>,
+    q_body_owners: Query<(&RigidBody, Has<RigidBodyDisabled>)>,
 ) {
     let physics_live =
         lunco_physics::physics_is_live_state(&physics_time, &virtual_time, faults.as_deref());
@@ -1703,7 +1703,13 @@ pub fn apply_pending_forces(
         }
         let has_pending_force =
             pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO;
-        if physics_live && !disabled && has_pending_force {
+        let receiver_prescribed_or_disabled = q_body_owners.get(e).is_ok_and(|(mode, disabled)| {
+            !lunco_physics::native_force_receiver_can_integrate(*mode, disabled)
+        });
+        // A missing native receiver still reaches force-batch admission and
+        // reports its invalid topology. Only a known prescribed owner suppresses
+        // a valid held level for this interval.
+        if physics_live && !disabled && !receiver_prescribed_or_disabled && has_pending_force {
             scratch.batch.push(lunco_physics::BodyForce {
                 local_force: pf.f_local,
                 body: e,
@@ -1798,9 +1804,8 @@ pub fn apply_pending_forces(
         }
         let Some(body) = nearest_rigid_body(actuator_entity, &q_parents, &q_body_owners, &q_poses)
         else {
-            // The actuator may arrive one frame before its body. Propagation will
-            // issue the command again on the next tick; dropping this value is
-            // preferable to applying it to a guessed body.
+            // Only the exact admitted dynamic owner consumes this interval.
+            // Input holds remain owned by propagation during prescribed motion.
             continue;
         };
         let Ok((_, position, rotation)) = q_poses.get(body) else {
@@ -1916,27 +1921,226 @@ fn reject_native_force_batch(
     lunco_core::trigger_runtime_error(commands, "cosim-native-force-range", detail);
 }
 
+/// Query and World adapters resolve the same nearest body in the authored tree.
+fn rigid_body_owner(
+    mut current: Entity,
+    parent: impl Fn(Entity) -> Option<Entity>,
+    is_body: impl Fn(Entity) -> bool,
+) -> Option<Entity> {
+    loop {
+        if is_body(current) {
+            return Some(current);
+        }
+        current = parent(current)?;
+    }
+}
+
 /// Resolve the nearest body owner; suspension does not transfer its actuator
 /// to an enclosing body.
 fn nearest_rigid_body(
     start: Entity,
     parents: &Query<&ChildOf>,
-    owners: &Query<&RigidBody>,
+    owners: &Query<(&RigidBody, Has<RigidBodyDisabled>)>,
     bodies: &Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
 ) -> Option<Entity> {
-    let mut current = start;
-    for _ in 0..64 {
-        if owners.contains(current) {
-            return bodies.contains(current).then_some(current);
-        }
-        current = parents.get(current).ok()?.parent();
+    let owner = rigid_body_owner(
+        start,
+        |entity| parents.get(entity).ok().map(ChildOf::parent),
+        |entity| owners.contains(entity),
+    )?;
+    let (mode, disabled) = owners.get(owner).ok()?;
+    (lunco_physics::native_force_receiver_can_integrate(*mode, disabled) && bodies.contains(owner))
+        .then_some(owner)
+}
+
+/// A command may change a native force level only while its exact receiver is
+/// admitted for integration. Existing held/wired levels retain their ownership
+/// across prescribed intervals; their consumer drains those intervals unused.
+pub(crate) fn validate_force_command_receiver(
+    world: &World,
+    write: &lunco_port_core::ports::PreparedPortWrite,
+) -> Result<(), String> {
+    if !lunco_physics::force_ports::is_physics_force_port(write.name()) {
+        return Ok(());
     }
-    None
+    let backend = world
+        .get_resource::<crate::ports::AvianPortBackend>()
+        .ok_or("native force command admission requires the registered Avian backend identity")?;
+    if write.backend_id() != backend.0 {
+        return Ok(());
+    }
+    let receiver = rigid_body_owner(
+        write.entity(),
+        |entity| world.get::<ChildOf>(entity).map(ChildOf::parent),
+        |entity| world.get::<RigidBody>(entity).is_some(),
+    )
+    .ok_or_else(|| {
+        format!(
+            "native force input '{}' has no live rigid-body receiver",
+            write.name()
+        )
+    })?;
+    let mode = world
+        .get::<RigidBody>(receiver)
+        .ok_or("resolved native force receiver retired before validation")?;
+    let disabled = world.get::<RigidBodyDisabled>(receiver).is_some();
+    if lunco_physics::native_force_receiver_can_integrate(*mode, disabled) {
+        Ok(())
+    } else {
+        let label = world
+            .get::<Name>(receiver)
+            .map_or_else(|| format!("{receiver:?}"), |name| name.as_str().to_owned());
+        Err(format!(
+            "native force input '{}' requires an enabled dynamic receiver; {label} is {mode:?} (disabled={disabled})",
+            write.name()
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_native_effort_survives_in_place_prescribed_interval() {
+        use crate::systems::propagate::{PropagationCache, propagate_connections};
+        use avian3d::dynamics::integrator::VelocityIntegrationData;
+        use avian3d::prelude::forces::AccumulatedLocalAcceleration;
+        use bevy::ecs::system::RunSystemOnce;
+        use lunco_cosim_core::{BindingRevision, CosimDiagnostics, PortHolds};
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Physics>::default());
+        world.insert_resource(Time::<Virtual>::default());
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.init_resource::<lunco_physics::PhysicsHolds>();
+        world.init_resource::<PortTopologyRevision>();
+        world.init_resource::<CosimDiagnostics>();
+        world.init_resource::<PortHolds>();
+        world.init_resource::<BindingRevision>();
+        world.init_resource::<PropagationCache>();
+        let mut registry = lunco_port_core::ports::PortRegistry::default();
+        let (_, avian_ports) = crate::ports::register_builtin_port_backends(&mut registry);
+        world.insert_resource(registry);
+        world.insert_resource(avian_ports);
+        let body = |world: &mut World, id: u64, name: &'static str| {
+            world
+                .spawn((
+                    lunco_core::GlobalEntityId::from_raw(id),
+                    Name::new(name),
+                    RigidBody::Dynamic,
+                    Position::default(),
+                    Rotation::default(),
+                    LinearVelocity::default(),
+                    AngularVelocity::default(),
+                    ComputedMass::new(1.0),
+                    ComputedAngularInertia::new(Vec3::ONE),
+                    ComputedCenterOfMass::default(),
+                    VelocityIntegrationData::default(),
+                    AccumulatedLocalAcceleration::default(),
+                ))
+                .id()
+        };
+        let ancestor = body(&mut world, 1, "outer dynamic owner");
+        let receiver = body(&mut world, 2, "prescribed receiver");
+        world.entity_mut(receiver).insert(ChildOf(ancestor));
+        let mut carrier = receiver;
+        for _ in 0..70 {
+            carrier = world.spawn(ChildOf(carrier)).id();
+        }
+        let mount = world
+            .spawn((
+                lunco_core::GlobalEntityId::from_raw(3),
+                Name::new("mounted force"),
+                ChildOf(carrier),
+                ForceActuator {
+                    local_position: DVec3::X,
+                    direction_local: DVec3::Y,
+                    max_force_n: 10.0,
+                },
+            ))
+            .id();
+        crate::write_layered_inputs(
+            &mut world,
+            receiver,
+            &[
+                ("force_x".into(), 6.0),
+                ("force_local_z".into(), 4.0),
+                ("torque_x".into(), 2.0),
+            ],
+            None,
+        )
+        .unwrap();
+        crate::write_layered_inputs(&mut world, mount, &[("force_command".into(), 2.0)], None)
+            .unwrap();
+        let hold_revision = world.resource::<PortHolds>().revision();
+        let accumulators = |world: &World, entity| {
+            let native = world.get::<VelocityIntegrationData>(entity).unwrap();
+            let local = world.get::<AccumulatedLocalAcceleration>(entity).unwrap();
+            (
+                native.linear_increment,
+                native.angular_increment,
+                local.linear,
+            )
+        };
+
+        propagate_connections(&mut world);
+        world.run_system_once(apply_pending_forces).unwrap();
+        let first_interval = accumulators(&world, receiver);
+        assert_eq!(
+            first_interval,
+            (
+                Vec3::new(6.0, 2.0, 0.0),
+                Vec3::new(2.0, 0.0, 2.0),
+                Vec3::Z * 4.0
+            )
+        );
+        world.entity_mut(receiver).insert(RigidBody::Kinematic);
+        for _ in 0..4 {
+            propagate_connections(&mut world);
+            world.run_system_once(apply_pending_forces).unwrap();
+            assert_eq!(accumulators(&world, receiver), first_interval);
+            assert_eq!(
+                accumulators(&world, ancestor),
+                (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO)
+            );
+            let pending = world.get::<PendingForces>(receiver).unwrap();
+            assert_eq!(
+                (pending.f, pending.f_local, pending.torque),
+                (DVec3::ZERO, DVec3::ZERO, DVec3::ZERO)
+            );
+            assert_eq!(
+                world.get::<PendingActuatorCommands>(mount).unwrap().force_n,
+                0.0
+            );
+            assert_eq!(world.resource::<PortHolds>().revision(), hold_revision);
+            assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
+        }
+        world.entity_mut(receiver).insert(RigidBody::Dynamic);
+        propagate_connections(&mut world);
+        world.run_system_once(apply_pending_forces).unwrap();
+        assert_eq!(
+            accumulators(&world, receiver),
+            (
+                first_interval.0 * 2.0,
+                first_interval.1 * 2.0,
+                first_interval.2 * 2.0
+            )
+        );
+        assert_eq!(
+            accumulators(&world, ancestor),
+            (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO)
+        );
+        assert_eq!(
+            world.resource::<PortHolds>().get(receiver, "force_x"),
+            Some(6.0)
+        );
+        assert_eq!(
+            world.resource::<PortHolds>().get(mount, "force_command"),
+            Some(2.0)
+        );
+        assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
+    }
 
     #[test]
     fn effort_admission_and_lint_share_units_frame_and_authority_checks() {

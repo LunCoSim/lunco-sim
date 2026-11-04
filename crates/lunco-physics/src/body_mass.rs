@@ -142,39 +142,19 @@ pub fn native_mass_properties(
     Ok((Mass(mass), inertia, CenterOfMass(center)))
 }
 
-/// Recover a native solver tensor without overflowing its f32 determinant.
-/// The stored inverse is authoritative; widen its finite coefficients before
-/// inversion so individually supported principal reciprocals remain readable.
+/// Read the native owner's widened tensor and validate dynamic-body inertia.
 pub fn computed_inertia_tensor_d(
     inertia: &ComputedAngularInertia,
 ) -> Result<bevy::math::DMat3, &'static str> {
-    use bevy::math::{DMat3, DVec3};
-    let inverse = inertia.inverse_tensor();
-    let matrix = DMat3::from_cols(
-        DVec3::new(
-            f64::from(inverse.m00),
-            f64::from(inverse.m01),
-            f64::from(inverse.m02),
-        ),
-        DVec3::new(
-            f64::from(inverse.m01),
-            f64::from(inverse.m11),
-            f64::from(inverse.m12),
-        ),
-        DVec3::new(
-            f64::from(inverse.m02),
-            f64::from(inverse.m12),
-            f64::from(inverse.m22),
-        ),
-    );
-    if !matrix.is_finite()
-        || matrix.x_axis.x <= 0.0
-        || matrix.x_axis.x * matrix.y_axis.y - matrix.x_axis.y.powi(2) <= 0.0
-        || matrix.determinant() <= 0.0
+    let tensor = bevy::math::DMat3::from(inertia.tensor_f64());
+    if !tensor.is_finite()
+        || tensor.x_axis.x <= 0.0
+        || tensor.x_axis.x * tensor.y_axis.y - tensor.x_axis.y.powi(2) <= 0.0
+        || tensor.determinant() <= 0.0
     {
-        return Err("native inverse inertia must be finite and positive definite");
+        return Err("native inertia must be finite and positive definite");
     }
-    Ok(matrix.inverse())
+    Ok(tensor)
 }
 
 /// Principal facts read from the native inverse through the canonical f64 seam.

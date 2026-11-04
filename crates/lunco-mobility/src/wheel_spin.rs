@@ -39,14 +39,17 @@ use crate::{Suspension, WheelBodyMount, WheelRaycast};
 /// The integrated angle is composed with the steer yaw to drive the mesh:
 /// `R = steer · roll_about_authored_axle(−θ) · visual_rest`.
 pub(crate) fn update_wheel_spin(
-    mut q_wheels: Query<(
-        Entity,
-        &mut WheelRaycast,
-        &RayHits,
-        &Suspension,
-        &WheelBodyMount,
-        Option<&crate::WheelHeatPorts>,
-    )>,
+    mut q_wheels: Query<
+        (
+            Entity,
+            &mut WheelRaycast,
+            &RayHits,
+            &Suspension,
+            &WheelBodyMount,
+            Option<&crate::WheelHeatPorts>,
+        ),
+        Without<lunco_core::SimulationObjectPaused>,
+    >,
     mut q_ports: ParamSet<(
         Query<&lunco_port_core::Port>,
         Query<&mut lunco_port_core::Port>,
@@ -67,7 +70,7 @@ pub(crate) fn update_wheel_spin(
         // The wheel body owner is resolved from authored topology and carried by
         // `WheelBodyMount`. A raycast wheel may be nested under a visual or
         // suspension carrier, so its ECS parent is not a physics ownership edge.
-        With<RigidBody>,
+        (With<RigidBody>, Without<RigidBodyDisabled>),
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     q_child_of: Query<&ChildOf>,
@@ -92,6 +95,12 @@ pub(crate) fn update_wheel_spin(
         return;
     }
     for (entity, mut wheel, hits, suspension, mount, heat_ports) in q_wheels.iter_mut() {
+        // The axle is an independent mechanical state owned by its carrier's
+        // admission. Preserve state and published samples while that owner is
+        // disabled, including object suspension and readiness transitions.
+        if !q_chassis.contains(mount.body) {
+            continue;
+        }
         // A ray can report a zero-normal hit when its origin is inside a
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a

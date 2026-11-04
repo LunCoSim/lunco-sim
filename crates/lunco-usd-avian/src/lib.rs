@@ -71,7 +71,7 @@ use openusd_schemas::geom::Purpose;
 // (an attribute UsdPhysics does not define) got invented and lived here for
 // months: a typo in a `&str` compiles.
 use lunco_usd_avian_contracts::{
-    AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
+    InitialPhysicsVelocity, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
     ShouldBeDynamic, UsdPhysicsProjected,
 };
 use lunco_usd_avian_reader::{
@@ -94,7 +94,28 @@ pub fn mass_center_of_mass_from_usd(
 }
 
 pub mod material;
-use material::read_physics_material;
+use material::read_physics_material as decode_physics_material;
+
+fn read_physics_material(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    prim: &SdfPath,
+) -> Result<Option<material::PhysicsMaterial>, String> {
+    decode_physics_material(reader, prim).map_err(|error| {
+        let material = reader
+            .bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Physics)
+            .ok()
+            .flatten()
+            .and_then(|path| SdfPath::new(&path).ok());
+        match material {
+            Some(path) => format!(
+                "{path}.{}={:?}: {error}",
+                error.attribute,
+                reader.attr_value(&path, &error.attribute)
+            ),
+            None => format!("{prim}: {error}"),
+        }
+    })
+}
 
 /// Runtime evidence for one joint-shaped entity, consumed by the generic Rhai
 /// USD lint. The fact is deliberately read-only; it does not create or repair
@@ -1215,11 +1236,8 @@ fn extract_avian_prim(
     let has_terrain_api = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
     // ── TERRAIN ── static collider; the terrain projection owns its marker.
     if has_terrain_api {
-        if apply_physics_material(commands, entity, reader, sdf_path).is_err() {
-            error!(
-                "[usd-avian] {sdf_path} has malformed physics-material values — refusing terrain projection"
-            );
-            commands.entity(entity).try_insert(UsdPhysicsProjected);
+        if let Err(error) = apply_physics_material(commands, entity, reader, sdf_path) {
+            reject_collider_projection(commands, entity, sdf_path, faults, holds, error);
             return;
         }
         commands
@@ -1495,12 +1513,10 @@ fn extract_avian_prim(
         for part in body_colliders {
             let source_path = SdfPath::new(&part.source_path)
                 .expect("collider source was validated by the composed reader");
-            let prepared = read_physics_material(reader, &source_path)
-                .map_err(|error| error.to_string())
-                .and_then(|material| {
-                    collider_density_from_usd(reader, &source_path, sdf_path)
-                        .map(|density| (material, density))
-                });
+            let prepared = read_physics_material(reader, &source_path).and_then(|material| {
+                collider_density_from_usd(reader, &source_path, sdf_path)
+                    .map(|density| (material, density))
+            });
             let (material, density) = match prepared {
                 Ok(prepared) => prepared,
                 Err(detail) => {
@@ -1735,11 +1751,8 @@ fn extract_avian_prim(
         // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
         // standalone as one at `/Ground`, and must collide the same way.
         if !has_rigid_body_ancestor(reader, sdf_path) {
-            if apply_physics_material(commands, entity, reader, sdf_path).is_err() {
-                error!(
-                    "[usd-avian] {sdf_path} has malformed physics-material values — refusing static collider projection"
-                );
-                commands.entity(entity).try_insert(UsdPhysicsProjected);
+            if let Err(error) = apply_physics_material(commands, entity, reader, sdf_path) {
+                reject_collider_projection(commands, entity, sdf_path, faults, holds, error);
                 return;
             }
             commands
@@ -2328,8 +2341,7 @@ fn collider_density_from_usd(
         }
     }
     if density.is_none() {
-        density = read_physics_material(reader, source)
-            .map_err(|error| error.to_string())?
+        density = read_physics_material(reader, source)?
             .and_then(|material| material.density)
             .filter(|density| *density > 0.0);
     }
@@ -2465,7 +2477,7 @@ fn apply_rigid_body_mass_props(
     // then carry them into the world frame through the body's composed rotation
     // — avian's velocity components are world-frame.
     if authored_linear.is_some() || authored_angular.is_some() {
-        commands.entity(entity).try_insert(AuthoredInitialVelocity {
+        commands.entity(entity).try_insert(InitialPhysicsVelocity {
             linear: authored_linear,
             angular: authored_angular,
         });
@@ -2489,7 +2501,7 @@ fn apply_physics_material(
     entity: Entity,
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
-) -> Result<(), ()> {
+) -> Result<(), ColliderProjectionError> {
     // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
     // NOT from a `physics:friction` attribute on the body, which is not a thing
     // UsdPhysics defines (see `read_physics_material`).
@@ -2502,7 +2514,12 @@ fn apply_physics_material(
     //
     // The pairwise combination remains Avian's responsibility. USD describes
     // each surface; it does not average the two surfaces at load time.
-    let material = read_physics_material(reader, sdf_path).map_err(|_| ())?;
+    let material = read_physics_material(reader, sdf_path).map_err(|detail| {
+        ColliderProjectionError::Backend {
+            prim: sdf_path.to_string(),
+            detail,
+        }
+    })?;
     insert_physics_material(commands, entity, material);
     Ok(())
 }

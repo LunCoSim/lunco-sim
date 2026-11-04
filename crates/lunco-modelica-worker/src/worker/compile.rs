@@ -1,6 +1,6 @@
 use super::*;
 use lunco_modelica_runtime::CompileRequested;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 type ModelicaDocuments =
     lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>;
@@ -545,6 +545,26 @@ fn dispatch_one(
         return;
     }
 
+    if let Some(entity) = target_entity
+        && world
+            .get::<ModelicaModel>(entity)
+            .is_some_and(|model| model.in_flight_step.is_some())
+    {
+        let mut model = world
+            .get_mut::<ModelicaModel>(entity)
+            .expect("admitted step owner");
+        model.paused = true;
+        model.is_compiling = true;
+        model.resume_after_compile = request.resume_after_compile;
+        drop(model);
+        world.init_resource::<PendingCompileAdmissions>();
+        world
+            .resource_mut::<PendingCompileAdmissions>()
+            .0
+            .push(request);
+        return;
+    }
+
     let connected_inputs = if target_entity.is_some_and(|entity| {
         world
             .get::<lunco_cosim_core::UsdSourcedCosim>(entity)
@@ -678,7 +698,11 @@ fn dispatch_one(
         return;
     }
 
-    let mut claimed: HashSet<String> = ast.classes.iter().map(|(name, _)| name.clone()).collect();
+    let mut claimed: BTreeMap<_, _> = ast
+        .declared_class_names()
+        .into_iter()
+        .map(|name| (name, doc))
+        .collect();
     let mut dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
     let mut extra_sources = Vec::new();
     for other_doc in sibling_documents {
@@ -687,15 +711,24 @@ fn dispatch_one(
             .expect("current participating source snapshot");
         let other_document = host.document();
         if let Some(other_ast) = other_document.strict_ast() {
-            let names: Vec<_> = other_ast
-                .classes
+            let names = other_ast.declared_class_names();
+            if let Some((name, previous_doc)) = names
                 .iter()
-                .map(|(name, _)| name.clone())
-                .collect();
-            if names.iter().any(|name| claimed.contains(name)) {
-                continue;
+                .find_map(|name| claimed.get(name).map(|previous| (name, *previous)))
+            {
+                fail_request(
+                    &request.completions,
+                    world,
+                    doc,
+                    target_entity,
+                    &model_name,
+                    &format!(
+                        "duplicate Modelica declaration '{name}' in documents {previous_doc} and {other_doc}"
+                    ),
+                );
+                return;
             }
-            claimed.extend(names);
+            claimed.extend(names.into_iter().map(|name| (name, other_doc)));
             dependency_roots.extend(rumoca_compile::compile::source_root_dependencies(
                 &other_ast,
             ));
@@ -1018,6 +1051,187 @@ fn write_notice(world: &mut World, level: NoticeLevel, text: String) {
 mod tests {
     use super::*;
     use lunco_doc::PathlessOrigin;
+
+    #[test]
+    fn replacement_compile_drains_the_shared_step_before_retiring_its_session() {
+        let mut documents = ModelicaDocuments::default();
+        let doc = documents.allocate(
+            "model Plant Real x(start=0,fixed=true); equation der(x)=1; end Plant;".into(),
+            PathlessOrigin::untitled("Plant"),
+        );
+        documents
+            .host_mut(doc)
+            .unwrap()
+            .document_mut()
+            .refresh_ast_now();
+        let generation = documents.host(doc).unwrap().document().generation_owned();
+        let source = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(doc, None).unwrap();
+        let snapshot =
+            lunco_modelica_core::source_snapshot::capture(&documents, &source, None, None, None)
+                .unwrap();
+        let mut app = App::new();
+        app.insert_resource(documents)
+            .add_message::<CompileRequested>()
+            .add_message::<ModelicaNotice>()
+            .add_message::<ModelicaSessionStarted>()
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<CosimLag>()
+            .insert_resource(lunco_core_runtime::SimTick(3))
+            .add_systems(First, super::super::handle_modelica_responses)
+            .add_systems(Update, dispatch_modelica_compile_requests)
+            .add_systems(FixedUpdate, super::super::spawn_modelica_requests);
+        let (commands, received_commands) = crossbeam_channel::unbounded();
+        let (results, received_results) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx: commands,
+            rx: received_results,
+            preparation_rx: crossbeam_channel::never(),
+        });
+        let mut model = ModelicaModel {
+            document: doc,
+            model_name: "Plant".into(),
+            session_id: 7,
+            is_compiled: true,
+            is_stepping: true,
+            compiled_generation: generation,
+            source_snapshot: Some(snapshot),
+            in_flight_step: Some(InFlightModelicaStep {
+                step_id: 1,
+                start_time: 0.0,
+                stop_time: 0.05,
+                stop_tick: 3,
+                sampled_inputs: Vec::new(),
+                submitted_at: web_time::Instant::now(),
+            }),
+            ..Default::default()
+        };
+        for tick in 1..=3 {
+            model
+                .observe_master_tick(lunco_core_runtime::SimTick(tick), true)
+                .unwrap();
+        }
+        let mut variables = ModelicaVariables::default();
+        variables.values.insert("x".into(), 0.0);
+        let entity = app
+            .world_mut()
+            .spawn((
+                model,
+                variables,
+                source.clone(),
+                lunco_modelica_runtime::ModelicaSessionEpoch(7),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ModelicaDocuments>()
+            .link(entity, doc)
+            .unwrap();
+        let mut participants = lunco_core_runtime::SimulationBarrierParticipants::default();
+        participants.replace_modelica_entities([entity]);
+        participants.replace([entity]);
+        app.insert_resource(participants);
+        let (completion, reply) = lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
+        app.world_mut().write_message(CompileRequested {
+            source,
+            entity: Some(entity),
+            class: Some("Plant".into()),
+            force: true,
+            resume_after_compile: false,
+            completions: vec![completion],
+        });
+        app.world_mut().run_schedule(Update);
+        let pending = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert!(pending.paused && pending.is_compiling && pending.is_compiled);
+        assert!(pending.in_flight_step.is_some());
+        assert_eq!(pending.session_id, 7);
+        assert_eq!(
+            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
+            0.0
+        );
+        assert!(received_commands.is_empty() && reply.try_take().is_none());
+        app.world_mut().run_schedule(First);
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 6,
+                step_id: Some(1),
+                new_time: 0.05,
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        app.world_mut().run_schedule(Update);
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+        assert!(received_commands.is_empty() && reply.try_take().is_none());
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 7,
+                step_id: Some(1),
+                new_time: 0.05,
+                outputs: vec![("x".into(), 1.0)],
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        assert_eq!(
+            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
+            1.0
+        );
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationBarrier>()
+                .held
+        );
+        set_modelica_document_run_intent(app.world_mut(), doc, true).unwrap();
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 4;
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(
+            received_commands.is_empty(),
+            "Resume cannot admit another old-session Step"
+        );
+        assert_eq!(
+            app.world()
+                .get::<ModelicaModel>(entity)
+                .unwrap()
+                .master_clock
+                .elapsed_ticks(),
+            3
+        );
+        app.world_mut().run_schedule(Update);
+        let command = received_commands
+            .try_recv()
+            .expect("settled replacement compile");
+        assert!(
+            matches!(command, ModelicaCommand::Compile { entity: target, session_id: 8, .. } if target == entity)
+        );
+        assert!(received_commands.is_empty() && reply.try_take().is_none());
+        results
+            .send(ModelicaResult {
+                entity,
+                session_id: 8,
+                is_new_model: true,
+                checked_interface: Some(crate::worker::test_checked_interface()),
+                variable_metadata: Some(Default::default()),
+                detected_symbols: vec![("x".into(), 0.0)],
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(First);
+        assert_eq!(reply.try_take().unwrap().unwrap().session_id, 8);
+        let installed = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert!(installed.is_compiled && !installed.is_compiling && !installed.paused);
+    }
 
     #[test]
     fn compile_completion_retires_once_with_its_session_owner() {

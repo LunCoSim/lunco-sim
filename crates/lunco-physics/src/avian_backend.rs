@@ -13,7 +13,7 @@ use bevy::ecs::{
     system::lifetimeless::Read,
 };
 use bevy::math::{DQuat, DVec3, Quat, Vec3};
-use bevy::prelude::{Entity, Name, Query};
+use bevy::prelude::*;
 use lunco_spatial::coords::GridPos;
 
 /// Read native body motion and its dynamic force state without mutation.
@@ -21,6 +21,7 @@ use lunco_spatial::coords::GridPos;
 #[derive(QueryData)]
 pub struct AvianForceState {
     pub body: Read<RigidBody>,
+    disabled: Has<avian3d::prelude::RigidBodyDisabled>,
     name: Option<Read<Name>>,
     native: RigidBodyQueryReadOnly,
     integration: Option<Read<VelocityIntegrationData>>,
@@ -66,6 +67,97 @@ pub struct ForceBatchScratch {
     predicted: std::collections::HashMap<Entity, (Vec3, Vec3, Vec3)>,
 }
 
+/// Only an enabled dynamic body consumes physical force intervals.
+/// Prescribed motion retains its input holds without integrating their effort.
+pub fn native_force_receiver_can_integrate(mode: RigidBody, disabled: bool) -> bool {
+    mode.is_dynamic() && !disabled
+}
+
+/// Validate the native producer schedule before any solver result is committed.
+pub(crate) fn install(app: &mut App) {
+    use avian3d::dynamics::integrator::IntegrationSystems;
+    use avian3d::prelude::{PhysicsSchedule, SolverSystems};
+    app.add_systems(
+        PhysicsSchedule,
+        validate_native_velocity_increments
+            .after(IntegrationSystems::UpdateVelocityIncrements)
+            .before(SolverSystems::Substep),
+    );
+    // Each condition is evaluated after admission. PostSubstep still clears the
+    // transient accumulators; no invalid solver body is integrated or published.
+    app.configure_sets(
+        PhysicsSchedule,
+        (
+            SolverSystems::Substep.run_if(crate::physics_is_live),
+            SolverSystems::Restitution.run_if(crate::physics_is_live),
+            SolverSystems::ContinuousCollision.run_if(crate::physics_is_live),
+            SolverSystems::Finalize.run_if(crate::physics_is_live),
+            SolverSystems::StoreContactImpulses.run_if(crate::physics_is_live),
+        ),
+    );
+}
+
+/// Native constant forces, gravity and timestep scaling have all run here.
+/// Reject their final increments before the substep loop consumes them.
+fn validate_native_velocity_increments(
+    bodies: Query<(Entity, AvianForceState, Option<&crate::PhysicsOrderKey>), crate::Integrable>,
+    time: Res<Time<avian3d::prelude::Substeps>>,
+    mut physics_time: ResMut<Time<avian3d::prelude::Physics>>,
+    mut holds: ResMut<crate::PhysicsHolds>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut commands: Commands,
+) {
+    use avian3d::schedule::PhysicsTime;
+    let delta = time.delta_secs();
+    let invalid = bodies.iter().filter_map(|(entity, state, key)| {
+        if !state.body.is_dynamic() {
+            return None;
+        }
+        let (Some(integration), Some(local)) = (state.integration, state.local) else {
+            return Some((entity, key, state.name, "dynamic body has no native acceleration accumulators".to_owned()));
+        };
+        let rotation = state.rotation();
+        let local_linear = rotation * local.linear * delta;
+        let local_angular = rotation * local.angular * delta;
+        let linear = state.native.linear_velocity.0 + local_linear + integration.linear_increment;
+        let angular = state.native.angular_velocity.0 + local_angular + integration.angular_increment;
+        if integration.linear_increment.is_finite()
+            && integration.angular_increment.is_finite()
+            && local.linear.is_finite() && local.angular.is_finite()
+            && local_linear.is_finite() && local_angular.is_finite()
+            && linear.is_finite() && angular.is_finite()
+        {
+            return None;
+        }
+        Some((entity, key, state.name, format!(
+            "native accumulated velocity increment exceeds finite solver range: linear_increment={:?}, angular_increment={:?}, local_linear_acceleration={:?}, local_angular_acceleration={:?}, substep_seconds={delta}, resulting_linear_velocity={linear:?}, resulting_angular_velocity={angular:?}",
+            integration.linear_increment, integration.angular_increment, local.linear, local.angular,
+        )))
+    }).min_by(|left, right| left.1.map(|key| &key.0).cmp(&right.1.map(|key| &key.0)));
+    let Some((entity, _, name, detail)) = invalid else {
+        return;
+    };
+    let subject = name.map_or_else(
+        || format!("entity {entity:?}"),
+        |name| name.as_str().to_owned(),
+    );
+    holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
+    physics_time.pause();
+    physics_time.advance_by(std::time::Duration::ZERO);
+    if faults.raise(
+        "physics-native-integration-range",
+        Some(entity),
+        subject.clone(),
+        detail.clone(),
+    ) {
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "physics-native-integration-range",
+            format!("{subject}: {detail}"),
+        );
+    }
+}
+
 /// Check the exact native products and accumulated sums for the complete batch.
 /// The caller holds this read lease until admission, then applies the same ordered
 /// batch before any other force producer can mutate its native accumulators.
@@ -92,8 +184,10 @@ pub fn prepare_force_batch<F: QueryFilter>(
                 |name| format!("{}: {detail}", name.as_str()),
             ),
         };
-        if !state.body.is_dynamic() {
-            return Err(error("native force receiver must be dynamic".into()));
+        if !native_force_receiver_can_integrate(*state.body, state.disabled) {
+            return Err(error(
+                "native force receiver must be enabled and dynamic".into(),
+            ));
         }
         let integration = state
             .integration

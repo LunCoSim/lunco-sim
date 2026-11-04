@@ -83,7 +83,9 @@ from carrier point velocity minus support point velocity at the shared world
 contact point. A common translation of both bodies creates no slip or damping.
 Each force has an equal and opposite contribution on an admitted dynamic
 support; static and kinematic supports retain prescribed motion. A retired
-support supplies no contact force.
+support supplies no contact force. Scoped object pause and a disabled carrier
+stop raycast axle integration and preserve angle, speed and published shaft/heat
+samples. Unrelated live objects do not release that scoped mechanical boundary.
 
 Both wheel realizations stage their ordered native force batches before
 application. The physics-owned `prepare_force_batch` validates mass/inertia

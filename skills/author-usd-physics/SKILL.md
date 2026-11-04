@@ -43,10 +43,20 @@ basis does not define the mechanical axle. `wheel_render_root` verifies the
 shared projection and rejects overlapping or ambiguous render roots in lint.
 
 Initial and live wheel admission validate the complete native mass/inertia
-candidate, including finite native inverse inertia. Invalid authored values
+candidate, including finite native inverse inertia. The native owner supplies
+`ComputedAngularInertia::tensor_f64()` for observation and gyroscopic integration;
+valid tiny anisotropic rotors retain their physical response. The sixth-pass
+numeric gates pair isotropic/anisotropic controls at two inertia scales.
+Invalid authored values
 produce an Error identifying the wheel and field in Recent Events and hold
 physics. Validate this with the fourth-pass wheel cases; an accepted document
-edit alone does not prove native admission.
+edit alone does not prove native admission. Bound static/terrain material
+rejection must name the material, property and authored value in the collider
+fault and Recent Events, with physics held. Use the sixth-pass material gates.
+Revolute admission aligns constrained hinge axes while preserving free twist
+and axial spin through the `InitialPhysicsVelocity` dynamic-admission handoff;
+the sixth-pass hinge gate includes incompatible prescribed
+endpoints and both movable endpoint orders.
 
 Joint endpoints depend on their composed socket and body frames. Live socket
 translation, rotation or scale and body scale must refresh the affected native
