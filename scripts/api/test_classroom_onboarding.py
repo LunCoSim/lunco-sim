@@ -70,7 +70,7 @@ def main() -> None:
         observer = int(source["stdout"].strip())
         offset = session.log_path.stat().st_size
         command(session, "RunScenarioAsset", target=observer,
-                source_asset="lunco://scenarios/tests/tutorial_rover_lab.rhai", reload_policy="Restart")
+                source_asset="lunco://scenarios/tests/tutorial_rover_lab.rhai", reload_policy="restart")
         wait_for_authored_verdict(session, title="Lunar Rover Lab", check_count=11, offset=offset, timeout_s=240)
         before = report(session)
         document = command(session, "InspectUsdDocument", doc_id=before["doc_id"])
@@ -118,7 +118,7 @@ def main() -> None:
             for card in command(session, "InspectGuidedHud").get("cards", [])))
         session.capture_screenshot(output / "next-lesson.png")
         # A skipped UI tour must remain closed under later Next commands.
-        command(session, "RunScenarioAsset", source_asset="lunco://tutorials/luncosim/welcome.rhai", reload_policy="Restart")
+        command(session, "RunScenarioAsset", source_asset="lunco://tutorials/luncosim/welcome.rhai", reload_policy="restart")
         wait_until(session, "UI tour", lambda: command(session, "InspectGuidedHud").get("tour"))
         command(session, "GuidedSkip")
         wait_until(session, "closed skipped tour", lambda: command(session, "InspectGuidedHud").get("tour") is None)

@@ -1,5 +1,5 @@
 // Run on an owned client with its remote scene already admitted. Attach in
-// Application scope with Retain reload policy. Supply remote_path (a cached
+// Application scope with retain reload policy. Supply remote_path (a cached
 // remote .mo), application_path (a loose .mo), their distinct class names, and
 // dirty_source (valid replacement source for the remote class). Both files must
 // be unopened in this session. No path spelling is used to infer their owners.

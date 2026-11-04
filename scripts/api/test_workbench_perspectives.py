@@ -34,7 +34,7 @@ def main() -> None:
         offset = log.stat().st_size
         response = session.post({"type": "ExecuteCommand", "command": "RunScenarioAsset", "params": {
             "source_asset": f"lunco://scenarios/tests/{scenario}.rhai",
-            "reload_policy": "Retain",
+            "reload_policy": "retain",
             "params": {
                 "good_twin": str(ROOT / "assets/scenes/tests/workbench_perspectives"),
                 "bad_twin": str(ROOT / "assets/scenes/tests/workbench_perspectives_invalid"),

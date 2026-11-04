@@ -48,7 +48,7 @@ def main() -> None:
              "difficulty": "beginner", "source_asset": "tutorials/luncosim/welcome.rhai"},
         ]}
         response = session.post({"type": "ExecuteCommand", "command": "RunScenarioAsset", "params": {
-            "source_asset": "lunco://scenarios/tests/tutorial_navigation.rhai", "reload_policy": "Restart",
+            "source_asset": "lunco://scenarios/tests/tutorial_navigation.rhai", "reload_policy": "restart",
             "params": {"catalog": json.dumps(catalog)},
         }})
         if response.get("error"):

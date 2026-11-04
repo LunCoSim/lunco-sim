@@ -16,7 +16,7 @@ The mandate above is **honoured for USD geometry and transforms**. Two types:
 
 | Type | What it is |
 |---|---|
-| **`StageMetrics`** | the stage's declared convention — `meters_per_unit: f64` + `up_axis: UpAxis::{Y,Z}` — read from the pseudo-root metadata by the `StageMetrics::from_reader` adapter or native `StageMetrics::from_stage`. This is the **only** place `upAxis` / `metersPerUnit` are interpreted. |
+| **`StageMetrics`** | the stage's declared convention — `meters_per_unit: f64` + `up_axis: UpAxis::{Y,Z}` — read from the pseudo-root metadata by the `StageMetrics::from_reader` adapter or native `StageMetrics::from_stage`. This is the **only** place `upAxis` / `metersPerUnit` are interpreted; runtime reads also admit only kilogram mass units. |
 | **`ConventionTransform`** | the precomputed stage→canonical **similarity** `S = k·Q` (uniform scale `k = metersPerUnit`, rotation `Q` = identity for Y-up, `Rx(−90°)` for Z-up). Built solely by `ConventionTransform::from_stage_metrics`. `#[must_use]`. |
 
 **The conversion is baked into the shared decoders, not applied to a root
@@ -62,8 +62,12 @@ rotation — that is why `Q` is derived from a two-valued token and never from
 free-form data.
 
 **Failure behaviour is loud, never silent.** An `upAxis` that is neither `Y` nor
-`Z`, or a non-finite/non-positive `metersPerUnit`, rejects the USD projection at
-the importer boundary. There is no canonical-value substitution for malformed
+`Z`, a non-finite/non-positive `metersPerUnit`, or an authored
+`kilogramsPerUnit` other than `1.0`, rejects runtime USD projection at the importer
+boundary. Omitted mass units use the standard kilogram default. Prepared plans
+retain all three metadata fields and validate the convention before publication.
+The existing primary-stage load-failure owner reports the rejected stage; no
+physical body can be admitted from it. There is no canonical-value substitution for malformed
 metadata. A *supported but non-canonical* stage logs a one-shot warning naming
 what is being converted.
 
@@ -202,16 +206,49 @@ only conversion edge is *external-document ↔ canonical*. N spokes, not N²
 adapters — but each spoke is only worth building when its convention actually
 appears (see staged plan).
 
+## Physical mounts and reduced mass
+
+`transform_in_body_frame` composes both USD world matrices in double precision
+and subtracts their translations before the explicit native local-transform
+conversion. Physical mounts, wheel offsets and reduced mass placements consume
+that shared path. Large translations of an assembly therefore preserve its
+body-local geometry and force moment arms.
+
+A `LunCoMassContributionAPI` child in a reduced realization supplies explicit
+standard `physics:mass`, `physics:diagonalInertia` and `physics:centerOfMass`.
+Its omitted `physics:principalAxes` has the standard identity default. Geometry
+cannot derive a missing COM for a part omitted from native rigid-body geometry;
+missing or malformed mass facts fault the reduced realization visibly. The
+shared suspension carrier authors its zero COM explicitly.
+
+The USD reader converts positive principal magnitudes and principal orientation
+through the stage convention. Mobility transforms the child's complete mass
+properties by its body-local mount. Parry's maintained `MassProperties` reduction
+owns full tensor rotation, COM transport, parallel-axis cross terms and principal
+frame extraction in stable source order. Proxy wheels contribute point mass at
+their physical mounts; their independent spin inertia remains with the wheel
+integrator. The carrier's explicit mass override or actual prepared
+`ComputedMass` joins the same reduction with its authored or prepared tensor
+and COM. A collider-massed carrier needs no fabricated mass seed.
+
+`lunco-physics::body_mass` checks source contributions and the complete native
+candidate before mobility changes mass, inertia, COM or its once-only marker.
+Nonfinite values, degenerate final inertia and native-range overflow raise
+`physics-reduced-mass-invalid` and hold integration. No partial native candidate
+is published. The completed mass and tensor become the explicit native owners
+(`Mass`/`NoAutoMass`, `AngularInertia`/`NoAutoAngularInertia`) so collider
+recomputation cannot discard the reduced children.
+
 ## Full API shape — **design; does not exist yet**
 
 > **This section is a target, not a description.** What exists today is the
 > `StageMetrics` / `ConventionTransform` pair described in *As built* above:
 > a `metersPerUnit` scale + an up-axis rotation, with `point` / `dir` / `orient` /
-> `rotation` / `scale_vec` / `length` / `local_transform`. There is **no `Units`
-> struct, no `Dimension` exponents, no `kilogramsPerUnit`, and no
-> `mass()` / `stiffness()` / `damping()` accessor** — mass and the physics scalars
-> are read unconverted. Every asset we own is SI, so nothing is wrong today; the
-> machinery below is what a non-SI *mass* would need.
+> `rotation` / `scale_vec` / `length` / `local_transform`. Runtime admission rejects
+> non-kilogram `kilogramsPerUnit` metadata. There is no general dimensional mass,
+> stiffness or damping conversion API. Authoring can retain a non-kilogram stage
+> for interchange, but it cannot execute until complete dimensional conversion
+> exists at the stage owner.
 
 ```rust
 /// Which way is up / forward + chirality. All our targets are right-handed
@@ -374,7 +411,7 @@ Plus `#[must_use]` on `ConventionTransform` so an unused gate warns.
 
 | Spoke | Convention source | Status |
 |---|---|---|
-| **USD** | stage metrics: `upAxis`, `metersPerUnit` | **built, both directions** — `StageMetrics` / `ConventionTransform`, with save applied at the `UsdDocument::apply` seam. `SetTimeSample` uses the same authoring conversion; `kilogramsPerUnit` is not covered. |
+| **USD** | stage metrics: `upAxis`, `metersPerUnit` | **built, both directions** — `StageMetrics` / `ConventionTransform`, with save applied at the `UsdDocument::apply` seam. `SetTimeSample` uses the same authoring conversion; `kilogramsPerUnit` defaults to 1.0 and other authored values are rejected at runtime; authoring retains valid interchange metadata. |
 | glTF | fixed Y-up / metres (≈ identity spoke) | not built — additive |
 | Blender (live) | Z-up / −Y-fwd / metres, via USD interchange | not built — the USD spoke already covers a Z-up Blender export |
 | Isaac Sim | USD Z-up + centimetres | **covered by the USD spoke** — this is the exact stage the spoke was built for |
@@ -403,9 +440,10 @@ its keep (YAGNI).
 4. **Save path — DONE.** Document operations convert canonical values at the
    authoring boundary, including defaults and time samples, so Save preserves
    the stage's declared metrics.
-5. **Dimensional scalars — OPEN.** `kilogramsPerUnit`, and the
-   `mass()`/`stiffness()`/`damping()` accessors that a non-SI mass would need.
-   Nothing we load is non-SI in mass today.
+5. **Dimensional mass conversion — OPEN.** Runtime admission supports only
+   kilogram mass units. Supporting other `kilogramsPerUnit` values requires one
+   complete conversion of mass, density, inertia, physical force/torque caps and
+   dimensional drive gains; accepting only part of that contract is invalid.
 
 ## Relationship to other specs
 

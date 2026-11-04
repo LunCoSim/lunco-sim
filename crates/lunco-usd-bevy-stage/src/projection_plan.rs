@@ -174,6 +174,8 @@ impl UsdStageProjectionPlan {
     pub fn from_stage(stage: &Stage) -> Result<Self> {
         let _span = bevy::log::info_span!("usd_projection_facts").entered();
         let reader = StageView::new(stage);
+        let _ = crate::units::stage_convention(&reader)
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?;
         let traversal_span = bevy::log::debug_span!("usd_projection_traversal").entered();
         let mut paths = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -204,7 +206,7 @@ impl UsdStageProjectionPlan {
         let mut data = UsdStageProjectionData {
             default_prim: reader.default_prim(),
             time_codes_per_second: reader.time_codes_per_second(),
-            stage_metadata: ["upAxis", "metersPerUnit"]
+            stage_metadata: ["upAxis", "metersPerUnit", "kilogramsPerUnit"]
                 .into_iter()
                 .filter_map(|name| {
                     reader
@@ -1029,6 +1031,33 @@ impl UsdRead for UsdStageProjectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_stage_admission_preserves_and_checks_mass_units() {
+        let recipe = StageRecipe::from_source(
+            "mass_units.usda",
+            r#"#usda 1.0
+(metersPerUnit = 1
+kilogramsPerUnit = 1)
+def Xform "Body" {}
+"#,
+        );
+        let plan = UsdStageProjectionPlan::from_recipe(&recipe).unwrap();
+        assert_eq!(
+            plan.stage_metadata_value("kilogramsPerUnit"),
+            Some(openusd::sdf::Value::Double(1.0))
+        );
+        let recipe = StageRecipe::from_source(
+            "mass_units.usda",
+            r#"#usda 1.0
+(metersPerUnit = 1
+kilogramsPerUnit = 0.001)
+def Xform "Body" {}
+"#,
+        );
+        let error = UsdStageProjectionPlan::from_recipe(&recipe).unwrap_err();
+        assert!(error.to_string().contains("kilogramsPerUnit"));
+    }
 
     #[test]
     fn native_composition_arc_facts_survive_prepared_admission() {

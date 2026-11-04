@@ -114,6 +114,7 @@ def run_authored_scenario(
     title: str,
     check_count: int,
     params: dict[str, Any] | None = None,
+    owner_twin_id: int | None = None,
     allow_runtime_fault: bool = False,
     timeout_s: float = 120,
 ) -> None:
@@ -124,9 +125,10 @@ def run_authored_scenario(
     its named verdict and exact assertion count after admission.
     """
     offset = session.log_path.stat().st_size
-    response = session.post({"type": "ExecuteCommand", "command": "RunScenarioAsset",
-                             "params": {"source_asset": source_asset,
-                                        "reload_policy": "Retain", "params": params or {}}})
+    launch = {"source_asset": source_asset, "reload_policy": "retain", "params": params or {}}
+    if owner_twin_id is not None:
+        launch["owner_twin_id"] = owner_twin_id
+    response = session.post({"type": "ExecuteCommand", "command": "RunScenarioAsset", "params": launch})
     if response.get("error"):
         raise RuntimeError(f"scenario admission failed: {response}")
     wait_for_authored_verdict(session, title=title, check_count=check_count, offset=offset,

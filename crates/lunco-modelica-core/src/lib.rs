@@ -92,6 +92,7 @@ pub mod sim_target;
 /// Core (UI-free) Modelica command helpers — `SetModelInput` application + sim-
 /// bounds resolution — shared by the egui workbench and the headless API server.
 pub mod model_commands;
+mod parameter_commands;
 
 /// Per-Twin Modelica domain engine: long-lived `rumoca_compile::Session`
 /// + per-doc URI mapping. Provides cross-file inheritance-merged queries.
@@ -139,6 +140,7 @@ impl Plugin for ModelicaCorePlugin {
         // Register it here so headless and workbench hosts expose the same
         // reflected command contract.
         model_commands::register_all_commands(app);
+        parameter_commands::install(app);
         doc_ops::register_all_commands(app);
         app.add_observer(model_commands::commit_session_input);
         #[cfg(feature = "api")]

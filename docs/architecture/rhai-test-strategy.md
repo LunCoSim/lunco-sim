@@ -405,6 +405,10 @@ Authored mass/inertia/centre values and their Avian override markers are reporte
 beside computed values. `computed_mass_finite` and
 `computed_inertia_finite` expose whether Avian has produced usable solver values,
 so production Rhai physics gates can fail at the first invalid fixed step.
+`inertia_tensor_kgm2` supplies the complete computed body-local tensor as three
+rows, including off-diagonal terms; it is unavailable when no finite native
+tensor exists. Use it for frame-sensitive mass checks instead of reconstructing
+a tensor from principal values or reading unregistered native components.
 
 The production gate is the coverage index for claims that an asset author can
 observe through USD, commands, queries, or telemetry. A row may point at more

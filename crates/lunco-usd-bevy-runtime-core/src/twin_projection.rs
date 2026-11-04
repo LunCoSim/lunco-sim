@@ -3027,6 +3027,7 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
             // Stage metrics affect every canonical transform and require the
             // composed stage and all projected spatial state to be rebuilt.
             | UsdOp::SetStageMetrics { .. }
+            | UsdOp::SetStageMassUnits { .. }
     )
 }
 
@@ -3131,6 +3132,7 @@ fn dependent_stage_refresh_mode(ops: &[UsdOp]) -> Option<DependentStageRefreshMo
             | UsdOp::CopyProperty { .. }
             | UsdOp::SetDefaultPrim { .. }
             | UsdOp::SetStageMetrics { .. }
+            | UsdOp::SetStageMassUnits { .. }
             | UsdOp::SetVariantSelection { .. }
             | UsdOp::SetPayload { .. }
             | UsdOp::SetReferenceArcs { .. } => {

@@ -52,9 +52,8 @@ pub(super) fn enqueue_command(
         // takes the FIFO slot behind it. (`is_squashable` is false for Step,
         // so the squash below never collapses it.)
     }
-    // The setpoint squash, unchanged in meaning: consecutive
-    // Compile/UpdateParameters for the same entity+session collapse to the
-    // latest, acking the dropped one (see `is_squashable`).
+    // Only an identical setpoint may collapse within one entity/session.
+    // Parameter deltas for different names retain their FIFO positions.
     if let Some(last) = compile_lane.back_mut() {
         if is_squashable(last, &cmd) && cmd_session(last) == cmd_session(&cmd) {
             if let (Some(entity), Some(session)) = (cmd_entity(last), cmd_session(last)) {
@@ -407,6 +406,50 @@ mod tests {
         l.push(step(ent(1)));
         assert_eq!(l.compile.len(), 3);
         assert!(l.rx.try_recv().is_err(), "no synthetic ack for a Step");
+    }
+
+    #[test]
+    fn distinct_parameter_deltas_retain_their_fifo_slots() {
+        let mut lanes = Lanes::new();
+        let update = |name: &str, value| ModelicaCommand::UpdateParameters {
+            entity: ent(1),
+            session_id: 7,
+            model_name: "M".into(),
+            source: String::new(),
+            parameter_name: name.into(),
+            parameter_value: value,
+            initial_inputs: Vec::new(),
+        };
+        lanes.push(update("gain", 3.0));
+        lanes.push(update("bias", 4.0));
+        assert_eq!(
+            lanes.compile.len(),
+            2,
+            "a distinct parameter must not discard an earlier override delta"
+        );
+        assert!(
+            lanes.rx.try_recv().is_err(),
+            "both deltas still own real work"
+        );
+        lanes.push(update("bias", 5.0));
+        assert_eq!(
+            lanes.compile.len(),
+            2,
+            "the latest value replaces only its own scalar setpoint"
+        );
+        let names_and_values = lanes
+            .compile
+            .iter()
+            .map(|command| match command {
+                ModelicaCommand::UpdateParameters {
+                    parameter_name,
+                    parameter_value,
+                    ..
+                } => (parameter_name.as_str(), *parameter_value),
+                _ => panic!("only parameter updates were queued"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names_and_values, vec![("gain", 3.0), ("bias", 5.0)]);
     }
 
     #[test]

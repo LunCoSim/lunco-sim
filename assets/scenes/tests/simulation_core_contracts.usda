@@ -1,0 +1,77 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    custom double lunco:time:epochJd = 2451545.0
+    def Cube "Source" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        bool physics:rigidBodyEnabled = true
+        bool physics:kinematicEnabled = true
+        float physics:mass = 2.0
+        custom double3 xformOp:translate = (100000000.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom double outputs:position_y = 2.0
+        def Xform "AuditMount" (
+            prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        )
+        {
+            custom double3 xformOp:translate = (1.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float3 lunco:forceActuator:direction = (0.0, 1.0, 0.0)
+            double lunco:forceActuator:maxForce = 10.0
+        }
+    }
+    def Cube "Target" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        bool physics:rigidBodyEnabled = true
+        bool physics:kinematicEnabled = true
+        float physics:mass = 5.0
+        custom double3 xformOp:translate = (3.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom double inputs:position_y = 0.0
+        double inputs:position_y.connect = </World/Source.outputs:position_y>
+        custom double inputs:mass = 5.0
+        float3 physics:diagonalInertia = (10.0, 10.0, 10.0)
+        point3f physics:centerOfMass = (0.0, 0.0, 0.0)
+        def Xform "AuditMass" (
+            prepend apiSchemas = ["PhysicsMassAPI", "LunCoMassContributionAPI"]
+        )
+        {
+            float physics:mass = 1.0
+            float3 physics:diagonalInertia = (1.0, 2.0, 3.0)
+            point3f physics:centerOfMass = (0.20000000298023224, 0.0, 0.0)
+            custom double3 xformOp:rotateXYZ = (0.0, 0.0, 90.0)
+            uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        }
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 60000.0
+    }
+    def PhysicsScene "Physics"
+    {
+        float physics:gravityMagnitude = 0.0
+    }
+    def Cube "ForceBody" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (10.0, 10.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double size = 1.0
+        float physics:mass = 1.0
+    }
+}

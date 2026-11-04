@@ -60,8 +60,10 @@ pub struct PendingForces {
 /// The Modelica/network solver determines the scalar.  This system performs
 /// only the mechanical boundary projection; it does not derive torque from a
 /// command, speed, battery state, motor name, or fixed torque-speed curve.
+/// All couplings validate their unique authored physical order keys before
+/// any feedback, brake state, or shared-body torque changes.
 pub fn apply_joint_torque_actuators(
-    physics_time: Res<Time<Physics>>,
+    mut physics_time: ResMut<Time<Physics>>,
     virtual_time: Res<Time<Virtual>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -72,6 +74,7 @@ pub fn apply_joint_torque_actuators(
             Option<&mut RevoluteJoint>,
             &avian3d::prelude::JointForces,
             Has<JointDisabled>,
+            Option<&lunco_physics::PhysicsOrderKey>,
         ),
         Without<lunco_physics::PhysicsObjectPaused>,
     >,
@@ -98,8 +101,31 @@ pub fn apply_joint_torque_actuators(
         return;
     }
 
+    let ordered = lunco_physics::ordered_physics_entities(
+        q_actuators
+            .iter()
+            .map(|(entity, _, _, _, _, key)| (entity, key)),
+        "joint effort application",
+    );
+    let ordered = match ordered {
+        Ok(ordered) => ordered,
+        Err(invalid) => {
+            lunco_physics::report_invalid_physics_order(
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                Some(&mut physics_time),
+                "cosim-joint-effort-order-invalid",
+                &invalid,
+            );
+            return;
+        }
+    };
+
     previous_axle_speed.retain(|entity, _| q_actuators.contains(*entity));
-    for (entity, actuator, joint, joint_forces, disabled) in &mut q_actuators {
+    for entity in ordered {
+        let (entity, actuator, joint, joint_forces, disabled, _) = q_actuators
+            .get_mut(entity)
+            .expect("ordered joint effort entity remains live during this system");
         let torque_contracts = q_contracts.get(actuator.torque_endpoint()).ok();
         let speed_contracts = q_contracts.get(actuator.speed_endpoint()).ok();
         if let Err(detail) = validate_joint_effort_contract(
@@ -1922,7 +1948,7 @@ mod tests {
     }
 
     #[test]
-    fn joint_brake_uses_admitted_cycle_after_zero_delta_hold() {
+    fn joint_brake_configures_native_constraint_after_zero_delta_hold() {
         use avian3d::dynamics::integrator::VelocityIntegrationData;
         use avian3d::prelude::forces::AccumulatedLocalAcceleration;
         use bevy::ecs::system::RunSystemOnce;
@@ -1930,7 +1956,6 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(Time::<Physics>::default());
         world.insert_resource(Time::<Virtual>::default());
-        world.insert_resource(Time::<Fixed>::from_hz(lunco_core_runtime::FIXED_HZ));
         let mut inputs = lunco_port_core::InputPorts::new(&["brake"]);
         inputs.brake_active = true;
         let control = world.spawn(inputs).id();
@@ -1971,35 +1996,46 @@ mod tests {
                 ))
                 .id()
         });
-        world.spawn((
-            RevoluteJoint::new(bodies[0], bodies[1]).with_hinge_axis(Vec3::X),
-            {
-                let mut coupling = JointTorqueActuator::new(
-                    torque,
-                    speed,
-                    control,
-                    lunco_physics::joint::JointCoordinateSign::Positive,
-                )
-                .unwrap();
-                coupling.brake_torque = 4_000.0;
-                coupling.rotational_inertia = 1.0;
-                coupling.brake_heat_port = Some(brake_heat);
-                coupling
-            },
-        ));
+        let joint = world
+            .spawn((
+                RevoluteJoint::new(bodies[0], bodies[1]).with_hinge_axis(Vec3::X),
+                avian3d::prelude::JointForces::new(),
+                lunco_physics::PhysicsOrderKey("test:joint-brake".into()),
+                {
+                    let mut coupling = JointTorqueActuator::new(
+                        torque,
+                        speed,
+                        control,
+                        lunco_physics::joint::JointCoordinateSign::Positive,
+                    )
+                    .unwrap();
+                    coupling.brake_torque = 4_000.0;
+                    coupling.rotational_inertia = 1.0;
+                    coupling.brake_heat_port = Some(brake_heat);
+                    coupling
+                },
+            ))
+            .id();
 
         // Admission opens the native clock before it has integrated this cycle.
         assert!(world.resource::<Time<Physics>>().delta().is_zero());
         world.run_system_once(apply_joint_torque_actuators).unwrap();
-        let expected = 1.0 / world.resource::<Time<Fixed>>().timestep().as_secs_f64();
-        for (body, sign) in bodies.into_iter().zip([1.0, -1.0]) {
+        assert_eq!(
+            world.get::<RevoluteJoint>(joint).unwrap().motor,
+            world
+                .get::<JointTorqueActuator>(joint)
+                .unwrap()
+                .passive_brake_motor()
+        );
+        for body in bodies {
             let acceleration = world
                 .get::<VelocityIntegrationData>(body)
                 .unwrap()
                 .angular_increment;
-            assert!(
-                (f64::from(acceleration.x) - sign * f64::from(expected as f32)).abs() < 1e-10,
-                "{acceleration:?}"
+            assert_eq!(
+                acceleration,
+                Vec3::ZERO,
+                "only the native joint constraint may apply the passive brake reaction"
             );
         }
         assert_eq!(
@@ -2010,7 +2046,10 @@ mod tests {
             .get::<lunco_port_core::Port>(brake_heat)
             .unwrap()
             .value;
-        assert!((heat / expected - 0.5).abs() < 1e-12, "{heat}");
+        assert_eq!(
+            heat, 0.0,
+            "no native solver interval has delivered brake work yet"
+        );
     }
 
     #[test]

@@ -222,8 +222,9 @@ pub struct ApiQueryParameterSchema {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSchema {
     pub name: String,
-    /// Whether the reflected command registered `ReflectDefault`, so omitted
-    /// fields can be filled from the Rust type's actual `Default` contract.
+    /// Whether the command registered its Rust type's `ReflectDefault`.
+    /// The concrete serde adapter also owns per-field defaults and optional
+    /// omission, including commands without a whole-struct default.
     pub defaulted: bool,
     pub fields: Vec<FieldSchema>,
 }

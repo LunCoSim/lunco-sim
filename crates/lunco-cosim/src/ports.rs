@@ -416,10 +416,11 @@ fn avian_metadata(
                 (Some(-actuator.max_torque_nm), Some(actuator.max_torque_nm))
             }),
     };
-    // Native computed properties and motor targets use f32. World positions
-    // and the domain force accumulators retain their f64 contracts.
+    // Validate native representability before any atomic input commit. Force
+    // accumulators retain f64 samples, but their admitted values must also fit
+    // the native solver that consumes them. Kinematic world positions stay f64.
     let (min, max) = if port.write.is_some()
-        && matches!(
+        && (matches!(
             port.name,
             "mass"
                 | "inertia_xx"
@@ -430,7 +431,8 @@ fn avian_metadata(
                 | "com_z"
                 | "angle"
                 | "displacement"
-        ) {
+        ) || lunco_physics::force_ports::is_physics_force_port(port.name))
+    {
         let native_max = f64::from(f32::MAX);
         (
             Some(min.unwrap_or(-native_max).max(-native_max)),

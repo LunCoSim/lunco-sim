@@ -49,6 +49,13 @@ converts values only at JSON wire boundaries, and outward transports are in
 
 Commands are discovered automatically. The API scans `AppTypeRegistry` for reflected events carrying the marker emitted by `#[Command]`. A command must still be registered by its owning plugin so its observer and reflected type exist in the running host.
 
+`#[Command]` registers its typed serde deserializer with Bevy reflection. Supplied
+values are constructed by that owner before dispatch; documented defaults apply
+only to omitted values. Unknown command fields and malformed nested operations
+are terminal rejections. Ordinary reflected nested structures retain strict field
+names; explicitly registered serde adapters own their wire representation.
+Optional fields use their raw value or `null`, including optional global entity IDs.
+
 ### HTTP Endpoint
 
 The endpoint is supplied by `lunco-api-transport`. Pure JSON wire envelopes

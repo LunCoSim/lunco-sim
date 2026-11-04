@@ -555,6 +555,17 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                 let (principal, _) = inertia.principal_angular_inertia_with_local_frame();
                 api_value!([principal.x, principal.y, principal.z])
             }),
+            // Body-local rows preserve the full physical tensor, including
+            // cross terms and orientation that principal values alone omit.
+            "inertia_tensor_kgm2": inertia.filter(|inertia| inertia.is_finite())
+                .and_then(|inertia| {
+                    let tensor = inertia.tensor();
+                    tensor.is_finite().then(|| api_value!([
+                        [tensor.m00, tensor.m01, tensor.m02],
+                        [tensor.m01, tensor.m11, tensor.m12],
+                        [tensor.m02, tensor.m12, tensor.m22],
+                    ]))
+                }),
             // A footprint is authored support geometry; a contact count is a
             // live result from the owning physics realization. Keep them
             // separate so callers cannot mistake a declared probe for ground

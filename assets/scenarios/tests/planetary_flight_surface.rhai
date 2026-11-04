@@ -5,8 +5,8 @@ const TEST_KIND = "headless";
 fn launch_input(id, speed_mps) {
     let mass = get(id,"mass");
     if mass == () || mass <= 0.0 { return false; }
-    // One fixed-step force input supplies the requested momentum increment
-    // through the normal native force-port owner.
+    // The test releases this force level at the following fixed cycle, after
+    // one native interval supplies the requested momentum increment.
     cmd("SetPorts",#{target:id,writes:[["force_y",mass*speed_mps/dt()]]}).ok
 }
 
@@ -29,6 +29,7 @@ fn on_start(me, ctx) {
     this.max_cell_y = -1000000;
     this.initial_reported = false;
     this.drive_tick = -1;
+    this.launch_released = false;
 }
 
 fn on_tick(me, ctx) {
@@ -56,6 +57,19 @@ fn on_tick(me, ctx) {
         }
         this.drive_tick = sim_tick();
         return;
+    }
+    if !this.launch_released {
+        let released = true;
+        for body in [flight,companion,globe,collar] {
+            if cmd("ReleasePort",#{target:body,name:"force_y"}).ok != true { released=false; }
+        }
+        this.launch_released = true;
+        if !released {
+            this.done = true;
+            report_verdict(["native launch force release was rejected"],
+              "Planetary flight/surface", "PLANETARY_FLIGHT_SURFACE");
+            return;
+        }
     }
     this.peak = this.peak.max(p.y);
     this.max_attachment_error = this.max_attachment_error.max((vlen(q-p)-3.0).abs());

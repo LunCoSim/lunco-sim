@@ -26,7 +26,7 @@ def main() -> None:
         print(f"OWNED pid={pid} port={args.port} cwd={ROOT}", flush=True)
         offset = log.stat().st_size
         result = session.post({"type": "ExecuteCommand", "command": "RunScenarioAsset", "params": {
-            "source_asset": "lunco://scenarios/tests/workbench_navigation.rhai", "reload_policy": "Retain",
+            "source_asset": "lunco://scenarios/tests/workbench_navigation.rhai", "reload_policy": "retain",
             "params": {"replacement": str(ROOT / "assets/scenes/tests/workbench_perspectives")},
         }})
         if result.get("error"):

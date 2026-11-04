@@ -25,8 +25,8 @@ assets/tutorials/
 The catalog is presentation data. Each entry names a `source_asset`, may name a
 `scene_asset`, and belongs to a `track`; the application presents each track as
 a submenu and keeps the entries in authored order. Both assets are resolved
-through the asset system. The menu uses the reflected
-`ScenarioReloadPolicy::Restart` value so selecting a lesson always gets a
+through the asset system. The menu sends `reload_policy: "restart"`
+so selecting a lesson always gets a
 fresh scenario start after its requested scene is composed. Other applications
 can reuse the same generic command with their own catalog or no menu at all.
 

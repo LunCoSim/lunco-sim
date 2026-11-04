@@ -55,12 +55,12 @@ use syn::{
 ///
 /// Always derives:
 /// - `bevy::Event` — dispatchable on the Bevy command bus.
-/// - `bevy::Reflect` + `#[reflect(Event)]` — ad-hoc dispatch from the
-///   HTTP API's reflection-based deserializer.
+/// - `bevy::Reflect` + event and concrete serde reflection adapters — typed
+///   validation and dispatch from the API.
 /// - The reflected `ApiCommandMarker` type attribute — API discovery uses the
 ///   same command abstraction for commands defined by external plugins.
 /// - `Clone, Debug`.
-/// - `serde::Serialize, serde::Deserialize` — typed roundtrip for
+/// - `serde::Serialize, serde::Deserialize` with unknown-field rejection — typed roundtrip for
 ///   journals, network sync, CLI clients, AI-agent flows. Requires the
 ///   workspace's bevy `serialize` feature so `Entity`, `Vec3`, `Handle`
 ///   etc. cooperate.
@@ -68,7 +68,7 @@ use syn::{
 /// Optional keyword:
 ///
 /// - `default` — also derive `Default` and emit `#[serde(default)]` so
-///   JSON with omitted fields fills in defaults.
+///   omitted wire fields use the Rust command's semantic defaults.
 ///   ```ignore
 ///   #[Command(default)]
 ///   pub struct OpenFile { pub path: String, pub doc_id: DocumentId }
@@ -94,11 +94,8 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         .filter(|s| !s.is_empty())
         .collect();
     let wants_default = keywords.contains("default");
-    // `reflect_default`: register `ReflectDefault` (so the API reflect
-    // deserializer fills MISSING fields from `Default`) WITHOUT deriving
-    // `Default` — for commands whose fields aren't all `Default` (e.g. an
-    // `Entity` field) but which still want optional/defaulted params. The caller
-    // provides a manual `impl Default`.
+    // `reflect_default` registers a caller-provided Default and its serde
+    // omitted-field contract without deriving Default for every field.
     let wants_reflect_default = keywords.contains("reflect_default");
 
     // Reject unknown keywords so typos don't silently no-op.
@@ -189,9 +186,9 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Register `ReflectDefault` when either deriving Default (`default`) or the
     // caller supplies a manual one (`reflect_default`).
     let reflect = if wants_default || wants_reflect_default {
-        quote!(#[reflect(Event, Default)])
+        quote!(#[reflect(Event, bevy::reflect::ReflectDeserialize, Default)])
     } else {
-        quote!(#[reflect(Event)])
+        quote!(#[reflect(Event, bevy::reflect::ReflectDeserialize)])
     };
     let api_marker = quote!(#[reflect(@::lunco_core::ApiCommandMarker)]);
 
@@ -200,7 +197,7 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     // because we route through lunco-core's re-export instead of a
     // direct `serde` dependency at every call site.
     let serde_crate_attr = quote!(#[serde(crate = "::lunco_core::serde")]);
-    let serde_default_attr = if wants_default {
+    let serde_default_attr = if wants_default || wants_reflect_default {
         quote!(#[serde(default)])
     } else {
         quote!()
@@ -221,6 +218,7 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         #api_marker
         #serde_crate_attr
         #serde_default_attr
+        #[serde(deny_unknown_fields)]
         #vis struct #name #generics #where_clause {
             #fields
         }

@@ -207,6 +207,9 @@ pub struct PortHolds {
     /// propagation cache uses this to rebuild held target indices off the
     /// steady fixed-tick path.
     revision: u64,
+    /// Changes only when an endpoint enters or leaves the live hold set.
+    /// Value changes reuse the propagation fabric's admitted target slots.
+    membership_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -247,6 +250,7 @@ impl PortHolds {
 
     fn set(&mut self, entity: Entity, port: String, value: f64, program: bool) {
         let ports = self.holds.entry(entity).or_default();
+        let added = !ports.contains_key(&port);
         let hold = ports.entry(port).or_default();
         let current = if program {
             &mut hold.program
@@ -258,6 +262,28 @@ impl PortHolds {
         }
         *current = Some(value);
         self.bump_revision();
+        if added {
+            self.bump_membership_revision();
+        }
+    }
+
+    /// Resolve a proposed layer write without mutating either hold layer.
+    /// Input owners use this before their atomic backend commit, so a program
+    /// write cannot temporarily replace an existing controller setpoint.
+    pub fn effective_write(&self, entity: Entity, port: &str, value: f64, program: bool) -> f64 {
+        let mut hold = self
+            .holds
+            .get(&entity)
+            .and_then(|ports| ports.get(port))
+            .copied()
+            .unwrap_or_default();
+        if program {
+            hold.program = Some(value);
+        } else {
+            hold.control = Some(value);
+        }
+        hold.resolved()
+            .expect("the proposed write supplies one hold layer")
     }
 
     /// Read one live intent by borrowed port name.
@@ -270,8 +296,8 @@ impl PortHolds {
     }
 
     /// Iterate active intents without cloning names. The propagation engine
-    /// uses this to apply holds only to matching compiled targets instead of
-    /// hashing every target against the hold table on every physics tick.
+    /// uses this when hold membership or values change, rather than hashing
+    /// every target against the hold table on every physics tick.
     pub fn iter(&self) -> impl Iterator<Item = (Entity, &str, f64)> + '_ {
         self.holds.iter().flat_map(|(&entity, ports)| {
             ports.iter().filter_map(move |(name, hold)| {
@@ -291,6 +317,7 @@ impl PortHolds {
         }
         if released {
             self.bump_revision();
+            self.bump_membership_revision();
         }
         released
     }
@@ -299,6 +326,7 @@ impl PortHolds {
     pub fn clear_entity(&mut self, entity: Entity) {
         if self.holds.remove(&entity).is_some() {
             self.bump_revision();
+            self.bump_membership_revision();
         }
     }
 
@@ -317,11 +345,16 @@ impl PortHolds {
         if !released {
             return;
         }
+        let previous_len = ports.len();
         ports.retain(|_, hold| !hold.is_empty());
+        let removed = ports.len() != previous_len;
         if ports.is_empty() {
             self.holds.remove(&entity);
         }
         self.bump_revision();
+        if removed {
+            self.bump_membership_revision();
+        }
     }
 
     /// Clear every intent at a scene boundary while preserving the revision
@@ -330,6 +363,7 @@ impl PortHolds {
         if !self.holds.is_empty() {
             self.holds.clear();
             self.bump_revision();
+            self.bump_membership_revision();
         }
     }
 
@@ -339,9 +373,20 @@ impl PortHolds {
         self.revision
     }
 
+    /// Invalidation generation for the union of wired and explicitly held targets.
+    #[inline]
+    pub fn membership_revision(&self) -> u64 {
+        self.membership_revision
+    }
+
     #[inline]
     fn bump_revision(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    #[inline]
+    fn bump_membership_revision(&mut self) {
+        self.membership_revision = self.membership_revision.wrapping_add(1);
     }
 
     /// Return the names of every persisted intent addressed to `entity`.
@@ -391,7 +436,9 @@ mod tests {
 
         holds.hold(entity, "throttle", 0.25);
         let first = holds.revision();
+        let membership = holds.membership_revision();
         assert_eq!(first, 1);
+        assert_eq!(membership, 1);
         holds.hold(entity, "throttle", 0.25);
         assert_eq!(
             holds.revision(),
@@ -401,7 +448,19 @@ mod tests {
 
         holds.hold(entity, "throttle", 0.5);
         assert_ne!(holds.revision(), first);
+        assert_eq!(
+            holds.membership_revision(),
+            membership,
+            "numeric changes reuse compiled target membership"
+        );
+        holds.hold_program(entity, "throttle", 0.4);
+        assert_eq!(
+            holds.membership_revision(),
+            membership,
+            "a second layer shares the existing endpoint"
+        );
         assert!(holds.release(entity, "throttle"));
+        assert!(holds.membership_revision() > membership);
         let released = holds.revision();
         assert!(!holds.release(entity, "throttle"));
         assert_eq!(holds.revision(), released);

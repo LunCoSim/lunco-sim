@@ -2233,6 +2233,21 @@ fn process_usd_sim_prim_read(
                 sdf_path.as_str(),
                 reason
             );
+            push_usd_sim_diagnostic(
+                diagnostics,
+                &prim_path.path,
+                "usd-reduced-mass-invalid",
+                &reason,
+            );
+            runtime_faults.raise(
+                "usd-reduced-mass-invalid",
+                Some(entity),
+                "reduced physical mass",
+                format!("{}: {reason}", prim_path.path),
+            );
+            commands
+                .entity(entity)
+                .try_remove::<lunco_mobility::RaycastMassContribution>();
             commands.entity(entity).try_insert(UsdSimProcessed);
             return;
         }
@@ -3392,17 +3407,8 @@ fn vehicle_mount_transform(
     let mut path = wheel_path.clone();
     loop {
         if reader.has_api_schema(&path, "PhysxVehicleContextAPI") {
-            let wheel = lunco_usd_bevy_stage::world_transform(reader, wheel_path).ok()?;
-            let vehicle = lunco_usd_bevy_stage::world_transform(reader, &path).ok()?;
-            let inverse = vehicle.rotation.inverse();
-            return Some((
-                path,
-                Transform {
-                    translation: inverse * (wheel.translation - vehicle.translation),
-                    rotation: (inverse * wheel.rotation).normalize(),
-                    scale: Vec3::ONE,
-                },
-            ));
+            let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &path, wheel_path)?;
+            return Some((path, local));
         }
         path = path.parent()?;
     }
@@ -3431,6 +3437,14 @@ fn raycast_mass_contribution_from_usd(
         .ok_or_else(|| "missing `physics:mass`".to_owned())?;
     let inertia = read_vec3_f64(reader, prim, "physics:diagonalInertia")
         .ok_or_else(|| "missing `physics:diagonalInertia`".to_owned())?;
+    let center_of_mass = lunco_usd_avian_reader::read_authored_vec3(
+        reader, prim, "physics:centerOfMass",
+    ).map_err(|_| "malformed `physics:centerOfMass`".to_owned())?
+        .ok_or_else(|| "reduced mass requires explicit `physics:centerOfMass`; geometry-derived COM is not available for this realization".to_owned())?;
+    let principal_axes =
+        lunco_usd_avian_reader::read_authored_quat(reader, prim, "physics:principalAxes")
+            .map_err(|_| "malformed `physics:principalAxes`".to_owned())?
+            .unwrap_or(DQuat::IDENTITY);
     if !mass.is_finite()
         || mass <= 0.0
         || !inertia
@@ -3468,15 +3482,26 @@ fn raycast_mass_contribution_from_usd(
     .ok_or_else(|| format!("owner entity {} is not projected", body_path.as_str()))?;
     let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &body_path, prim)
         .ok_or_else(|| "cannot resolve local transform".to_owned())?;
-    let principal = convention.dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
+    let principal = convention
+        .dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
+        .abs()
         * (meters_per_unit * meters_per_unit);
+    let center_of_mass = convention.point_d(center_of_mass);
+    let principal_axes = convention.rotation_d(principal_axes);
+    lunco_physics::body_mass::checked_mass_properties(
+        center_of_mass, mass, principal, principal_axes,
+    ).map_err(|reason| format!(
+        "{reason}; mass_kg={mass}, center_of_mass_m={center_of_mass:?}, principal_kgm2={principal:?}, principal_axes={principal_axes:?}"
+    ))?;
     let order_key = stable_usd_physics_order_key(stage_source, prim.as_str())?;
     Ok(Some(lunco_mobility::RaycastMassContribution {
         owner,
         order_key,
         local,
         mass,
+        center_of_mass,
         principal,
+        principal_axes,
     }))
 }
 

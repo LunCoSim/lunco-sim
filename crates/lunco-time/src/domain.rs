@@ -728,22 +728,51 @@ fn on_control_animation(
     trigger: On<ControlAnimation>,
     preview: Option<Res<AnimationPreview>>,
     mut q: Query<&mut Playback>,
-) {
+    mut commands: Commands,
+) -> Result<Ack, String> {
     let cmd = trigger.event();
     // An explicit target drives that per-object domain; otherwise the shared
     // preview. Same verb either way.
     let Some(domain) = cmd.target.or_else(|| preview.map(|p| p.domain)) else {
-        return;
+        let detail = "animation preview is unavailable".to_owned();
+        warn!("[time] rejected ControlAnimation: {detail}");
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "animation-command-rejected",
+            detail.clone(),
+        );
+        return Err(detail);
     };
     let Ok(mut pb) = q.get_mut(domain) else {
-        return;
+        let detail = format!("animation target {domain:?} has no live Playback owner");
+        warn!("[time] rejected ControlAnimation: {detail}");
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "animation-command-rejected",
+            detail.clone(),
+        );
+        return Err(detail);
     };
-    apply_control_animation(&mut pb, cmd);
+    apply_control_animation(&mut pb, cmd).map_err(|detail| {
+        warn!("[time] rejected ControlAnimation: {detail}");
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "animation-command-rejected",
+            detail.clone(),
+        );
+        detail
+    })?;
+    Ok(Ack::default())
 }
 
 /// Pure transport edit — apply a [`ControlAnimation`] to a [`Playback`]. Split
 /// out so the verb is unit-tested headless without an observer / world.
-pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
+pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) -> Result<(), String> {
+    if cmd.seek_secs.is_some_and(|value| !value.is_finite())
+        || cmd.rate.is_some_and(|value| !value.is_finite())
+    {
+        return Err("animation seek and rate must be finite".to_owned());
+    }
     if let Some(playing) = cmd.playing {
         pb.mode = if playing {
             TransportMode::Playing
@@ -760,6 +789,7 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
     if let Some(looping) = cmd.looping {
         pb.looping = looping;
     }
+    Ok(())
 }
 
 /// Select how the host advances the application loop, independently of the
@@ -1081,11 +1111,14 @@ fn on_set_mission_epoch(
     mut clock: ResMut<crate::MissionClock>,
     clocks: Option<Res<Clocks>>,
     mut domains: Query<&mut TimeDomain>,
-) {
+    mut commands: Commands,
+) -> Result<Ack, String> {
     let jd = trigger.event().epoch_jd;
     if !jd.is_finite() || jd == 0.0 {
-        bevy::log::warn!("[time] rejected invalid mission epoch JD {jd:?}");
-        return;
+        let detail = format!("mission epoch must be finite and nonzero, received {jd:?}");
+        bevy::log::warn!("[time] rejected SetMissionEpoch: {detail}");
+        lunco_core::trigger_runtime_error(&mut commands, "mission-epoch-rejected", detail.clone());
+        return Err(detail);
     }
     *clock = crate::MissionClock::anchored(jd, tick.0);
     if let Some(clocks) = clocks {
@@ -1096,6 +1129,7 @@ fn on_set_mission_epoch(
         }
     }
     bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4}");
+    Ok(Ack::default())
 }
 
 #[derive(SystemParam)]
@@ -1310,7 +1344,8 @@ mod tests {
                 playing: Some(false),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         assert!(matches!(pb.mode, TransportMode::Paused));
         assert_eq!(pb.head, 0.0);
         assert_eq!(pb.rate, 1.0);
@@ -1321,7 +1356,8 @@ mod tests {
                 seek_secs: Some(3.5),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         assert!(matches!(pb.mode, TransportMode::Paused));
         assert!((pb.head - 3.5).abs() < EPS);
         // Play + rate in one verb.
@@ -1332,7 +1368,8 @@ mod tests {
                 rate: Some(2.0),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         assert!(matches!(pb.mode, TransportMode::Playing));
         assert!((pb.rate - 2.0).abs() < EPS);
         assert!((pb.head - 3.5).abs() < EPS); // seek preserved
@@ -1712,7 +1749,8 @@ mod tests {
                 looping: Some(true),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         assert!(pb.looping);
         // ...and it reaches the stepper: past `end` wraps instead of clamping.
         let wrapped = Playback { head: 9.0, ..pb };
@@ -1723,7 +1761,8 @@ mod tests {
                 looping: Some(false),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         let clamped = Playback { head: 9.0, ..pb };
         assert!((step_playhead(&clamped, 2.0) - 10.0).abs() < EPS);
 
@@ -1745,7 +1784,8 @@ mod tests {
                 seek_secs: Some(restart_to),
                 ..default()
             },
-        );
+        )
+        .unwrap();
         assert!(matches!(late.mode, TransportMode::Playing));
         assert!((late.head - 5.0).abs() < EPS);
         assert!((step_playhead(&late, 1.0) - 6.0).abs() < EPS); // runs forward from start

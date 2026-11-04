@@ -447,7 +447,11 @@ pub struct RaycastMassContribution {
     pub order_key: lunco_physics::PhysicsOrderKey,
     pub local: Transform,
     pub mass: f64,
+    /// Centre of mass in the contributing prim's canonical local frame.
+    pub center_of_mass: DVec3,
     pub principal: DVec3,
+    /// Principal frame in the contributing prim's canonical local frame.
+    pub principal_axes: DQuat,
 }
 
 /// Resolve a wheel's authored carrier chain to the vehicle's actuator owner.
@@ -750,53 +754,16 @@ fn publish_raycast_wheel_contact_diagnostics(
     }
 }
 
-/// Fold each raycast wheel and authored reduced-realization mass contribution
-/// onto its resolved rigid-body owner.
+/// Fold reduced masses into their resolved rigid-body owner exactly once.
 ///
-/// A ROVER'S MASS IS A PROPERTY OF THE ROVER, NOT OF HOW ITS WHEELS ARE REALIZED.
-/// A raycast wheel is not an Avian rigid body, but its authored mass still belongs
-/// to the body that carries its suspension and tire force. A composed USD mass
-/// contribution follows the same owner contract, so reduced and full realizations
-/// use one mass-property operation.
-/// Folding all descendant wheels into the actuator root made the force owner and
-/// mass owner disagree, destabilising the articulated linkage under drive.
+/// Parry reduces complete body-frame tensors and centres of mass in stable
+/// source order. A proxy wheel contributes its mass at the suspension mount;
+/// its independent spin inertia remains owned by the wheel integrator. Other
+/// physical children retain their authored COM, tensor and principal frame.
 ///
-/// That 10% is directly a speed error: `physxRigidBody:linearDamping` drags `c·m·v`,
-/// so terminal speed goes as `F/(c·m)`.
-///
-/// MASS AND INERTIA MOVE TOGETHER, or the fix is worse than the bug. Folding mass
-/// ALONE was measured: the chassis carries an authored `physics:diagonalInertia`
-/// under `NoAutoAngularInertia`, so the rover got harder to push and no harder to
-/// turn, and `drivetrain_parity`'s heading swung 56.3° → 61.7° against a physical
-/// twin at 51° — a 9% gap turned into 29%. Each wheel therefore contributes its
-/// parallel-axis term `m·d²` at its authored mount as well as its mass.
-///
-/// SO DOES THE CENTRE OF MASS. A wheel's mass is combined with its carrier's
-/// existing mass at the wheel's carrier-local mount. This preserves load transfer
-/// and articulated reaction torques instead of moving every wheel's mass to the
-/// vehicle root.
-///
-/// The tensor is taken about that COMBINED centre, not about the body origin: the
-/// authored `physics:diagonalInertia` is about the carrier centre, so once the
-/// combined centre moves, both the chassis and each wheel contribute a parallel-axis
-/// term measured from the NEW centre. (The correction is small but not nothing —
-/// ~3.8 kg·m² on a ~1220 kg·m² skid-rover `I_x`, 0.3% — and getting it right costs
-/// one subtraction, whereas leaving it wrong is a number nobody could later explain.)
-///
-/// THE WHEEL'S OWN SPIN INERTIA IS DELIBERATELY NOT FOLDED. `update_wheel_spin`
-/// already integrates each wheel's ω against `I = ½·m·r²` ([`WheelRaycast::axle_inertia`]),
-/// exactly as the physical wheel's own rigid body does. Adding it to the chassis
-/// tensor as well would count one physical quantity twice. What the chassis is
-/// missing is only the wheel as a MASS AT A DISTANCE, which is what this adds.
-///
-/// Inertia is folded only when the body carries [`NoAutoAngularInertia`] — i.e. the
-/// tensor is authored. Without it avian recomputes the tensor from colliders every
-/// time the mass properties change, and this addition would be silently discarded.
-/// The centre of mass is written WITH [`NoAutoCenterOfMass`] for the same reason:
-/// avian consults the `CenterOfMass` override only inside `if no_auto_center_of_mass`,
-/// so the marker is what makes the write survive the next recompute — and the
-/// recompute is what publishes it to `ComputedCenterOfMass`, which is the component
-/// the solver integrates against.
+/// The complete native candidate is validated before any component changes.
+/// Missing preparation or invalid physical data raises a runtime fault and
+/// holds integration rather than publishing a partial mass-property update.
 pub fn fold_raycast_wheel_mass(
     mut commands: Commands,
     q_wheels: Query<(
@@ -808,18 +775,27 @@ pub fn fold_raycast_wheel_mass(
     q_contributions: Query<(Entity, &RaycastMassContribution)>,
     mut q_body: Query<
         (
-            &mut Mass,
+            Option<&mut Mass>,
+            Option<&ComputedMass>,
+            Has<NoAutoMass>,
             Option<&mut AngularInertia>,
             Has<NoAutoAngularInertia>,
             Option<&CenterOfMass>,
             Option<&ComputedCenterOfMass>,
+            Option<&ComputedAngularInertia>,
         ),
-        Without<RaycastWheelMassFolded>,
+        (
+            Without<RaycastWheelMassFolded>,
+            Or<(With<RigidBody>, With<Mass>, With<ComputedMass>)>,
+        ),
     >,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
+    use avian3d::parry::{mass_properties::MassProperties, math::Pose};
+    use lunco_physics::body_mass::{checked_mass_properties, native_mass_properties};
+
     let order = match lunco_physics::ordered_physics_entities(
         q_wheels
             .iter()
@@ -843,98 +819,157 @@ pub fn fold_raycast_wheel_mass(
             return;
         }
     };
+    let mut carriers = Vec::new();
+    let mut pending = HashSet::new();
     let mut additions_by_carrier =
-        std::collections::HashMap::<Entity, Vec<(f64, DVec3, DVec3)>>::new();
+        std::collections::HashMap::<Entity, Vec<Result<MassProperties, &'static str>>>::new();
     for entity in order {
-        if let Ok((_, wheel, mount, _)) = q_wheels.get(entity) {
-            if !q_body.contains(mount.body) {
+        let (owner, contribution) = if let Ok((_, wheel, mount, _)) = q_wheels.get(entity) {
+            if wheel.mass == 0.0 {
+                pending.insert(mount.body);
                 continue;
             }
-            additions_by_carrier.entry(mount.body).or_default().push((
-                wheel.mass,
-                mount.local.translation.as_dvec3(),
-                DVec3::ZERO,
-            ));
+            (
+                mount.body,
+                checked_mass_properties(
+                    mount.local.translation.as_dvec3(),
+                    wheel.mass,
+                    DVec3::ZERO,
+                    DQuat::IDENTITY,
+                ),
+            )
         } else if let Ok((_, contribution)) = q_contributions.get(entity) {
-            if !q_body.contains(contribution.owner) {
-                continue;
-            }
-            additions_by_carrier
-                .entry(contribution.owner)
-                .or_default()
-                .push((
-                    contribution.mass,
+            let properties = checked_mass_properties(
+                contribution.center_of_mass,
+                contribution.mass,
+                contribution.principal,
+                contribution.principal_axes,
+            )
+            .and_then(|properties| {
+                if !contribution.local.translation.is_finite()
+                    || !contribution.local.rotation.is_finite()
+                    || !contribution.local.rotation.is_normalized()
+                {
+                    return Err("mass contribution has an invalid body-local mount");
+                }
+                Ok(properties.transform_by(&Pose::from_parts(
                     contribution.local.translation.as_dvec3(),
-                    contribution.principal,
-                ));
-        }
-    }
-
-    for (carrier, additions) in additions_by_carrier {
-        // The wheel's `mass` arrives from `WheelParams::apply_to_raycast`, which may
-        // land a frame after the component itself. A wheel still reading zero means
-        // the vehicle is not ready to fold and must be left for a later tick — never
-        // folded at half its real mass.
-        let pending = additions.iter().any(|(mass, _, _)| *mass <= 0.0);
-        if pending || additions.is_empty() {
+                    contribution.local.rotation.as_dquat().normalize(),
+                )))
+            });
+            (contribution.owner, properties)
+        } else {
+            continue;
+        };
+        if !q_body.contains(owner) {
             continue;
         }
-
-        let Ok((mut mass, inertia, inertia_authored, com_override, com_computed)) =
-            q_body.get_mut(carrier)
+        if !additions_by_carrier.contains_key(&owner) {
+            carriers.push(owner);
+        }
+        additions_by_carrier
+            .entry(owner)
+            .or_default()
+            .push(contribution);
+    }
+    for carrier in carriers {
+        if pending.contains(&carrier) {
+            continue;
+        }
+        let Ok((
+            mass,
+            computed_mass,
+            mass_authored,
+            inertia,
+            inertia_authored,
+            com_override,
+            com_computed,
+            computed_inertia,
+        )) = q_body.get_mut(carrier)
         else {
             continue;
         };
-
-        // The carrier's own centre, BEFORE the wheels are folded in. An authored
-        // `physics:centerOfMass` arrives as the override and wins (six_wheel_rover
-        // authors one); otherwise avian's collider-derived value is the truth.
-        let com_carrier = com_override
-            .map(|c| c.0.as_dvec3())
-            .or_else(|| com_computed.map(|c| c.0.as_dvec3()))
-            .unwrap_or(DVec3::ZERO);
-        let carrier_mass = mass.0 as f64;
-
-        let added: f64 = additions.iter().map(|(mass, _, _)| *mass).sum();
-        let total = carrier_mass + added;
-        mass.0 += added as f32;
-
-        // Combined centre of mass: carrier at its own centre, each proxy wheel a
-        // point mass at its carrier-local mount.
-        let com_new = if total > 0.0 {
-            let mut moment = com_carrier * carrier_mass;
-            for (m, d, _) in &additions {
-                moment += *d * *m;
-            }
-            moment / total
-        } else {
-            com_carrier
-        };
-
-        if let (Some(mut inertia), true) = (inertia, inertia_authored) {
-            // Parallel-axis about the COMBINED centre: a mass `m` at `d` adds
-            // `m·(d_j² + d_k²)` about each axis `i`, with `d` measured from that
-            // centre. The chassis contributes too, because its authored tensor is
-            // about ITS centre and the centre has just moved.
-            let perp = |m: f64, d: DVec3| {
-                DVec3::new(
-                    m * (d.y * d.y + d.z * d.z),
-                    m * (d.x * d.x + d.z * d.z),
-                    m * (d.x * d.x + d.y * d.y),
+        let candidate = (|| {
+            let carrier_mass = if let Some(mass) = mass.as_deref().filter(|_| mass_authored) {
+                f64::from(mass.0)
+            } else {
+                f64::from(
+                    computed_mass
+                        .filter(|mass| mass.is_finite())
+                        .ok_or("carrier has no admitted mass baseline")?
+                        .value(),
                 )
             };
-            let mut principal = perp(carrier_mass, com_carrier - com_new);
-            for (m, d, authored_principal) in &additions {
-                principal += perp(*m, *d - com_new);
-                principal += *authored_principal;
+            let center = com_override
+                .map(|c| c.0.as_dvec3())
+                .or_else(|| com_computed.map(|c| c.0.as_dvec3()))
+                .ok_or("carrier has no admitted centre-of-mass baseline")?;
+            let (principal, frame) =
+                if let Some(inertia) = inertia.as_deref().filter(|_| inertia_authored) {
+                    (inertia.principal, inertia.local_frame)
+                } else {
+                    computed_inertia
+                        .filter(|inertia| inertia.is_finite())
+                        .ok_or("carrier has no admitted inertia baseline")?
+                        .principal_angular_inertia_with_local_frame()
+                };
+            if !frame.is_finite() || !frame.is_normalized() {
+                return Err("carrier has an invalid principal frame");
             }
-            inertia.principal += principal.as_vec3();
+            let baseline = checked_mass_properties(
+                center,
+                carrier_mass,
+                principal.as_dvec3(),
+                frame.as_dquat().normalize(),
+            )?;
+            let additions = additions_by_carrier
+                .remove(&carrier)
+                .expect("carrier was collected with its contributions")
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+            let total: MassProperties = std::iter::once(baseline).chain(additions).sum();
+            native_mass_properties(&total)
+        })();
+        let (new_mass, new_inertia, new_center) = match candidate {
+            Ok(candidate) => candidate,
+            Err(detail) => {
+                if let Some(holds) = holds.as_deref_mut() {
+                    holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                }
+                if let Some(time) = physics_time.as_deref_mut() {
+                    use avian3d::schedule::PhysicsTime;
+                    time.pause();
+                    time.advance_by(std::time::Duration::ZERO);
+                }
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "physics-reduced-mass-invalid",
+                        Some(carrier),
+                        "reduced physical mass",
+                        detail,
+                    );
+                }
+                error!("refusing reduced mass candidate for {carrier:?}: {detail}");
+                return;
+            }
+        };
+        if let Some(mut mass) = mass {
+            *mass = new_mass;
+        } else {
+            commands.entity(carrier).try_insert(new_mass);
         }
-
-        commands
-            .entity(carrier)
-            .try_insert((CenterOfMass(com_new.as_vec3()), NoAutoCenterOfMass));
-        commands.entity(carrier).try_insert(RaycastWheelMassFolded);
+        if let Some(mut inertia) = inertia {
+            *inertia = new_inertia;
+        } else {
+            commands.entity(carrier).try_insert(new_inertia);
+        }
+        commands.entity(carrier).try_insert((
+            new_center,
+            NoAutoMass,
+            NoAutoCenterOfMass,
+            NoAutoAngularInertia,
+            RaycastWheelMassFolded,
+        ));
     }
 }
 
@@ -2964,6 +2999,47 @@ mod raycast_wheel_mass_tests {
     use super::*;
 
     #[test]
+    fn automatic_carrier_uses_prepared_mass_and_publishes_complete_override() {
+        let mut app = App::new();
+        app.add_systems(Update, fold_raycast_wheel_mass);
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                ComputedMass::new(1000.0),
+                ComputedAngularInertia::new(Vec3::splat(10.0)),
+                ComputedCenterOfMass(Vec3::ZERO),
+            ))
+            .id();
+        assert!(app.world().get::<Mass>(body).is_none());
+        app.world_mut().spawn((
+            WheelRaycast {
+                mass: 25.0,
+                ..default()
+            },
+            WheelBodyMount {
+                body,
+                local: Transform::from_translation(Vec3::Y),
+            },
+            lunco_physics::PhysicsOrderKey("inline/automatic-carrier/wheel".to_owned()),
+        ));
+        app.update();
+        assert_eq!(app.world().get::<Mass>(body).unwrap().0, 1025.0);
+        assert!(app.world().get::<NoAutoMass>(body).is_some());
+        assert!(app.world().get::<NoAutoAngularInertia>(body).is_some());
+        let center = app.world().get::<CenterOfMass>(body).unwrap().0;
+        assert!((center.y - 25.0 / 1025.0).abs() < 1e-7);
+        let tensor = app.world().get::<AngularInertia>(body).unwrap().tensor();
+        assert!(
+            (tensor.diagonal()
+                - Vec3::new(10.0 + 25_000.0 / 1025.0, 10.0, 10.0 + 25_000.0 / 1025.0,))
+            .abs()
+            .max_element()
+                < 1e-4
+        );
+    }
+
+    #[test]
     #[ignore = "manual settled mass-fold preparation benchmark"]
     fn settled_mass_fold_preparation_benchmark() {
         let mut app = App::new();
@@ -2998,7 +3074,9 @@ mod raycast_wheel_mass_tests {
                     )),
                     local: Transform::IDENTITY,
                     mass: 3.0,
+                    center_of_mass: DVec3::ZERO,
                     principal: DVec3::ZERO,
+                    principal_axes: DQuat::IDENTITY,
                 });
             }
         }
@@ -3032,11 +3110,13 @@ mod raycast_wheel_mass_tests {
                 MobilityRoot,
                 OutputPorts::default(),
                 Mass(1000.0),
+                NoAutoMass,
                 AngularInertia {
                     principal: Vec3::new(1028.0, 1354.0, 341.0),
                     ..default()
                 },
                 NoAutoAngularInertia,
+                CenterOfMass(Vec3::ZERO),
             ))
             .id();
 
@@ -3069,7 +3149,8 @@ mod raycast_wheel_mass_tests {
             .world()
             .get::<AngularInertia>(chassis)
             .unwrap()
-            .principal;
+            .tensor()
+            .diagonal();
         let com = app
             .world()
             .get::<CenterOfMass>(chassis)
@@ -3168,7 +3249,15 @@ mod raycast_wheel_mass_tests {
         app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
-            .spawn((MobilityRoot, OutputPorts::default(), Mass(1000.0)))
+            .spawn((
+                MobilityRoot,
+                OutputPorts::default(),
+                Mass(1000.0),
+                NoAutoMass,
+                AngularInertia::new(Vec3::ONE),
+                NoAutoAngularInertia,
+                CenterOfMass(Vec3::ZERO),
+            ))
             .id();
         app.world_mut().spawn((
             WheelRaycast {
@@ -3197,12 +3286,24 @@ mod raycast_wheel_mass_tests {
         app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
-            .spawn((MobilityRoot, OutputPorts::default(), Mass(1000.0)))
+            .spawn((
+                MobilityRoot,
+                OutputPorts::default(),
+                Mass(1000.0),
+                NoAutoMass,
+                AngularInertia::new(Vec3::ONE),
+                NoAutoAngularInertia,
+                CenterOfMass(Vec3::ZERO),
+            ))
             .id();
         let rocker = app
             .world_mut()
             .spawn((
                 Mass(50.0),
+                NoAutoMass,
+                AngularInertia::new(Vec3::ONE),
+                NoAutoAngularInertia,
+                CenterOfMass(Vec3::ZERO),
                 Transform::from_translation(Vec3::new(0.0, -0.2, 0.5)),
                 ChildOf(chassis),
             ))

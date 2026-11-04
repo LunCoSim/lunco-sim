@@ -39,7 +39,7 @@ fn finish(me, failures) {
     me
 }
 fn request_copy(me, qualified, name, expected_title, expected_class, next) {
-    me.copy_ack = cmd("OpenClass", #{qualified: qualified, action: #{Duplicate: #{name: name}}});
+    me.copy_ack = cmd("OpenClass", #{qualified: qualified, action: #{kind: "Duplicate", name: name}});
     me.expected_title = expected_title; me.expected_class = expected_class;
     me.next = next; me.phase = "copy";
     me
@@ -47,7 +47,7 @@ fn request_copy(me, qualified, name, expected_title, expected_class, next) {
 fn request_failure(me, qualified, name, diagnostic, next) {
     me.failure_before = me.errors.len(); me.failure_diagnostic = diagnostic;
     me.failure_title = name; me.next = next;
-    me.copy_ack = cmd("OpenClass", #{qualified: qualified, action: #{Duplicate: #{name: name}}});
+    me.copy_ack = cmd("OpenClass", #{qualified: qualified, action: #{kind: "Duplicate", name: name}});
     me.phase = "failure";
     me
 }
@@ -205,7 +205,7 @@ fn on_tick(me, params) {
         this = request_copy(this, this.qualified, "DuplicateGateRootCopy", "DuplicateGateRootCopy", "DuplicateGateRoot.B.DuplicateGateRootCopy", "replace_pending"); return;
     }
     if this.phase == "replace_pending" {
-        this.copy_ack = cmd("OpenClass", #{qualified: this.qualified, action: #{Duplicate: #{name: "DuplicateRetiredReuse"}}});
+        this.copy_ack = cmd("OpenClass", #{qualified: this.qualified, action: #{kind: "Duplicate", name: "DuplicateRetiredReuse"}});
         let result = ack(this.copy_ack);
         if result != () && result.ok == false { this = finish(this, ["original-target duplicate admission rejected"]); return; }
         // OpenClass can still have queued its World closure. An absent
@@ -294,7 +294,7 @@ fn on_tick(me, params) {
             this = finish(this, ["authored package root admission failed: " + loaded.to_string()]); return;
         }
         this.failure_before = this.errors.len();
-        this.copy_ack = cmd("OpenClass", #{qualified: "HeaderImports.Child", action: #{Duplicate: #{name: "HeaderCopy"}}});
+        this.copy_ack = cmd("OpenClass", #{qualified: "HeaderImports.Child", action: #{kind: "Duplicate", name: "HeaderCopy"}});
         this.phase = "import_copy"; return;
     }
     if this.phase == "import_copy" {

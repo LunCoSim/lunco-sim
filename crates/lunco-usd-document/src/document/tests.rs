@@ -21,6 +21,37 @@ fn native_snapshot(document: &UsdDocument) -> sdf::Data {
 const TINY_USDA: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1\n)\n\ndef Xform \"World\"\n{\n}\n";
 
 #[test]
+fn standard_mass_units_round_trip_and_reject_invalid_edits() {
+    let mut doc = UsdDocument::new(DocumentId::new(991), TINY_USDA);
+    let op = |value| UsdOp::SetStageMassUnits {
+        edit_target: LayerId::root(),
+        kilograms_per_unit: value,
+    };
+    let inverse = doc.apply(op(Some(0.001))).unwrap();
+    let root = SdfPath::abs_root();
+    assert_eq!(
+        doc.layer(TargetLayer::Base)
+            .spec(&root)
+            .unwrap()
+            .get("kilogramsPerUnit"),
+        Some(&sdf::Value::Double(0.001))
+    );
+    let before = doc.source().unwrap();
+    for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(doc.apply(op(Some(value))).is_err());
+        assert_eq!(doc.source().unwrap(), before);
+    }
+    doc.apply(inverse).unwrap();
+    assert!(
+        doc.layer(TargetLayer::Base)
+            .spec(&root)
+            .unwrap()
+            .get("kilogramsPerUnit")
+            .is_none()
+    );
+}
+
+#[test]
 fn compound_authoring_preserves_ordered_native_layers() {
     let original = UsdDocument::new(DocumentId::new(990), TINY_USDA);
     let path = "/World/Part".to_owned();

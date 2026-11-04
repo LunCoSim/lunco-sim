@@ -22,11 +22,12 @@ use lunco_modelica_runtime::{
     CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
     ModelicaCacheLimits, ModelicaChannels, ModelicaCommand, ModelicaInitializationOutcome,
     ModelicaInterfaceOutcome, ModelicaLiveSolverSnapshot, ModelicaModel, ModelicaNotice,
-    ModelicaPreparationId, ModelicaPreparationOutcome, ModelicaPreparationResult,
-    ModelicaResponseSender, ModelicaResult, ModelicaRuntimeProfile, ModelicaSessionStarted,
-    ModelicaSolverCapabilities, ModelicaSolverParameters, ModelicaVariables,
-    ModelicaWorkerResponse, NoticeLevel,
+    ModelicaPreparationOutcome, ModelicaPreparationResult, ModelicaResult, ModelicaRuntimeProfile,
+    ModelicaSessionStarted, ModelicaSolverCapabilities, ModelicaSolverParameters,
+    ModelicaVariables, ModelicaWorkerResponse, NoticeLevel,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_modelica_runtime::{ModelicaPreparationId, ModelicaResponseSender};
 use lunco_modelica_solver::simulation_session::LiveStepper;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1308,23 +1309,26 @@ fn install_compile_work(
                     let _ = tx.send(result);
                 }
                 CompileIntent::UpdateParameters => {
-                    let _ = tx.send(ModelicaResult {
-                        entity,
-                        session_id,
-                        new_time: 0.0,
-                        outputs: Vec::new(),
-                        detected_symbols: symbols,
-                        error: None,
-                        log_message: Some("Parameters applied.".to_string()),
-                        is_new_model: false,
-                        is_parameter_update: true,
-                        is_reset: false,
-                        detected_input_names: input_names,
-                        compile_diagnostics: Vec::new(),
-                        live_solver_snapshot: Some(live_solver_snapshot),
-                        variable_metadata: published_metadata,
-                        ..Default::default()
-                    });
+                    let _ = tx.send(add_experiment_defaults(
+                        ModelicaResult {
+                            entity,
+                            session_id,
+                            new_time: 0.0,
+                            outputs: Vec::new(),
+                            detected_symbols: symbols,
+                            error: None,
+                            log_message: Some("Parameters applied.".to_string()),
+                            is_new_model: false,
+                            is_parameter_update: true,
+                            is_reset: false,
+                            detected_input_names: input_names,
+                            compile_diagnostics: Vec::new(),
+                            live_solver_snapshot: Some(live_solver_snapshot),
+                            variable_metadata: published_metadata,
+                            ..Default::default()
+                        },
+                        &comp_res,
+                    ));
                 }
                 CompileIntent::StepInit(step) => {
                     step_lane.push_front(step.into_command());
@@ -2003,6 +2007,7 @@ struct CompiledModelArtifact {
     /// Per-request values classified after the shared artifact lookup. Never
     /// stored in the shared compiled-artifact cache.
     authored_bindings: lunco_modelica_compiler::AdmittedModelicaBindings,
+    #[cfg(not(target_arch = "wasm32"))]
     source_content: lunco_hash::content::Cid,
     /// Exact source/root context and explicitly bound parameter name set.
     binding_schema: lunco_hash::content::Cid,
@@ -2025,6 +2030,23 @@ fn prepared_source_key(source_content: lunco_hash::content::Cid) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     source_content.to_bytes().hash(&mut h);
     h.finish()
+}
+
+impl CachedModel {
+    /// Reconstruct one complete admitted source and instance-parameter context.
+    fn compile_unit(&self, source: &str) -> CompileUnit {
+        let mut unit = assemble_compile_unit(source, self.extra_sources.clone());
+        unit.parameter_overrides = canonical_parameter_overrides(&self.parameter_overrides);
+        unit.expected_library_revision = self.expected_library_revision;
+        unit
+    }
+
+    fn parameter_update_unit(&self, source: &str, name: String, value: f64) -> CompileUnit {
+        let mut unit = self.compile_unit(source);
+        unit.parameter_overrides =
+            merge_instance_values(&unit.parameter_overrides, &[(name, value)]);
+        unit
+    }
 }
 
 /// A compiled artifact belongs to one exact source unit and source-root revision.
@@ -2207,6 +2229,7 @@ fn compile_bound_variant(
         prepared_source_key,
         structural_overrides,
         authored_bindings: Default::default(),
+        #[cfg(not(target_arch = "wasm32"))]
         source_content,
         binding_schema,
     };
@@ -2498,8 +2521,7 @@ fn native_cached_rebuild(
     library_revision: u64,
 ) -> Option<NativeCachedRebuild> {
     let cached = cached_models.get(&entity)?;
-    let mut unit = assemble_compile_unit(&cached.source, cached.extra_sources.clone());
-    unit.expected_library_revision = cached.expected_library_revision;
+    let unit = cached.compile_unit(&cached.source);
     let unit_key = cached.compiled.prepared_source_key;
     Some(NativeCachedRebuild {
         execution_domain: cached.execution_domain,
@@ -3656,6 +3678,9 @@ pub fn modelica_worker(
                         session_id,
                         model_name,
                         source,
+                        parameter_name,
+                        parameter_value,
+                        initial_inputs,
                     } => {
                         if session_id < *current_sessions.get(&entity).unwrap_or(&0) {
                             let _ = tx_inner.send(result_ok(entity, session_id));
@@ -3693,6 +3718,8 @@ pub fn modelica_worker(
                             let _ = tx_inner.send(result);
                             return;
                         };
+                        let unit =
+                            cached.parameter_update_unit(&source, parameter_name, parameter_value);
                         let execution_domain = cached.execution_domain;
                         let doc_uri = cached.doc_uri.clone();
                         let pending = PendingCompile {
@@ -3703,15 +3730,16 @@ pub fn modelica_worker(
                             model_name,
                             source: source.clone(),
                             doc_uri,
-                            raw_extras: Vec::new(),
-                            parameter_overrides: Vec::new(),
-                            initial_inputs: cached.initial_inputs.clone(),
+                            raw_extras: unit.extras.clone(),
+                            parameter_overrides: unit.parameter_overrides.clone(),
+                            initial_inputs: merge_instance_values(
+                                &cached.initial_inputs,
+                                &initial_inputs,
+                            ),
                             initial_state_values: cached.initial_state_values.clone(),
                             library_gen,
                             intent: CompileIntent::UpdateParameters,
                         };
-                        let mut unit = assemble_compile_unit(&source, Vec::new());
-                        unit.expected_library_revision = cached.expected_library_revision;
                         submit_pending_compile(
                             pending,
                             unit,
@@ -4143,16 +4171,16 @@ fn cmd_session(cmd: &ModelicaCommand) -> Option<u64> {
     }
 }
 
-/// Returns true if two consecutive commands can be squashed (same type, same entity).
+/// Whether consecutive commands replace the same entity's idempotent setpoint.
 ///
 /// Squashing prevents "back-pressure" lag when the UI sends rapid updates
 /// (e.g., dragging a parameter slider). Only the latest value is processed —
 /// the dropped command is acked with a synthetic success (`result_ok`).
 ///
 /// **`Step` is NOT squashable** (A5). Squashing is only sound for commands that
-/// are *idempotent setpoints*: `UpdateParameters` (the last value wins — an
-/// earlier slider position has no lasting meaning) and `Compile` (the last
-/// source wins). A `Step` is an **integration**, not a setpoint: collapsing two
+/// are *idempotent setpoints*: `UpdateParameters` for the same scalar parameter
+/// (the last value wins) and `Compile` (the last source wins). Distinct parameter
+/// deltas must remain ordered so each override is retained. A `Step` is an **integration**, not a setpoint: collapsing two
 /// `Step`s deletes `dt` of model time from the co-simulation and then reports
 /// SUCCESS for the step that never ran, so the model silently falls behind the
 /// world clock with nothing to show for it.
@@ -4163,9 +4191,17 @@ fn cmd_session(cmd: &ModelicaCommand) -> Option<u64> {
 fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
     match (last, next) {
         (
-            ModelicaCommand::UpdateParameters { entity: e1, .. },
-            ModelicaCommand::UpdateParameters { entity: e2, .. },
-        ) => e1 == e2,
+            ModelicaCommand::UpdateParameters {
+                entity: e1,
+                parameter_name: p1,
+                ..
+            },
+            ModelicaCommand::UpdateParameters {
+                entity: e2,
+                parameter_name: p2,
+                ..
+            },
+        ) => e1 == e2 && p1 == p2,
         (
             ModelicaCommand::Compile { entity: e1, .. },
             ModelicaCommand::Compile { entity: e2, .. },
@@ -4794,30 +4830,27 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
             session_id,
             model_name,
             source,
+            parameter_name,
+            parameter_value,
+            initial_inputs: current_inputs,
         } => {
             if session_id < *w.current_sessions.get(&entity).unwrap_or(&0) {
                 send(result_ok(entity, session_id));
                 return;
             }
             w.current_sessions.insert(entity, session_id);
-            let mut unit = assemble_compile_unit(&source, Vec::new());
-            unit.expected_library_revision = w
-                .cached_models
-                .get(&entity)
-                .and_then(|cached| cached.expected_library_revision);
-
-            // Re-seat under the model's original session URI (see the threaded
-            // handler) so the reused session never holds it under two filenames.
-            let doc_uri = w
-                .cached_models
-                .get(&entity)
-                .map(|c| c.doc_uri.clone())
-                .unwrap_or_else(|| model_name.clone());
-
-            let initial_state_values = w
-                .cached_models
-                .get(&entity)
-                .and_then(|cached| cached.initial_state_values.clone());
+            let Some(cached) = w.cached_models.get(&entity) else {
+                let mut result = result_ok(entity, session_id);
+                result.is_parameter_update = true;
+                result.error = Some("Parameter update requires a cached compiled model".to_owned());
+                send(result);
+                return;
+            };
+            let unit = cached.parameter_update_unit(&source, parameter_name, parameter_value);
+            let parameter_overrides = unit.parameter_overrides.clone();
+            let doc_uri = cached.doc_uri.clone();
+            let initial_state_values = cached.initial_state_values.clone();
+            let cached_inputs = cached.initial_inputs.clone();
             let initial_inputs = match w.steppers.get(&entity) {
                 Some((_, _, stepper)) => match capture_initial_inputs(stepper) {
                     Ok(inputs) => inputs,
@@ -4829,13 +4862,10 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                         return;
                     }
                 },
-                None => w
-                    .cached_models
-                    .get(&entity)
-                    .map(|cached| cached.initial_inputs.clone())
-                    .unwrap_or_default(),
+                None => cached_inputs,
             };
 
+            let initial_inputs = merge_instance_values(&initial_inputs, &current_inputs);
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
 
             match compile_shared(
@@ -4850,7 +4880,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                     match build_stepper(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
-                        &[],
+                        &parameter_overrides,
                         &initial_inputs,
                         initial_state_values.as_deref(),
                         comp_res.prepared_source_key,
@@ -4874,10 +4904,8 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                                 CachedModel {
                                     model_name: model_name.clone(),
                                     source: Arc::from(source.clone()),
-                                    // Parameter substitution rewrites one doc —
-                                    // compiled without extras, matching above.
-                                    extra_sources: Vec::new(),
-                                    parameter_overrides: Vec::new(),
+                                    extra_sources: unit.extras.clone(),
+                                    parameter_overrides,
                                     initial_inputs,
                                     expected_library_revision: unit.expected_library_revision,
                                     initial_state_values,
@@ -4892,23 +4920,26 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
 
                             w.steppers
                                 .insert(entity, (session_id, model_name.clone(), stepper));
-                            send(ModelicaResult {
-                                entity,
-                                session_id,
-                                new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: symbols,
-                                error: None,
-                                log_message: Some("Parameters applied.".to_string()),
-                                is_new_model: false,
-                                is_parameter_update: true,
-                                is_reset: false,
-                                detected_input_names: input_names,
-                                compile_diagnostics: Vec::new(),
-                                live_solver_snapshot: Some(live_solver_snapshot),
-                                variable_metadata: Some(variable_metadata),
-                                ..Default::default()
-                            });
+                            send(add_experiment_defaults(
+                                ModelicaResult {
+                                    entity,
+                                    session_id,
+                                    new_time: 0.0,
+                                    outputs: Vec::new(),
+                                    detected_symbols: symbols,
+                                    error: None,
+                                    log_message: Some("Parameters applied.".to_string()),
+                                    is_new_model: false,
+                                    is_parameter_update: true,
+                                    is_reset: false,
+                                    detected_input_names: input_names,
+                                    compile_diagnostics: Vec::new(),
+                                    live_solver_snapshot: Some(live_solver_snapshot),
+                                    variable_metadata: Some(variable_metadata),
+                                    ..Default::default()
+                                },
+                                &comp_res,
+                            ));
                         }
                         Err(e) => {
                             send(ModelicaResult {
@@ -5074,6 +5105,9 @@ mod worker_budget_tests {
                 session_id: 1,
                 model_name: "Uncompiled".to_owned(),
                 source: "model Uncompiled end Uncompiled;".to_owned(),
+                parameter_name: "gain".into(),
+                parameter_value: 1.0,
+                initial_inputs: Vec::new(),
             })
             .unwrap();
         let result = result_rx
@@ -5090,6 +5124,104 @@ mod worker_budget_tests {
         drop(command_tx);
         assert!(owner.join().is_ok());
         assert!(result_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn parameter_updates_retain_sibling_sources_and_distinct_instance_overrides() {
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (result_tx, result_rx) = crossbeam_channel::unbounded();
+        let one = WorkerThreadBudget {
+            max_worker_threads: 1,
+            reserved_cpu_threads: 0,
+        };
+        let owner = std::thread::spawn(move || {
+            modelica_worker(
+                command_rx,
+                ModelicaResponseSender::new(result_tx, crossbeam_channel::unbounded().0),
+                ModelicaArtifactDiskLimits::default(),
+                ModelicaCacheLimits::default(),
+                ModelicaWorkerLimits {
+                    preparation: one,
+                    live_execution: one,
+                    document_execution: one,
+                },
+            )
+        });
+        let entity = Entity::from_raw_u32(9).unwrap();
+        let source = |gain| {
+            format!(
+                "model ParameterProbe parameter Real gain={gain}; parameter Real keep=1; ParameterHelper helper; output Real value; equation value=gain*keep*helper.value; end ParameterProbe;"
+            )
+        };
+        let terminal = || loop {
+            let result = result_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap();
+            if result.preparation_phase.is_none() {
+                break result;
+            }
+        };
+        command_tx.send(ModelicaCommand::Compile {
+            entity, session_id: 1,
+            execution_domain: lunco_modelica_runtime::ModelicaExecutionDomain::Document,
+            model_name: "ParameterProbe".into(), source: source(1), realtime_safe: false,
+            doc_uri: "ParameterProbe.mo".into(),
+            extra_sources: vec![("ParameterHelper.mo".into(), "model ParameterHelper output Real value; equation value=2; end ParameterHelper;".into())],
+            expected_library_revision: None,
+            parameter_overrides: vec![("keep".into(), 5.0)],
+            authored_bindings: Default::default(), initial_inputs: Vec::new(), initial_state_values: None,
+        }).unwrap();
+        let initial = terminal();
+        assert!(initial.error.is_none(), "{:?}", initial.error);
+        assert_eq!(
+            initial
+                .detected_symbols
+                .iter()
+                .find(|(name, _)| name == "value")
+                .unwrap()
+                .1,
+            10.0
+        );
+        for (session_id, gain) in [(2, 3), (3, 4)] {
+            command_tx
+                .send(ModelicaCommand::UpdateParameters {
+                    entity,
+                    session_id,
+                    model_name: "ParameterProbe".into(),
+                    source: source(gain),
+                    parameter_name: "gain".into(),
+                    parameter_value: f64::from(gain),
+                    initial_inputs: Vec::new(),
+                })
+                .unwrap();
+            let result = terminal();
+            assert!(result.error.is_none(), "{:?}", result.error);
+            assert!(result.is_parameter_update);
+            assert_eq!(
+                result
+                    .detected_symbols
+                    .iter()
+                    .find(|(name, _)| name == "value")
+                    .unwrap()
+                    .1,
+                f64::from(gain) * 10.0
+            );
+            assert!(
+                result
+                    .detected_parameter_names
+                    .iter()
+                    .any(|name| name == "keep")
+            );
+            assert!(
+                result
+                    .live_solver_snapshot
+                    .unwrap()
+                    .parameter_overrides
+                    .contains(&("keep".into(), 5.0))
+            );
+        }
+        drop(command_tx);
+        assert!(owner.join().is_ok());
     }
 
     #[test]
@@ -5186,6 +5318,9 @@ mod macro_step_tests {
             session_id: 7,
             model_name: "M".into(),
             source: String::new(),
+            parameter_name: "gain".into(),
+            parameter_value: 1.0,
+            initial_inputs: Vec::new(),
         };
         assert!(
             is_squashable(&params(), &params()),
