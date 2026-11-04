@@ -47,6 +47,7 @@ use avian3d::dynamics::solver::islands::PhysicsIslands;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
+mod joint_frames;
 mod mass;
 mod source_contacts;
 use bevy::ecs::schedule::common_conditions::any_with_component;
@@ -81,6 +82,15 @@ use lunco_usd_avian_reader::{
     read_authored_bool_or_default, read_authored_real, read_authored_vec3,
 };
 use openusd_schemas::physics::tokens as ptok;
+
+/// Standard composed centre of mass including the prim's world scale.
+/// Reduced realizations share this interpretation with full native bodies.
+pub fn mass_center_of_mass_from_usd(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+) -> Result<Option<DVec3>, String> {
+    mass::center_of_mass(reader, path)
+}
 
 pub mod material;
 use material::read_physics_material;
@@ -498,6 +508,14 @@ impl Plugin for UsdAvianPlugin {
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
         app.add_plugins(lunco_usd_avian_joints::JointAttachPlugin);
+        app.init_resource::<lunco_core::RuntimeFaults>();
+        app.add_systems(
+            PreUpdate,
+            joint_frames::refresh_joint_frames
+                .after(lunco_core::RuntimeCycleSet::Lifecycle)
+                .before(lunco_physics::body_mass::PhysicsGeometryAdmission)
+                .before(lunco_physics::apply_physics_holds),
+        );
         app.add_systems(lunco_core::SceneTeardown, prepare_scene_physics_teardown);
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdSceneProjected — fires
@@ -1102,6 +1120,7 @@ fn project_pending_joint(
     if let Some(joint) = read_joint_spec(reader, sdf_path) {
         info!("USD joint topology pending native projection: {sdf_path} ({entity:?})");
         commands.entity(entity).try_insert((
+            joint_frames::UsdJointFrames::from(&joint),
             joint,
             lunco_physics::PhysicsJointPending,
             lunco_physics::PhysicsJointTopologyPending,

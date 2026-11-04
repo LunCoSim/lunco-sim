@@ -354,25 +354,31 @@ pub fn world_transform_matrix_d_at(
     Ok(matrix)
 }
 
-/// Compose a physical mount in its body's frame before the native `f32`
-/// boundary. Absolute translations remain `f64` through subtraction, so moving
+/// Compose a canonical physical mount in its body's scale-free frame.
+/// Absolute translations remain `f64` through subtraction, so moving
 /// an assembly far from the origin cannot change its local geometry.
 pub fn transform_in_body_frame(
     reader: &dyn UsdReadObject,
     body_path: &SdfPath,
     prim_path: &SdfPath,
-) -> Option<Transform> {
+) -> Option<lunco_core::DTransform> {
     let body = world_transform_matrix_d_at(reader, body_path, 0.0).ok()?;
     let prim = world_transform_matrix_d_at(reader, prim_path, 0.0).ok()?;
+    if [body, prim].into_iter().any(|matrix| {
+        !matrix.row(3).abs_diff_eq(bevy::math::DVec4::W, 1e-12)
+            || !matrix.determinant().is_finite()
+            || matrix.determinant() == 0.0
+    }) {
+        return None;
+    }
     let (_, body_rotation, body_translation) = body.to_scale_rotation_translation();
     let (_, prim_rotation, prim_translation) = prim.to_scale_rotation_translation();
     let inverse = body_rotation.inverse();
-    let relative = DMat4::from_rotation_translation(
-        (inverse * prim_rotation).normalize(),
+    lunco_core::DTransform::new(
         inverse * (prim_translation - body_translation),
-    );
-    // This component is a native body-local mount, never an absolute position.
-    project_transform_matrix_d(relative, prim_path).ok()
+        inverse * prim_rotation,
+        DVec3::ONE,
+    )
 }
 
 pub fn read_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> Option<Vec<String>> {
@@ -466,7 +472,7 @@ def Xform "Body" {{
                 &SdfPath::new("/Body/Mount").unwrap(),
             )
             .unwrap();
-            assert_eq!(mount.translation, Vec3::new(1.0, 0.125, -2.0));
+            assert_eq!(mount.translation, DVec3::new(1.0, 0.125, -2.0));
         }
     }
 

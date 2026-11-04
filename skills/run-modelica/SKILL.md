@@ -821,7 +821,11 @@ post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc_id"
 stale, then plays it. Reuse requires the exact requested class, document leases,
 candidate source generations and admitted source-root operations to match.
 `CompileStatus.stale` reads that same source owner. `CompileModel` compiles only (stays paused);
-`ResumeActiveModel` unpauses only.
+`ResumeActiveModel` unpauses only. Pause and Resume also update the latest run
+intent while source analysis or compilation is pending; installation preserves
+that intent. Await terminal outcomes for Pause, Resume and Restart, including
+invalid targets. Restart is one checked Reset followed by its requested running
+state, and a failed Reset must reject Restart.
 Generated-source regeneration fences its own document and library operations;
 unrelated editor namespace publication or retirement does not stale that unit.
 Editable document libraries remain protected by the ordinary source-document
@@ -1065,11 +1069,11 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 **Compile & run**
 | command | params | effect |
 |---|---|---|
-| `CompileModel` | `{doc, class?, force?, resume_after_compile?}` | terminal result after initialized session installation; paused unless resume requested |
+| `CompileModel` | `{doc_id, class?, force?, resume_after_compile?}` | terminal result after initialized session installation; paused unless resume requested |
 | `SetModelicaParameter` | `{entity, key, value}` | checked edit of the selected participant's mutable source parameter; terminal success after exact replacement installation |
-| `RunActiveModel` | `{doc, class?}` | compile-if-stale + play (live) |
-| `PauseActiveModel` / `ResumeActiveModel` / `ResetActiveModel` | `{doc}` | live stepping control |
-| `RestartActiveModel` | `{doc}` | reset t=0 then run |
+| `RunActiveModel` | `{doc_id, class?}` | compile-if-stale + play (live) |
+| `PauseActiveModel` / `ResumeActiveModel` / `ResetActiveModel` | `{doc_id}` | checked live stepping control with terminal outcomes |
+| `RestartActiveModel` | `{doc_id}` | checked reset t=0 and running intent; terminal outcome after replacement installation |
 | `FastRunActiveModel` | `{doc, class?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?}` | batch, bounds from UI draft |
 | `RunExperiment` | `{doc, class?, overrides[], inputs[], t_start?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?, label?}` | dispatch a batch run; acknowledgement returns exact `experiment_id` |
 | `SetModelInput` | `{doc_id, target_gid?, name, value, producer_id?}` | select an editor model by `doc_id` or a live Twin participant by `target_gid`; live API, direct typed, and actorless Rhai callers need a stable nonzero `producer_id` |
@@ -1297,11 +1301,12 @@ source snapshot in `RunScenarioAsset.params` (`source` and
 current gain initialization, paused input changes, and the authority gate.
 Reset admits current values even when the worker has not stepped after a write.
 It requires an idle compiled participant and retains the installed source and
-class lease. The worker rebuilds from the installed immutable FMI factory and
-solver plan, refreshing admitted inputs without consulting mutable compiler
-libraries. Await its terminal command result: submission is pending until the
-matching rebuilt session is installed or rejected. Busy, uncompiled or retired
-targets reject before installed state changes. Internal compile/reset results
+class lease. The worker prepares the retained immutable checked DAE with the
+current initialization inputs and solver plan, without consulting mutable
+compiler libraries. Initialization and the published input snapshot must use
+the same admitted values. Await its terminal command result: submission is
+pending until the matching rebuilt session is installed or rejected. Busy,
+uncompiled or retired targets reject before installed state changes. Internal compile/reset results
 remain available with `ui+scripting` even when the transport API feature is off.
 
 Tune a document-backed participant through `SetModelicaParameter`, using its

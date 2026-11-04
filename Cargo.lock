@@ -10990,6 +10990,7 @@ name = "lunco-usd-actuation"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-core",
  "lunco-cosim-core",
  "lunco-usd-bevy-stage",
  "openusd",
@@ -11390,6 +11391,7 @@ dependencies = [
  "bevy",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-core",
  "lunco-usd-authoring",
  "lunco-usd-compose",
  "lunco-usd-data",

@@ -6,16 +6,23 @@
 //! Modelica-facing geometry keep the `f64` representation.
 
 use bevy::math::{DQuat, DVec3};
-use bevy::prelude::Transform as BevyTransform;
+use bevy::prelude::{Reflect, ReflectDefault, Transform as BevyTransform};
 use lunco_engineering_values::{CoordinateFrameId, FrameIdError};
 use std::fmt;
 
 /// A finite, precision-preserving rigid pose with component-wise scale.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Default)]
 pub struct DTransform {
     pub translation: DVec3,
     pub rotation: DQuat,
     pub scale: DVec3,
+}
+
+impl Default for DTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
 }
 
 impl DTransform {

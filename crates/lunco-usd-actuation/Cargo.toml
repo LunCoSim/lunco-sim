@@ -9,6 +9,7 @@ description = "Composed USD actuation readers for co-simulation projections"
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy.workspace = true
 lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-core = { path = "../lunco-core" }
 openusd = { workspace = true }
 
 [lints]

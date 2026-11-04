@@ -213,10 +213,18 @@ appears (see staged plan).
 ## Physical mounts and reduced mass
 
 `transform_in_body_frame` composes both USD world matrices in double precision
-and subtracts their translations before the explicit native local-transform
-conversion. Physical mounts, wheel offsets and reduced mass placements consume
-that shared path. Large translations of an assembly therefore preserve its
-body-local geometry and force moment arms.
+and returns a scale-free `DTransform` with `DVec3` translation and `DQuat`
+rotation. Physical mounts, wheel offsets and reduced mass placements consume
+that one canonical path. Actuator descriptions retain double-precision mount
+positions and directions through Modelica wrench synthesis; only native force
+application and rendering perform their checked backend conversions. Neither
+large absolute assembly translations nor large local lever arms are narrowed
+while deriving simulation geometry.
+At native point-force application, the physics backend validates the relative
+lever arm and the resulting native torque as well as the force. A canonical
+double-valued mount may be valid for model generation while a requested native
+moment is out of range; that request faults visibly and holds physics before
+the accumulator changes.
 Compound collider walks likewise compose their relative matrices in `f64`,
 honour transform-stack resets, and narrow only the final native mount. An
 actuator's prim-frame direction crosses the stage convention before its
@@ -251,7 +259,11 @@ missing or malformed mass facts fault the reduced realization visibly. The
 shared suspension carrier authors its zero COM explicitly.
 
 The USD reader converts positive principal magnitudes and principal orientation
-through the stage convention. Mobility transforms the child's complete mass
+through the stage convention. Full and reduced realizations share the same
+standard COM reader: the child's composed world scale multiplies its authored
+COM once, before the scale-free rigid mount transports it. Transform notices
+refresh both the mount and scaled COM, including ancestor-only scale edits.
+Mobility transforms the child's complete mass
 properties by its body-local mount. Parry's maintained `MassProperties` reduction
 owns full tensor rotation, COM transport, parallel-axis cross terms and principal
 frame extraction in stable source order. Proxy wheels contribute point mass at

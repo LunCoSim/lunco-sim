@@ -352,6 +352,7 @@ impl Plugin for CoSimPlugin {
             ports::register_builtin_port_backends(&mut registry)
         };
         app.insert_resource(participant_ports);
+        app.insert_resource(lunco_cosim_core::LayeredInputWriter(write_layered_inputs));
 
         // Avian state ports are detected by component presence through the
         // `AVIAN` spec table. Actuator components additionally publish the
@@ -1130,8 +1131,8 @@ mod binding_lifecycle_tests {
         assert!(app.world().get::<BoundConnection>(edge).is_none());
 
         app.world_mut().entity_mut(actuator).insert(ForceActuator {
-            local_position: Vec3::ZERO,
-            direction_local: Vec3::Y,
+            local_position: bevy::math::DVec3::ZERO,
+            direction_local: bevy::math::DVec3::Y,
             max_force_n: 100.0,
         });
         app.update();
@@ -1213,8 +1214,8 @@ mod binding_lifecycle_tests {
         let entity = app
             .world_mut()
             .spawn(ForceActuator {
-                local_position: Vec3::ZERO,
-                direction_local: Vec3::Y,
+                local_position: bevy::math::DVec3::ZERO,
+                direction_local: bevy::math::DVec3::Y,
                 max_force_n: 1.0,
             })
             .id();
@@ -1983,6 +1984,29 @@ fn apply_validated_port_input_writes(
     program_setpoint: bool,
 ) -> Result<(), (String, lunco_api_core::ApiErrorCode)> {
     commit_prepared_port_input_writes(world, registry, prepared, program_setpoint, None)
+}
+
+fn write_layered_inputs(
+    world: &mut World,
+    target: Entity,
+    writes: &[(String, f64)],
+    origin: Option<CommandOrigin>,
+) -> Result<(), String> {
+    let registry = world
+        .get_resource::<lunco_port_core::ports::PortRegistry>()
+        .cloned()
+        .ok_or("live input transaction requires PortRegistry")?;
+    if !world.contains_resource::<PortHolds>() {
+        return Err("live input transaction requires PortHolds".to_owned());
+    }
+    let prepared = validate_port_input_writes(world, &registry, target, writes)?;
+    apply_validated_port_input_writes(
+        world,
+        &registry,
+        prepared,
+        authored_simulation_setpoint(origin),
+    )
+    .map_err(|(message, _)| message)
 }
 
 fn commit_prepared_port_input_writes(

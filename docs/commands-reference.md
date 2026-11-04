@@ -610,7 +610,8 @@ actually call, with the fields the deserializer actually accepts. See the
  This command is owned by the UI-free Modelica core, so the same reflected
  command is available to headless API hosts, the workbench, and Rhai. Its
  live-session acknowledgement includes the target and admission stamp, and
- its fixed-tick commit uses the same port-first helper as local UI writes.
+ its live commit uses the co-simulation layered-input owner, including
+ controller/program priority. Editor-only models retain their port writer.
 
 - *defined in:* `crates/lunco-modelica-core/src/model_commands.rs`
 
@@ -957,8 +958,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `RestartActiveModel`
 
- Reset to `t=0` and run again. Composition of [`ResetActiveModel`]
- followed by [`RunActiveModel`].
+ Reset the installed instance to `t=0` and resume after its exact checked
+ initialization completes. A later Pause or Resume supersedes this run intent.
 
 - *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
@@ -982,11 +983,10 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This is the user-facing "Run" verb. If the model is already
  compiled for the requested class and its admitted source context is current,
- it unpauses without recompiling. Otherwise it sets [`ModelicaModel::resume_after_compile`]
- and triggers a [`CompileModel`]; the post-compile success handler in
- the worker then unpauses, so play begins as soon as the stepper is
- installed. Contrast with [`CompileModel`] (compile only, never auto-
- starts) and [`ResumeActiveModel`] (unpause only, never compiles).
+ it unpauses without recompiling. Otherwise it admits [`CompileModel`] with
+ running intent; installation consumes the latest ordered intent, including
+ a later Pause or Resume. [`CompileModel`] defaults to paused installation;
+ [`ResumeActiveModel`] unpauses without compiling.
  Invalid document, parse or class selection rejects before changing run intent.
 
 - *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
@@ -4705,7 +4705,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 316 commands from the runtime schema; scanned 1079 .rs files for docs (0 parse failure(s) skipped).
+<!-- 316 commands from the runtime schema; scanned 1081 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetVisualLead, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

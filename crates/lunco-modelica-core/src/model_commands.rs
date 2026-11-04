@@ -28,7 +28,8 @@ use lunco_modelica_document::ModelicaDocument;
 /// This command is owned by the UI-free Modelica core, so the same reflected
 /// command is available to headless API hosts, the workbench, and Rhai. Its
 /// live-session acknowledgement includes the target and admission stamp, and
-/// its fixed-tick commit uses the same port-first helper as local UI writes.
+/// its live commit uses the co-simulation layered-input owner, including
+/// controller/program priority. Editor-only models retain their port writer.
 #[Command(default)]
 pub struct SetModelInput {
     /// Document id; zero selects the documented active-document default.
@@ -387,7 +388,7 @@ pub fn execute_set_model_input(
         ));
     }
 
-    apply_model_input_to_entity(world, doc.raw(), entity, name, value)
+    apply_model_input_with_authority(world, doc.raw(), entity, name, value, origin)
         .map_err(|error| error.message())?;
     Ok(set_model_input_ack(
         doc,
@@ -475,6 +476,15 @@ fn validate_model_input_target(
     if world.get::<ModelicaModel>(entity).is_none() {
         return Err(SetModelInputError::EntityMissingModel { doc: doc_raw });
     }
+    if world.get::<GlobalEntityId>(entity).is_some()
+        && !world.contains_resource::<lunco_cosim_core::LayeredInputWriter>()
+    {
+        return Err(SetModelInputError::PortWriteRejected {
+            doc: doc_raw,
+            name: name.to_owned(),
+            reason: "live Modelica input requires the co-simulation layered input owner".to_owned(),
+        });
+    }
     let registry = world
         .get_resource::<lunco_port_core::ports::PortRegistry>()
         .ok_or(SetModelInputError::PortRegistryUnavailable { doc: doc_raw })?;
@@ -530,6 +540,35 @@ fn map_port_write_error(
     }
 }
 
+fn apply_model_input_with_authority(
+    world: &mut World,
+    doc_raw: u64,
+    entity: Entity,
+    name: &str,
+    value: f64,
+    origin: Option<CommandOrigin>,
+) -> Result<(), SetModelInputError> {
+    if world.get::<GlobalEntityId>(entity).is_none() {
+        return apply_model_input_to_entity(world, doc_raw, entity, name, value);
+    }
+    validate_model_input_target(world, doc_raw, entity, name, value)?;
+    let writer = world
+        .get_resource::<lunco_cosim_core::LayeredInputWriter>()
+        .copied()
+        .ok_or_else(|| SetModelInputError::PortWriteRejected {
+            doc: doc_raw,
+            name: name.to_owned(),
+            reason: "live Modelica input requires the co-simulation layered input owner".to_owned(),
+        })?;
+    writer
+        .write(world, entity, &[(name.to_owned(), value)], origin)
+        .map_err(|reason| SetModelInputError::PortWriteRejected {
+            doc: doc_raw,
+            name: name.to_owned(),
+            reason,
+        })
+}
+
 fn apply_model_input_to_entity(
     world: &mut World,
     doc_raw: u64,
@@ -576,6 +615,7 @@ pub(crate) fn commit_session_input(
     };
     let target = commit.target();
     let target_gid = commit.record().target;
+    let origin = commit.origin();
     let name = name.clone();
     let value = *value;
     let correlation_id = *correlation_id;
@@ -592,7 +632,7 @@ pub(crate) fn commit_session_input(
             });
             return;
         };
-        if let Err(error) = apply_model_input_to_entity(world, doc_raw, target, &name, value) {
+        if let Err(error) = apply_model_input_with_authority(world, doc_raw, target, &name, value, origin) {
             world.trigger(lunco_core::RuntimeError {
                 name: "modelica-session-input".to_owned(),
                 message: format!(
@@ -606,13 +646,42 @@ pub(crate) fn commit_session_input(
 
 #[cfg(test)]
 mod tests {
-    use super::{SetModelInputError, apply_model_input_to_entity};
+    use super::{
+        SetModelInputError, apply_model_input_to_entity, apply_model_input_with_authority,
+    };
     use bevy::prelude::*;
     use lunco_modelica_runtime::ModelicaModel;
     use lunco_port_core::ports::{
         PortBackend, PortDeclarationQuery, PortDirection, PortMetadata, PortRegistry,
         PortTopologyRevision,
     };
+
+    #[test]
+    fn live_input_without_layered_owner_rejects_before_port_mutation() {
+        let mut world = World::new();
+        world.insert_resource(PortTopologyRevision::default());
+        let entity = world
+            .spawn((
+                lunco_core::GlobalEntityId::from_raw(17),
+                ModelicaModel {
+                    model_name: "InputAuthority".to_owned(),
+                    inputs: [("u".to_owned(), 1.0)].into(),
+                    ..Default::default()
+                },
+            ))
+            .id();
+        let mut ports = PortRegistry::default();
+        super::super::model_ports::register_port_backend(&mut ports);
+        world.insert_resource(ports);
+
+        let error = apply_model_input_with_authority(&mut world, 17, entity, "u", 2.0, None)
+            .expect_err("a live host must install the layered input owner");
+        assert!(
+            matches!(error, SetModelInputError::PortWriteRejected { ref reason, .. }
+            if reason.contains("layered input owner"))
+        );
+        assert_eq!(world.get::<ModelicaModel>(entity).unwrap().inputs["u"], 1.0);
+    }
 
     #[test]
     fn non_writable_declared_port_rejects_without_mutating_model_snapshot() {

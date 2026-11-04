@@ -34,6 +34,16 @@ interval; there is no solver-phase scaling in the application.
 A coupling hold changes scheduling permission,
 without changing the duration or load represented by that completed sample.
 
+Shared physical tires retain the native support-body identity with each
+contact. Their tangential force acts on the wheel and, for an admitted dynamic
+support, the equal and opposite force acts at the same world contact point.
+Both accumulators are checked before either receives force. Static, kinematic
+and disabled supports prescribe motion and do not receive a dynamic reaction.
+Raycast spin, drive and parking share the finite-positive normal-load boundary
+with jointed tire contacts; valid sub-newton loads retain their proportional
+traction. `simulation_core_fourth_signals_tires` observes dynamic-deck momentum
+and sub-newton raycast traction through the public physics queries.
+
 Authored mechanism policy can inspect `joint_drive(id)` and change the native
 dimensional law with `set_joint_drive(id, stiffness, damping, max_effort)`.
 Both prismatic and revolute joints use the same physics-owned boundary. A
@@ -444,7 +454,7 @@ winner; once selected, an owner refusal is terminal and cannot fall through to
 a shadowed port. Output-only owners do not shadow input writes. `ReleasePort`
 and `ReleaseControl` clear named or all local setpoint holds without writing
 values. `PortHolds` retains controller and authored-program setpoints in
-separate layers. `SetPorts` assigns Twin/Simulation Rhai writes to the program
+separate layers. `SetPorts` and live `SetModelInput` assign Twin/Simulation Rhai writes to the program
 layer; controller, UI, and external command writes use the controller layer.
 Controller input takes precedence over authored program guidance, which takes
 precedence over the wiring fabric. The input owner resolves this priority before
@@ -457,6 +467,13 @@ Despawn retires holds for that exact entity lease. A deleted endpoint cannot
 leave a level for a future entity or fault the surviving exchange; missing
 identity on a still-live held endpoint remains an invalid-state failure.
 Authored control policy uses named `SetPorts` writes for explicit setpoints.
+`lunco-cosim-core::LayeredInputWriter` is the typed callback contract for live
+input adapters. `CoSimPlugin` installs its implementation at the existing
+transaction owner; Modelica core uses it for both immediate and admitted
+fixed-tick input changes, retaining the original command provenance. A live
+participant without this owner rejects its input instead of writing around
+control priority. Standalone editor models keep their document-owned port
+writer and do not require the physics/API orchestration stack.
 All `SetPorts` inputs are levels, including body force/torque and generic actuator
 commands. The exchange reapplies a held level every fixed cycle even without a
 wire. Release removes the requested hold without writing a replacement endpoint
@@ -798,7 +815,7 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 | **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), not a per-tick result endpoint. |
 | **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
 | **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | Named writes use the shared `PortRegistry`. External API, identified direct typed, local port-inspector, and non-Simulation Rhai `SetPorts`, `ReleasePort`, and `ReleaseControl` commands enter the bounded session queue and commit at the next fixed tick. Simulation-clock Rhai and fixed-step controller writes stay in their owning pass; network ControlStream frames keep their per-vessel input path. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`; release returns it to authored wiring without synthesizing values. |
-| **Modelica input injection** — discrete | `SetModelInput` | live API clients select a Modelica participant by `target_gid` from `ListEntities`; workbench clients select an editor document by `doc_id`. Live `SetModelInput` commands and local Modelica canvas writes are admitted to the shared next-fixed-tick queue, captured as typed Modelica changes, and applied by the Modelica owner through the shared port-first helper. Editor-only models keep immediate writes; Simulation-clock Rhai writes remain derived behavior. |
+| **Modelica input injection** — discrete | `SetModelInput` | live API clients select a Modelica participant by `target_gid` from `ListEntities`; workbench clients select an editor document by `doc_id`. Live `SetModelInput` commands and local Modelica canvas writes are admitted to the shared next-fixed-tick queue, captured as typed Modelica changes, and applied through the shared layered input transaction. Simulation-clock Twin Rhai uses the program layer; controller/external input uses the controller layer. Editor-only models keep immediate document-owned writes; Simulation-clock Rhai writes remain derived behavior. |
 
 For a batch `RunExperiment`, the deferred command acknowledgement contains the
 exact `experiment_id` after registration; it does not wait for numerical

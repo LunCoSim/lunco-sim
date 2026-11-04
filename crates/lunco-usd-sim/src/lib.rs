@@ -513,7 +513,7 @@ impl JointTopologyIndex {
         let Some(topology) = self.by_stage.get_mut(&change.stage_id) else {
             return false;
         };
-        let invalidates = topology_change_affects(change, &topology.source_paths, reader);
+        let invalidates = topology_change_affects(change, &topology.source_paths);
         for path in change
             .resynced_prim_paths
             .iter()
@@ -1834,44 +1834,13 @@ fn update_simulation_candidate(
     }
 }
 
-fn topology_change_affects(
-    change: &UsdSceneChangeBatch,
-    source_paths: &HashSet<String>,
-    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
-) -> bool {
-    change
-        .resynced_prim_paths
-        .iter()
-        .any(|path| topology_change_affects_path(path, source_paths, reader))
+fn topology_change_affects(change: &UsdSceneChangeBatch, source_paths: &HashSet<String>) -> bool {
+    // Structural roots can introduce or remove simulation descendants that
+    // the previously prepared candidate inventory has never seen.
+    !change.resynced_prim_paths.is_empty()
         || change.info_prim_paths.iter().any(|path| {
-            source_paths.contains(path)
-                && !(change.transform_only_prim_paths.contains(path)
-                    && !change.resynced_prim_paths.contains(path))
+            source_paths.contains(path) && !change.transform_only_prim_paths.contains(path)
         })
-}
-
-fn topology_change_affects_path(
-    path: &str,
-    source_paths: &HashSet<String>,
-    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
-) -> bool {
-    if source_paths.iter().any(|source| {
-        source == path
-            || path == "/"
-            || source
-                .strip_prefix(path)
-                .is_some_and(|suffix| suffix.starts_with('/'))
-    }) {
-        return true;
-    }
-    let Ok(path) = SdfPath::new(path) else {
-        return true;
-    };
-    reader
-        .type_name(&path)
-        .is_some_and(|name| JOINT_TOPOLOGY_TYPES.contains(&name.as_str()))
-        || reader.has_api_schema(&path, WHEEL_ATTACHMENT_API)
-        || reader.has_api_schema(&path, VEHICLE_CONTEXT_API)
 }
 
 fn collect_vehicle_output_ports(
@@ -2843,7 +2812,7 @@ fn process_usd_sim_prim_read(
         );
         let attachment_tire =
             wheel_runtime::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
-        let params = match WheelParams::read(
+        let (params, wheel_mass_properties) = match WheelParams::read(
             reader,
             &sdf_path,
             attachment_susp.as_ref(),
@@ -2851,19 +2820,28 @@ fn process_usd_sim_prim_read(
         )
         .and_then(|params| {
             wheel_runtime::validate_native_parameters(&params)
-                .map(|()| params)
+                .map(|properties| (params, properties))
                 .map_err(|detail| vec![detail])
         }) {
             Ok(p) => p,
             Err(missing) => {
-                error!(
-                    "USD wheel {} is missing required wheel attributes {:?} — \
-                         refusing to spawn. They are authored in \
-                         components/mobility/wheel.usda; a wheel that does not \
-                         compose it has no handling to speak of.",
-                    sdf_path.as_str(),
-                    missing
+                let detail = format!(
+                    "{}: invalid wheel parameters: {}",
+                    sdf_path,
+                    missing.join("; ")
                 );
+                runtime_faults.raise(
+                    "usd-wheel-parameters-invalid",
+                    Some(entity),
+                    &prim_path.path,
+                    &detail,
+                );
+                lunco_core::trigger_runtime_error(commands, "usd-wheel-parameters-invalid", detail);
+                commands.queue(|world: &mut World| {
+                    world
+                        .resource_mut::<lunco_physics::PhysicsHolds>()
+                        .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                });
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             }
@@ -3286,6 +3264,7 @@ fn process_usd_sim_prim_read(
                     q_child_of,
                 ),
                 &params,
+                wheel_mass_properties,
                 body_mount,
                 vehicle_mount,
                 p_drive,
@@ -3433,7 +3412,7 @@ fn wheel_body_mount(
 fn vehicle_mount_transform(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     wheel_path: &SdfPath,
-) -> Option<(SdfPath, Transform)> {
+) -> Option<(SdfPath, lunco_core::DTransform)> {
     let path = lunco_usd_sim_authoring::wheel_params::vehicle_context_path(reader, wheel_path)?;
     let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &path, wheel_path)?;
     Some((path, local))
@@ -3462,9 +3441,7 @@ fn raycast_mass_contribution_from_usd(
         .ok_or_else(|| "missing `physics:mass`".to_owned())?;
     let inertia = read_vec3_f64(reader, prim, "physics:diagonalInertia")
         .ok_or_else(|| "missing `physics:diagonalInertia`".to_owned())?;
-    let center_of_mass = lunco_usd_avian_reader::read_authored_vec3(
-        reader, prim, "physics:centerOfMass",
-    ).map_err(|_| "malformed `physics:centerOfMass`".to_owned())?
+    let center_of_mass = lunco_usd_avian::mass_center_of_mass_from_usd(reader, prim)?
         .ok_or_else(|| "reduced mass requires explicit `physics:centerOfMass`; geometry-derived COM is not available for this realization".to_owned())?;
     let principal_axes =
         lunco_usd_avian_reader::read_authored_quat(reader, prim, "physics:principalAxes")
@@ -3511,7 +3488,6 @@ fn raycast_mass_contribution_from_usd(
         .dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
         .abs()
         * (meters_per_unit * meters_per_unit);
-    let center_of_mass = convention.point_d(center_of_mass);
     let principal_axes = convention.rotation_d(principal_axes);
     lunco_physics::body_mass::checked_mass_properties(
         center_of_mass, mass, principal, principal_axes,
@@ -3790,8 +3766,9 @@ fn setup_physical_wheel(
     visual_basis: Quat,
     suspension_visuals: Vec<(Entity, Transform)>,
     params: &WheelParams,
+    mass_properties: (avian3d::prelude::Mass, avian3d::prelude::AngularInertia),
     body_mount: lunco_mobility::WheelBodyMount,
-    vehicle_mount: Transform,
+    vehicle_mount: lunco_core::DTransform,
     p_drive: Entity,
     p_speed: Entity,
     heat_ports: lunco_mobility::WheelHeatPorts,
@@ -3867,12 +3844,12 @@ fn setup_physical_wheel(
         // The standard wheel mass is a body mass, independent of the authored
         // collision shape. `NoAutoMass` prevents child/shape changes from
         // silently replacing the USD value during Avian recomputation.
-        avian3d::prelude::Mass(params.mass as f32),
+        mass_properties.0,
         avian3d::prelude::NoAutoMass,
         // Publish the complete authored wheel inertia before the rigid-body
         // observer runs, so Avian never derives a transient tensor from the
         // collision shape.
-        physical_wheel_angular_inertia(params, wheel_axis_rot),
+        mass_properties.1,
         avian3d::prelude::NoAutoAngularInertia,
         RigidBody::Kinematic,
         ShouldBeDynamic,
@@ -3925,7 +3902,7 @@ fn setup_physical_wheel(
             SharedTireContact,
             params.jointed_tire(
                 joint_entity,
-                VehicleFrame::forward(GridRot(body_mount.local.rotation.as_dquat())),
+                VehicleFrame::forward(GridRot(body_mount.local.rotation)),
             ),
         ));
     }
@@ -4004,27 +3981,6 @@ mod physical_wheel_geometry_tests {
             let oriented = oriented_wheel_collider(mesh, DQuat::IDENTITY);
             assert_eq!(oriented.shape_scaled().compute_local_aabb(), bounds);
         }
-    }
-}
-
-/// Build the physical wheel's authored inertia tensor in the entity's local
-/// frame.  `WheelParams::axle_inertia` is the corresponding scalar used by the
-/// raycast integrator; keeping this conversion here makes the two realizations
-/// consume the same authored complete assembly MOI.
-pub(crate) fn physical_wheel_angular_inertia(
-    params: &WheelParams,
-    wheel_axis_rot: Quat,
-) -> avian3d::prelude::AngularInertia {
-    let m = params.mass;
-    let r = params.radius;
-    let i_perp = m * (3.0 * r * r + (params.width * params.width)) / 12.0;
-    avian3d::prelude::AngularInertia {
-        principal: bevy::math::Vec3::new(
-            i_perp as f32,
-            params.axle_inertia() as f32,
-            i_perp as f32,
-        ),
-        local_frame: wheel_axis_rot,
     }
 }
 
@@ -4111,7 +4067,7 @@ fn reconstruct_proxy_wheels(
         // World pose at the rigid mount offset. The cylinder
         // collider (axis baked into its compound) lands correctly for contact; the
         // visual child's spin is layered on by `animate_proxy_physical_wheels`.
-        let (p, q) = proxy_wheel_pose(c_pos.0, c_rot.0.as_dquat(), wheel.mount_local.as_dvec3());
+        let (p, q) = proxy_wheel_pose(c_pos.0, c_rot.0.as_dquat(), wheel.mount_local);
         pos.0 = p;
         rot.0 = q.as_quat();
     }
@@ -4212,7 +4168,7 @@ fn animate_proxy_physical_wheels(
         let (hub_pos, _) = wheel_hub_pose(
             chassis_pos,
             GridRot(rot.0.as_dquat()),
-            wheel.mount_local.as_dvec3(),
+            wheel.mount_local,
             DQuat::IDENTITY,
         );
         let hub_vel = body_point_velocity(
@@ -6107,11 +6063,11 @@ mod proxy_wheel_tests {
                 axis_rot: Quat::IDENTITY,
                 geometry_basis: Quat::IDENTITY,
                 spin_angle: 0.0,
-                mount_local: Vec3::ZERO,
+                mount_local: DVec3::ZERO,
             },
             lunco_mobility::WheelBodyMount {
                 body: chassis,
-                local: Transform::IDENTITY,
+                local: lunco_core::DTransform::IDENTITY,
             },
             GlobalTransform::IDENTITY,
             Rotation::default(),
@@ -6197,11 +6153,11 @@ mod proxy_wheel_tests {
                 axis_rot: Quat::IDENTITY,
                 geometry_basis: Quat::IDENTITY,
                 spin_angle: 0.0,
-                mount_local: Vec3::ZERO,
+                mount_local: DVec3::ZERO,
             },
             lunco_mobility::WheelBodyMount {
                 body: chassis,
-                local: Transform::IDENTITY,
+                local: lunco_core::DTransform::IDENTITY,
             },
             GlobalTransform::IDENTITY,
             Rotation::default(),
@@ -6278,11 +6234,16 @@ mod proxy_wheel_tests {
                 axis_rot: Quat::IDENTITY,
                 geometry_basis: Quat::IDENTITY,
                 spin_angle: 0.0,
-                mount_local,
+                mount_local: mount_local.as_dvec3(),
             },
             lunco_mobility::WheelBodyMount {
                 body: chassis,
-                local: Transform::from_translation(mount_local),
+                local: lunco_core::DTransform::new(
+                    mount_local.as_dvec3(),
+                    DQuat::IDENTITY,
+                    DVec3::ONE,
+                )
+                .unwrap(),
             },
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
             Rotation::default(),

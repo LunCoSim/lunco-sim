@@ -5,6 +5,7 @@
 //! solver-specific realization; the authored actuator reader does not need to
 //! depend on that backend.
 
+use bevy::math::DVec3;
 use bevy::prelude::*;
 
 /// A force actuator authored by a domain adapter.
@@ -16,9 +17,9 @@ use bevy::prelude::*;
 #[reflect(Component)]
 pub struct ForceActuator {
     /// Mount position relative to the owning rigid-body origin (m).
-    pub local_position: Vec3,
+    pub local_position: DVec3,
     /// Unit force direction in the owning body's local frame.
-    pub direction_local: Vec3,
+    pub direction_local: DVec3,
     /// Maximum accepted force for this actuator (N).
     pub max_force_n: f64,
 }
@@ -31,7 +32,7 @@ pub struct ForceActuator {
 #[reflect(Component)]
 pub struct TorqueActuator {
     /// Torque axis in the owning body's local frame.
-    pub axis_local: Vec3,
+    pub axis_local: DVec3,
     /// Maximum torque magnitude (N·m).
     pub max_torque_nm: f64,
 }

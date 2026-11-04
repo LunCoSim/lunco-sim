@@ -923,11 +923,11 @@ processed-marker lifecycle observers queue only affected entities; one initial
 discovery covers prims present before plugin installation. The update gate reads
 that set instead of querying all projected prims on idle frames, and stage
 topology is prepared only for stages represented in the current batch. Initial
-topology and candidate indexes run on a worker; live topology refresh follows
-`UsdSceneChangeBatch` and is limited to resynced joint/attachment sources and
-non-transform info changes to indexed topology paths. Transform-only info
-changes advance the cached generation without rebuilding joint topology;
-structural resyncs and mixed edits still refresh it. Live USD invalidation
+topology and candidate indexes run on a worker. Every structural resync in
+`UsdSceneChangeBatch` invalidates that inventory because a root may introduce
+or remove previously unknown simulation descendants. Non-transform info
+changes to indexed topology paths also refresh it. Transform-only info changes
+advance the cached generation without rebuilding joint topology. Live USD invalidation
 requeues the affected prim, while `SceneTeardown` retires the scene-owned work
 and cache. A live refresh encodes the exact canonical recipe snapshot and opens
 its composed stage on the worker. The shared `StageView` read interface extracts
@@ -1033,6 +1033,14 @@ local +Y; an authored Mesh already contains its local orientation. Initial
 projection and parameter resynchronization share that basis decision, while
 joint and inertia orientation continue to use the shaft axis.
 
+Both initial wheel admission and live parameter resynchronization prepare a
+complete mass/inertia candidate through `lunco-physics::body_mass` before
+publishing native components. Positive authored values must also have finite
+native reciprocals and a valid rotated inverse tensor. Initial parameter
+failures raise `usd-wheel-parameters-invalid`; live failures raise
+`usd-wheel-resync-invalid`. Both hold physics and publish the prim and rejected
+property through Recent Events, retaining previously admitted native state.
+
 For authored profile geometry, `RevolveProfileMesh` accepts an explicit finite,
 nonzero local axis direction (default +Y). Rhai supplies the small meridian and
 the native geometry owner rotates points and normals together, then expands the
@@ -1076,6 +1084,22 @@ native construction and admission boundary is **`lunco-usd-avian-joints`**.
 Physical wheel hinges use the same USD joint reader, authored prim identity,
 frames, limits and admission as other joints. The wheel projector binds its
 Modelica torque/speed actuator to that authored hinge.
+
+`lunco-usd-avian` retains the canonical frames that produced each definition.
+Composed change notices re-read joints affected by target, body or ancestor
+transform edits. Changed endpoints retire the old native definition and parked
+admission plan through `retire_native_joints`, then cross the existing seating
+and admission boundary again. Unique world-anchor bodies retire with their
+definition; authored body identities and unrelated simulation state survive.
+The queued replacement checks its exact entity, USD path and canonical stage
+generation. An unchanged rigid assembly move does not replace its joints.
+Invalid new frames leave the admitted body state intact and fault visibly.
+
+Production regression entry points are
+`simulation_core_fourth_physics_wheel.rhai` (tiny native reciprocal and initial
+parameter rejection) and `simulation_core_fourth_physics_joints.rhai` (live
+socket translation, rotation, nonuniform scale, body scale, and singular-frame
+rejection). Fixtures are edited through typed unsaved document operations.
 
 The native 3D prismatic solver couples the two blocked translations and three
 blocked rotations. Its moving-axis Jacobian includes the anchor separation;

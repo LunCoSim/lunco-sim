@@ -6,7 +6,76 @@ type ModelicaDocuments =
     lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>;
 
 #[derive(Resource, Default)]
-pub struct PendingCompileAdmissions(Vec<CompileRequested>);
+pub struct PendingCompileAdmissions(
+    Vec<CompileRequested>,
+    HashMap<lunco_doc::DocumentId, (lunco_workspace::PinnedDocumentRuntimeOwner, bool)>,
+);
+
+impl PendingCompileAdmissions {
+    /// Record the requested run state at the same ordered boundary as compile
+    /// admission. A subsequent Pause or Resume replaces this intent.
+    pub fn record_run_intent(&mut self, request: &CompileRequested) {
+        self.1.insert(
+            request.source.document,
+            (request.source.clone(), request.resume_after_compile),
+        );
+    }
+}
+
+/// Apply run intent to the current document owner, including a compile that has
+/// been requested before its runtime participant exists.
+pub fn set_modelica_document_run_intent(
+    world: &mut World,
+    doc: lunco_doc::DocumentId,
+    running: bool,
+) -> Result<(), String> {
+    let documents = world
+        .get_resource::<ModelicaDocuments>()
+        .ok_or("Modelica document registry is unavailable")?;
+    documents
+        .host(doc)
+        .ok_or("Modelica run-control source document is closed")?;
+    let entity = documents.simulator_for(doc);
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    let source = lunco_workspace::PinnedDocumentRuntimeOwner::for_document(doc, workspace)?;
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    if !source.is_current(workspace, replication.as_ref()) {
+        return Err("Modelica run-control source runtime has retired".into());
+    }
+    if entity.is_none()
+        && !world
+            .get_resource::<PendingCompileAdmissions>()
+            .and_then(|pending| pending.1.get(&doc))
+            .is_some_and(|(admitted, _)| admitted == &source)
+    {
+        return Err("The document has no runtime participant or admitted compilation".into());
+    }
+    if let Some(entity) = entity {
+        let model = world
+            .get::<ModelicaModel>(entity)
+            .ok_or("The document has no live Modelica model")?;
+        if model.document != doc
+            || world.get::<lunco_workspace::PinnedDocumentRuntimeOwner>(entity) != Some(&source)
+        {
+            return Err(
+                "Modelica run-control participant belongs to a different source runtime".into(),
+            );
+        }
+        let mut model = world
+            .get_mut::<ModelicaModel>(entity)
+            .expect("validated run-control participant");
+        model.paused = !running;
+        model.resume_after_compile = running;
+    }
+    world.init_resource::<PendingCompileAdmissions>();
+    world
+        .resource_mut::<PendingCompileAdmissions>()
+        .1
+        .insert(doc, (source, running));
+    Ok(())
+}
 
 /// Completion ownership follows the exact installed session. Replacing or
 /// despawning its component cancels every remaining listener.
@@ -142,6 +211,7 @@ pub fn reset_modelica_document(
     model.session_id = session_id;
     model.is_stepping = true;
     model.is_compiling = true;
+    model.resume_after_compile = !model.paused;
     drop(model);
     world.entity_mut(entity).insert((
         lunco_modelica_runtime::ModelicaSessionEpoch(session_id),
@@ -159,9 +229,26 @@ pub fn dispatch_modelica_compile_requests(
     mut requests: MessageReader<CompileRequested>,
     mut commands: Commands,
     pending: Option<ResMut<PendingCompileAdmissions>>,
+    documents: Option<Res<ModelicaDocuments>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<lunco_core_session::ClientConnection>>,
+    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
 ) {
+    let replication =
+        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let mut queued = pending
-        .map(|mut pending| std::mem::take(&mut pending.0))
+        .map(|mut pending| {
+            pending.1.retain(|doc, (source, _)| {
+                documents
+                    .as_deref()
+                    .is_some_and(|documents| documents.host(*doc).is_some())
+                    && source.is_current(
+                        workspace.as_deref().map(|workspace| &workspace.0),
+                        replication.as_ref(),
+                    )
+            });
+            std::mem::take(&mut pending.0)
+        })
         .unwrap_or_default();
     queued.extend(requests.read().cloned());
     let mut requests = queued;
@@ -179,7 +266,7 @@ pub fn dispatch_modelica_compile_requests(
         {
             earlier.completions.append(&mut later.completions);
             earlier.force |= later.force;
-            earlier.resume_after_compile |= later.resume_after_compile;
+            earlier.resume_after_compile = later.resume_after_compile;
             true
         } else {
             false
@@ -197,10 +284,17 @@ pub fn dispatch_modelica_compile_requests(
 
 fn dispatch_one(
     world: &mut World,
-    request: CompileRequested,
+    mut request: CompileRequested,
     sampling: &mut Option<Result<(), String>>,
 ) {
     let doc = request.source.document;
+    if let Some((source, running)) = world
+        .get_resource::<PendingCompileAdmissions>()
+        .and_then(|pending| pending.1.get(&doc))
+        && source == &request.source
+    {
+        request.resume_after_compile = *running;
+    }
     let workspace = world
         .get_resource::<lunco_workspace::WorkspaceResource>()
         .map(|workspace| &workspace.0);
@@ -301,11 +395,33 @@ fn dispatch_one(
         return;
     };
     let document = host.document();
+    let generated =
+        lunco_modelica_runtime::generated_source::is_generated_origin(document.origin());
+    let mut sibling_documents: Vec<_> = documents
+        .docs()
+        .filter(|(other_doc, host)| {
+            !generated
+                && *other_doc != doc
+                && request
+                    .source
+                    .shares_runtime_with(*other_doc, workspace, replication.as_ref())
+                && !lunco_modelica_source_roots::is_library_document(host.document())
+        })
+        .map(|(other_doc, _)| other_doc)
+        .collect();
+    sibling_documents.sort_unstable_by_key(|other_doc| other_doc.raw());
     // Source analysis is asynchronous. Retain this current source owner's
     // intent and completion listeners while analysis is pending, including
     // requests that already acquired the initial-input admission hold.
     // Once analysis settles, invalid source takes the terminal path below.
-    if document.syntax_is_stale() || document.ast_is_stale() {
+    if document.syntax_is_stale()
+        || document.ast_is_stale()
+        || sibling_documents.iter().any(|id| {
+            documents.host(*id).is_some_and(|host| {
+                host.document().syntax_is_stale() || host.document().ast_is_stale()
+            })
+        })
+    {
         world.init_resource::<PendingCompileAdmissions>();
         world
             .resource_mut::<PendingCompileAdmissions>()
@@ -389,13 +505,12 @@ fn dispatch_one(
                 model.is_compiled,
                 model.is_compiling,
                 model.compiled_generation,
-                model.resume_after_compile,
             )
         })
     });
     let communication_period = existing
         .as_ref()
-        .map(|(_, _, period, _, _, _, _)| *period)
+        .map(|(_, _, period, _, _, _)| *period)
         .unwrap_or(lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS);
     if let Err(error) =
         lunco_modelica_runtime::validate_communication_period_secs(communication_period)
@@ -418,7 +533,7 @@ fn dispatch_one(
                     && model.source_snapshot.as_ref() == Some(&source_snapshot)
             })
         && existing.as_ref().is_some_and(
-            |(_, _, _, is_compiled, is_compiling, compiled_generation, _)| {
+            |(_, _, _, is_compiled, is_compiling, compiled_generation)| {
                 *is_compiled && !*is_compiling && *compiled_generation == generation
             },
         )
@@ -552,34 +667,32 @@ fn dispatch_one(
     let document = host.document();
     let source = lunco_modelica_source_roots::compile_overlay_source(document);
     let source_uri = document.origin().session_uri();
-    let generated =
-        lunco_modelica_runtime::generated_source::is_generated_origin(document.origin());
+    if !lunco_modelica_core::source_snapshot::is_current(
+        &source_snapshot,
+        documents,
+        &request.source,
+        world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .map(|workspace| &workspace.0),
+        replication.as_ref(),
+        world.get_resource::<lunco_modelica_source_roots::SourceRootRegistry>(),
+    ) {
+        world.init_resource::<PendingCompileAdmissions>();
+        world
+            .resource_mut::<PendingCompileAdmissions>()
+            .0
+            .push(request);
+        return;
+    }
 
     let mut claimed: HashSet<String> = ast.classes.iter().map(|(name, _)| name.clone()).collect();
     let mut dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
     let mut extra_sources = Vec::new();
-    let mut sibling_documents: Vec<_> = documents
-        .docs()
-        // A synthesized network contains its complete unit definitions and
-        // admits external classes through source roots. Editor documents are
-        // not dependencies of that immutable production compile snapshot.
-        .filter(|(other_doc, _)| !generated && *other_doc != doc)
-        .collect();
-    sibling_documents.sort_unstable_by_key(|(other_doc, _)| other_doc.raw());
-    for (other_doc, host) in sibling_documents {
+    for other_doc in sibling_documents {
+        let host = documents
+            .host(other_doc)
+            .expect("current participating source snapshot");
         let other_document = host.document();
-        if !request.source.shares_runtime_with(
-            other_doc,
-            world
-                .get_resource::<lunco_workspace::WorkspaceResource>()
-                .map(|workspace| &workspace.0),
-            replication.as_ref(),
-        ) {
-            continue;
-        }
-        if lunco_modelica_source_roots::is_library_document(other_document) {
-            continue;
-        }
         if let Some(other_ast) = other_document.strict_ast() {
             let names: Vec<_> = other_ast
                 .classes
@@ -659,7 +772,7 @@ fn dispatch_one(
     };
     let mut inputs = existing
         .as_ref()
-        .map(|(_, inputs, _, _, _, _, _)| inputs.clone())
+        .map(|(_, inputs, _, _, _, _)| inputs.clone())
         .unwrap_or_default();
 
     let initial_state_values = connected_inputs.state_values;
@@ -731,10 +844,7 @@ fn dispatch_one(
         );
         return;
     }
-    let resume_after_compile = request.resume_after_compile
-        || existing
-            .as_ref()
-            .is_some_and(|(_, _, _, _, _, _, resume)| *resume);
+    let resume_after_compile = request.resume_after_compile;
     let model = ModelicaModel {
         model_name: model_name.clone(),
         source_uri: source_uri.clone(),
@@ -763,7 +873,7 @@ fn dispatch_one(
         is_compiled: false,
         compiled_generation: existing
             .as_ref()
-            .map_or(0, |(_, _, _, _, _, generation, _)| *generation),
+            .map_or(0, |(_, _, _, _, _, generation)| *generation),
         live_solver_snapshot: None,
         variable_metadata: None,
         construction_profile: None,

@@ -30,7 +30,7 @@ fn relative_to_body(
     prims: &Query<&UsdPrimPath>,
     parents: &Query<&ChildOf>,
     previews: &Query<(), With<UsdPreviewOnly>>,
-) -> Result<Transform, String> {
+) -> Result<lunco_core::DTransform, String> {
     let body_prim = prims
         .get(body)
         .map_err(|_| "physical mount owner is no longer projected")?;
@@ -200,7 +200,7 @@ pub(super) fn refresh_mounted_physics(
                 let mass_local = mass
                     .as_ref()
                     .map(|mount| {
-                        relative_to_body(
+                        let local = relative_to_body(
                             &reader,
                             &path,
                             mount.owner,
@@ -208,7 +208,12 @@ pub(super) fn refresh_mounted_physics(
                             &prims,
                             &parents,
                             &previews,
-                        )
+                        )?;
+                        let center = lunco_usd_avian::mass_center_of_mass_from_usd(&reader, &path)?
+                            .ok_or(
+                                "reduced mass requires an explicit finite physics:centerOfMass",
+                            )?;
+                        Ok::<_, String>((local, center))
                     })
                     .transpose()?;
                 Ok((force, torque, wheel_local, vehicle_local, mass_local))
@@ -244,14 +249,15 @@ pub(super) fn refresh_mounted_physics(
                 }
             }
             if let (Some(mut old), Some(local)) = (tire, wheel_local) {
-                let heading = VehicleFrame::forward(GridRot(local.rotation.as_dquat()));
+                let heading = VehicleFrame::forward(GridRot(local.rotation));
                 if old.heading_local != heading {
                     old.heading_local = heading;
                 }
             }
-            if let (Some(mut old), Some(local)) = (mass, mass_local) {
-                if old.local != local {
+            if let (Some(mut old), Some((local, center))) = (mass, mass_local) {
+                if old.local != local || old.center_of_mass != center {
                     old.local = local;
+                    old.center_of_mass = center;
                 }
             }
         }

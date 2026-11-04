@@ -7,7 +7,7 @@
 //! the dependency of the other.
 
 use bevy_ecs::prelude::*;
-use bevy_math::{Quat, Vec3};
+use bevy_math::{DVec3, Quat};
 use bevy_reflect::Reflect;
 use std::collections::HashSet;
 
@@ -167,7 +167,7 @@ pub struct PhysicalWheel {
     pub spin_angle: f32,
     /// Wheel mount offset in the enclosing vehicle frame. A client proxy can
     /// reconstruct the wheel's position as `chassis_pos + chassis_rot · mount_local`.
-    pub mount_local: Vec3,
+    pub mount_local: DVec3,
 }
 
 #[cfg(test)]

@@ -25,6 +25,14 @@ switch to it silently when a visual check is requested.
 > **Read the ports, not the log.** A telemetry port snapshot is the authoritative
 > current value. `tail -f`/`sleep`-polling a log for a number is the anti-pattern.
 
+For tire contact, inspect `QueryPhysicsState.wheel_contacts` fields
+`contact_valid`, `normal_force_n` and `tire_force_n`; a valid positive load can
+be below 1 N. Shared physical tires expose native `contact_force`. On a free
+dynamic support, verify both the support response and total tangential momentum
+of every dynamic member, rather than treating wheel motion as proof of a
+balanced contact force. The fourth-pass physical tire gate exercises that
+contract through a deck with only vertical and rotational constraint.
+
 Live Modelica and external FMU engineering metadata is owned by
 `lunco-port-core::ScalarPortContracts`. Inspect it through `ReadPorts`/`ListPorts`;
 resolved definitions include `dimension_si`, `angle_power`, `relative_quantity`,

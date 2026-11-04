@@ -494,6 +494,10 @@ authority before applying it.
 
 Shared physical tires consume the physics owner's prepared native contact
 loads with their exact body/collider provenance, normal and world contact point.
+The shared tire owner retains the support identity and applies an equal and
+opposite tangential force to dynamic supports at that same point. Both native
+accumulators must be available before either side is changed. Static and
+kinematic supports retain their prescribed motion.
 The same completed native contact graph supplies generic `contact_force`; there
 is one contact impulse owner.
 Completed samples survive an admission hold and retire with the scene.

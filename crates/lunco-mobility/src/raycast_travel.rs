@@ -234,8 +234,8 @@ fn sync_limits(
         let (hub, heading) = wheel_hub_pose(
             GridPos(position.0),
             GridRot(rotation.0.as_dquat()),
-            mount.local.translation.as_dvec3(),
-            mount.local.rotation.as_dquat() * wheel.heading_rotation,
+            mount.local.translation,
+            mount.local.rotation * wheel.heading_rotation,
         );
         let hit = hits
             .iter_sorted()
@@ -531,7 +531,7 @@ mod tests {
                     Suspension::default(),
                     WheelBodyMount {
                         body: carrier,
-                        local: Transform::IDENTITY,
+                        local: lunco_core::DTransform::IDENTITY,
                     },
                     RayHits(vec![RayHitData {
                         entity: support,

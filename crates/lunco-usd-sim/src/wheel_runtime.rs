@@ -46,7 +46,9 @@ pub(crate) fn attachment_suspension_path(
 }
 
 /// Validate wheel values that cross the native solver and ray-query boundary.
-pub(crate) fn validate_native_parameters(params: &WheelParams) -> Result<(), String> {
+pub(crate) fn validate_native_parameters(
+    params: &WheelParams,
+) -> Result<(avian3d::prelude::Mass, avian3d::prelude::AngularInertia), String> {
     let transverse_inertia =
         params.mass * (3.0 * params.radius * params.radius + params.width * params.width) / 12.0;
     for (name, value) in [
@@ -70,7 +72,19 @@ pub(crate) fn validate_native_parameters(params: &WheelParams) -> Result<(), Str
     }) {
         return Err("wheel suspension ray exceeds the native query range".to_owned());
     }
-    Ok(())
+    let axis = Quat::from_rotation_arc(bevy::math::Vec3::Y, params.axle_axis.as_vec3());
+    let properties = lunco_physics::body_mass::checked_mass_properties(
+        DVec3::ZERO,
+        params.mass,
+        DVec3::new(transverse_inertia, params.axle_inertia(), transverse_inertia),
+        axis.as_dquat(),
+    )
+    .and_then(|properties| lunco_physics::body_mass::native_mass_properties(&properties))
+    .map_err(|reason| format!(
+        "physxVehicleWheel:mass={}, physxVehicleWheel:moi={} (effective axle inertia {}), transverse inertia {transverse_inertia}: {reason}",
+        params.mass, params.moment_of_inertia, params.axle_inertia(),
+    ))?;
+    Ok((properties.0, properties.1))
 }
 
 /// Resolve a wheel's attachment tire prim via the standard attachment
@@ -141,6 +155,7 @@ struct WheelUpdate {
     collider: Option<Collider>,
     visual_basis: Quat,
     native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
+    mass_properties: (avian3d::prelude::Mass, avian3d::prelude::AngularInertia),
 }
 
 /// Re-derive every spawned wheel of `stage` from the live composed stage, in
@@ -209,10 +224,13 @@ pub(crate) fn resync_wheels_for_stage(
                 .and_then(|s| SdfPath::new(s).ok());
             match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
                 Ok(params) => {
-                    if let Err(detail) = validate_native_parameters(&params) {
-                        failures.push((Some(*entity), path.clone(), detail));
-                        continue;
-                    }
+                    let mass_properties = match validate_native_parameters(&params) {
+                        Ok(properties) => properties,
+                        Err(detail) => {
+                            failures.push((Some(*entity), path.clone(), detail));
+                            continue;
+                        }
+                    };
                     // Use the same authored pose/axis readers as the mesh owner.
                     // Keep this rest pose separate from the animated transform.
                     let geometry_basis = match visual_basis(&view, &sp) {
@@ -263,6 +281,7 @@ pub(crate) fn resync_wheels_for_stage(
                         collider,
                         visual_basis: geometry_basis,
                         native_material,
+                        mass_properties,
                     });
                 }
                 Err(missing) => failures.push((
@@ -339,9 +358,7 @@ pub(crate) fn resync_wheels_for_stage(
         {
             transform.rotation = u.visual_basis;
         }
-        if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(u.entity) {
-            mass.0 = u.params.mass as f32;
-        }
+        world.entity_mut(u.entity).insert(u.mass_properties.0);
         if let Some(material) = &u.native_material {
             world.entity_mut(u.entity).remove::<(
                 JointedWheelTire,
@@ -358,10 +375,9 @@ pub(crate) fn resync_wheels_for_stage(
                 friction.static_coefficient = u.params.friction_mu as f32;
             }
         }
-        world.entity_mut(u.entity).insert((
-            crate::physical_wheel_angular_inertia(&u.params, axis_rot),
-            avian3d::prelude::NoAutoAngularInertia,
-        ));
+        world
+            .entity_mut(u.entity)
+            .insert((u.mass_properties.1, avian3d::prelude::NoAutoAngularInertia));
         let Some(collider) = u.collider.as_ref() else {
             continue;
         };
@@ -386,8 +402,7 @@ pub(crate) fn resync_wheels_for_stage(
                 );
                 continue;
             };
-            let heading_local =
-                crate::VehicleFrame::forward(crate::GridRot(mount.local.rotation.as_dquat()));
+            let heading_local = crate::VehicleFrame::forward(crate::GridRot(mount.local.rotation));
             world.entity_mut(u.entity).insert((
                 lunco_usd_avian_filters::filtered_pairs::SharedTireContact,
                 u.params.jointed_tire(je, heading_local),

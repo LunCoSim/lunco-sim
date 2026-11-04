@@ -1963,12 +1963,15 @@ pub(super) fn actuator_wrench_matrix(
     let columns: Vec<[f64; 6]> = actuators
         .iter()
         .map(|actuator| {
-            let direction = actuator.direction_local.normalize_or_zero().as_dvec3();
+            let direction = actuator
+                .direction_local
+                .try_normalize()
+                .ok_or("actuator direction has no finite physical wrench authority")?;
             let force = direction * actuator.max_force_n;
-            let torque = actuator.local_position.as_dvec3().cross(direction) * actuator.max_force_n;
-            [force.x, force.y, force.z, torque.x, torque.y, torque.z]
+            let torque = actuator.local_position.cross(direction) * actuator.max_force_n;
+            Ok([force.x, force.y, force.z, torque.x, torque.y, torque.z])
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     if columns.iter().flatten().any(|value| !value.is_finite()) {
         return Err("actuator-wrench geometry produced a non-finite torque column".into());
     }

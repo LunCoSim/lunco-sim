@@ -1,7 +1,7 @@
 //! Admission checks for the Avian backend representation boundary.
 //!
-//! The simulation keeps physics poses in `f64`, while Avian's OBVHS spatial
-//! backend consumes `f32` points and AABBs. This module owns that one shared
+//! The simulation keeps physics poses in `f64`, while Avian's force math and
+//! OBVHS spatial backend consume `f32` vectors and AABBs. This module owns the shared
 //! contract. Callers remain responsible for their lifecycle decision and
 //! diagnostic subject; they must not invent a second representability rule.
 
@@ -12,6 +12,19 @@ use bevy::math::{DQuat, DVec3};
 #[inline]
 pub fn avian_backend_vector_is_valid(value: DVec3) -> bool {
     value.is_finite() && value.as_vec3().is_finite()
+}
+
+/// Check the native force and moment before Avian narrows a world-point offset.
+/// Absolute world coordinates remain f64; the solver computes its moment from
+/// the f32 offset and force, so both operands and that product must be finite.
+#[inline]
+pub fn avian_backend_force_at_point_is_valid(force: DVec3, point: DVec3, center: DVec3) -> bool {
+    let offset = point - center;
+    point.is_finite()
+        && center.is_finite()
+        && avian_backend_vector_is_valid(force)
+        && avian_backend_vector_is_valid(offset)
+        && offset.as_vec3().cross(force.as_vec3()).is_finite()
 }
 
 /// Check a point before it crosses into an Avian backend value.
@@ -74,6 +87,19 @@ mod tests {
     };
     use avian3d::prelude::Collider;
     use bevy::math::{DQuat, DVec3};
+
+    #[test]
+    fn point_force_admission_checks_native_offset_and_moment() {
+        use super::avian_backend_force_at_point_is_valid as valid;
+        assert!(valid(DVec3::Y * 10.0, DVec3::X * 100000001.0, DVec3::ZERO));
+        assert!(!valid(
+            DVec3::Y * 1.0e31,
+            DVec3::X * 100000001.0,
+            DVec3::ZERO
+        ));
+        assert!(!valid(DVec3::Y, DVec3::X * 1.0e100, DVec3::ZERO));
+        assert!(valid(DVec3::Y, DVec3::X * 1.0e100, DVec3::X * 1.0e100));
+    }
 
     #[test]
     fn backend_admission_rejects_nonrepresentable_geometry_and_rotation() {

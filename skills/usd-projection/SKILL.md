@@ -710,7 +710,10 @@ the right behaviour is for it to visibly do nothing.
    once with unique, ordered native prim paths after the complete batch has
    been authored; the writer must not also refresh ECS state. Property resyncs
    use the same attribute consumer and prepare only that property's asset
-   values. Prim resyncs retain structural subtree preparation; native USD asset
+   values. Structural prim resyncs also invalidate prepared simulation topology
+   and candidate inventories through their bounded worker owner, including an
+   empty prior inventory or a new reference subtree. Exact-root candidate
+   updates cannot certify new descendants. Prim resyncs retain structural subtree preparation; native USD asset
    types select provenance/time-sample reads. Property/transform notices for a
    prim removed in the completed batch leave deletion to structural reconciliation.
    Billboard edits reuse their initial reader

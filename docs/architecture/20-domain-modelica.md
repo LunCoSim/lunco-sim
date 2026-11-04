@@ -842,8 +842,10 @@ worker thread; the main Bevy thread communicates via `crossbeam` channels:
 - `ModelicaCommand::UpdateParameters` — admit one named scalar delta with its
   edited source, session identity and latest inputs; retain sibling sources
   and untouched instance overrides while constructing the checked replacement
-- `ModelicaCommand::Reset { entity, session_id }` — rebuild stepper from
-  cached DAE, reset to initial conditions
+- `ModelicaCommand::Reset { entity, session_id, target, initial_inputs }` —
+  prepare the installed immutable checked DAE with current admitted inputs and
+  its exact solver plan, then initialize at zero. The prepared cache includes
+  input bits; mutable source/library state does not participate in Reset.
 - `ModelicaCommand::Step { entity, inputs, dt }` — advance one timestep
 - `ModelicaResult { entity, session_id, outputs, variables, error, ... }`
   — participant command result; request-owned preparation replies use the typed
@@ -1230,7 +1232,9 @@ master clock advances and the next deterministic communication request is
 issued. `ModelicaExecutionPlugin` consumes `CompileRequested` intent and the
 worker validates the pinned document runtime owner before gathering the current
 snapshot; sibling documents must share that exact admitted runtime. The UI
-command only resolves class selection. A requested target entity that has been
+command resolves class selection and records ordered run intent. The complete
+participating source unit waits for current syntax/AST generations before class
+deduplication and dependency discovery consume its bytes. A requested target entity that has been
 removed is rejected; it cannot create an editor actor implicitly. Completion
 admission continues while the fixed clock is held, so readiness can observe
 the terminal worker result and release its preparation hold.
@@ -1241,10 +1245,10 @@ Verb semantics:
 |---|---|
 | `CompileModel` | Deferred terminal result after the exact checked session is accepted, or an explicit rejection/cancellation. An already compiled, unchanged exact class reuses its session; `force: true` dispatches again. Success leaves the model paused/ready unless explicit Run intent was requested. |
 | `RunActiveModel` | Compile-if-stale, then play. If already compiled & clean, just sets `paused = false` (no recompile); otherwise sets `resume_after_compile = true` and triggers `CompileModel`, which resumes on success. |
-| `ResumeActiveModel` | Unpause (`paused = false`); no compile. |
-| `PauseActiveModel` | Pause (`paused = true`). |
-| `ResetActiveModel` | Bump `session_id`, send `ModelicaCommand::Reset`, zero `current_time` / `last_step_time`. Cheap — no recompile. |
-| `RestartActiveModel` | Composition of `ResetActiveModel` + `RunActiveModel`. |
+| `ResumeActiveModel` | Apply running intent to an installed or admitted participant, including a pending compile; terminal applied/rejected result, without compiling. |
+| `PauseActiveModel` | Apply paused intent to an installed or admitted participant, including a pending compile; terminal applied/rejected result. |
+| `ResetActiveModel` | Validate the installed target, prepare its retained checked DAE with current inputs, and complete after exact session installation or rejection. Zero time and retain the latest run intent; no source compilation. |
+| `RestartActiveModel` | One checked Reset transaction with running intent. Complete after its installation or propagate its failure. A later Pause/Resume replaces the intent. |
 | `FastRunActiveModel` | Orthogonal: batch compile + simulate off-thread → `Experiment`. Never touches live run-state. |
 
 Strict DAE compilation failures remain terminal. Rumoca's checked phase

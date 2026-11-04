@@ -1590,6 +1590,7 @@ pub fn apply_pending_forces(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut scratch: Local<ActuatorCommandScratch>,
+    mut commands: Commands,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
@@ -1613,6 +1614,7 @@ pub fn apply_pending_forces(
     )>,
     q_parents: Query<&ChildOf>,
     q_poses: Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
+    q_centers: Query<&ComputedCenterOfMass>,
 ) {
     let physics_live =
         lunco_physics::physics_is_live_state(&physics_time, &virtual_time, faults.as_deref());
@@ -1755,7 +1757,7 @@ pub fn apply_pending_forces(
         let Ok(mut body_forces) = forces.get_mut(body) else {
             continue;
         };
-        let direction = actuator.direction_local.normalize_or_zero().as_dvec3();
+        let direction = actuator.direction_local.normalize_or_zero();
         if direction == DVec3::ZERO || actuator.max_force_n <= 0.0 {
             continue;
         }
@@ -1763,9 +1765,32 @@ pub fn apply_pending_forces(
         if thrust == 0.0 {
             continue;
         }
-        let local_position = actuator.local_position.as_dvec3();
+        let local_position = actuator.local_position;
         let world_point = position.0 + rotation.0.as_dquat() * local_position;
         let world_force = rotation.0.as_dquat() * (direction * thrust);
+        let local_center = q_centers
+            .get(body)
+            .expect("native Forces requires computed COM");
+        let center = position.0 + (rotation.0 * local_center.0).as_dvec3();
+        if !lunco_physics::avian_backend_force_at_point_is_valid(world_force, world_point, center) {
+            let detail = format!(
+                "force actuator {actuator_entity:?} exceeds the native force/torque range: command_n={force_n}, local_position_m={local_position:?}, offset_m={:?}, world_force_n={world_force:?}",
+                world_point - center,
+            );
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+            }
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "cosim-force-actuator-range",
+                    Some(actuator_entity),
+                    "ForceActuator",
+                    detail.clone(),
+                );
+            }
+            lunco_core::trigger_runtime_error(&mut commands, "cosim-force-actuator-range", detail);
+            return;
+        }
         body_forces.apply_force_at_point(world_force.as_vec3(), world_point);
     }
 
@@ -1804,7 +1829,7 @@ pub fn apply_pending_forces(
         let Ok(mut body_forces) = forces.get_mut(body) else {
             continue;
         };
-        let axis = actuator.axis_local.normalize_or_zero().as_dvec3();
+        let axis = actuator.axis_local.normalize_or_zero();
         if axis == DVec3::ZERO || actuator.max_torque_nm <= 0.0 {
             continue;
         }

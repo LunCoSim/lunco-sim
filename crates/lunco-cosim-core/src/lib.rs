@@ -13,6 +13,7 @@ pub mod connection;
 pub mod contract;
 pub mod diagnostics;
 pub mod initialization;
+pub mod input_authority;
 pub mod schedule;
 
 pub use actuation::{ForceActuator, TorqueActuator};
@@ -21,4 +22,5 @@ pub use component::*;
 pub use connection::{PortHolds, RealtimeSafe, SimConnection};
 pub use contract::*;
 pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};
+pub use input_authority::LayeredInputWriter;
 pub use lunco_port_core::ports::ScalarPortMap;

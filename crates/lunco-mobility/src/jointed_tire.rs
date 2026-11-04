@@ -71,6 +71,8 @@ impl BodyState {
 
 #[derive(Clone, Copy)]
 struct TireContact {
+    /// Native rigid-body support; absent for a fixed world collider.
+    support: Option<Entity>,
     point: DVec3,
     normal_force: f64,
     forward: DVec3,
@@ -136,6 +138,7 @@ pub fn apply_jointed_tire_forces(
         Without<lunco_core::SimulationObjectPaused>,
     >,
     q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
+    q_body_modes: Query<(&RigidBody, Has<RigidBodyDisabled>)>,
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,
     collisions: Collisions,
@@ -169,6 +172,12 @@ pub fn apply_jointed_tire_forces(
     {
         let q_state = bodies.p1();
         for wheel in wheel_order {
+            if !q_body_modes
+                .get(wheel)
+                .is_ok_and(|(body, disabled)| *body == RigidBody::Dynamic && !disabled)
+            {
+                continue;
+            }
             let Ok((_, _, tire, heat_ports)) = q_tires.get(wheel) else {
                 continue;
             };
@@ -224,6 +233,12 @@ pub fn apply_jointed_tire_forces(
                 } else {
                     pair.body1
                 };
+                // A retained contact sample cannot keep a retired rigid-body
+                // lease alive until native collision cleanup runs. Bodyless
+                // static colliders remain valid fixed-world supports.
+                if other.is_some_and(|body| !q_body_modes.contains(body)) {
+                    continue;
+                }
                 for manifold in &pair.manifolds {
                     // The contact normal points from collider1 to collider2. Flip
                     // it when the wheel is collider/body1 so the tire sees the
@@ -239,7 +254,7 @@ pub fn apply_jointed_tire_forces(
                             f64::from(point.normal_impulse),
                             full_dt,
                         );
-                        if normal_force <= 0.0 {
+                        if !crate::contact_has_positive_load(normal_force) {
                             continue;
                         }
                         // A jointed tire's translational slip is measured at the
@@ -253,6 +268,7 @@ pub fn apply_jointed_tire_forces(
                         let v_long = contact_velocity.dot(forward);
                         let v_lat = contact_velocity.dot(right);
                         contacts.push(TireContact {
+                            support: other,
                             point: point.point,
                             normal_force,
                             forward,
@@ -417,20 +433,55 @@ pub fn apply_jointed_tire_forces(
                     return;
                 }
                 pending.push((wheel, force, contact.point, drive_torque != 0.0 || braking));
+                // A dynamic support receives the opposite tangential force at
+                // the identical world point. Static, kinematic and disabled
+                // supports prescribe their motion and exchange momentum with
+                // that external constraint rather than a native accumulator.
+                if let Some(support) = contact.support
+                    && q_body_modes
+                        .get(support)
+                        .is_ok_and(|(body, disabled)| *body == RigidBody::Dynamic && !disabled)
+                {
+                    pending.push((
+                        support,
+                        -force,
+                        contact.point,
+                        drive_torque != 0.0 || braking,
+                    ));
+                }
             }
         }
     }
 
     let mut q_forces = bodies.p0();
+    if let Some((body, ..)) = pending.iter().find(|(body, ..)| !q_forces.contains(*body)) {
+        if let Some(holds) = holds.as_deref_mut() {
+            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        }
+        if let Some(time) = physics_time.as_deref_mut() {
+            time.pause();
+            time.advance_by(std::time::Duration::ZERO);
+        }
+        if let Some(faults) = faults.as_deref_mut() {
+            faults.raise(
+                "mobility-contact-body-unavailable",
+                Some(*body),
+                "wheel contact force",
+                "dynamic contact participant has no native force accumulator",
+            );
+        }
+        return;
+    }
     for (wheel, force, point, commanded) in pending {
-        if let Ok(mut forces) = q_forces.get_mut(wheel) {
-            if commanded {
-                forces.apply_force_at_point(force.as_vec3(), point);
-            } else {
-                forces
-                    .non_waking()
-                    .apply_force_at_point(force.as_vec3(), point);
-            }
+        let mut forces = q_forces
+            .get_mut(wheel)
+            .expect("contact participants were validated before force application");
+        if commanded {
+            forces.apply_force_at_point(force.as_vec3(), point);
+        } else {
+            forces
+                .non_waking()
+                .apply_force_at_point(force.as_vec3(), point);
         }
     }
 }

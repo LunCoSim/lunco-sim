@@ -687,6 +687,7 @@ pub fn on_compile_model(
     active_id: Option<Res<ActiveCommandId>>,
     #[cfg(feature = "api")] pending_request: Option<Res<PendingApiRequest>>,
     mut pending: ResMut<PendingLifecycleCommands>,
+    mut admissions: ResMut<lunco_modelica_execution::PendingCompileAdmissions>,
     mut commands: Commands,
 ) {
     let request = trigger.event();
@@ -780,6 +781,7 @@ pub fn on_compile_model(
     })();
     match admission {
         Ok(Some(request)) => {
+            admissions.record_run_intent(&request);
             let request = {
                 let mut request = request;
                 if external {
@@ -850,11 +852,10 @@ pub struct ResetActiveModel {
 ///
 /// This is the user-facing "Run" verb. If the model is already
 /// compiled for the requested class and its admitted source context is current,
-/// it unpauses without recompiling. Otherwise it sets [`ModelicaModel::resume_after_compile`]
-/// and triggers a [`CompileModel`]; the post-compile success handler in
-/// the worker then unpauses, so play begins as soon as the stepper is
-/// installed. Contrast with [`CompileModel`] (compile only, never auto-
-/// starts) and [`ResumeActiveModel`] (unpause only, never compiles).
+/// it unpauses without recompiling. Otherwise it admits [`CompileModel`] with
+/// running intent; installation consumes the latest ordered intent, including
+/// a later Pause or Resume. [`CompileModel`] defaults to paused installation;
+/// [`ResumeActiveModel`] unpauses without compiling.
 /// Invalid document, parse or class selection rejects before changing run intent.
 #[Command(default)]
 pub struct RunActiveModel {
@@ -863,51 +864,134 @@ pub struct RunActiveModel {
     pub class: Option<String>,
 }
 
-/// Reset to `t=0` and run again. Composition of [`ResetActiveModel`]
-/// followed by [`RunActiveModel`].
+/// Reset the installed instance to `t=0` and resume after its exact checked
+/// initialization completes. A later Pause or Resume supersedes this run intent.
 #[Command(default)]
 pub struct RestartActiveModel {
     pub doc_id: DocumentId,
 }
 
-#[on_command(PauseActiveModel)]
-pub fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc_id;
+fn run_control_source(
+    raw: DocumentId,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Result<lunco_workspace::PinnedDocumentRuntimeOwner, String> {
+    let doc = if raw.is_unassigned() {
+        workspace
+            .and_then(|workspace| workspace.active_document)
+            .ok_or("No Modelica document selected")?
+    } else {
+        raw
+    };
+    lunco_workspace::PinnedDocumentRuntimeOwner::for_document(
+        doc,
+        workspace.map(|workspace| &workspace.0),
+    )
+}
+
+fn validate_run_control_source(
+    world: &World,
+    source: &lunco_workspace::PinnedDocumentRuntimeOwner,
+) -> Result<(), String> {
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .map(|workspace| &workspace.0);
+    let replication = lunco_core_session::current_replication_owner_in(world);
+    if !source.is_current(workspace, replication.as_ref()) {
+        return Err("Modelica run-control source runtime has retired".into());
+    }
+    Ok(())
+}
+
+fn finish_run_control(
+    world: &mut World,
+    command_id: Option<u64>,
+    correlation_id: Option<u64>,
+    result: Result<(), String>,
+) {
+    if let Err(message) = &result {
+        bevy::log::warn!("Modelica run control rejected: {message}");
+        world.commands().trigger(lunco_core::RuntimeError {
+            name: "modelica-run-control-rejected".into(),
+            message: message.clone(),
+        });
+    }
+    finish_modelica_command(
+        world,
+        command_id,
+        correlation_id,
+        result.map(|()| Ack::new(OpId::new())),
+    );
+}
+
+fn queue_run_intent(
+    commands: &mut Commands,
+    source: Result<lunco_workspace::PinnedDocumentRuntimeOwner, String>,
+    running: bool,
+    command_id: Option<u64>,
+    correlation_id: Option<u64>,
+) {
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc_or_active(world, raw) else {
-            return;
-        };
-        if let Some(entity) = entity_for_doc(world, doc) {
-            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
-                model.paused = true;
-            }
-        }
+        let result = source.and_then(|source| {
+            validate_run_control_source(world, &source)?;
+            lunco_modelica_execution::set_modelica_document_run_intent(
+                world,
+                source.document,
+                running,
+            )
+        });
+        finish_run_control(world, command_id, correlation_id, result);
     });
 }
 
+#[on_command(PauseActiveModel)]
+pub fn on_pause_active_model(
+    trigger: On<PauseActiveModel>,
+    mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    active: Option<Res<ActiveCommandId>>,
+    #[cfg(feature = "api")] pending: Option<Res<PendingApiRequest>>,
+) {
+    let source = run_control_source(trigger.event().doc_id, workspace.as_deref());
+    let command_id = active.as_ref().and_then(|active| active.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending
+        .as_ref()
+        .map(|pending| pending.correlation_id)
+        .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
+    queue_run_intent(&mut commands, source, false, command_id, correlation_id);
+}
+
 #[on_command(ResumeActiveModel)]
-pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc_id;
-    commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc_or_active(world, raw) else {
-            return;
-        };
-        if let Some(entity) = entity_for_doc(world, doc) {
-            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
-                model.paused = false;
-            }
-        }
-    });
+pub fn on_resume_active_model(
+    trigger: On<ResumeActiveModel>,
+    mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    active: Option<Res<ActiveCommandId>>,
+    #[cfg(feature = "api")] pending: Option<Res<PendingApiRequest>>,
+) {
+    let source = run_control_source(trigger.event().doc_id, workspace.as_deref());
+    let command_id = active.as_ref().and_then(|active| active.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending
+        .as_ref()
+        .map(|pending| pending.correlation_id)
+        .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
+    queue_run_intent(&mut commands, source, true, command_id, correlation_id);
 }
 
 #[on_command(RunActiveModel)]
 pub fn on_run_active_model(
     trigger: On<RunActiveModel>,
     mut commands: Commands,
-    active: Option<Res<lunco_core::ActiveCommandId>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    active: Option<Res<ActiveCommandId>>,
     #[cfg(feature = "api")] pending: Option<Res<PendingApiRequest>>,
 ) {
-    let raw = trigger.event().doc_id;
+    let source = run_control_source(trigger.event().doc_id, workspace.as_deref());
     let class = trigger.event().class.clone();
     let command_id = active.as_ref().and_then(|active| active.get());
     #[cfg(feature = "api")]
@@ -915,36 +999,14 @@ pub fn on_run_active_model(
         .as_ref()
         .map(|pending| pending.correlation_id)
         .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
     commands.queue(move |world: &mut World| {
-        let result = run_active_model(world, raw, class);
-        if let Err(message) = &result {
-            world.commands().trigger(lunco_core::RuntimeError {
-                name: "modelica-run-rejected".into(),
-                message: message.clone(),
-            });
-        }
-        let outcome = result
-            .map(|()| lunco_command_contracts::Ack::new(lunco_command_contracts::OpId::new()));
-        #[cfg(feature = "api")]
-        lunco_api::executor::finish_command_result(
-            world,
-            command_id,
-            correlation_id,
-            outcome,
-            lunco_api_core::ApiErrorCode::CommandRejected,
-        );
-        #[cfg(not(feature = "api"))]
-        if let Some(id) = command_id {
-            let outcome = match outcome {
-                Ok(ack) => lunco_core::CommandOutcome::Succeeded(ack),
-                Err(message) => lunco_core::CommandOutcome::Rejected(
-                    lunco_command_contracts::Reject::InvalidOp(message),
-                ),
-            };
-            world
-                .resource_mut::<lunco_core::CommandResults>()
-                .insert(id, outcome);
-        }
+        let result = source.and_then(|source| {
+            validate_run_control_source(world, &source)?;
+            run_active_model(world, source.document, class)
+        });
+        finish_run_control(world, command_id, correlation_id, result);
     });
 }
 
@@ -983,7 +1045,7 @@ fn run_active_model(
         })
         .transpose()?;
     let Some(entity) = entity_for_doc(world, doc) else {
-        world.commands().trigger(CompileModel {
+        world.trigger(CompileModel {
             doc_id: doc,
             class,
             force: false,
@@ -1004,17 +1066,9 @@ fn run_active_model(
         })
         .ok_or("Run document has no Modelica participant")?;
     if is_compiled && !stale && !is_compiling {
-        world
-            .get_mut::<ModelicaModel>(entity)
-            .expect("validated Run participant")
-            .paused = false;
-        return Ok(());
+        return lunco_modelica_execution::set_modelica_document_run_intent(world, doc, true);
     }
-    world
-        .get_mut::<ModelicaModel>(entity)
-        .expect("validated Run participant")
-        .resume_after_compile = true;
-    world.commands().trigger(CompileModel {
+    world.trigger(CompileModel {
         doc_id: doc,
         class,
         force: false,
@@ -1024,20 +1078,23 @@ fn run_active_model(
 }
 
 #[on_command(RestartActiveModel)]
-pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc_id;
-    commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc_or_active(world, raw) else {
-            return;
-        };
-        // Reset to t=0, then run. Mirrors the toolbar's Reset+Run
-        // composition; the two triggers run in dispatch order.
-        world.commands().trigger(ResetActiveModel { doc_id: doc });
-        world.commands().trigger(RunActiveModel {
-            doc_id: doc,
-            class: None,
-        });
-    });
+pub fn on_restart_active_model(
+    trigger: On<RestartActiveModel>,
+    mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    active: Option<Res<ActiveCommandId>>,
+    #[cfg(feature = "api")] pending: Option<Res<PendingApiRequest>>,
+) {
+    let source = run_control_source(trigger.event().doc_id, workspace.as_deref());
+    let command_id = active.as_ref().and_then(|active| active.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending
+        .as_ref()
+        .map(|pending| pending.correlation_id)
+        .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
+    queue_reset(&mut commands, source, true, command_id, correlation_id);
 }
 
 /// Fast Run — compile + simulate end-to-end off-thread (Web Worker on
@@ -1933,37 +1990,27 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
     });
 }
 
-#[on_command(ResetActiveModel)]
-pub fn on_reset_active_model(
-    trigger: On<ResetActiveModel>,
-    mut commands: Commands,
-    active_id: Option<Res<ActiveCommandId>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    #[cfg(feature = "api")] pending_request: Option<Res<PendingApiRequest>>,
+fn queue_reset(
+    commands: &mut Commands,
+    source: Result<lunco_workspace::PinnedDocumentRuntimeOwner, String>,
+    restart: bool,
+    command_id: Option<u64>,
+    correlation_id: Option<u64>,
 ) {
-    let raw = trigger.event().doc_id;
-    let doc = if raw.is_unassigned() {
-        workspace
-            .as_ref()
-            .and_then(|workspace| workspace.active_document)
-    } else {
-        Some(raw)
-    };
-    let command_id = active_id.as_ref().and_then(|id| id.get());
-    #[cfg(feature = "api")]
-    let correlation_id = pending_request
-        .as_ref()
-        .map(|request| request.correlation_id)
-        .filter(|id| *id != 0);
-    #[cfg(not(feature = "api"))]
-    let correlation_id = None;
     commands.queue(move |world: &mut World| {
         let (completion, reply) = lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
-        let result = doc
-            .ok_or_else(|| "No Modelica document selected".to_owned())
-            .and_then(|doc| {
-                lunco_modelica_execution::reset_modelica_document(world, doc, completion)
-            });
+        let result = source.and_then(|source| {
+            validate_run_control_source(world, &source)?;
+            lunco_modelica_execution::reset_modelica_document(world, source.document, completion)?;
+            if restart {
+                lunco_modelica_execution::set_modelica_document_run_intent(
+                    world,
+                    source.document,
+                    true,
+                )?;
+            }
+            Ok(())
+        });
         match result {
             Ok(()) => {
                 world
@@ -1975,16 +2022,29 @@ pub fn on_reset_active_model(
                         reply,
                     })
             }
-            Err(message) => {
-                bevy::log::warn!("ResetActiveModel rejected: {message}");
-                world.commands().trigger(lunco_core::RuntimeError {
-                    name: "modelica-reset-rejected".into(),
-                    message: message.clone(),
-                });
-                finish_modelica_command(world, command_id, correlation_id, Err(message));
-            }
+            Err(message) => finish_run_control(world, command_id, correlation_id, Err(message)),
         }
     });
+}
+
+#[on_command(ResetActiveModel)]
+pub fn on_reset_active_model(
+    trigger: On<ResetActiveModel>,
+    mut commands: Commands,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    active: Option<Res<ActiveCommandId>>,
+    #[cfg(feature = "api")] pending: Option<Res<PendingApiRequest>>,
+) {
+    let source = run_control_source(trigger.event().doc_id, workspace.as_deref());
+    let command_id = active.as_ref().and_then(|active| active.get());
+    #[cfg(feature = "api")]
+    let correlation_id = pending
+        .as_ref()
+        .map(|pending| pending.correlation_id)
+        .filter(|id| *id != 0);
+    #[cfg(not(feature = "api"))]
+    let correlation_id = None;
+    queue_reset(&mut commands, source, false, command_id, correlation_id);
 }
 
 // ─── Compile command plugin ────────────────────────────────────────────────
@@ -2007,10 +2067,14 @@ impl Plugin for CompileCommandsPlugin {
         app.register_deferred_command::<RunExperiment>();
         #[cfg(feature = "api")]
         app.register_deferred_command::<ResetActiveModel>()
+            .register_deferred_command::<RestartActiveModel>()
+            .register_deferred_command::<PauseActiveModel>()
+            .register_deferred_command::<ResumeActiveModel>()
             .register_deferred_command::<RunActiveModel>();
         #[cfg(feature = "api")]
         app.register_deferred_command::<CompileModel>();
         app.init_resource::<PendingLifecycleCommands>()
+            .init_resource::<lunco_modelica_execution::PendingCompileAdmissions>()
             .add_systems(Update, finish_lifecycle_commands);
     }
 }

@@ -83,6 +83,24 @@ pub(crate) fn overrides(
     } else {
         None
     };
+    let center = center_of_mass(reader, path)?;
+    Ok(ColliderMassOverrides {
+        mass,
+        principal,
+        principal_axes,
+        center,
+        ..Default::default()
+    })
+}
+
+/// Read a standard authored COM in the scale-free native prim frame.
+/// World scale is applied once because native rigid poses carry no scale.
+pub(crate) fn center_of_mass(
+    reader: &dyn UsdReadObject,
+    path: &Path,
+) -> Result<Option<DVec3>, String> {
+    let convention =
+        lunco_usd_bevy_stage::stage_convention(reader).map_err(|error| error.to_string())?;
     let center = if reader.has_authored_attribute(path, ptok::PHYSICS_CENTER_OF_MASS) {
         let value = DVec3::from_array(
             reader
@@ -118,13 +136,7 @@ pub(crate) fn overrides(
     } else {
         None
     };
-    Ok(ColliderMassOverrides {
-        mass,
-        principal,
-        principal_axes,
-        center,
-        ..Default::default()
-    })
+    Ok(center)
 }
 
 /// No collision volume means a unit mass unless explicitly authored. The

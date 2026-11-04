@@ -4426,18 +4426,18 @@ def Scope "Rig"
     fn actuator_wrench_allocation_uses_authored_body_torque_axes() {
         let actuators = [
             lunco_cosim_core::ForceActuator {
-                local_position: Vec3::Y,
-                direction_local: Vec3::Z,
+                local_position: bevy::math::DVec3::Y,
+                direction_local: bevy::math::DVec3::Z,
                 max_force_n: 1.0,
             },
             lunco_cosim_core::ForceActuator {
-                local_position: Vec3::Z,
-                direction_local: Vec3::X,
+                local_position: bevy::math::DVec3::Z,
+                direction_local: bevy::math::DVec3::X,
                 max_force_n: 1.0,
             },
             lunco_cosim_core::ForceActuator {
-                local_position: Vec3::X,
-                direction_local: Vec3::Y,
+                local_position: bevy::math::DVec3::X,
+                direction_local: bevy::math::DVec3::Y,
                 max_force_n: 1.0,
             },
         ];
@@ -4453,8 +4453,8 @@ def Scope "Rig"
     #[test]
     fn actuator_wrench_rejects_zero_authority_geometry() {
         let actuators = [lunco_cosim_core::ForceActuator {
-            local_position: Vec3::ZERO,
-            direction_local: Vec3::ZERO,
+            local_position: bevy::math::DVec3::ZERO,
+            direction_local: bevy::math::DVec3::ZERO,
             max_force_n: 1.0,
         }];
 

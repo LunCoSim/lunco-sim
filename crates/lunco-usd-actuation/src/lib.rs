@@ -132,8 +132,8 @@ fn actuator_direction_in_body(
     reader: &dyn UsdReadObject,
     actuator_path: &SdfPath,
     attribute: &str,
-    relative: Transform,
-) -> Option<Vec3> {
+    relative: lunco_core::DTransform,
+) -> Option<bevy::math::DVec3> {
     let authored = bevy::math::DVec3::from_array(lunco_usd_bevy_stage::read::read_vec3_f64(
         reader,
         actuator_path,
@@ -141,6 +141,6 @@ fn actuator_direction_in_body(
     )?);
     let direction = authored.try_normalize()?;
     let convention = lunco_usd_bevy_stage::stage_convention(reader).ok()?;
-    let native_direction = convention.dir_d(direction).as_vec3();
-    (relative.rotation * native_direction).try_normalize()
+    let canonical_direction = convention.dir_d(direction);
+    (relative.rotation * canonical_direction).try_normalize()
 }

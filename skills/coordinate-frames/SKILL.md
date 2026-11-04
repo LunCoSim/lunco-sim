@@ -37,6 +37,16 @@ Missing and duplicate declarations must remain errors (`None`).
 They never cross a user/API/network/model boundary and never become the
 authoritative source of an astronomical or physics value.
 
+Authored body-local physical mounts use `lunco_core::DTransform` through
+`lunco_usd_bevy_stage::transform_in_body_frame`. Keep translations, rotations
+and actuator directions in f64 through mass reduction and Modelica allocator
+generation. Subtract body/world translations before any native conversion.
+Narrow only at the checked native solver or presentation boundary; widening a
+native vector must never supply canonical generated-model geometry.
+At point-force application, use the physics backend's shared range check for
+the force, relative lever arm and resulting torque before Avian narrows them.
+An excessive native moment must produce a diagnostic and hold integration.
+
 For immutable high-precision presentation entities, use BigSpace's existing
 `Stationary` marker. Streamed globe/terrain visual tiles may use it because
 their placement is fixed until the entity is replaced; never use it on a

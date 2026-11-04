@@ -52,7 +52,7 @@ pub use bridge::{
 };
 pub use compile::{
     PendingCompileAdmissions, PendingLifecycleCompletion, dispatch_modelica_compile_requests,
-    reset_modelica_document,
+    reset_modelica_document, set_modelica_document_run_intent,
 };
 #[cfg(not(target_arch = "wasm32"))]
 mod compiler_actor;
@@ -208,20 +208,20 @@ type BuiltStepper<S> = (
     std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>,
     Vec<(String, f64)>,
     lunco_modelica_runtime::ModelicaConstructionProfile,
-    RetainedLiveModel,
+    LiveBuildPlan,
 );
-
-#[derive(Clone)]
-struct RetainedLiveModel {
-    component: Arc<rumoca_ir_solve::fmi::FmiComponent>,
-    plan: LiveBuildPlan,
-}
 
 impl LiveBuildPlan {
     fn with_initial_inputs(&self, inputs: &[(String, f64)]) -> Self {
         let mut plan = self.clone();
         let inputs = canonical_parameter_overrides(inputs);
         plan.options.initial_inputs = inputs.clone();
+        plan.key = PreparedSolveCache::key(
+            plan.key.source_key,
+            &plan.spec,
+            &plan.snapshot.parameter_overrides,
+            &inputs,
+        );
         Arc::make_mut(&mut plan.snapshot).initial_inputs = inputs;
         plan
     }
@@ -328,26 +328,25 @@ fn build_stepper(
         )?
         .with_initial_state_values(_comp_res, initial_state_values)?
     };
-    if !prepared.contains_key(&plan.key) {
-        #[cfg(not(target_arch = "wasm32"))]
-        return Err(rumoca_sim::SimulationDiagnosticError::Solver(
-            "native solver model reached stepper construction before asynchronous preparation committed"
-                .to_owned(),
-        ));
+    build_cached_stepper(_comp_res, plan, prepared)
+}
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            let lower_started = web_time::Instant::now();
-            let model = rumoca_sim::prepare_fmi_component(&_comp_res.compiled.dae, &plan.options)?;
-            bevy::log::info!(
-                "[modelica-runtime] prepared solver IR for `{}`: lower={:?} cache=miss",
-                plan.spec.id,
-                lower_started.elapsed(),
-            );
-            prepared.insert(plan.key.clone(), std::sync::Arc::new(model));
-        }
+#[cfg(target_arch = "wasm32")]
+fn build_cached_stepper(
+    compiled: &CompiledModelArtifact,
+    plan: LiveBuildPlan,
+    prepared: &mut PreparedSolveCache,
+) -> Result<BuiltStepper<LiveStepper>, rumoca_sim::SimulationDiagnosticError> {
+    if !prepared.contains_key(&plan.key) {
+        let lower_started = web_time::Instant::now();
+        let model = rumoca_sim::prepare_fmi_component(&compiled.compiled.dae, &plan.options)?;
+        bevy::log::info!(
+            "[modelica-runtime] prepared solver IR for `{}`: lower={:?} cache=miss",
+            plan.spec.id,
+            lower_started.elapsed(),
+        );
+        prepared.insert(plan.key.clone(), Arc::new(model));
     } else {
-        #[cfg(target_arch = "wasm32")]
         bevy::log::info!(
             "[modelica-runtime] reused prepared solver IR for `{}`: cache=memory-hit",
             plan.spec.id,
@@ -355,7 +354,7 @@ fn build_stepper(
     }
     let model = prepared
         .get(&plan.key)
-        .expect("prepared solver model inserted or found above");
+        .expect("admitted solver preparation");
     build_prepared_stepper(model, plan)
 }
 
@@ -404,10 +403,7 @@ fn build_prepared_stepper(
     } else {
         model
     };
-    let retained = RetainedLiveModel {
-        component: Arc::clone(component),
-        plan: plan.clone(),
-    };
+    let retained = plan.clone();
     let stepper = {
         let _span = bevy::log::info_span!("modelica_live_session_construct").entered();
         lunco_modelica_solver::simulation_session::live_from_fmi_component(
@@ -1982,9 +1978,9 @@ fn commit_ready_compiler_completions(
 
 use std::sync::Arc;
 
-/// Installed source/artifact context and its immutable live-session factory.
-/// Reset uses the retained FMI component and exact admitted plan, independent
-/// of mutable compiler revisions and shared-cache eviction. Source-backed
+/// Installed source/artifact context and its immutable checked preparation plan.
+/// Reset prepares the retained checked DAE with the exact admitted plan and
+/// current inputs, independent of mutable compiler revisions. Source-backed
 /// recompilation is reserved for new authoring or Step auto-initialization.
 struct CachedModel {
     #[cfg(not(target_arch = "wasm32"))]
@@ -2012,8 +2008,8 @@ struct CachedModel {
     unit_hash: u64,
     /// Worker library generation at the time `compiled` was built.
     library_gen: u64,
-    /// Exact immutable prepared component and plan used by the installed session.
-    retained: RetainedLiveModel,
+    /// Exact immutable plan used by the installed session.
+    retained: LiveBuildPlan,
     pending_variable_metadata:
         Option<std::collections::BTreeMap<String, lunco_modelica_runtime::ModelicaScalarMetadata>>,
 }
@@ -2105,7 +2101,7 @@ fn validate_reset_target(
     {
         return Err("Reset installed target was superseded before cached reconstruction".into());
     }
-    if cached.retained.plan.snapshot.admitted_library_revision != Some(target.library_revision) {
+    if cached.retained.snapshot.admitted_library_revision != Some(target.library_revision) {
         return Err(
             "Reset cached source-library identity differs from the installed session".into(),
         );
@@ -3719,7 +3715,6 @@ pub fn modelica_worker(
                             }
                         };
                         let inputs = merge_instance_values(&captured, &initial_inputs);
-                        let component = Arc::clone(&cached.retained.component);
                         let work = PreparationWork::Participant(CompileWork {
                             execution_domain: cached.execution_domain,
                             entity,
@@ -3735,18 +3730,13 @@ pub fn modelica_worker(
                             unit: cached.compile_unit(&cached.source),
                             comp_res: cached.compiled.clone(),
                             library_gen: cached.library_gen,
-                            plan: cached.retained.plan.with_initial_inputs(&inputs),
+                            plan: cached.retained.with_initial_inputs(&inputs),
                             intent: CompileIntent::Reset,
                         });
                         current_sessions.insert(entity, session_id);
-                        let id = solve_preparation_pool.allocate_id();
-                        let lane = construction_lane(&work, &mut solve_preparation_pool);
-                        live_preparation_pipeline.order.admit(id, None);
-                        dispatch_live_construction(
-                            id,
-                            lane,
-                            component,
+                        admit_preparation(
                             work,
+                            &mut prepared_solve_cache,
                             &tx_inner,
                             &mut solve_preparation_pool,
                             &mut live_preparation_pipeline,
@@ -4018,7 +4008,7 @@ pub fn modelica_worker(
 
                         let live_solver_snapshot = cached_models
                             .get(&entity)
-                            .map(|cached| cached.retained.plan.snapshot.clone());
+                            .map(|cached| cached.retained.snapshot.clone());
 
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
@@ -4556,7 +4546,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
             let live_solver_snapshot = w
                 .cached_models
                 .get(&entity)
-                .map(|cached| cached.retained.plan.snapshot.clone());
+                .map(|cached| cached.retained.snapshot.clone());
 
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
@@ -4834,10 +4824,8 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
             let comp_res = cached.compiled.clone();
             let source = Arc::clone(&cached.source);
             let model_name = cached.model_name.clone();
-            let built = build_prepared_stepper(
-                &cached.retained.component,
-                cached.retained.plan.with_initial_inputs(&inputs),
-            );
+            let plan = cached.retained.with_initial_inputs(&inputs);
+            let built = build_cached_stepper(&comp_res, plan, &mut w.prepared_solve_cache);
             w.current_sessions.insert(entity, session_id);
             match built {
                 Ok((
@@ -6241,7 +6229,8 @@ mod live_solver_snapshot_tests {
         .unwrap();
         let reset = original.with_initial_inputs(&[("u".into(), 8.0)]);
         assert_eq!(reset.snapshot.admitted_library_revision, Some(9));
-        assert_eq!(reset.key, original.key);
+        assert_ne!(reset.key, original.key);
+        assert_eq!(reset.key.source_key, original.key.source_key);
         assert_eq!(reset.spec.id, original.spec.id);
         assert_eq!(reset.snapshot.parameters, original.snapshot.parameters);
         assert_eq!(

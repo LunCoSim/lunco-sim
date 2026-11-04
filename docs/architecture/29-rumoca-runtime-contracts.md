@@ -162,6 +162,10 @@ candidate source generations and URIs, admitted source-root operations and reque
 class. Compile, Run, status queries and deferred installation consume that same
 source snapshot. A sibling edit invalidates reuse even when the primary
 document's generation is unchanged.
+Compile admission waits for the primary and every participating sibling's
+current syntax and AST generations before using class names or dependencies.
+Those facts and compiled bytes come from the same captured source unit;
+generated units retain their deliberate exclusion of editor siblings.
 Library source sets contribute their load/unload operation identities.
 Document-backed namespace registrations without a worker operation are parser/editor facts; their source
 documents are already fenced by exact leases, generations and URIs. Publishing
@@ -190,12 +194,23 @@ Run inputs and tunable parameters enter `SimOptions::initial_inputs` and
 parameter dependents. The compiled DAE stays immutable across sweep points. Reset carries current
 admitted inputs explicitly across the worker boundary, including values changed
 while the participant is paused.
+Reset prepares that input vector against the installed session's retained checked
+DAE and exact solver plan. Its prepared-solve identity includes the input bits;
+an input-baked FMI component cannot initialize a different vector. This uses the
+ordinary preparation/cache owner without consulting mutable compiler sources or
+library revisions. Native preparation stays off the UI thread; browser
+preparation stays in its Modelica worker.
 The session's `parameter_values` reader supplies initialized numeric parameters
 through checked FMI storage identities, including expressions, inherited values
 and initialization-solved parameters. The numeric editing inventory excludes
 String declarations. Source edits validate checked scalar type, visibility,
 finality and bounds before changing either source or session. Reset refreshes
 that inventory from its own settled initialization.
+Pause and Resume record terminal applied/rejected outcomes and replace the
+document's exact-source-leased run intent, including before a compile creates
+its participant. Compile and Reset installation consume the latest intent.
+Restart owns one Reset completion, requests running, and reports the exact
+installation or failure; a subsequent Pause or Resume supersedes that intent.
 Parameter source edits replace the complete expression span supplied by Rumoca;
 token locations identify only an anchor and cannot define the replacement range.
 Modelica `SaveDocument` and `SaveAsDocument` record terminal owned write/download
@@ -292,6 +307,10 @@ instance override and verifies it across successive parameter replacements.
 The scenario uses the workbench's `CompileModel` command to create its editable
 document participant and therefore runs in a windowed production session; the
 parameter command itself is registered by the headless core.
+`simulation_core_fourth_modelica.rhai` exercises changed-input and cached Reset,
+ordered Pause/Resume across compilation and Reset, terminal run-control failures,
+single-session Restart, and pending/invalid/recovered sibling source generations
+through the windowed production command surface.
 
 ## Source-preserving editing and lint
 

@@ -480,7 +480,7 @@ compiled, ready, numerically observed, or visually accepted.
 ## Gotchas
 
 - **Don't apply gravity in `.mo`** — `lunco-environment` applies it separately; doing both double-counts.
-- **Don't write `ModelicaModel.inputs` directly** — co-simulation sync owns those values each tick. `SetModelInput` uses the shared port-first input path.
+- **Don't write `ModelicaModel.inputs` directly** — co-simulation sync owns those values each tick. Live `SetModelInput` uses the shared layered-input owner and controller/program precedence.
 - **`set_input(me,…)` is not a rhai verb** — inside a scenario use `set(me, "port", v)` (routes through `write_port`).
 - **A vehicle is a USD file** — spawn/param it in USD; if you're writing a Rust struct for a specific rover, stop.
 - **Unwired algebraic Modelica inputs fold to their default** — see [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md) for the `der`-feed / wiring fix.

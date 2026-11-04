@@ -16,6 +16,7 @@ lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-data = { path = "../lunco-usd-data" }
+lunco-core = { path = "../lunco-core" }
 
 [dev-dependencies]
 tempfile.workspace = true

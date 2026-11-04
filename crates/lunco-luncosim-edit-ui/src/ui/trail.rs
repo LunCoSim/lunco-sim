@@ -291,8 +291,8 @@ fn valid_raycast_contact(
     let (hub, heading) = wheel_hub_pose(
         GridPos(position.0),
         GridRot(rotation.0.as_dquat()),
-        mount.local.translation.as_dvec3(),
-        mount.local.rotation.as_dquat() * wheel.heading_rotation,
+        mount.local.translation,
+        mount.local.rotation * wheel.heading_rotation,
     );
     if (heading.0 * DVec3::Y).dot(normal) <= TRAIL_MIN_SUPPORT_NORMAL_Y {
         return None;

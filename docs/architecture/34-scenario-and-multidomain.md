@@ -167,11 +167,10 @@ registered Rhai verb.
 
 The `PortRegistry` remains the single write surface for cosim entities:
 
-1. `SetModelInput` is **port-first**: if the entity exposes a
-   writable port of that name (`PortRegistry::write_port` succeeds), use the
-   shared port surface. A bare workbench/batch model without a `SimComponent`
-   uses its own `ModelicaModel.inputs` state, which is the authoritative input
-   owner for that non-co-simulation mode.
+1. Live `SetModelInput` uses the co-simulation layered-input owner before the
+   registry commits the effective input. Controller/program precedence follows
+   [the shared input contract](22-domain-cosim.md). A standalone document uses
+   its registered Modelica input backend, whose state is `ModelicaModel.inputs`.
 2. Rhai `set()` uses the same `PortRegistry` for scalar co-simulation names and
    has no second input API. Its reflected component/resource path is explicitly
    host-local tuning, not a competing authoritative input channel.

@@ -48,8 +48,8 @@ pub use assembly::{
 pub use avian_backend::{
     avian_backend_aabb_is_valid, avian_backend_collider_is_leaf,
     avian_backend_collider_shape_is_valid, avian_backend_collider_shape_kind,
-    avian_backend_point_is_valid, avian_backend_pose_is_valid, avian_backend_rotation_is_valid,
-    avian_backend_vector_is_valid,
+    avian_backend_force_at_point_is_valid, avian_backend_point_is_valid,
+    avian_backend_pose_is_valid, avian_backend_rotation_is_valid, avian_backend_vector_is_valid,
 };
 pub use escape::{
     EscapeDiagnosticPlugin, PhysicsObjectPaused, UnboundedPhysicsDomain, WorldBounds,

@@ -42,6 +42,19 @@ proxy through standard `VisibilityAPI`; see `build-vehicle`. Its geometry rest
 basis does not define the mechanical axle. `wheel_render_root` verifies the
 shared projection and rejects overlapping or ambiguous render roots in lint.
 
+Initial and live wheel admission validate the complete native mass/inertia
+candidate, including finite native inverse inertia. Invalid authored values
+produce an Error identifying the wheel and field in Recent Events and hold
+physics. Validate this with the fourth-pass wheel cases; an accepted document
+edit alone does not prove native admission.
+
+Joint endpoints depend on their composed socket and body frames. Live socket
+translation, rotation or scale and body scale must refresh the affected native
+constraint through its admission owner. Verify native follower/anchor state
+after the edit, including a singular-frame rejection that preserves the prior
+valid body state. Reduced mass contributions use standard scaled COM facts
+before rigid reduction into the body frame.
+
 For assets intended for Omniverse, independently moving rigid bodies nested
 under another body need `!resetXformStack!` and explicit initial world poses.
 Author both joint local frames explicitly: portable UsdPhysics defaults are

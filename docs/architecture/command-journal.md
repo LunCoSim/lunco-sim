@@ -513,7 +513,7 @@ contracts:
 | Dig / raise authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
 | Flatten pad authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
 | Spawn a rover during a session | Document-backed scene: resulting `ApplyUsdOps` in the Twin journal; raw-file scene: `RuntimeSpawn` admitted through `PendingSessionInputs`, then committed by the scene-command owner with `NetSpawn` | document operation uses `EntryId` and merged order; raw-file record retains producer, scene generation, scene-root and active-frame identities, original `f64` pose, correlation, reserved root id, `SimTick`, and shared sequence |
-| Submit a live Modelica input with `SetModelInput` | API/direct/Rhai command or local Modelica canvas input → `ModelicaInputChange` in `PendingSessionInputs` → Modelica port-first commit | producer, target, scene generation, exact `f64` value, correlation, effective tick, and shared sequence |
+| Submit a live Modelica input with `SetModelInput` | API/direct/Rhai command or local Modelica canvas input → `ModelicaInputChange` in `PendingSessionInputs` → shared layered-input commit with original provenance | producer, target, scene generation, exact `f64` value, correlation, effective tick, and shared sequence |
 | Possess during a session | semantic user intent; whole-session capture is not implemented | scene generation, controlled target, `SimTick`, stable sequence |
 | USD prim edit | USD document operation in the Twin journal | `EntryId` and merged journal order |
 

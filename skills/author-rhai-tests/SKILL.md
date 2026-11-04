@@ -32,6 +32,14 @@ generic; do not embed a repository or Twin asset path in a Rust test. A Rust
 resolver test may prove the generic TwinRoots contract, but it must not become
 a second asset acceptance runner.
 
+Use `scripts/api/test_simulation_core_fourth_pass.py` with `LUNCOSIM_BIN` set to
+the built production binary for initialization, run-control, input priority,
+live-frame, low-load and canonical-precision regressions. It runs authored Rhai
+verdicts, creates geometry through typed document operations, and checks that
+the fixture source files remain unchanged. Negative wheel and joint cases must
+observe the structured owner fault and detailed Error event while the process
+remains available.
+
 The source-of-truth split is:
 
 | Fact or behavior | Authoritative source | Test owner |

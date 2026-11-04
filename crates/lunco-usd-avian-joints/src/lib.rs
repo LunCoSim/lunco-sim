@@ -27,8 +27,9 @@ const JOINT_SEAT_EPS: f64 = 1.0e-3;
 const JOINT_SEAT_ANGLE_EPS: f64 = 1.0e-3;
 const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 
-/// Remove native joint definitions as one validated application operation.
-/// Avian's component hooks own graph removal and queued island updates.
+/// Retire native definitions and parked admission plans without despawning
+/// their owning entities. Avian's hooks own graph removal and island updates;
+/// the collision-pair owner retires its suppression lease at this boundary.
 pub fn retire_native_joints(world: &mut World, entities: &[Entity]) -> Result<(), String> {
     // Validate native component identities before changing any graph edge.
     let definitions = entities
@@ -45,6 +46,20 @@ pub fn retire_native_joints(world: &mut World, entities: &[Entity]) -> Result<()
         .collect::<Result<Vec<_>, _>>()?;
     for (entity, component_id) in definitions {
         world.entity_mut(entity).remove_by_id(component_id);
+    }
+    for entity in entities {
+        if let Ok(mut joint) = world.get_entity_mut(*entity) {
+            joint
+                .remove::<PendingJoint<RevoluteJoint>>()
+                .remove::<PendingJoint<PrismaticJoint>>()
+                .remove::<PendingJoint<FixedJoint>>()
+                .remove::<PendingJoint<SphericalJoint>>()
+                .remove::<PendingJoint<DistanceJoint>>()
+                .remove::<PendingJointAdmission>()
+                .remove::<lunco_physics::PhysicsJointPrepared>()
+                .remove::<lunco_physics::PhysicsJointPending>()
+                .remove::<collision_filters::JointCollisionPair>();
+        }
     }
     Ok(())
 }
@@ -472,17 +487,7 @@ fn retire_requested_joints(world: &mut World) {
         let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
             continue;
         };
-        entity_mut
-            .remove::<PendingJoint<RevoluteJoint>>()
-            .remove::<PendingJoint<PrismaticJoint>>()
-            .remove::<PendingJoint<FixedJoint>>()
-            .remove::<PendingJoint<SphericalJoint>>()
-            .remove::<PendingJoint<DistanceJoint>>()
-            .remove::<PendingJointAdmission>()
-            .remove::<lunco_physics::PhysicsJointPrepared>()
-            .remove::<lunco_physics::PhysicsJointPending>()
-            .remove::<lunco_physics::PhysicsJointDetachRequested>()
-            .remove::<collision_filters::JointCollisionPair>();
+        entity_mut.remove::<lunco_physics::PhysicsJointDetachRequested>();
         entity_mut.despawn();
         info!(
             "DETACH_JOINT: retired solver edge and despawned {:?}",
@@ -931,6 +936,54 @@ mod native_retirement_tests {
     use super::*;
 
     #[test]
+    fn definition_retirement_cancels_parked_admission_without_despawning_owners() {
+        let mut world = World::new();
+        let first = world.spawn_empty().id();
+        let second = world.spawn_empty().id();
+        let entity = world
+            .spawn((
+                PendingJoint {
+                    order_key: "inline/parked-joint".to_owned(),
+                    body0: first,
+                    body1: second,
+                    joint: RevoluteJoint::new(first, second),
+                    seat: None,
+                },
+                PendingJointAdmission {
+                    body0: first,
+                    body1: second,
+                },
+                lunco_physics::PhysicsJointPending,
+                lunco_physics::PhysicsJointPrepared { activate: true },
+                collision_filters::JointCollisionPair {
+                    body0: first,
+                    body1: second,
+                },
+            ))
+            .id();
+        retire_native_joints(&mut world, &[entity]).unwrap();
+        assert!(world.get_entity(entity).is_ok());
+        assert!(world.get_entity(first).is_ok() && world.get_entity(second).is_ok());
+        assert!(world.get::<PendingJoint<RevoluteJoint>>(entity).is_none());
+        assert!(world.get::<PendingJointAdmission>(entity).is_none());
+        assert!(
+            world
+                .get::<lunco_physics::PhysicsJointPrepared>(entity)
+                .is_none()
+        );
+        assert!(
+            world
+                .get::<lunco_physics::PhysicsJointPending>(entity)
+                .is_none()
+        );
+        assert!(
+            world
+                .get::<collision_filters::JointCollisionPair>(entity)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn disabled_joint_retirement_never_readmits_a_retired_constraint() {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>()
@@ -960,11 +1013,12 @@ mod native_retirement_tests {
                 }
             }
             let joint = entity.id();
+            let disabled = app.world().get::<JointDisabled>(joint).is_some();
             assert!(app.world().resource::<JointGraph>().get(joint).is_none());
             app.world_mut().flush();
             retire_native_joints(app.world_mut(), &[joint]).unwrap();
             assert!(app.world().get::<RevoluteJoint>(joint).is_none());
-            assert!(app.world().get::<JointDisabled>(joint).is_none());
+            assert_eq!(app.world().get::<JointDisabled>(joint).is_some(), disabled);
             app.world_mut().despawn(joint);
             app.world_mut().flush();
             assert!(app.world().resource::<JointGraph>().get(joint).is_none());
@@ -1007,6 +1061,7 @@ mod joint_pose_tests {
         // A tiny perturbation below seating tolerance must survive unchanged
         // for both quaternion signs, while native feedback has the same sign.
         let authored = DQuat::from_rotation_y(1.0e-8) * target;
+        let authored_native = authored.as_quat();
         let mut results = Vec::new();
         for kind in [JointSeatKind::Fixed, JointSeatKind::Prismatic] {
             for sign in [1.0, -1.0] {
@@ -1022,7 +1077,7 @@ mod joint_pose_tests {
                 let child = world
                     .spawn((
                         Position(DVec3::ZERO),
-                        Rotation(authored * sign),
+                        Rotation(authored_native * sign),
                         LinearVelocity::ZERO,
                         AngularVelocity::ZERO,
                     ))
@@ -1058,16 +1113,21 @@ mod joint_pose_tests {
                     )
                     .unwrap();
                 let rotation = world.get::<Rotation>(child).unwrap();
-                assert!((rotation.0 - authored).length() < 1.0e-14);
+                assert!((rotation.0 - authored_native).length() < 1.0e-6);
                 let mut native =
                     avian3d::dynamics::solver::xpbd::joints::FixedAngleConstraintShared::default();
-                native.prepare(&Rotation::IDENTITY, rotation, target * basis, basis);
+                native.prepare(
+                    Quat::IDENTITY,
+                    rotation.0,
+                    (target * basis).as_quat(),
+                    basis.as_quat(),
+                );
                 assert!(native.rotation_difference.w > 0.0);
                 results.push(native.rotation_difference);
             }
         }
         for result in &results[1..] {
-            assert!((*result - results[0]).length() < 1.0e-14);
+            assert!((*result - results[0]).length() < 1.0e-6);
         }
     }
 }

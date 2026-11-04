@@ -71,6 +71,11 @@ longitudinal slip. The axle solve accepts only a finite, scaled torque-balance
 residual; an interval narrowing around a discontinuity fails visibly.
 Jointed contact patches share the tire's force budget by normal-load fractions.
 The existing combined Coulomb cone bounds the longitudinal and lateral result.
+Contact load is valid when finite and positive; spin, traction and parking use
+the same predicate without an absolute force cutoff. Shared jointed tire forces
+retain the native support body and apply equal and opposite tangential forces
+at the same world contact point when that support is dynamic. Static and
+kinematic supports exchange momentum with their prescribed external constraint.
 
 Run `scripts/api/test_simulation_core_third_pass.py --case physics --case mounts
 --case slip-invalid --case mount-invalid --case torque-z --case allocator` with `LUNCOSIM_BIN` set

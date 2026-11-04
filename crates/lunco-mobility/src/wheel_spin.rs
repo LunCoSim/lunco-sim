@@ -157,11 +157,11 @@ pub(crate) fn update_wheel_spin(
             // resolved body pose and authored body-local mount —
             // never from `global_tf.translation()`, whose render frame drifted
             // the slip lever once the rover drove off origin (CQ-201).
-            let wheel_local_rotation = mount.local.rotation.as_dquat() * wheel.heading_rotation;
+            let wheel_local_rotation = mount.local.rotation * wheel.heading_rotation;
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(pos.0),
                 GridRot(rot.0.as_dquat()),
-                mount.local.translation.as_dvec3(),
+                mount.local.translation,
                 wheel_local_rotation,
             );
             let Some((wheel_forward, wheel_right)) = wheel_heading(
@@ -198,7 +198,8 @@ pub(crate) fn update_wheel_spin(
             }
         }
 
-        let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
+        let on_ground =
+            crate::contact_has_positive_load(wheel.last_normal_force) && contact.is_some();
         let load = if on_ground {
             wheel.last_normal_force
         } else {
@@ -405,7 +406,7 @@ mod tests {
                 wheel_width: 0.28,
                 visual_entity: Some(visual),
                 visual_base_rotation: Quat::from_rotation_arc(Vec3::Y, Vec3::X),
-                last_normal_force: 100.0, // ≥1 ⇒ on_ground (with a hit present)
+                last_normal_force: 100.0, // Positive load with a valid native hit.
                 spin_angle: 0.0,
                 spin_velocity: 0.0,
                 mass: 8.0,
@@ -433,7 +434,10 @@ mod tests {
             Transform::from_translation(wheel_local),
             WheelBodyMount {
                 body: chassis,
-                local: Transform::from_translation(wheel_local),
+                local: lunco_core::DTransform {
+                    translation: wheel_local.as_dvec3(),
+                    ..lunco_core::DTransform::IDENTITY
+                },
             },
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
             // One hit ⇒ the wheel is on the ground (the integrator only checks
@@ -534,7 +538,7 @@ mod tests {
                 Transform::default(),
                 WheelBodyMount {
                     body: chassis,
-                    local: Transform::IDENTITY,
+                    local: lunco_core::DTransform::IDENTITY,
                 },
                 GlobalTransform::default(),
                 RayHits(vec![]),

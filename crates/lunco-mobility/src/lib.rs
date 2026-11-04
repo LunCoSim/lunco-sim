@@ -472,7 +472,7 @@ impl ReducedComputedInputs {
 #[reflect(Component)]
 pub struct WheelBodyMount {
     pub body: Entity,
-    pub local: Transform,
+    pub local: lunco_core::DTransform,
 }
 
 /// Mass and authored principal inertia of a physical child that is absent as a
@@ -484,7 +484,7 @@ pub struct WheelBodyMount {
 pub struct RaycastMassContribution {
     pub owner: Entity,
     pub order_key: lunco_physics::PhysicsOrderKey,
-    pub local: Transform,
+    pub local: lunco_core::DTransform,
     pub mass: f64,
     /// Centre of mass in the contributing prim's canonical local frame.
     pub center_of_mass: DVec3,
@@ -896,8 +896,7 @@ pub fn fold_raycast_wheel_mass(
             else {
                 return true;
             };
-            source.inv_mass != wheel.mass.recip()
-                || source.local_com != mount.local.translation.as_dvec3()
+            source.inv_mass != wheel.mass.recip() || source.local_com != mount.local.translation
         });
     if !changed {
         return;
@@ -941,7 +940,7 @@ pub fn fold_raycast_wheel_mass(
             (
                 mount.body,
                 checked_mass_properties(
-                    mount.local.translation.as_dvec3(),
+                    mount.local.translation,
                     wheel.mass,
                     DVec3::ZERO,
                     DQuat::IDENTITY,
@@ -962,8 +961,8 @@ pub fn fold_raycast_wheel_mass(
                     return Err("mass contribution has an invalid body-local mount");
                 }
                 Ok(properties.transform_by(&Pose::from_parts(
-                    contribution.local.translation.as_dvec3(),
-                    contribution.local.rotation.as_dquat().normalize(),
+                    contribution.local.translation,
+                    contribution.local.rotation.normalize(),
                 )))
             });
             (contribution.owner, properties)
@@ -1290,6 +1289,13 @@ pub fn contact_plane_basis(
         .unwrap_or(wheel_forward);
     let right = forward.cross(n).try_normalize().unwrap_or(wheel_right);
     (forward, right)
+}
+
+/// Whether a solved contact carries a physical normal load. Tire, drive and
+/// parking consumers share this scale-independent boundary; a sub-newton load
+/// remains a contact and contributes its proportionate friction capacity.
+pub(crate) fn contact_has_positive_load(normal_force: f64) -> bool {
+    normal_force.is_finite() && normal_force > 0.0
 }
 
 /// The standard PhysX tire lateral-stiffness graph projected into the shared
@@ -2284,21 +2290,13 @@ fn apply_wheel_suspension(
             let (world_pos, world_rot) = wheel_hub_pose(
                 GridPos(forces.position()),
                 GridRot(forces.rotation().as_dquat()),
-                mount.local.translation.as_dvec3(),
-                mount.local.rotation.as_dquat() * wheel.heading_rotation,
+                mount.local.translation,
+                mount.local.rotation * wheel.heading_rotation,
             );
 
-            // A hit with a DEGENERATE normal is not a contact. avian casts these rays
-            // `solid: true`, so a ray whose origin is INSIDE a collider returns
-            // distance 0 with a ZERO normal — and distance 0 always sorts ahead of the
-            // real ground a few centimetres below. The old code then computed a
-            // saturated `total_force_mag`, applied `zero_normal * mag` (i.e. NO force),
-            // and still published that saturated value as `last_normal_force`. Downstream
-            // `apply_wheel_drive` gates on `normal_force >= 1.0`, so it ran at full
-            // traction authority against a chassis nothing was holding up: the rover
-            // tore itself off the ground and reappeared at the grid origin. Report what
-            // actually happened — no support — rather than what the spring would have
-            // produced had the geometry been real.
+            // An inside-collider hit with a degenerate normal cannot supply
+            // support. Publish zero load unless the native hit has a valid
+            // contact normal, so tire consumers use the same physical contact.
             let contact = hits
                 .iter_sorted()
                 .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
@@ -2388,7 +2386,7 @@ fn apply_wheel_suspension(
 /// would cast from the origin-relative render frame and — at an elevated site
 /// (≈ +1945 m grid-absolute vs ≈ −53 m render, a ~2 km gap) — miss the terrain
 /// collider entirely, leaving `last_normal_force` at 0 so `apply_wheel_drive`
-/// bails on its `normal_force < 1.0` gate. That is the flat-sandbox-works /
+/// has no positive contact load. That is the flat-sandbox-works /
 /// elevated-moonbase-fails split: near the origin the two frames coincide.
 ///
 /// We compose the chassis' solved grid-absolute pose with the wheel's local
@@ -2435,8 +2433,8 @@ fn sync_raycast_wheel_physics_pose(
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(cpos.0),
                 GridRot(crot.0.as_dquat()),
-                mount.local.translation.as_dvec3(),
-                mount.local.rotation.as_dquat() * wheel.heading_rotation,
+                mount.local.translation,
+                mount.local.rotation * wheel.heading_rotation,
             );
             // Avian transforms this local origin and NEG_Y direction by the
             // same solved hub rotation used by raycast_contact_point below.
@@ -2652,7 +2650,7 @@ fn apply_wheel_drive(
             if hits
                 .iter_sorted()
                 .any(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12)
-                && wheel.last_normal_force >= 1.0
+                && contact_has_positive_load(wheel.last_normal_force)
             {
                 *total_normal_load.entry(mount.body).or_default() += wheel.last_normal_force;
             }
@@ -2680,8 +2678,8 @@ fn apply_wheel_drive(
                 let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
                     GridPos(forces.position()),
                     GridRot(forces.rotation().as_dquat()),
-                    mount.local.translation.as_dvec3(),
-                    mount.local.rotation.as_dquat() * wheel.heading_rotation,
+                    mount.local.translation,
+                    mount.local.rotation * wheel.heading_rotation,
                 );
                 // Traction only exists when the ray is hitting the ground.
                 let Some(hit) = hits
@@ -2692,8 +2690,7 @@ fn apply_wheel_drive(
                 };
                 {
                     let normal_force = wheel.last_normal_force;
-                    if normal_force < 1.0 {
-                        // Not enough contact to transmit meaningful force
+                    if !contact_has_positive_load(normal_force) {
                         continue;
                     }
 
@@ -3088,10 +3085,10 @@ mod wheel_raycast_parallel_tests {
             ))
             .id();
 
-        let authored_mount = Transform {
-            translation: Vec3::new(1.0, -0.25, 0.75),
-            rotation: Quat::from_rotation_x(0.2),
-            scale: Vec3::ONE,
+        let authored_mount = lunco_core::DTransform {
+            translation: DVec3::new(1.0, -0.25, 0.75),
+            rotation: DQuat::from_rotation_x(0.2),
+            scale: DVec3::ONE,
         };
         let fixed_heading = DQuat::from_rotation_y(0.4);
         let render_sample = Quat::from_rotation_z(-0.9);
@@ -3124,8 +3121,8 @@ mod wheel_raycast_parallel_tests {
         let (expected_position, expected_rotation) = wheel_hub_pose(
             GridPos(chassis_position),
             GridRot(chassis_rotation.as_dquat()),
-            authored_mount.translation.as_dvec3(),
-            authored_mount.rotation.as_dquat() * fixed_heading,
+            authored_mount.translation,
+            authored_mount.rotation * fixed_heading,
         );
         let expected_ray_origin = DVec3::Y * strut_offset(0.8, 0.35);
 
@@ -3151,8 +3148,8 @@ mod wheel_raycast_parallel_tests {
         let (_, render_rotation) = wheel_hub_pose(
             GridPos(chassis_position),
             GridRot(chassis_rotation.as_dquat()),
-            authored_mount.translation.as_dvec3(),
-            authored_mount.rotation.as_dquat() * render_sample.as_dquat(),
+            authored_mount.translation,
+            authored_mount.rotation * render_sample.as_dquat(),
         );
         let render_ray_origin = render_rotation.0 * DVec3::Y * strut_offset(0.8, 0.35);
         assert_ne!(render_ray_origin, expected_rotation.0 * expected_ray_origin);
@@ -3383,7 +3380,10 @@ mod raycast_wheel_mass_tests {
             },
             WheelBodyMount {
                 body,
-                local: Transform::from_translation(Vec3::Y),
+                local: lunco_core::DTransform {
+                    translation: DVec3::Y,
+                    ..lunco_core::DTransform::IDENTITY
+                },
             },
             lunco_physics::PhysicsOrderKey("inline/automatic-carrier/wheel".to_owned()),
         ));
@@ -3428,7 +3428,10 @@ mod raycast_wheel_mass_tests {
             .id();
 
         for (x, z) in [(-1.0, -1.225), (1.0, -1.225), (-1.0, 1.225), (1.0, 1.225)] {
-            let local = Transform::from_translation(Vec3::new(x, -0.65, z));
+            let local = lunco_core::DTransform {
+                translation: DVec3::new(x, -0.65, z),
+                ..lunco_core::DTransform::IDENTITY
+            };
             let wheel = app
                 .world_mut()
                 .spawn((
@@ -3438,7 +3441,7 @@ mod raycast_wheel_mass_tests {
                         ..default()
                     },
                     lunco_physics::PhysicsOrderKey(format!("test-wheel/{x}/{z}")),
-                    local,
+                    local.as_bevy_transform(),
                     WheelBodyMount {
                         body: chassis,
                         local,
@@ -3574,7 +3577,7 @@ mod raycast_wheel_mass_tests {
             lunco_physics::PhysicsOrderKey("test-wheel/one".to_owned()),
             WheelBodyMount {
                 body: chassis,
-                local: Transform::IDENTITY,
+                local: lunco_core::DTransform::IDENTITY,
             },
             Transform::default(),
             ChildOf(chassis),
@@ -3615,7 +3618,10 @@ mod raycast_wheel_mass_tests {
                 ChildOf(chassis),
             ))
             .id();
-        let local = Transform::from_translation(Vec3::new(0.0, -0.65, -1.2));
+        let local = lunco_core::DTransform {
+            translation: DVec3::new(0.0, -0.65, -1.2),
+            ..lunco_core::DTransform::IDENTITY
+        };
         app.world_mut().spawn((
             WheelRaycast {
                 mass: 25.0,
@@ -3626,7 +3632,7 @@ mod raycast_wheel_mass_tests {
                 body: rocker,
                 local,
             },
-            local,
+            local.as_bevy_transform(),
             ChildOf(rocker),
         ));
 

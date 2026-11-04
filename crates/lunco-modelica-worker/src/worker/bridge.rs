@@ -1627,6 +1627,10 @@ pub fn handle_modelica_responses(
                 );
             } else if result.is_reset {
                 model.clear_clock();
+                if result.error.is_none() {
+                    model.paused = inactive.contains(result.entity) || !model.resume_after_compile;
+                    model.resume_after_compile = false;
+                }
                 let values = &mut variables.bypass_change_detection().values;
                 variables_changed |= !values.is_empty();
                 values.clear();
