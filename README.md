@@ -18,6 +18,7 @@ traverse. LunCoSim brings those interactions into one scene, with models you
 can inspect, parameters you can change, and telemetry you can follow.
 
 [**Download LunCoSim**](https://github.com/LunCoSim/lunco-sim/releases)
+· [**Documentation**](https://luncosim.github.io/luncosim-docs/)
 · [Tutorials](docs/tutorials/README.md)
 · [Watch demos](https://www.youtube.com/@LunCoSim)
 · [Join the community](https://discord.gg/A6U3GdvQum)
