@@ -194,6 +194,14 @@ another scripting runtime.
 
 ## Visibility work follows adapter capability
 
+The workspace pins its maintained `bevy_shader`, `bevy_render`, `bevy_light`
+and `bevy_pbr` crates to one Bevy revision in the root manifest and lockfile.
+Every workspace consumer uses that source through Cargo's shared patch table;
+profiling does not require a local path override. The light/PBR owner excludes
+exactly zero-output local lights from clustering and extraction without changing
+authored visibility. Native changed-light extraction restores their light and
+shadow state when output becomes nonzero, including the smallest positive value.
+
 The desktop host selects `PbrPlugin::use_gpu_instance_buffer_builder = false`
 for native CPU mesh-instance preparation. This bounds per-view preparation
 overhead in the interactive scene workloads. Native GPU drawing, material

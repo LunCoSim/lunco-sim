@@ -22,6 +22,10 @@ to improve a timing.
 
 ## Required separation
 
+- Use the root manifest's shared Bevy patches for ordinary measurements. Shader,
+  render, light and PBR owners share one pinned revision; record that exact source
+  with the executable. A historical local path override is a different dependency
+  cohort, even when the application and Twin names match.
 - A faster worker can expose a clock-boundary defect. Compare
   `clock_snapshot().transport_rate` with `virtual_rate` after a pacing-clock
   update, through pause and
