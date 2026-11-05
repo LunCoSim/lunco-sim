@@ -30,7 +30,7 @@ use std::sync::LazyLock;
 
 use lunco_port_core::ports::{
     PortBackend, PortDeclarationQuery, PortDirection, PortMetadata, PortRegistry,
-    PortTopologyRevision, PortTopologyState, declare_map, port_entity_map_key, port_name_set_key,
+    PortTopologyRevision, PortTopologyState, declare_map, port_entity_map_key,
 };
 use lunco_port_core::{EngineUnit, InputPorts, OutputPorts, PORT_NAME, Port, PortSurface};
 
@@ -627,7 +627,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
                 component,
                 world
                     .get::<DeclaredOutputPorts>(entity)
-                    .map(|ports| port_name_set_key(ports.names.iter()))
+                    .map(|ports| ports.topology_key())
                     .unwrap_or(0),
                 world
                     .get::<lunco_port_core::ScalarPortContracts>(entity)
@@ -642,11 +642,11 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
                 && let Some(declared) = w.get::<DeclaredOutputPorts>(e)
             {
                 if let Some(name) = out.requested_name() {
-                    if declared.names.contains(name) && !c.outputs.contains_key(name) {
+                    if declared.names().contains(name) && !c.outputs.contains_key(name) {
                         out.declare(name, PortDirection::Out, None);
                     }
                 } else {
-                    for name in &declared.names {
+                    for name in declared.names() {
                         if !c.outputs.contains_key(name) {
                             out.declare(name, PortDirection::Out, None);
                         }
@@ -1196,15 +1196,7 @@ pub(crate) fn check_port_owner_structure(
         // had no SimComponent. Refresh those facts even if their own change
         // tick predates this system's last run.
         let admitted = component.is_added();
-        let declared_key = declared.as_ref().map_or(0, |ports| {
-            state
-                .observe_if_changed::<DeclaredOutputPorts>(
-                    entity,
-                    admitted || ports.is_changed(),
-                    || port_name_set_key(ports.names.iter()),
-                )
-                .0
-        });
+        let declared_key = declared.as_ref().map_or(0, |ports| ports.topology_key());
         let (signal_contract, signal_contract_changed) =
             signal_layout.as_ref().map_or((None, false), |layout| {
                 let (key, changed) = state
@@ -1645,9 +1637,7 @@ mod tests {
             .spawn((
                 component.clone(),
                 layout,
-                DeclaredOutputPorts {
-                    names: ["pending".into()].into(),
-                },
+                DeclaredOutputPorts::new(["pending".into()].into()),
             ))
             .id();
         app.update();
@@ -1674,10 +1664,24 @@ mod tests {
         app.update();
         assert_eq!(revision(&app), seeded + 1);
 
-        app.world_mut()
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+        let resolved = registry
+            .resolve_output(app.world(), entity, "signal")
+            .unwrap();
+        assert_eq!(
+            registry.read_resolved(app.world(), entity, &resolved),
+            Some(2.0)
+        );
+        *app.world_mut()
             .get_mut::<DeclaredOutputPorts>(entity)
-            .unwrap()
-            .names = ["replacement".into()].into();
+            .unwrap() = DeclaredOutputPorts::new(["replacement".into()].into());
+        assert_eq!(revision(&app), seeded + 1);
+        assert_eq!(
+            registry.read_resolved(app.world(), entity, &resolved),
+            None,
+            "declaration replacement invalidates a lease before scheduled revision publication"
+        );
         app.update();
         assert_eq!(revision(&app), seeded + 2);
         app.world_mut()
@@ -1695,10 +1699,9 @@ mod tests {
             .unwrap()
             .set("signal".into(), contract("A"))
             .unwrap();
-        app.world_mut()
+        *app.world_mut()
             .get_mut::<DeclaredOutputPorts>(entity)
-            .unwrap()
-            .names = ["readmitted".into()].into();
+            .unwrap() = DeclaredOutputPorts::new(["readmitted".into()].into());
         app.update();
         app.world_mut().entity_mut(entity).insert(component);
         app.update();
@@ -1707,11 +1710,11 @@ mod tests {
             .get::<ScalarPortContracts>(entity)
             .unwrap()
             .topology_key();
-        let declared_key = port_name_set_key(
+        let declared_key = lunco_port_core::ports::port_name_set_key(
             app.world()
                 .get::<DeclaredOutputPorts>(entity)
                 .unwrap()
-                .names
+                .names()
                 .iter(),
         );
         let cached = app

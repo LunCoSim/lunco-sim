@@ -114,7 +114,7 @@ int run(int argc, char** argv) {
     if (!zone_name.empty()) std::cerr << " matched_zones=" << matched_zones;
     std::cerr << '\n';
     if (counts.empty()) throw std::runtime_error("no CPU callstacks in the selected thread/time interval");
-    std::cout << "pid,tid,csv_thread,thread,callstack,frame,inline_frame,samples,address,frame_metadata_present,function,file,line\n";
+    std::cout << "pid,tid,csv_thread,thread,callstack,frame,inline_frame,samples,address,frame_metadata_present,function,file,line,image\n";
     for (const auto& [key, count] : counts) {
         const auto [tid, stack_id] = key;
         const auto csv_thread = worker.CompressThread(tid);
@@ -130,7 +130,7 @@ int run(int argc, char** argv) {
             };
             if (!frame || !frame->size) {
                 prefix();
-                std::cout << ',' << count << ',' << address << ",0,,,\n";
+                std::cout << ',' << count << ',' << address << ",0,,,,\n";
             } else {
                 for (uint8_t inlined = 0; inlined < frame->size; ++inlined) {
                     const auto& symbol = frame->data[inlined];
@@ -138,7 +138,9 @@ int run(int argc, char** argv) {
                     std::cout << unsigned(inlined) << ',' << count << ',' << address << ",1,"
                               << std::quoted(worker.GetString(symbol.name), '"', '"') << ','
                               << std::quoted(worker.GetString(symbol.file), '"', '"') << ','
-                              << symbol.line << '\n';
+                              << symbol.line << ','
+                              << std::quoted(frame->imageName.Active()
+                                  ? worker.GetString(frame->imageName) : "", '"', '"') << '\n';
                 }
             }
             ++index;

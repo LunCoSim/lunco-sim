@@ -163,6 +163,7 @@ pub struct CompiledWiring {
 #[derive(Resource, Default)]
 pub struct PropagationCache {
     wiring: RebuildOnChange<BoundConnection, CompiledWiring>,
+    registry: Option<PortRegistry>,
     port_topology_revision: Option<u64>,
     hold_membership_revision: Option<u64>,
     scratch: PropagationScratch,
@@ -565,6 +566,15 @@ impl CompiledWiring {
 /// standalone propagate into everything.
 pub fn propagate_connections(world: &mut World) {
     world.resource_scope(|world, mut cache: Mut<PropagationCache>| {
+        let registry = world.resource::<PortRegistry>();
+        if cache
+            .registry
+            .as_ref()
+            .is_none_or(|previous| !registry.same_registration(previous))
+        {
+            cache.wiring.invalidate();
+            cache.registry = Some(registry.clone());
+        }
         let topology_revision = world
             .get_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .map(|revision| revision.0);
@@ -1192,6 +1202,56 @@ mod wire_order_tests {
                 .get("demand"),
             Some(&7.0)
         );
+        // A backend-table replacement is its own binding generation, even
+        // when no port-topology revision has been published yet.
+        let previous = world.resource::<PortRegistry>().clone();
+        world
+            .resource_mut::<PortRegistry>()
+            .register(lunco_port_core::ports::PortBackend {
+                list_entities: |_, _| {},
+                topology_key: |_, _| 0,
+                declare_ports: |_, _, _| {},
+                metadata: |_, _, _, direction, _| {
+                    lunco_port_core::ports::PortMetadata::scalar(
+                        direction,
+                        None,
+                        None,
+                        None,
+                        "empty backend",
+                        "probe",
+                        false,
+                        None,
+                    )
+                },
+                read_output: |_, _, _| None,
+                read_input: |_, _, _| None,
+                initial_expression: None,
+                read_slot: None,
+                read_input_slot: None,
+                write_slot: None,
+            });
+        assert!(
+            !world
+                .resource::<PortRegistry>()
+                .same_registration(&previous)
+        );
+        world.run_system_once(propagate_connections).unwrap();
+        let cache = world.resource::<PropagationCache>();
+        assert!(
+            cache
+                .registry
+                .as_ref()
+                .unwrap()
+                .same_registration(world.resource::<PortRegistry>())
+        );
+        assert_eq!(
+            world
+                .get::<SimComponent>(target)
+                .unwrap()
+                .inputs
+                .get("demand"),
+            Some(&7.0)
+        );
     }
 
     #[test]
@@ -1420,9 +1480,9 @@ mod wire_order_tests {
                 inputs: inputs.iter().map(|name| (name.to_string(), 0.0)).collect(),
                 ..Default::default()
             },
-            lunco_cosim_core::DeclaredOutputPorts {
-                names: outputs.iter().map(|name| name.to_string()).collect(),
-            },
+            lunco_cosim_core::DeclaredOutputPorts::new(
+                outputs.iter().map(|name| name.to_string()).collect(),
+            ),
         )
     }
 
@@ -1646,9 +1706,7 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("in".into(), 0.0)]).into(),
                     ..default()
                 },
-                lunco_cosim_core::DeclaredOutputPorts {
-                    names: ["out".into(), "force".into()].into(),
-                },
+                lunco_cosim_core::DeclaredOutputPorts::new(["out".into(), "force".into()].into()),
                 RealtimeSafe,
                 avian3d::prelude::RigidBody::Dynamic,
             ))
@@ -1660,9 +1718,7 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("in".into(), 0.0)]).into(),
                     ..default()
                 },
-                lunco_cosim_core::DeclaredOutputPorts {
-                    names: ["out".into()].into(),
-                },
+                lunco_cosim_core::DeclaredOutputPorts::new(["out".into()].into()),
                 RealtimeSafe,
             ))
             .id();
@@ -1707,9 +1763,7 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("height".into(), 0.0)]).into(),
                     ..default()
                 },
-                lunco_cosim_core::DeclaredOutputPorts {
-                    names: ["netForce".into()].into(),
-                },
+                lunco_cosim_core::DeclaredOutputPorts::new(["netForce".into()].into()),
                 RealtimeSafe,
             ))
             .id();
@@ -1753,9 +1807,7 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("height".into(), 0.0)]).into(),
                     ..default()
                 },
-                lunco_cosim_core::DeclaredOutputPorts {
-                    names: ["netForce".into()].into(),
-                },
+                lunco_cosim_core::DeclaredOutputPorts::new(["netForce".into()].into()),
             ))
             .id();
         wire(&mut unsafe_world, body, "position_y", program, "height");
@@ -1804,9 +1856,7 @@ mod wire_order_tests {
                     inputs: std::collections::HashMap::from([("height".into(), 0.0)]).into(),
                     ..default()
                 },
-                lunco_cosim_core::DeclaredOutputPorts {
-                    names: ["netForce".into()].into(),
-                },
+                lunco_cosim_core::DeclaredOutputPorts::new(["netForce".into()].into()),
             ))
             .id();
         wire(&mut world, body, "position_y", program, "height");

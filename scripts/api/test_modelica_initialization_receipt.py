@@ -27,16 +27,16 @@ def main():
         assert Path(f"/proc/{pid}/cwd").resolve() == ROOT
         assert Path(f"/proc/{pid}/exe").resolve() == BINARY.resolve()
         receipt["pid"] = pid
-        wait_for_authored_verdict(session, title="MODELICA INITIALIZATION NETWORK", check_count=44)
+        wait_for_authored_verdict(session, title="MODELICA INITIALIZATION NETWORK", check_count=45)
         run_authored_scenario(
             session, "lunco://scenarios/tests/modelica_initialization_receipt.rhai",
             title="MODELICA INITIALIZATION RECEIPT", check_count=2,
             params={"replacement_scene": "lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda",
                     "replacement_marker": "/World/TestLight"},
         )
-    receipt.update(checks=46, port_released=True)
+    receipt.update(checks=47, port_released=True)
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-    print(f"46 authored checks passed; owned port {args.port} released")
+    print(f"47 authored checks passed; owned port {args.port} released")
 
 
 if __name__ == "__main__":

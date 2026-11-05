@@ -230,6 +230,24 @@ observation failure terminate the step without publishing values or a stream
 snapshot. The live solver boundary requires finite time and visible values;
 invalid observations produce a `modelica-step-failed` runtime fault. Initial
 observations are checked before compile, reset, or parameter-update success.
+The common host's `visit_visible_values` emits the complete observation with
+applied-input overlays, checked cardinality and borrowed canonical `VarName`
+handles. Output labels resolve once at host construction; input labels and
+output positions resolve at first admission and retire with the input on reset.
+Native RK45 and the fixed session forward that reader. The live stepper clones
+shared labels into typed worker/accepted rows, validates finite time and every
+value, and the worker removes `time` in place. Names remain text on the external
+worker wire. The reflected variable snapshot retains String keys and one
+normalized publication reader. The named-map API collects the same native
+visitor; no second name interner, numeric evaluator or input overlay is added.
+The local SDK consumer and native API require coupled promotion as recorded in
+[the observation review](../reviews/modelica-batched-observation-2026-10-24.md).
+Native projection uses Rumoca's `TornTangentPreparation` owner to bind one JVP
+source and share temporary seed/output/coefficient storage across its block
+evaluators. Each invocation retains its exact logical seed shape and independently
+owned Jacobian result. Workspace contents are not simulation state; the native
+[workspace contract](../../../rumoca/docs/dev-guide/src/runtime/simulation-runtime.md#torn-tangent-workspaces)
+defines clearing, nested evaluation and teardown at that owner.
 The source-library bundle stores `ParsedSourceDocument` with expanded source
 text and syntax together. Admission uses `replace_in_memory_source_set`;
 source spans and portable content identities address those retained bytes.
@@ -416,6 +434,15 @@ compiler source-map/diagnostic data are not retained by live workers. Native DAE
 reconstructs through the checked constructor. Compilation input identity,
 participating-source identity and solver-preparation identity remain distinct;
 the earlier cache cannot bypass source admission or retain a live session.
+Rumoca's root plan prepares fixed public/search selections into checked source
+program batches. Numerical execution retains the original root membership,
+program order, output placement, current coordinates and finite-value checks.
+Native execution errors propagate; a compilation decline uses the prepared
+interpreter. No COM/input-dependent result is cached. The SDK owns this mechanism
+and its [root execution contract](../../../rumoca/docs/dev-guide/src/runtime/simulation-runtime.md#root-condition-execution);
+LunCoSim supplies its existing ME execution backend and reads the same checked
+observations.
+
 Rumoca's exact assignment owner issues a checked `SharedAssignmentSchedule`
 containing immutable `ScalarProgramBlock` storage, provenance and ordered target
 rows. The interpreter prepares that same block through a shallow clone, and
@@ -495,3 +522,12 @@ The production `modelica_observation_failure.usda` gate declares the expected
 terminal fault when a zero-state model's output becomes non-finite. A low-level
 worker test checks unknown and non-finite input packets before integration;
 the public command surface rejects those packets before they reach the worker.
+
+### Bound numerical publication
+
+Rumoca's canonical `VarName` identities cross the internal observation boundary.
+The immutable `ModelicaVariableDeclarations` and owner-controlled
+`ModelicaVariables` bind them to numerical inventory indices and declared port
+slots. The complete lifecycle and string-boundary contract is in
+[architecture 22](22-domain-cosim.md#names-bindings-and-numerical-exchange); generic
+reflection protection is in [architecture 12](12-api.md#owner-maintained-reflected-state).

@@ -1349,6 +1349,7 @@ pub fn set_component_field(
         let registration = reg
             .get_with_short_type_path(comp)
             .ok_or_else(|| format!("unknown type '{comp}'"))?;
+        lunco_core::ReflectReadOnly::check_write(registration, &sub)?;
         let reflect_component = registration
             .data::<ReflectComponent>()
             .ok_or_else(|| format!("'{comp}' is not a Component"))?;
@@ -1387,8 +1388,9 @@ pub fn set_resource_field(
         let registration = reg
             .get_with_short_type_path(res)
             .ok_or_else(|| format!("unknown type '{res}'"))?;
-        // bevy 0.19: `ReflectResource` is a marker; mutate via the resource's
-        // dedicated entity + `ReflectComponent` (see `get_resource_field`).
+        lunco_core::ReflectReadOnly::check_write(registration, &sub)?;
+        // `ReflectResource` is a marker; mutate via the resource's dedicated
+        // entity and `ReflectComponent` (see `get_resource_field`).
         registration
             .data::<ReflectResource>()
             .ok_or_else(|| format!("'{res}' is not a Resource"))?;
@@ -1459,6 +1461,7 @@ pub fn add_component(
         let reflect_default = registration
             .data::<ReflectDefault>()
             .ok_or_else(|| format!("'{comp}' has no ReflectDefault (add #[reflect(Default)])"))?;
+        lunco_core::ReflectReadOnly::check_write(registration, "")?;
         let mut value = reflect_default.default();
         build(&mut *value)?;
         let mut entity_mut = world

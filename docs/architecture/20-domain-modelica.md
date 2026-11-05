@@ -1112,14 +1112,13 @@ co-simulation and API readers consume this one map. External API variable fields
 retain their existing shape. `ResetActiveModel` completes through command-result
 admission and rejects missing runtime state visibly.
 
-The observable snapshot uses Bevy-reflected native `IndexMap` storage with
-Bevy's fixed hasher. Admission aligns each detected-symbol/output batch to its
-observed order, checks the actual name before indexed updates, and resolves
-reordered, new or duplicate rows by name. Existing keys and values omitted from
-a batch remain present; later output rows take precedence. Input and parameter
-name indexes use Bevy's reflected `HashMap`, and live observation classification
-checks their current membership. This is the existing serial publication owner,
-with no separate index cache or retained classification. Compile admission and
+The observable snapshot retains one Bevy-reflected `IndexMap` under an
+owner-controlled mutation boundary. Checked compiler declarations classify
+variables. Canonical-ID row bindings preserve admitted ordering, omitted values,
+duplicates and exact f64 bits; numerical updates use retained indices. Named
+inspection and typed input/parameter commands retain their public contracts.
+Generic reflected writes cannot modify snapshots or live name/value maps.
+Compile admission and
 fixed-step dispatch share the worker's name-sorted input sampler; hash-table iteration never chooses solver input
 order. The USD input bridge uses native borrowed entry lookup and applies the
 authored command surface after connected samples, preserving its precedence.
@@ -1134,8 +1133,10 @@ inspection and telemetry retain their separate observable inventory. Copying a
 worker observation cannot introduce an undeclared public output.
 
 Production gates `modelica_variable_projection` and `modelica_variables_missing`
-cover retained publication while paused, resumed solver replacement,
-and the required-state fault. Exact multi-rover replay checks the fixed-step
+cover retained publication while paused, typed input writes, rejected raw snapshot
+and input/parameter-map mutation, resumed solver replacement, and the required-state
+fault. The indexed inventory and binding contract is in
+[architecture 22](22-domain-cosim.md#names-bindings-and-numerical-exchange). Exact multi-rover replay checks the fixed-step
 consumer; neither the solver nor communication schedule changes.
 
 Standalone Modelica port topology publication excludes entities with
@@ -1245,10 +1246,13 @@ deduplication and dependency discovery consume its bytes. A requested target ent
 removed is rejected; it cannot create an editor actor implicitly. Completion
 admission continues while the fixed clock is held, so readiness can observe
 the terminal worker result and release its preparation hold.
-Compile requests retain admission order. Only consecutive requests for the same
-source owner, participant and class coalesce; they share completion listeners
-and the later run intent. A later different target supersedes the earlier
-session and terminates its listeners explicitly. Class spelling is not priority.
+Compile requests retain first-admission order across participants. Deferred
+requests for the same source owner, participant and class coalesce across
+interleaved participants; they retain every completion listener, any forced
+compile and the latest ordered run intent. A different class for that participant
+is an ordering boundary: subsequent requests cannot coalesce across it. A later
+different target supersedes the earlier session and terminates its listeners
+explicitly. Class spelling is not priority.
 
 Verb semantics:
 

@@ -139,6 +139,7 @@ fn rewire_derives_at_load_and_clears() {
         .unwrap()
         .stage()
         .prim(SdfPath::new("/World/Sink").unwrap())
+        .expect("fixture prim path is valid")
         .attribute("inputs:force_y")
         .set_connections(Vec::<SdfPath>::new())
         .unwrap();

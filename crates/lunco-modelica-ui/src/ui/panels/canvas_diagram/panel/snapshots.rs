@@ -113,7 +113,7 @@ pub(crate) fn stash_snapshots(
                 for (k, v) in &model.inputs {
                     state.values.insert(k.to_string(), *v);
                 }
-                for (k, v) in &variables.values {
+                for (k, v) in variables.values() {
                     state.values.insert(k.to_string(), *v);
                 }
                 project_target_unit_scope(&mut state.values, target_unit_instance);

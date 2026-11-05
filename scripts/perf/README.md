@@ -1,4 +1,4 @@
-# Native input performance drivers
+# Performance drivers and diagnostic readers
 
 Keep generated profiling data in ignored `scripts/perf/captures/`, `.cache/`,
 or `target/perf/`. Commit reusable tool sources and documentation only.
@@ -33,6 +33,23 @@ Receipts retain the starting frame count and the first-ready engine history so
 loading-frame count and recent stalls can be compared alongside wall-clock
 readiness. The engine history retains only 240 frames; it does not certify the
 maximum stall over a longer load.
+For 2K acceptance on Linux, use `--window-size 2560x1440 --min-fps 150`.
+Use `--pointer-passthrough` on an interactive desktop to clear only the owned
+window's X11 input shape while preserving its visible shape and render target.
+The receipt records this setting; pointer events invalidate the isolated run.
+The optional sizing path requires `python3-xlib` and X11/XWayland. It resizes
+only the window whose native PID matches the owned process and verifies the
+active scene camera's physical target throughout the measured window. The FPS
+gate requires both mean FPS and p95 frame time to meet the requested budget;
+receipts also report the percentage of frames within budget. The settled samples also retain the native
+`engine-health` exposure, including aggregate Modelica worker work per
+completed physics tick, its exact tick denominator and participant count. Keep
+that attribution metric separate from the largest participant mean and from
+coupled-step wall time. Missing frame
+history rejects the run. `--min-fps` cannot accompany `--tracy-port`: record
+profiling and product acceptance in separate processes. A binary hash identifies
+the measured artifact; the checkout HEAD alone does not prove how a retained
+binary was built.
 By default the driver opens the Twin's current default scene with `OpenTwin`.
 Use `--scene scenes/example.usda` to open an exact Twin-relative scene through
 `OpenFile`, which mounts its owning Twin without changing the manifest. Receipts
@@ -57,6 +74,14 @@ The output must be ignored by Git. For a separate Tracy run, start the matching
 collector first, set `TRACY_PORT` and `TRACY_SAMPLING_HZ=1000`, then add
 `--tracy-port <port> --symbols`. The driver verifies the profiler socket against
 its owned PID and saves native maps/ELF/symbols for subsequent sample resolution.
+For optimized CPU attribution, retain symbols in the exact diagnostic ELF:
+`cargo rustc --release -p lunco-luncosim --bin luncosim --features tracy -j 4
+-- -C strip=none`. This preserves release optimization and thin LTO while
+retaining native function symbols; normal product builds retain their standard
+profile. Verify nonempty text symbols before capture (`nm --defined-only`),
+retain that executable independently, and match its hash and native load map
+when resolving addresses. A stripped release capture can still expose zones
+and JIT mappings, but cannot provide precise Rust function attribution by itself.
 Profiler timings remain diagnostic; retain a separate regular build/run. Workload
 snapshots are retained before launch, at first readiness and after mission
 qualification; distinguish restarts during these separate windows.
@@ -65,6 +90,26 @@ Keep unprofiled product measurements separate. `ReadExposures` on `engine-health
 provides raw frame time and `engine_revision`; de-duplicate revisions when
 sampling. Polling does not observe every rendered frame, so report sampled
 coverage and concurrent workloads rather than claiming complete frame capture.
+
+## Native shadow input comparisons
+
+`SceneCameraAudit { shadow_inputs: true }` provides compact native cascade
+matrices and candidate membership/pose/mesh fingerprints. Save one owned
+process's responses as JSONL records with a `phase` string and the query data
+in `audit`, then compare consecutive host frames:
+
+```sh
+python3 scripts/perf/shadow_input_changes.py .cache/perf/shadows.jsonl \
+  --output .cache/perf/shadow-changes.json
+```
+
+The reader accepts gzip input, excludes 2D/non-active scene-camera entries,
+and reports duplicates/gaps instead of treating sparse polling as consecutive
+coverage. Matching fingerprints and matrices establish diagnostic candidacy
+only: shader/material revisions, deformation, atlas allocation and GPU state
+remain outside this snapshot. Use raw-pose pages (offset plus limit up to 64)
+for individual inspection. Query load affects the observed workload; these
+records are separate from normal FPS acceptance.
 
 ## Interaction ownership
 
@@ -141,4 +186,20 @@ interval. Each stack contributes `samples` once, repeated on its frame rows;
 group by `(tid, callstack)` before counting samples. For inclusive function
 counts, count each function once per stack. Unknown symbols and absent frame
 metadata remain explicit; source locations may still identify their owner.
+The `image` column retains Tracy's native module identity. For unresolved static
+symbols, resolve addresses only against the exact captured ELF and its recorded
+load bias; another build's symbol offsets are not interchangeable. Anonymous
+JIT frames can lack both an image and a recoverable caller. Such incomplete
+stacks cannot establish inclusive caller coverage.
+The maintained Cranelift JIT in this checkout records function ranges in
+`/tmp/perf-<PID>.map` when `PERF_BUILDID_DIR` is set. For a separate owned
+diagnostic, preserve that exact process's map after preparation, together with
+its current memory mappings. Do not assign stale, overlapping or unmapped
+ranges to samples by guessing; admission and code-arena retirement can change
+which ranges are live. The flag records JIT names and does not restore stripped
+static ELF symbols. Its preparation-time file writes exclude it from a clean
+startup-performance comparison.
+Validate every JIT-map row before attribution. In the current Cranelift writer,
+concurrent constructors can interleave the formatted fields of separate rows.
+A successfully completed capture does not make a malformed symbol map usable.
 These CPU samples attribute diagnostic work, not wall time or product FPS.

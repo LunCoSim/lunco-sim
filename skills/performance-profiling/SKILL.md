@@ -9,8 +9,35 @@ Read the current handover in
 [`docs/reviews/open-400fps-performance-handover.md`](../../docs/reviews/open-400fps-performance-handover.md)
 before changing code. A status-bar FPS number is a symptom, not an attribution.
 
+For name-processing hotspots, distinguish named admission from numerical execution.
+`ModelicaVariables::admit_observation` reuses canonical-ID row bindings, and
+`publish_outputs` binds source indices to declared destination slots. Its private
+storage and `ReflectReadOnly` contract must remain intact. `ResolvedPort` validates
+its complete lease without named declaration/metadata callbacks; owner contract-key
+callbacks remain part of liveness cost and must be profiled. `DeclaredOutputPorts`
+admits its immutable names and structural key together; numerical readers consume
+that key without rehashing the declaration inventory. Never remove those
+checks or weaken duplicate-alias, non-finite, stale-session or atomic-write gates
+to improve a timing.
+
 ## Required separation
 
+- A faster worker can expose a clock-boundary defect. Compare
+  `clock_snapshot().transport_rate` with `virtual_rate` after a pacing-clock
+  update, through pause and
+  preparation holds, and retain the production `modelica_initialization_network`
+  verdict plus the inconsistent-initial-equation negative gate. The time owner
+  contract is in `docs/architecture/19-unified-time-and-clock.md`; do not weaken
+  clock assertions to qualify an allocation optimization.
+- The existing `scripts/perf/twin_startup.py` accepts
+  `--window-size 2560x1440 --min-fps 150` for an owned Linux X11/XWayland run
+  (`python3-xlib` required). Add `--pointer-passthrough` on an interactive
+  desktop to isolate pointer input to the owned window without changing its
+  visible shape or render target. It checks the active camera target throughout the
+  window, rejects incomplete frame history, and requires mean FPS plus p95
+  frame time to meet the budget. Preserve its source, terrain, diagnostics and
+  advancing-physics gates. See `scripts/perf/README.md`; retain binary build
+  provenance separately from the checkout revision.
 - Run one production session that you own for the product FPS number, launched
   from the task checkout on a verified free API port. Do this even if another
   user's or agent's session is active; never control, stop, restart, or change
@@ -49,6 +76,12 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   Select native physics zones for broad phase, narrow phase, solver preparation,
   substeps, integration and CCD. Keep `lunco_physics::order_audit` disabled
   unless deterministic ordering itself is the measurement subject.
+  For optimized static CPU symbols, build the diagnostic executable with
+  `cargo rustc --release -p lunco-luncosim --bin luncosim --features tracy -j 4
+  -- -C strip=none`. Keep release optimization and LTO unchanged; verify text
+  symbols before launching, retain the exact ELF independently and use its
+  recorded native load map. A stripped release ELF leaves Rust attribution
+  unresolved even when zone export succeeds.
   Check the profiler listener and connection against the owned PID with
   `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
@@ -83,6 +116,9 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
   and its [build/interpretation instructions](../../scripts/perf/README.md#saved-cpu-samples).
   Match the capture's Tracy release when building its server library, verify
   the owned PID, and select the zone's exact thread and time interval. Samples
+  retain native module identity in `image`; unresolved static symbols require
+  the exact captured ELF and its load bias. Anonymous JIT frames can break
+  caller recovery, so inclusive sample coverage may be incomplete. Samples
   can be narrowed to complete instances of one exact zone by appending its name
   to the sample export command; inspect `matched_zones` and the terminal result.
   Frame-wide samples include unrelated work outside the selected child zone.
@@ -121,6 +157,13 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 - Attribute CPU, GPU, physics, terrain, and UI separately. Never disable
   shadows, lower authored terrain quality, change BigSpace, or change the
   standard substep count to make a graph look better.
+  To locate fragment cost before arithmetic edits, an ignored diagnostic may
+  temporarily remove groups of shader work. Guard exact source bytes, bracket
+  each altered variant with the original in one owned frozen session, restore
+  on every exit, and verify the original images match. Record GPU clocks/power
+  and exclude reload preparation. Such altered images are attribution only;
+  compiler dead-code elimination makes the differences non-additive, and no
+  reduced-quality variant qualifies as a product optimization.
   For typed hook conversion, `lunco-hooks-rhai`'s ignored
   `map_conversion_diagnostic` measures complete nested-map conversion at 8,
   128 and 2,048 entries in sorted, reverse and permuted order. Compare every
@@ -791,30 +834,59 @@ For Modelica response retention, reuse observable-variable keys and move the
 worker's input/output buffers into the accepted record after transaction
 validation. Preserve detected-symbol/output precedence and verify reset
 isolation, signed-zero values and stale-result rejection at the owner seam.
-The observable snapshot uses native Bevy-reflected `IndexMap` storage; inputs
-and parameters use Bevy's `HashMap`. Indexed publication checks actual names,
-aligns each admitted batch, and preserves reordered, omitted and duplicate rows.
-Keep public reflected reads and filtered `SnapshotVariables` results consistent
-with the accepted step. Retain live input/parameter classification, shared
-name-sorted compile and step sampling, and command-surface precedence in the
-borrowed-entry input bridge.
+`ModelicaVariables` owns the reflected numerical inventory and immutable-layout
+read handles. Observation admission compares canonical IDs, binds classification
+from checked compiler declarations, and writes by retained index. Source row
+reordering, omissions and duplicates rebind exact identities before publication;
+namespace changes replace the immutable declaration owner. Preserve signed zero,
+initial-symbol/output precedence, source leases and accepted-step clocks. Generic
+reflection may inspect snapshots and input/parameter maps but cannot mutate them;
+use typed owner commands.
 The ignored `named_observation_admission_benchmark` exercises 512 accepted
 steps with 2304 named observables and excludes input/parameter fields. Compare
 the same fixture and retain its exact-value and clock checks. Qualify the
 `modelica_variable_projection` and `modelica_variables_missing` production gates
 and the compiled-metadata editor scenario after changing this boundary.
 For worker-side collection, the ignored solver-owner
-`observation_diagnostics::named_and_batched_observation_collection` compares
-native named-map collection with the public ME batch reader and shared labels.
-Run it with `cargo test --locked -p lunco-modelica-solver --lib
-observation_diagnostics::named_and_batched_observation_collection -j 4 --
---ignored --nocapture`. It checks all names, f64 bits and current inputs at five
+`observation_diagnostics::named_and_visited_observation_collection` compares
+native named-map collection with the common ME host's checked visitor into
+shared canonical `VarName` rows. Run it with `cargo test --release --locked
+-p lunco-modelica-solver --lib
+observation_diagnostics::named_and_visited_observation_collection -j 4 --
+--ignored --nocapture`. It checks names, f64 bits and current inputs at five
 communication points, then times 512 reads per mode in alternating order.
-Construction, advancement and label preparation are excluded. Do not turn that
-collection result into a complete-worker or coupled-tick claim, duplicate the
-adaptive host constructor, or remove input visibility to bypass an SDK boundary.
-The [owner proposal](../../docs/reviews/modelica-batched-observation-2026-10-24.md)
-records the supported batch APIs and dependency-approval boundary.
+Construction and advancement are excluded. Compare independent before/after
+executables' `visited_ns` values to isolate a label-transport change. Preserve
+native input overlays, shared label identity, reset/lifecycle rejection, output
+order and complete finite-sample checks. Worker labels use Rumoca's existing
+`VarName` owner; never add another name interner or intern names on each step.
+Retain the binary worker-wire assertion in
+`worker::bridge::compile_fault_tests::shared_output_labels_keep_textual_worker_wire_values`:
+labels encode as text with exact decoded f64 bits, never process-local IDs.
+Qualify the `modelica_observation_failure` negative as well as variable,
+metadata, clock and receipt gates. Run compiled-editor metadata through the
+windowed workbench command owner; the headless scene-test host covers runtime
+observation and fault gates. The
+[owner contract](../../docs/reviews/modelica-batched-observation-2026-10-24.md)
+records the single reader and the coupled SDK/application promotion boundary.
+Do not turn collection timing into a complete-worker or coupled-tick claim.
+Selected-output grouping belongs to `SolveRuntime`'s reusable request scratch.
+Preserve ascending program order and original within-program request order,
+including duplicates and typed admission failures. Its ignored native
+`runtime::solve_runtime::tests::visibility::selected_output_grouping_diagnostic`
+checks exact output bits and times independent optimized executables in ordered
+and reversed requests. Treat these as grouping/evaluation fixture timings;
+require the fixed canary delta and production clock, observation and assertion
+fault gates before claiming a real worker improvement.
+For tangent seed allocation, use the existing `TornTangentPreparation` group:
+one checked-out workspace serves its evaluators. Preserve logical seed lengths,
+positive-zero inactive coordinates and cleanup of all previous-plan write ranges
+after errors or non-finite coefficients. The ignored native
+`tests::torn_tangent::native_torn_tangent_workspace_diagnostic` compares compiled
+multi-lane and directional execution at 3,035 coordinates. Keep reentry, shared
+lane-shape, short-input and recovery tests, then retain the canary delta and
+production runtime qualification. Bulk fill/copy instructions in libc samples
+alone do not identify their callers; confirm the owning operation independently.
 Immutable live solver facts share one `Arc` across the cache, receipt and model;
 do not clone their parameter/input strings on every step. The bridge ownership
 regression checks shared storage as well as terminal metadata rejection.
@@ -1207,6 +1279,22 @@ exact scene/solver/override identities; retain sampled UI/API latency and peak
 process memory alongside readiness. A cache-hit replacement does not measure
 cold lowering, and concurrent Cargo or simulator work limits timing claims.
 
+For root-condition cost, distinguish algebraic conditioning from selected-expression
+and native-call dispatch. Rumoca's fixed public/search selections prepare complete
+source program batches once; preserve their membership, shared conditional owners,
+output placement and terminal native errors. The native adapter's ignored
+`native_execution::tests::root_batches::fixed_root_selection_diagnostic` measures
+384 roots at 512 fresh times. Use independent executable pairs, exact-value checks,
+the fixed MSL canary and a production co-simulation window before claiming a gain.
+See the [SDK root execution contract](../../docs/architecture/29-rumoca-runtime-contracts.md).
+
+A dirty Twin manifest can select a film scene without changing its Git HEAD.
+Use the exact canonical scene with `--scene` and record source hashes. If concurrent
+graphics workloads exhaust VRAM, close only the owned failed session. The production
+`--no-ui` host can supply a separately labelled CPU/co-simulation diagnostic on its
+own API port; it does not qualify graphics or FPS. Preserve its exact scene,
+readiness, physical handoff, advancing ticks and complete Modelica inventories.
+
 For wrench-allocation cost, inspect the generated actuator count and sweep
 count separately from retained algebraic variables. The maintained allocator
 factors fixed geometry through `WᵀW`; preserve bounded cyclic sweep semantics,
@@ -1451,6 +1539,21 @@ active for its native consumers, including directional shadow views.
 
 Before adding shadow-content reuse, measure per-map native caster poses and
 light projections across consecutive frames; stable counts are insufficient.
+Use `SceneCameraAudit { shadow_inputs: true }` for the existing main-world
+cascade matrices and compact candidate membership/pose/mesh fingerprints. It
+uses the shared FNV substrate; matching fingerprints do not prove equality.
+Raw pose inspection uses `shadow_caster_offset` and `shadow_caster_limit`
+(default 0, maximum 64 per map), with explicit totals and completeness.
+The query returns column-major native f32 bit arrays, process-scoped identities
+and the optional native host-frame counter. Check that counter for
+gaps/duplicates; it is not a GPU-submission or
+FPS counter. Preserve explicit missing registrations, visibility, pose and
+mesh data. The ordinary audit omits this traversal. Run
+`python3 scripts/api/test_shadow_inputs_audit.py --port <free-port> --output <ignored-new-directory>`
+to verify the authored snapshot, changed-projection and typed rejection gates.
+Do not join raw pages across different host frames as one instantaneous state.
+Check each map's native camera identity/activity and `camera_3d`; 2D-camera
+entries in the main-world cascade inventory do not establish GPU shadow work.
 Reuse admission must also cover mesh/material/pipeline contents, skin/morph
 inputs, backing texture identity and atlas-layer assignment. Spot maps share
 the native directional atlas, so light or cascade changes can shift a layer

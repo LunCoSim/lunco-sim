@@ -1,7 +1,7 @@
 //! Native live-session mailboxes. Solver state stays on its constructing thread.
 
 use super::thread_pool::Lane;
-use super::{LiveBuildPlan, LiveStepper, WorkerPreparationResult, build_prepared_stepper};
+use super::{LiveBuildPlan, LiveStepper, VarName, WorkerPreparationResult, build_prepared_stepper};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use rumoca_sim::SimulationDiagnosticError;
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ pub(super) struct LiveConstructionResult {
 
 struct CompletedStep {
     time: f64,
-    outputs: Result<Vec<(String, f64)>, SimulationDiagnosticError>,
+    outputs: Result<Vec<(VarName, f64)>, SimulationDiagnosticError>,
     elapsed_ns: u64,
 }
 
@@ -180,7 +180,7 @@ impl SessionHandle {
         inputs: Vec<(String, f64)>,
         dt: f64,
         stop_time: f64,
-    ) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
+    ) -> Result<Vec<(VarName, f64)>, SimulationDiagnosticError> {
         if self.pending.is_none() {
             self.start_step(step_id, self.time, stop_time, dt, inputs)?;
         } else if !inputs.is_empty() {

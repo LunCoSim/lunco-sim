@@ -1,6 +1,7 @@
 //! Live solver selection over checked Rumoca FMI components.
 
 use rumoca_compile::compile::Dae;
+use rumoca_core::VarName;
 use rumoca_ir_solve::fmi::FmiComponent;
 use rumoca_sim::{SimOptions, SimulationDiagnosticError};
 
@@ -35,30 +36,32 @@ impl LiveStepper {
         }
     }
 
-    pub fn state(&self) -> Result<rumoca_sim::SessionState, SimulationDiagnosticError> {
-        let state = match self {
-            Self::Adaptive(session) => session
-                .state()
-                .map(|state| rumoca_sim::SessionState {
-                    time: state.time,
-                    values: state.values,
-                })
-                .map_err(adaptive_error),
-            Self::Fixed(session) => session.state(),
+    /// Collect the complete host observation with shared canonical variable names.
+    pub fn observables(&self) -> Result<Vec<(VarName, f64)>, SimulationDiagnosticError> {
+        let output_count = match self {
+            Self::Adaptive(session) => session.variable_names().len(),
+            Self::Fixed(session) => session.output_count(),
+        };
+        let mut values = Vec::with_capacity(output_count + self.input_names().len());
+        let visit = |name: &VarName, value| values.push((name.clone(), value));
+        match self {
+            Self::Adaptive(session) => session.visit_visible_values(visit).map_err(adaptive_error),
+            Self::Fixed(session) => session.visit_visible_values(visit),
         }?;
-        if !state.time.is_finite() {
+        let time = self.time();
+        if !time.is_finite() {
             return Err(SimulationDiagnosticError::Solver(format!(
                 "observation time is not finite: {}",
-                state.time
+                time
             )));
         }
-        if let Some((name, value)) = state.values.iter().find(|(_, value)| !value.is_finite()) {
+        if let Some((name, value)) = values.iter().find(|(_, value)| !value.is_finite()) {
             return Err(SimulationDiagnosticError::Solver(format!(
                 "observation '{name}' is not finite ({value}) at t={}",
-                state.time
+                time
             )));
         }
-        Ok(state)
+        Ok(values)
     }
 
     pub fn time(&self) -> f64 {

@@ -816,6 +816,37 @@ The wire format is identical for both — `{"type":"ExecuteCommand","command":".
 so callers don't need to know which path their command takes. The
 executor differentiates internally.
 
+`SceneCameraAudit` is owned by `lunco-usd-sim-cosim-api`. Its ordinary request
+returns scene-camera identities and presentation roles. The optional boolean
+`shadow_inputs: true` adds native main-world directional cascade matrices,
+texel sizes, candidate counts and membership/pose/mesh fingerprints. Matrix coefficients
+are column-major arrays of the native `f32` values' `u32` bits; there is no
+precision conversion. `host_frame` is the optional Bevy main-loop counter,
+not an FPS sample or proof of GPU submission. Missing native registrations,
+visibility lists, transforms or meshes remain explicit unavailable values/flags.
+Light, camera, caster and asset identities are process-scoped. Results are
+sorted for comparison; visibility candidates are not draw calls. Non-boolean
+requests reject with code 422. The read-only query shares the typed value ABI
+with Rhai; JSON is introduced only by the external transport.
+
+Fingerprints stream native fields through `lunco-hash::Fnv1a`, without serializing
+the candidate list. They are non-cryptographic diagnostic keys. The optional
+`shadow_caster_offset` and `shadow_caster_limit` select an exact raw-pose page
+per map, sorted by native entity identity. Both require `shadow_inputs: true`;
+the default limit is zero, and the maximum is 64. The response retains total,
+offset, limit and completeness; unrequested raw candidates are unit. Negative,
+non-integer or oversized pages reject with code 422. Pages from different
+host frames must not be assembled into one claimed instantaneous snapshot.
+Map camera names, activity and `camera_3d` distinguish native entries from
+actual 3D candidates; a native cascade entry alone does not prove GPU work.
+
+This audit supports performance diagnosis, not render-cache admission: it
+does not capture material/pipeline revisions, shader uniforms, deformation,
+texture/atlas allocation or GPU completion. No hook is required for this
+projection of existing owner facts; selection, verdicts and reuse policy remain
+with its consumer. `scripts/api/test_shadow_inputs_audit.py` runs the authored
+positive and rejection checks through the production renderer.
+
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  HTTP Client (curl, Python, MCP, Browser)                  │
@@ -1018,3 +1049,15 @@ that want a runtime-toggleable opt-out.
 | "Command not found" | Check `/api/commands/schema` for available commands |
 | "Entity not found" | `POST /api/commands` with `{"type":"ListEntities"}` for valid numeric api ids — there is no `GET /api/entities` route |
 | `lunco_api_transport` not found in `Cargo.toml` | Add `lunco-api` and `lunco-api-transport`; the plugin is owned by the transport package |
+
+### Owner-maintained reflected state
+
+Types carrying `lunco_core::ReflectReadOnly` remain available to generic reflected
+reads. Component/resource field writes reject that type before obtaining mutable
+reflection. Generic component insertion/replacement through `add` rejects it too.
+The same marker on a root field rejects writes through its name or
+field index, including replacement of its containing component/resource. The domain's typed commands
+remain its mutation boundary. `ModelicaVariables` uses this contract to preserve
+its numerical inventory and layout-bound projections. `ModelicaModel` protects
+its input/parameter maps through field metadata; source/control edits use
+the existing typed Modelica and port commands.

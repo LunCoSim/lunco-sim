@@ -11,10 +11,16 @@ use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
 use lunco_signal::SignalExposure;
+use rumoca_core::VarName;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+mod observations;
+pub use observations::{
+    ModelicaValueLayout, ModelicaVariableDeclarations, ModelicaVariableSlot, ModelicaVariables,
+};
 
 pub mod generated_source;
 pub mod source_asset;
@@ -164,8 +170,8 @@ pub struct ModelicaStepSample {
     pub input_time_s: f64,
     pub output_time_s: f64,
     pub inputs: Vec<(String, f64)>,
-    /// Worker outputs owned by this accepted transaction.
-    pub outputs: Vec<(String, f64)>,
+    /// Worker outputs with shared canonical names and native f64 values.
+    pub outputs: Vec<(VarName, f64)>,
 }
 
 /// One exact communication transaction awaiting a worker result.
@@ -502,7 +508,8 @@ pub struct ModelicaResult {
     #[serde(default)]
     pub step_id: Option<u64>,
     pub new_time: f64,
-    pub outputs: Vec<(String, f64)>,
+    /// Canonical name handles serialize as text on the external worker wire.
+    pub outputs: Vec<(VarName, f64)>,
     pub detected_symbols: Vec<(String, f64)>,
     /// Exact scalar declaration facts from the checked FMI component.
     /// Published once when construction installs or replaces a live stepper.
@@ -804,19 +811,6 @@ impl ModelicaStepDiagnostics {
     }
 }
 
-/// Landed observable variables of one Modelica participant.
-///
-/// Native component change detection tracks the output snapshot independently
-/// of input and communication-clock updates. The worker commits this map and
-/// the model clock together at its serial result-admission boundary. Native
-/// IndexMap storage retains reflected string-keyed reads and lets admission
-/// align stable observation rows without hashing each observable name.
-#[derive(Component, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct ModelicaVariables {
-    pub values: indexmap::IndexMap<String, f64, bevy::platform::hash::FixedHasher>,
-}
-
 /// Component attached to every live Modelica participant.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
@@ -840,16 +834,16 @@ pub struct ModelicaModel {
     pub last_step_time: f64,
     pub session_id: u64,
     pub paused: bool,
+    #[reflect(@lunco_core::ReflectReadOnly)]
     pub parameters: bevy::platform::collections::HashMap<String, f64>,
+    #[reflect(@lunco_core::ReflectReadOnly)]
     pub inputs: bevy::platform::collections::HashMap<String, f64>,
     /// Inputs latched at the start of the current communication interval.
     /// Slower participants retain this sample across intervening master ticks.
     #[reflect(ignore)]
     pub pending_step_inputs: Option<Vec<(String, f64)>>,
     #[reflect(ignore)]
-    pub compiled_input_names: BTreeSet<String>,
-    #[reflect(ignore)]
-    pub compiled_parameter_names: BTreeSet<String>,
+    pub compiled_variables: Arc<ModelicaVariableDeclarations>,
     #[reflect(ignore)]
     pub checked_interface:
         Option<Arc<lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface>>,
@@ -907,8 +901,7 @@ impl Default for ModelicaModel {
             parameters: Default::default(),
             inputs: Default::default(),
             pending_step_inputs: None,
-            compiled_input_names: BTreeSet::new(),
-            compiled_parameter_names: BTreeSet::new(),
+            compiled_variables: Arc::default(),
             checked_interface: None,
             last_error: None,
             document: lunco_doc::DocumentId::default(),

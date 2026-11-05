@@ -42,6 +42,26 @@ def workloads():
     return subprocess.check_output(["ps", "-eo", "pid,pcpu,args", "--sort=-pcpu"], text=True).splitlines()[:12]
 
 
+def set_owned_pointer_passthrough(pid, window_id):
+    """Set only the owned X11 window's input shape; preserve its visible shape."""
+    from Xlib import X
+    from Xlib.display import Display
+    from Xlib.ext import shape
+
+    display = Display()
+    try:
+        window = display.create_resource_object("window", window_id)
+        owner = window.get_full_property(display.intern_atom("_NET_WM_PID"), 0)
+        assert owner is not None and list(owner.value) == [pid], "native window owner changed"
+        assert window.get_attributes().map_state == X.IsViewable, "owned window is not viewable"
+        if window.shape_get_rectangles(shape.SK.Input).rectangles:
+            window.shape_rectangles(shape.SO.Set, shape.SK.Input, X.Unsorted, 0, 0, [])
+            display.sync()
+        assert not window.shape_get_rectangles(shape.SK.Input).rectangles, "pointer input shape was not cleared"
+    finally:
+        display.close()
+
+
 def readiness_probe(twin_name, body_path):
     """Qualify one World snapshot without adding inter-query frame delays."""
     return f"""
@@ -86,10 +106,33 @@ def main():
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--max-load-seconds", type=float,
                         help="require scene-open-to-physics readiness strictly below this limit")
+    parser.add_argument("--window-size", help="require the active camera target size, e.g. 2560x1440")
+    parser.add_argument("--pointer-passthrough", action="store_true",
+                        help="make the owned X11 window click-through; requires --window-size")
+    parser.add_argument("--min-fps", type=float,
+                        help="require mean FPS and 95 percent of frame times to meet this budget")
     args = parser.parse_args()
+    if args.pointer_passthrough and args.window_size is None:
+        parser.error("--pointer-passthrough requires --window-size")
     if args.max_load_seconds is not None and (
             not math.isfinite(args.max_load_seconds) or args.max_load_seconds <= 0):
         parser.error("--max-load-seconds must be finite and greater than zero")
+    if args.min_fps is not None and (not math.isfinite(args.min_fps) or args.min_fps <= 0):
+        parser.error("--min-fps must be finite and greater than zero")
+    if args.min_fps is not None and args.tracy_port is not None:
+        parser.error("FPS acceptance requires a separate run without Tracy")
+    window_size = None
+    if args.window_size is not None:
+        try:
+            window_size = [int(value) for value in args.window_size.split("x")]
+            assert len(window_size) == 2 and all(value > 0 for value in window_size)
+        except (ValueError, AssertionError):
+            parser.error("--window-size must contain two positive pixel dimensions, e.g. 2560x1440")
+        if not sys.platform.startswith("linux") or not os.environ.get("DISPLAY"):
+            parser.error("--window-size currently requires Linux with X11/XWayland and python3-xlib")
+        from Xlib.display import Display
+        os.environ.pop("WAYLAND_DISPLAY", None)
+        os.environ["WINIT_UNIX_BACKEND"] = "x11"
     if not os.environ.get("LUNCOSIM_BIN"):
         parser.error("set LUNCOSIM_BIN to the production executable")
     if not BINARY.is_file():
@@ -123,19 +166,40 @@ def main():
         "physical_root": args.body, "samples": [], "readiness_events": [],
         "open_command": open_command, "open_path": str(open_path),
         "max_load_seconds": args.max_load_seconds,
+        "required_camera_size": window_size, "min_fps": args.min_fps,
+        "pointer_passthrough": args.pointer_passthrough,
     }
     frames = {}
     started = time.monotonic()
     try:
         bootstrap = ROOT / "assets/scenes/tests/twin_session_retirement/replacement/replacement.usda"
-        with ProductionSession(args.port, windowed=True, extra_args=["--scene", str(bootstrap),
-                               "--no-throttle", "--no-vsync", "--render-quality", "high"],
+        extra_args = ["--scene", str(bootstrap), "--no-throttle", "--no-vsync", "--render-quality", "high"]
+        with ProductionSession(args.port, windowed=True, extra_args=extra_args,
                                log_path=output / "runtime.log") as session:
             pid = session.process.pid
             receipt["pid"] = pid
             assert Path(f"/proc/{pid}/cwd").resolve() == ROOT
             assert Path(f"/proc/{pid}/exe").resolve() == BINARY.resolve()
+            if window_size is not None:
+                display = Display()
+                try:
+                    clients = display.screen().root.get_full_property(display.intern_atom("_NET_CLIENT_LIST"), 0)
+                    assert clients is not None, "X11 window manager did not publish its client inventory"
+                    windows = []
+                    for identity in clients.value:
+                        window = display.create_resource_object("window", int(identity))
+                        owner = window.get_full_property(display.intern_atom("_NET_WM_PID"), 0)
+                        if owner is not None and list(owner.value) == [pid]:
+                            windows.append(window)
+                    assert len(windows) == 1, f"expected one owned native window: {windows}"
+                    windows[0].configure(width=window_size[0], height=window_size[1])
+                    display.sync()
+                    receipt["native_window"] = windows[0].id
+                finally:
+                    display.close()
             print("OWNED", pid, args.port, flush=True)
+            if args.pointer_passthrough:
+                set_owned_pointer_passthrough(pid, receipt["native_window"])
             if args.tracy_port:
                 sockets = subprocess.check_output(["ss", "-tnp"], text=True)
                 owned = [line for line in sockets.splitlines() if f"pid={pid}," in line]
@@ -174,6 +238,8 @@ def main():
             clear_since = measurement = None
             initial_frame = initial_tick = measured_body = None
             while time.monotonic() - opened < args.timeout:
+                if args.pointer_passthrough:
+                    set_owned_pointer_passthrough(pid, receipt["native_window"])
                 if "first_scene_ready_s" not in receipt:
                     status = command(session, "RunRhai", {"code": probe})["stdout"].strip()
                     if status == "pending":
@@ -256,12 +322,19 @@ def main():
                         print("QUALIFIED", clear_since, flush=True)
                     if measurement is not None:
                         assert body == measured_body, "measured body lease changed"
+                        camera = command(session, "SceneCameraAudit")
+                        if window_size is not None:
+                            active = [row for row in camera["candidates"] if row.get("camera_active")]
+                            assert len(active) == 1, "expected exactly one active scene camera"
+                            assert active[0]["physical_target_size"] == window_size, active
                         timing = command(session, "SimulationTimingProfile")
                         engine = command(session, "EnginePerformance")
                         last, history = engine["frame_sample_count"], engine["frame_time_samples_ms"]
                         frames.update({i: value for i, value in enumerate(history, last - len(history) + 1) if i > initial_frame})
                         receipt["samples"].append({"seconds": now, "PhysicsPerformance": physics,
                                                    "SimulationTimingProfile": timing, "EnginePerformance": engine,
+                                                   "EngineHealthExposures": command(session, "ReadExposures", {"surface": "engine-health"}),
+                                                   "camera": camera,
                                                    "qualification": qualification})
                         if time.monotonic() - measurement >= 10 and timing["fixed_tick"]["ticks_total"] - initial_tick >= 240:
                             break
@@ -278,11 +351,22 @@ def main():
         receipt["source_after"] = source_snapshot(source_root)
         assert receipt["source_before"] == receipt["source_after"], "source changed during run"
         log = (output / "runtime.log").read_text(errors="replace")
+        if args.pointer_passthrough:
+            assert "name=scene.pointer," not in log, "pointer input entered the isolated measurement"
         assert not any(marker in log for marker in ("[rhai] on_tick() failed", "[rhai] on_start() failed", "[rhai] task leaf failed")), "authored script failed"
         values = sorted(frames.values())
+        assert frames and len(frames) == max(frames) - initial_frame, "canonical frame history overran"
         receipt["frame_summary"] = {"count": len(values), "p50_ms": statistics.median(values),
-                                    "p95_ms": values[min(len(values) - 1, int(.95 * len(values)))], "max_ms": max(values)}
+                                    "p95_ms": values[min(len(values) - 1, int(.95 * len(values)))],
+                                    "mean_fps": 1000 / statistics.mean(values), "max_ms": max(values)}
         receipt["fixed_tick_summary"] = receipt["samples"][-1]["SimulationTimingProfile"]["fixed_tick"]
+        if args.min_fps is not None:
+            budget = 1000 / args.min_fps
+            receipt["frame_summary"]["within_budget_percent"] = 100 * sum(v <= budget for v in values) / len(values)
+            receipt["fps_budget_passed"] = (receipt["frame_summary"]["mean_fps"] >= args.min_fps
+                                             and receipt["frame_summary"]["p95_ms"] <= budget)
+            if not receipt["fps_budget_passed"]:
+                raise RuntimeError(f"FPS budget failed: {receipt['frame_summary']}; required {args.min_fps} FPS")
         if args.max_load_seconds is not None:
             receipt["load_budget_passed"] = receipt["first_scene_ready_s"] < args.max_load_seconds
             if not receipt["load_budget_passed"]:

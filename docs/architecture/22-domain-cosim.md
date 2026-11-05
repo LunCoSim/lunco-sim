@@ -20,6 +20,52 @@ without depending on Avian. It also owns the backend-neutral
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
+## Names, bindings and numerical exchange
+
+USD and Rhai use durable named endpoints at authoring, discovery and command
+admission. `CompiledWiring` resolves their backend, direction, engineering
+contract and process-local slot before numerical exchange. Ordered accumulation
+and atomic input transactions consume those bindings; the runtime never changes
+Jacobi/ZOH semantics or wire reduction order to optimize lookup.
+
+`ResolvedPort` retains an immutable registry-table lease, exact World/entity, shared
+port-topology revision and the contract keys of every precedence candidate through
+its owner. Reads and writes reject replaced registries/entities/contracts before
+slot access. Registry-table replacement invalidates `CompiledWiring` before
+its next exchange; Twin teardown drops its retained bindings. A backend's structural key must include every fact affecting its
+names, direction, metadata or permission and exclude live samples. Cached writes
+validate the retained engineering contract and complete live lease without
+named declaration/metadata callbacks. Named commands resolve through the same
+owner. Duplicate writes are identified by entity, backend and storage slot, so
+two aliases cannot modify one physical endpoint in an atomic batch.
+
+`DeclaredOutputPorts` admits its immutable name inventory and structural key
+together. Its private storage exposes named inspection and a constant-time key
+reader; replacing declarations constructs a new inventory. Backend lease checks
+consume that retained key, including before scheduled topology publication, and
+never hash the full declaration set per numerical read.
+
+Modelica's numerical inventory is owned by `ModelicaVariables`; consumers receive
+an immutable named view or layout-bound read handles. Checked compiler declarations
+classify inputs/parameters independently of which live values happen to be present.
+Observation admission binds canonical Rumoca `VarName` identities to inventory
+indices and reuses that plan while the complete row identity sequence and immutable
+declarations match. Layout changes retire consumer handles. Public outputs bind
+that inventory to the destination's declared scalar slots; internal observables
+remain available to inspection without being published as causal ports. USD
+interface admission owns declaration changes; declarations can predate a Modelica
+component, so projection prepares its namespace on first binding and destination
+layout changes. `invalidate_samples` withdraws values without retiring declared
+slots during recompilation. Unsampled ports remain unavailable; interface failure
+retires the namespace through its owner.
+
+`ReflectReadOnly` marks owner-maintained snapshots at type registration. Generic
+Rhai reflection may inspect them but cannot replace a map or bypass its layout
+invariants. Controls retain typed `SetPorts`/parameter commands, actor permissions,
+execution context, deterministic admission, holds and release. Names remain text
+on portable worker messages; intern IDs, registry leases and local slots are not
+wire identities. No new interner or USD property is required.
+
 User pause rejects simulation-target port writes. The process-local
 `LocalEmbodiment` remains an interaction-clock endpoint even when it has an
 authored USD identity: its camera movement writes bypass fixed simulation-input

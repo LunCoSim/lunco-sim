@@ -262,7 +262,7 @@ pub fn retain_modelica_runtime_state(
         }
         let mut retained_any = false;
         session.admission_pending = false;
-        for (name, &value) in &variables.values {
+        for (name, &value) in variables.values() {
             if !value.is_finite() || name.is_empty() {
                 continue;
             }
@@ -353,7 +353,7 @@ pub fn retain_modelica_runtime_state(
         if retained_any && signal_source.is_none() {
             commands.entity(entity).try_insert(SignalSource);
         }
-        if sample_due && model.current_time.is_finite() && !variables.values.is_empty() {
+        if sample_due && model.current_time.is_finite() && !variables.values().is_empty() {
             session.last_sample_time = Some(model.current_time);
         }
     }
@@ -434,9 +434,10 @@ mod tests {
     fn compiling_session_cannot_republish_retained_snapshot() {
         let (mut app, entity) = app_with_model(
             ModelicaModel::default(),
-            ModelicaVariables {
-                values: [("x".into(), 4.0), ("y".into(), 5.0)].into_iter().collect(),
-            },
+            ModelicaVariables::from_values(
+                [("x".into(), 4.0), ("y".into(), 5.0)].into_iter().collect(),
+            )
+            .expect("finite admitted observation"),
         );
         app.update();
         {
@@ -456,8 +457,9 @@ mod tests {
         );
         {
             let world = app.world_mut();
-            world.get_mut::<ModelicaVariables>(entity).unwrap().values =
-                [("x".into(), 8.0)].into_iter().collect();
+            *world.get_mut::<ModelicaVariables>(entity).unwrap() =
+                ModelicaVariables::from_values([("x".into(), 8.0)].into_iter().collect())
+                    .expect("finite admitted observation");
             let mut model = world.get_mut::<ModelicaModel>(entity).unwrap();
             model.is_compiled = true;
             model.is_compiling = false;
@@ -477,7 +479,9 @@ mod tests {
             ..Default::default()
         };
         let mut variables = ModelicaVariables::default();
-        variables.values.insert("soc".to_string(), 0.95);
+        variables
+            .insert_named("soc".to_string(), 0.95)
+            .expect("finite admitted observation");
         let (mut app, entity) = app_with_model(model, variables);
 
         app.update();
@@ -564,7 +568,9 @@ mod tests {
     fn runtime_state_uses_rate_and_retains_steady_time_samples() {
         let model = ModelicaModel::default();
         let mut variables = ModelicaVariables::default();
-        variables.values.insert("speed".to_string(), 1.0);
+        variables
+            .insert_named("speed".to_string(), 1.0)
+            .expect("finite admitted observation");
         let (mut app, entity) = app_with_model(model, variables);
         let signal = SignalRef::new(entity, "speed");
 
@@ -577,8 +583,8 @@ mod tests {
             model
                 .get_mut::<ModelicaVariables>()
                 .unwrap()
-                .values
-                .insert("speed".to_string(), 2.0);
+                .insert_named("speed".to_string(), 2.0)
+                .expect("finite admitted observation");
         }
         app.update();
         assert_eq!(
@@ -598,8 +604,8 @@ mod tests {
             model
                 .get_mut::<ModelicaVariables>()
                 .unwrap()
-                .values
-                .insert("speed".to_string(), 2.0);
+                .insert_named("speed".to_string(), 2.0)
+                .expect("finite admitted observation");
         }
         app.update();
         let history = app
@@ -621,8 +627,8 @@ mod tests {
             model
                 .get_mut::<ModelicaVariables>()
                 .unwrap()
-                .values
-                .insert("speed".to_string(), 2.0);
+                .insert_named("speed".to_string(), 2.0)
+                .expect("finite admitted observation");
         }
         app.update();
         assert_eq!(
@@ -643,8 +649,8 @@ mod tests {
             model
                 .get_mut::<ModelicaVariables>()
                 .unwrap()
-                .values
-                .insert("speed".to_string(), 2.1);
+                .insert_named("speed".to_string(), 2.1)
+                .expect("finite admitted observation");
         }
         app.update();
         assert_eq!(
@@ -660,7 +666,9 @@ mod tests {
     #[test]
     fn archived_histories_do_not_block_paused_admission_or_bypass_a_full_budget() {
         let mut variables = ModelicaVariables::default();
-        variables.values.insert("x".into(), 1.0);
+        variables
+            .insert_named("x".into(), 1.0)
+            .expect("finite admitted observation");
         let (mut app, entity) = app_with_model(ModelicaModel::default(), variables);
         app.world_mut()
             .resource_mut::<TelemetrySettings>()
@@ -724,7 +732,9 @@ mod tests {
     #[test]
     fn owner_publication_tracks_channel_lifecycle_and_source_identity() {
         let mut variables = ModelicaVariables::default();
-        variables.values.insert("x".into(), 1.0);
+        variables
+            .insert_named("x".into(), 1.0)
+            .expect("finite admitted observation");
         let mut model = ModelicaModel::default();
         model.current_time = f64::NAN;
         let (mut app, entity) = app_with_model(model, variables);
@@ -782,8 +792,8 @@ mod tests {
         app.world_mut()
             .get_mut::<ModelicaVariables>(entity)
             .unwrap()
-            .values
-            .insert("y".into(), 2.0);
+            .insert_named("y".into(), 2.0)
+            .expect("finite admitted observation");
         app.world_mut()
             .get_mut::<ModelicaModel>(entity)
             .unwrap()
@@ -811,18 +821,13 @@ mod tests {
             );
         }
 
-        // A skipped value must not acknowledge a batch's owner/catalog change.
-        app.world_mut()
-            .get_mut::<ModelicaVariables>(entity)
-            .unwrap()
-            .values
-            .insert("x".into(), f64::NAN);
+        // A skipped timestamp must not acknowledge a batch's owner/catalog change.
         let final_owner = GlobalEntityId::from_raw(123);
         app.world_mut().entity_mut(entity).insert(final_owner);
         app.world_mut()
             .get_mut::<ModelicaModel>(entity)
             .unwrap()
-            .current_time = 1.0;
+            .current_time = f64::NAN;
         app.update();
         assert_eq!(
             app.world().resource::<SignalRegistry>().global_owner(&x),
@@ -831,8 +836,8 @@ mod tests {
         app.world_mut()
             .get_mut::<ModelicaVariables>(entity)
             .unwrap()
-            .values
-            .insert("x".into(), 3.0);
+            .insert_named("x".into(), 3.0)
+            .expect("finite admitted observation");
         app.world_mut()
             .get_mut::<ModelicaModel>(entity)
             .unwrap()
@@ -844,23 +849,18 @@ mod tests {
         );
 
         app.world_mut()
-            .get_mut::<ModelicaVariables>(entity)
-            .unwrap()
-            .values
-            .insert("x".into(), f64::NAN);
-        app.world_mut()
             .resource_mut::<SignalRegistry>()
             .remove_signal(&x);
         app.world_mut()
             .get_mut::<ModelicaModel>(entity)
             .unwrap()
-            .current_time = 1.5;
+            .current_time = f64::NAN;
         app.update();
         app.world_mut()
             .get_mut::<ModelicaVariables>(entity)
             .unwrap()
-            .values
-            .insert("x".into(), 4.0);
+            .insert_named("x".into(), 4.0)
+            .expect("finite admitted observation");
         app.world_mut()
             .get_mut::<ModelicaModel>(entity)
             .unwrap()
@@ -893,8 +893,12 @@ mod tests {
     fn channel_limit_uses_live_registry_admission_after_removal() {
         let model = ModelicaModel::default();
         let mut variables = ModelicaVariables::default();
-        variables.values.insert("a".into(), 1.0);
-        variables.values.insert("b".into(), 2.0);
+        variables
+            .insert_named("a".into(), 1.0)
+            .expect("finite admitted observation");
+        variables
+            .insert_named("b".into(), 2.0)
+            .expect("finite admitted observation");
         let (mut app, entity) = app_with_model(model, variables);
         app.world_mut()
             .resource_mut::<TelemetrySettings>()

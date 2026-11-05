@@ -1,6 +1,6 @@
 use super::*;
 use lunco_modelica_runtime::CompileRequested;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 type ModelicaDocuments =
     lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>;
@@ -251,20 +251,25 @@ pub fn dispatch_modelica_compile_requests(
         })
         .unwrap_or_default();
     queued.extend(requests.read().cloned());
-    let mut requests = queued;
-    requests.dedup_by(|later, earlier| {
-        if later.source == earlier.source
-            && later.entity == earlier.entity
-            && later.class == earlier.class
+    // Deferred batches can interleave owners across several lifecycle cycles.
+    // Preserve first-admission order and every listener while admitting each
+    // exact source/target/class once with its latest ordered run intent. A
+    // different class for the same participant remains an ordered replacement.
+    let mut requests: Vec<CompileRequested> = Vec::new();
+    for mut request in queued {
+        if let Some(admitted) = requests
+            .iter_mut()
+            .rev()
+            .find(|admitted| admitted.source == request.source && admitted.entity == request.entity)
+            .filter(|admitted| admitted.class == request.class)
         {
-            earlier.completions.append(&mut later.completions);
-            earlier.force |= later.force;
-            earlier.resume_after_compile = later.resume_after_compile;
-            true
+            admitted.completions.append(&mut request.completions);
+            admitted.force |= request.force;
+            admitted.resume_after_compile = request.resume_after_compile;
         } else {
-            false
+            requests.push(request);
         }
-    });
+    }
     if !requests.is_empty() {
         commands.queue(move |world: &mut World| {
             let mut sampling = None;
@@ -886,8 +891,7 @@ fn dispatch_one(
         parameters: Default::default(),
         inputs,
         pending_step_inputs: None,
-        compiled_input_names: BTreeSet::new(),
-        compiled_parameter_names: BTreeSet::new(),
+        compiled_variables: Arc::default(),
         checked_interface: None,
         last_error: None,
         document: doc,
@@ -1111,7 +1115,9 @@ mod tests {
                 .unwrap();
         }
         let mut variables = ModelicaVariables::default();
-        variables.values.insert("x".into(), 0.0);
+        variables
+            .insert_named("x".into(), 0.0)
+            .expect("finite admitted observation");
         let entity = app
             .world_mut()
             .spawn((
@@ -1144,7 +1150,10 @@ mod tests {
         assert!(pending.in_flight_step.is_some());
         assert_eq!(pending.session_id, 7);
         assert_eq!(
-            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
+            app.world()
+                .get::<ModelicaVariables>(entity)
+                .unwrap()
+                .values()["x"],
             0.0
         );
         assert!(received_commands.is_empty() && reply.try_take().is_none());
@@ -1183,7 +1192,10 @@ mod tests {
             .unwrap();
         app.world_mut().run_schedule(First);
         assert_eq!(
-            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
+            app.world()
+                .get::<ModelicaVariables>(entity)
+                .unwrap()
+                .values()["x"],
             1.0
         );
         assert!(
@@ -1313,6 +1325,71 @@ mod tests {
     }
 
     #[test]
+    fn interleaved_compile_coalescing_preserves_target_replacement_order() {
+        let mut documents = ModelicaDocuments::default();
+        let doc = documents.allocate_untitled("model Plant end Plant;".into());
+        let mut app = App::new();
+        app.insert_resource(documents)
+            .add_message::<CompileRequested>()
+            .add_message::<ModelicaNotice>()
+            .add_systems(Update, dispatch_modelica_compile_requests);
+        let entities = [
+            app.world_mut()
+                .spawn(ModelicaModel {
+                    document: doc,
+                    ..Default::default()
+                })
+                .id(),
+            app.world_mut()
+                .spawn(ModelicaModel {
+                    document: doc,
+                    ..Default::default()
+                })
+                .id(),
+        ];
+        for (participant, class, running) in [
+            (0, "Plant", true),
+            (1, "Plant", true),
+            (0, "Other", true),
+            (1, "Plant", false),
+            (0, "Plant", false),
+        ] {
+            app.world_mut().write_message(CompileRequested {
+                completions: Vec::new(),
+                source: lunco_workspace::PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+                entity: Some(entities[participant]),
+                class: Some(class.into()),
+                force: false,
+                resume_after_compile: running,
+            });
+        }
+        app.world_mut().run_schedule(Update);
+        let pending = &app.world().resource::<PendingCompileAdmissions>().0;
+        let targets: Vec<_> = pending
+            .iter()
+            .map(|request| {
+                (
+                    request.entity.unwrap(),
+                    request.class.as_deref().unwrap(),
+                    request.resume_after_compile,
+                )
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                (entities[0], "Plant", true),
+                (entities[1], "Plant", false),
+                (entities[0], "Other", true),
+                (entities[0], "Plant", false),
+            ]
+        );
+    }
+
+    #[test]
     fn pending_compile_batch_defers_sampling_and_releases_retired_requests() {
         #[derive(Resource, Default)]
         struct SamplingCount(usize);
@@ -1361,6 +1438,24 @@ mod tests {
                     runtime: lunco_workspace::DocumentRuntimeOwner::Application,
                 },
                 entity: Some(entity),
+                class: Some("Plant".into()),
+                force: false,
+                resume_after_compile: true,
+            });
+        }
+        // Repeated lifecycle intents can interleave participants while their
+        // source/admission is still pending.
+        for entity in &entities {
+            let (completion, reply) =
+                lunco_modelica_runtime::ModelicaLifecycleCompletion::channel();
+            replies.push(reply);
+            app.world_mut().write_message(CompileRequested {
+                completions: vec![completion],
+                source: lunco_workspace::PinnedDocumentRuntimeOwner {
+                    document: doc,
+                    runtime: lunco_workspace::DocumentRuntimeOwner::Application,
+                },
+                entity: Some(*entity),
                 class: Some("Plant".into()),
                 force: false,
                 resume_after_compile: true,

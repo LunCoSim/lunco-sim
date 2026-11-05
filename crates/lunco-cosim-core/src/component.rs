@@ -31,10 +31,39 @@ pub struct BindingEpochDirty(pub bool);
 /// provider has produced its first value. The live sample remains in
 /// [`SimComponent::outputs`], so a declared port with no sample is still read
 /// as unavailable rather than as a fabricated zero.
-#[derive(Component, Debug, Clone, Default)]
+#[derive(Component, Debug, Clone)]
 pub struct DeclaredOutputPorts {
-    /// Names in the endpoint's output contract.
-    pub names: HashSet<String>,
+    names: HashSet<String>,
+    topology_key: u64,
+}
+
+impl Default for DeclaredOutputPorts {
+    fn default() -> Self {
+        Self::new(HashSet::default())
+    }
+}
+
+impl DeclaredOutputPorts {
+    /// Admit an immutable declaration inventory and its structural identity.
+    /// Replacing the inventory must pass through this constructor so cached
+    /// readers never rehash names or observe a key detached from its names.
+    pub fn new(names: HashSet<String>) -> Self {
+        let topology_key = lunco_port_core::ports::port_name_set_key(names.iter());
+        Self {
+            names,
+            topology_key,
+        }
+    }
+
+    /// Names available to authoring, discovery and binding consumers.
+    pub fn names(&self) -> &HashSet<String> {
+        &self.names
+    }
+
+    /// Retained structural fact, independent of numerical samples.
+    pub fn topology_key(&self) -> u64 {
+        self.topology_key
+    }
 }
 
 /// A co-simulation model on an entity.
@@ -122,5 +151,30 @@ impl SimStatus {
     /// Returns true if the model can accept step commands.
     pub fn can_step(&self) -> bool {
         matches!(self, SimStatus::Running | SimStatus::Idle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declaration_keys_are_admitted_with_the_complete_immutable_inventory() {
+        let names: HashSet<String> = ["plant.long.output".into(), "pending".into()].into();
+        let declared = DeclaredOutputPorts::new(names.clone());
+        assert_eq!(declared.names(), &names);
+        assert_eq!(
+            declared.topology_key(),
+            lunco_port_core::ports::port_name_set_key(names.iter())
+        );
+        assert_eq!(declared.clone().topology_key(), declared.topology_key());
+        let renamed =
+            DeclaredOutputPorts::new(["plant.long.output".into(), "replacement".into()].into());
+        assert_eq!(renamed.names().len(), declared.names().len());
+        assert_ne!(renamed.topology_key(), declared.topology_key());
+        assert_eq!(
+            DeclaredOutputPorts::default().topology_key(),
+            lunco_port_core::ports::port_name_set_key(std::iter::empty::<&str>())
+        );
     }
 }

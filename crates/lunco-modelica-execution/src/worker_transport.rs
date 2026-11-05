@@ -13,8 +13,8 @@
 //!
 //! Wire format
 //! ----------
-//! Commands and results round-trip through `bincode::serialize` /
-//! `bincode::deserialize`. Native and browser workers publish the same current
+//! Commands and results round-trip through Bincode's serde codec with
+//! `bincode::config::standard()`. Native and browser workers publish the same current
 //! observations through ordered result messages. The response owner validates
 //! them before the shared telemetry registry retains history.
 //!

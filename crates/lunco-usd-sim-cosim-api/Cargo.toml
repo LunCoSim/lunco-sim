@@ -14,6 +14,7 @@ lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-hash = { path = "../lunco-hash" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
