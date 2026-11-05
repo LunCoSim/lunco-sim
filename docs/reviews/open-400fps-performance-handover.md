@@ -1,5 +1,24 @@
 # High-quality realtime performance handover
 
+## Current shared-output qualification — 2026-11-05
+
+The consumer pins published Rumoca `e325c2c` and all four maintained Bevy
+renderer/light owners at published `eabfa34`. Fixed root and visible-output
+plans share checked preparation and evaluation; separate row caches are removed.
+The visible native fixture is 94.65% faster, with exact-value checks. Current
+normal High/2560×1440 windows measure 44.97 and 50.32 FPS against a fresh
+44.99 FPS baseline; MainPropulsion remains 1.41–1.55 ms/job. A stable scene-wide
+gain and the 1 ms/150 FPS targets are not established.
+
+Validation passes: 567 solver tests, native Clippy, bit-identical fixed-canary
+trajectories, 264 authored Rhai checks and two expected-fault scenes. Tracy
+identifies integration/refresh work, telemetry hashing, repeated Rhai fact
+conversion, and GPU opaque/directional shadow passes as next priorities. All
+546 guarded source hashes are unchanged and owned sessions are closed. See
+[the current review](shared-output-selection-performance-2026-11-05.md) for
+provenance, scope, measurements and test ownership. The two dependency changes
+are published; LunCoSim integration remains local.
+
 ## Current root-dispatch qualification — 2026-11-05
 
 The application consumer pins local Rumoca commit

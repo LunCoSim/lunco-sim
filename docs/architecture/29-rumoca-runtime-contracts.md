@@ -434,14 +434,16 @@ compiler source-map/diagnostic data are not retained by live workers. Native DAE
 reconstructs through the checked constructor. Compilation input identity,
 participating-source identity and solver-preparation identity remain distinct;
 the earlier cache cannot bypass source admission or retain a live session.
-Rumoca's root plan prepares fixed public/search selections into checked source
-program batches. Numerical execution retains the original root membership,
-program order, output placement, current coordinates and finite-value checks.
-Native execution errors propagate; a compilation decline uses the prepared
-interpreter. No COM/input-dependent result is cached. The SDK owns this mechanism
-and its [root execution contract](../../../rumoca/docs/dev-guide/src/runtime/simulation-runtime.md#root-condition-execution);
-LunCoSim supplies its existing ME execution backend and reads the same checked
-observations.
+Rumoca's fixed root and visible-output plans carry checked executable selections
+alongside their semantic metadata. Their common `PreparedOutputSelection` owner
+retains program order, complete grouped outputs, direct/deduplicated observations,
+current coordinates and error boundaries. Fixed readers cannot receive raw row
+selections or own separate per-row caches. Compilation decline uses the same
+prepared interpreter; admitted native errors propagate. No COM/input-dependent
+result is cached. The SDK's [fixed execution contract](../../../rumoca/docs/dev-guide/src/runtime/simulation-runtime.md#fixed-output-execution)
+owns this mechanism; LunCoSim supplies its existing ME backend and consumes the
+same checked observations. Public runtime behavior is verified in authored Rhai;
+native call counts, storage bounds and exact bit contracts use SDK unit tests.
 
 Rumoca's exact assignment owner issues a checked `SharedAssignmentSchedule`
 containing immutable `ScalarProgramBlock` storage, provenance and ordered target

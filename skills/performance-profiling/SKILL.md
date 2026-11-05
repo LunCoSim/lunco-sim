@@ -1284,13 +1284,17 @@ process memory alongside readiness. A cache-hit replacement does not measure
 cold lowering, and concurrent Cargo or simulator work limits timing claims.
 
 For root-condition cost, distinguish algebraic conditioning from selected-expression
-and native-call dispatch. Rumoca's fixed public/search selections prepare complete
-source program batches once; preserve their membership, shared conditional owners,
-output placement and terminal native errors. The native adapter's ignored
+and native-call dispatch. Rumoca's fixed root and visible-output plans
+use the same prepared output-selection owner; preserve their membership, shared
+conditional owners, direct/deduplicated values, output placement and terminal native
+errors. Do not add a fixed per-row dispatch/cache beside that owner. Dynamic guarded
+event selections retain their distinct membership semantics. The native adapter's ignored
 `native_execution::tests::root_batches::fixed_root_selection_diagnostic` measures
-384 roots at 512 fresh times. Use independent executable pairs, exact-value checks,
+384 roots at 512 fresh times. Its companion
+`native_execution::tests::root_batches::fixed_visible_selection_diagnostic` uses
+the same native fixture for visible values. Use independent executable pairs, exact-value checks,
 the fixed MSL canary and a production co-simulation window before claiming a gain.
-See the [SDK root execution contract](../../docs/architecture/29-rumoca-runtime-contracts.md).
+See the [SDK fixed-output execution contract](../../docs/architecture/29-rumoca-runtime-contracts.md).
 
 A dirty Twin manifest can select a film scene without changing its Git HEAD.
 Use the exact canonical scene with `--scene` and record source hashes. If concurrent
