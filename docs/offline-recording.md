@@ -182,7 +182,12 @@ system has run.
 complete fixed cycles per host service pass. The recorder reads the same
 `Time<Fixed>::overstep`: while a whole cycle remains, it writes zero additional
 duration and waits before requesting readback. This preserves the logical frame
-through budget and causal holds, including a 25 FPS frame at 64x. It does not
+through budget and causal holds, including a 25 FPS frame at 64x. Completion
+uses transport intent and the shared fixed-cycle accumulator, rather than the
+effective virtual-clock pause state: a causal hold can pause that clock with
+part of an image still queued. Readback waits for both the hold to clear and
+all admitted cycles to complete. An explicit user pause still permits a held
+camera shot. It does not
 install or restore a separate virtual-clock cap. The rendered production
 `fixed_budget_recording.rhai` gate exercises this boundary and rejects a
 readback with whole cycles pending.

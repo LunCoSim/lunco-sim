@@ -15,7 +15,10 @@ description: >
 
 The recorder supplies `1/fps` per frame through the shared transport. A held
 simulation advances only through explicit `StepSimulation` requests. Output
-sequencing uses frame index, independent of machine speed. Full design:
+sequencing uses frame index, independent of machine speed. Causal preparation
+holds retain each image's admitted time; readback waits until the hold clears
+and the shared runner completes its queued cycles. An effective clock pause
+from that hold does not mean that the image is complete. Full design:
 [`docs/offline-recording.md`](../../docs/offline-recording.md).
 
 ## The one-command take (start here)

@@ -1860,7 +1860,8 @@ fn drive_offline_clock(
     status_bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
     ui_presentation: Option<Res<crate::presentation::CaptureUiPresentation>>,
     fixed_time: Res<Time<bevy::time::Fixed>>,
-    virtual_time: Res<Time<bevy::time::Virtual>>,
+    transport: Res<lunco_time::TimeTransport>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
     step_control: Option<Res<lunco_time::SimulationStepControl>>,
     sim_tick: Option<Res<lunco_core_runtime::SimTick>>,
     mut sampling: ResMut<lunco_render::OfflineImageSampling>,
@@ -1931,6 +1932,9 @@ fn drive_offline_clock(
     // Keep this logical image fixed until both domain work and the rendered
     // loading-overlay acknowledgement are clear. No dirty image is numbered.
     if visual_work_pending(status_bus.as_deref())
+        || progress
+            .as_deref()
+            .is_some_and(lunco_core_runtime::SimulationProgress::is_held)
         || ui_presentation.as_ref().is_some_and(|ui| !ui.ready())
     {
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(
@@ -1969,7 +1973,10 @@ fn drive_offline_clock(
         let manual_pending = step_control
             .as_ref()
             .is_some_and(|control| control.remaining() > 0);
-        let automatic_pending = !virtual_time.is_paused()
+        // Admission can pause the effective virtual clock after only part of
+        // this image's duration completed. User transport intent still owns
+        // the remaining cycles after that causal hold releases.
+        let automatic_pending = transport.is_running()
             && !step_control
                 .as_ref()
                 .is_some_and(|control| control.is_held())
@@ -2338,6 +2345,95 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
 #[cfg(test)]
 mod recording_readiness_tests {
     use super::*;
+
+    #[test]
+    fn offline_readback_waits_for_admitted_cycles_after_a_causal_hold() {
+        use bevy::ecs::system::RunSystemOnce;
+        use lunco_core_runtime::{SimulationProgress, SimulationProgressKey};
+
+        let mut world = World::new();
+        world.insert_resource(OfflineRecordingState {
+            active: true,
+            fps: 30,
+            ..Default::default()
+        });
+        world.init_resource::<lunco_render::OfflineImageSampling>();
+        world.init_resource::<Time<bevy::time::Fixed>>();
+        world.init_resource::<Time<bevy::time::Virtual>>();
+        world.init_resource::<lunco_time::TimeTransport>();
+        world.init_resource::<SimulationProgress>();
+        world.resource_mut::<Time<bevy::time::Virtual>>().pause();
+        let quantum = world.resource::<Time<bevy::time::Fixed>>().timestep();
+        world
+            .resource_mut::<Time<bevy::time::Fixed>>()
+            .accumulate_overstep(quantum);
+        let key = SimulationProgressKey::physics_integration();
+        world
+            .resource_mut::<SimulationProgress>()
+            .acquire(key, "terrain support pending");
+        world.run_system_once(drive_offline_clock).unwrap();
+        assert!(
+            !world
+                .resource::<OfflineRecordingState>()
+                .is_waiting_for_frame
+        );
+
+        world.resource_mut::<SimulationProgress>().release(key);
+        world.run_system_once(drive_offline_clock).unwrap();
+        assert!(
+            !world
+                .resource::<OfflineRecordingState>()
+                .is_waiting_for_frame,
+            "releasing the hold cannot admit an image before the queued cycle completes"
+        );
+        assert!(
+            matches!(world.resource::<TimeUpdateStrategy>(), TimeUpdateStrategy::ManualDuration(d) if d.is_zero())
+        );
+
+        world
+            .resource_mut::<Time<bevy::time::Fixed>>()
+            .discard_overstep(quantum);
+        world.run_system_once(drive_offline_clock).unwrap();
+        assert!(
+            world
+                .resource::<OfflineRecordingState>()
+                .is_waiting_for_frame
+        );
+    }
+
+    #[test]
+    fn offline_held_shots_do_not_wait_for_unadmitted_automatic_cycles() {
+        use bevy::ecs::system::RunSystemOnce;
+        for (mode, rate, held) in [
+            (lunco_time::TransportMode::Paused, 1.0, false),
+            (lunco_time::TransportMode::Playing, 0.0, false),
+            (lunco_time::TransportMode::Playing, 1.0, true),
+        ] {
+            let mut world = World::new();
+            world.insert_resource(OfflineRecordingState {
+                active: true,
+                fps: 30,
+                ..Default::default()
+            });
+            world.init_resource::<lunco_render::OfflineImageSampling>();
+            world.init_resource::<Time<bevy::time::Fixed>>();
+            world.insert_resource(lunco_time::TimeTransport { mode, rate });
+            let mut control = lunco_time::SimulationStepControl::default();
+            control.request(Some(held), None, false).unwrap();
+            world.insert_resource(control);
+            let quantum = world.resource::<Time<bevy::time::Fixed>>().timestep();
+            world
+                .resource_mut::<Time<bevy::time::Fixed>>()
+                .accumulate_overstep(quantum);
+            world.run_system_once(drive_offline_clock).unwrap();
+            assert!(
+                world
+                    .resource::<OfflineRecordingState>()
+                    .is_waiting_for_frame,
+                "an explicit pause or hold must allow a stationary shot"
+            );
+        }
+    }
 
     #[test]
     fn visual_work_holds_capture_but_optional_derived_work_does_not() {

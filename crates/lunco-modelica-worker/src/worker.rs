@@ -5993,6 +5993,73 @@ mod artifact_cache_tests {
     }
 
     #[test]
+    fn reused_nested_parameter_initialization_uses_current_instance() {
+        let source = r#"
+model Navigation
+ parameter Real initial_y=0;
+ output Real y;
+initial equation
+ y=initial_y;
+equation
+ der(y)=0;
+end Navigation;
+model Probe
+ parameter Real initial_y=60;
+ Navigation navigation(initial_y=initial_y);
+end Probe;
+"#;
+        let mut compiler = ModelicaCompiler::new();
+        let mut artifacts = CompiledArtifactCache::new(std::num::NonZeroUsize::new(4).unwrap());
+        let mut first_dae = None;
+        for expected in [60.0, 1.0, 2.0, -4.0, 60.0] {
+            let mut unit = assemble_compile_unit(source, Vec::new());
+            unit.parameter_overrides = vec![("initial_y".into(), expected)];
+            let artifact = compile_shared(
+                &mut artifacts,
+                &mut compiler,
+                "Probe",
+                &unit,
+                "nested-init.mo",
+                0,
+            )
+            .unwrap();
+            if let Some(first) = &first_dae {
+                assert!(
+                    Arc::ptr_eq(first, &artifact.compiled.dae),
+                    "tunable values must reuse the same compiled model"
+                );
+            } else {
+                first_dae = Some(Arc::clone(&artifact.compiled.dae));
+            }
+            let plan = live_build_plan(
+                solver::RuntimeProfile {
+                    live: true,
+                    predicted: false,
+                },
+                &unit.parameter_overrides,
+                &[],
+                artifact.prepared_source_key,
+                &artifact.structural_overrides,
+                None,
+            )
+            .unwrap();
+            let component =
+                rumoca_sim::prepare_fmi_component(&artifact.compiled.dae, &plan.options).unwrap();
+            let values = rumoca_sim::initialize_fmi_component(
+                &component,
+                &plan.options,
+                &["navigation.y".into()],
+            )
+            .unwrap();
+            assert!(
+                (values[0] - expected).abs() < 1e-8,
+                "expected {expected}, actual {}",
+                values[0]
+            );
+        }
+    }
+
+    #[test]
     fn coupled_array_modifiers_initialize_with_qualified_indexed_parameter_overrides() {
         let source = r#"
 model Element
