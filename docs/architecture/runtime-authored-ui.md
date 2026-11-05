@@ -425,7 +425,12 @@ The same policy boundary applies to simulation participants: Rust exposes
 typed participant facts and authored public outputs, while Twin Rhai chooses
 which values become a presentation property. Missing, compiling, paused, and
 failed states remain explicit instead of being hidden until a sample exists.
-The built-in properties policy counts statuses through indexed participant
+The single `runtime.ui.surface` hook returns `#{visible: bool, properties: map}`
+for one captured fact snapshot. Both fields are validated before the surface
+is published, so malformed visibility or properties fail the whole decision.
+There is one backend fact conversion and one hook call per admitted surface
+snapshot. Rhai owns camera visibility as well as runtime subject visibility.
+The built-in projection counts statuses through indexed participant
 access and passes only those counts to its formatting helper. Rhai array
 iteration and by-value helper arguments can copy nested input/output maps;
 presentation helpers should receive only the fields they consume. Custom

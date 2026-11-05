@@ -210,8 +210,7 @@ fn publish_application_cadence_exposure(
 }
 
 const LUNAR_MAP_SETTING_KEY: &str = "ui.lunar_map";
-const RUNTIME_UI_VISIBILITY_HOOK: &str = "runtime.ui.visibility";
-const RUNTIME_UI_PROPERTIES_HOOK: &str = "runtime.ui.properties";
+const RUNTIME_UI_SURFACE_HOOK: &str = "runtime.ui.surface";
 
 fn runtime_ui_execution_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
     lunco_core::RuntimeExecutionContext {
@@ -247,20 +246,9 @@ fn presentation_execution_context(
 }
 
 lunco_hooks::declare_hook! {
-    id: RUNTIME_UI_VISIBILITY_HOOK,
+    id: RUNTIME_UI_SURFACE_HOOK,
     owner: "lunco-luncosim-exposures",
-    description: "Choose visibility for a generic authored runtime UI surface.",
-    signature: [facts: Map],
-    output: Map,
-    deterministic: false,
-    required: false,
-    installable: true,
-}
-
-lunco_hooks::declare_hook! {
-    id: RUNTIME_UI_PROPERTIES_HOOK,
-    owner: "lunco-luncosim-exposures",
-    description: "Provide typed presentation properties for a generic authored runtime UI surface.",
+    description: "Project one fact snapshot to an atomic surface: boolean visible and typed properties map.",
     signature: [facts: Map],
     output: Map,
     deterministic: false,

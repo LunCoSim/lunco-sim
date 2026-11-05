@@ -7,6 +7,17 @@ fn exposure_present(namespace) {
     query("ReadExposures", #{surface: namespace}).surfaces.contains(namespace)
 }
 
+fn seed_telemetry_for_document() {
+    for doc in query("ListOpenDocuments").open_documents {
+        if doc.kind != "usd" || doc.runtime_context.kind != "local_twin" { continue; }
+        let owner = find_path_in_document(doc.doc_id, "/World");
+        if owner < 0 { throw "telemetry probe needs the admitted document's global /World identity"; }
+        return cmd("ControlTelemetry", #{channel: "lifecycle_retirement_probe", entity: owner,
+            reflect: "Transform.translation.x", unit: "m", rate_hz: 60.0});
+    }
+    throw "telemetry probe needs an admitted Twin document";
+}
+
 fn verify_exposure_published(namespace) {
     report_verdict([
         t_true(exposure_present(namespace), "outgoing authored surface is retained in the public registry"),
@@ -23,7 +34,7 @@ fn verify_exposure_retired(namespace) {
 }
 
 fn scene_policy_hook() {
-    policy_hook("runtime.ui.properties")
+    policy_hook("runtime.ui.surface")
 }
 
 fn policy_hook(id) {
@@ -57,19 +68,19 @@ fn verify_runtime_policy_retired(application_file) {
 
 fn seed_scene_policy() {
     cmd("SetRhaiPolicy", #{
-        name: "RetirementProbe", seam: "runtime.ui.properties", entry: "retirement_probe",
-        source: "fn retirement_probe(facts) { #{ retirement_probe: true } }",
+        name: "RetirementProbe", seam: "runtime.ui.surface", entry: "retirement_probe",
+        source: "fn retirement_probe(facts) { #{ visible: true, properties: #{ retirement_probe: true } } }",
         deterministic: false,
     });
 }
 
 fn scene_policy_ready() {
-    let result = invoke_hook("runtime.ui.properties", [#{}]);
-    result.ok && result.value.retirement_probe == true
+    let result = invoke_hook("runtime.ui.surface", [#{}]);
+    result.ok && result.value.properties.retirement_probe == true
 }
 
 fn verify_scene_policy_applied() {
-    let replacement = bind_policy("runtime.ui.properties", "wrong_owner", "fn wrong_owner(facts) { #{} }");
+    let replacement = bind_policy("runtime.ui.surface", "wrong_owner", "fn wrong_owner(facts) { #{} }");
     report_verdict([
         t_true(!replacement.ok && replacement.status == "rejected" && replacement.installed,
             "inline application mutation cannot replace a scene-authored policy"),

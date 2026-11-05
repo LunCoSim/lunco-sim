@@ -111,14 +111,9 @@ entry = "shadow_quality"
 skip_when_hook_unavailable = true
 
 [[policies]]
-hook = "runtime.ui.visibility"
+hook = "runtime.ui.surface"
 source = "runtime_ui_surface.rhai"
 entry = "runtime_ui_surface"
-
-[[policies]]
-hook = "runtime.ui.properties"
-source = "runtime_ui_properties.rhai"
-entry = "runtime_ui_properties"
 
 [[policies]]
 hook = "runtime.ui.recording"

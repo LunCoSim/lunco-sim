@@ -103,11 +103,8 @@ def seed_telemetry(session: ProductionSession) -> tuple[list[str], list[str]]:
     prim = live_prim(session, "/World", topology=True)
     if not prim or not prim.get("spawned"):
         raise RuntimeError("telemetry probe needs the current mounted /World")
-    # The plain Xform has session-local identity; the topology owner supplies
-    # its exact native Entity. Solver channels separately exercise API owners.
-    execute(session, "ControlTelemetry", channel="lifecycle_retirement_probe",
-            entity=prim["topology"]["binding"]["entity"], reflect="Transform.translation.x",
-            unit="m", rate_hz=60.0)
+    execute(session, "RunRhai", code=SOURCE.read_text(encoding="utf-8")
+            + "\nseed_telemetry_for_document();")
     execute(session, "SetTimeTransport", playing=True)
     def sampled():
         channels = execute(session, "ListTelemetryChannels")["channels"]

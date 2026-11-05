@@ -201,8 +201,13 @@ Producers must use change detection, revisions, or dirty flags. Continuous
 values are coalesced to the current bounded presentation cadence (20 Hz).
 `EngineExposures.revision` changes when a complete surface changes or retires;
 it is not a frame counter. Do not use JSON to detect internal changes.
-Runtime visibility/property policies prepare immutable facts through shared
+The `runtime.ui.surface` policy consumes one immutable fact snapshot through shared
 bounded async admission in the same headless and windowed owner. Use
+one Rhai entry returning `#{visible: bool, properties: map}`; the owner validates
+and publishes both together. Do not split visibility/properties into separate
+hook calls or pass the complete rich fact map to by-value formatting helpers.
+Camera surfaces use the same decision with their captured Presentation context.
+Use
 `ReadExposures` to wait for `state == "ready"` before asserting their properties.
 A new identity starts hidden and `pending`; `failed` exposes an owner error
 without partial properties and requires source/identity replacement to recover.
@@ -216,7 +221,20 @@ production binary in both host modes:
 ```sh
 python3 scripts/api/test_runtime_ui_preparation.py --port 4374 --log target/ui-preparation-headless.log
 python3 scripts/api/test_runtime_ui_preparation.py --port 4375 --windowed --log target/ui-preparation-windowed.log
+python3 scripts/api/test_runtime_policy_transaction.py --port 4376 --log target/ui-policy-transaction.log
 ```
+
+`SetRhaiPolicy` creates a complete source policy through one compound document
+intent. Use that producer or `ApplyUsdOps` for file-backed policy changes; do
+not enqueue its scope, source, entry and execution fields as parallel edits.
+File-backed `LunCoPolicy` uses the registered asset-typed `info:sourceAsset`;
+remove its inline `info:sourceCode` opinion so the file is authoritative.
+Resolve source assets within their admitted Twin/source scope and verify the
+actual installed hook and ready consumer, in addition to saved USD readback.
+The runtime reads `UsdReadObject::asset_identifier` through the shared prepared/
+live policy reader, preserving the contributing layer's anchor for referenced
+policies. Raw authored asset text is not a file-I/O identifier; source-identifier
+errors must reject installation visibly rather than guessing the scene root.
 
 When one producer owns several surfaces, keep invalidation domains separate so
 continuous motion does not rebuild static authored topology. Use the existing

@@ -507,6 +507,14 @@ and owner publication. Native pure policy evaluation uses shared bounded worker
 admission, retaining captured hooks and caller context; one job plus one latest
 pending snapshot per surface bounds work. Source and identity changes fence
 completion. The wasm kernel is currently cooperative, not an isolated worker.
+`exposure_runtime_surface_projection` covers the single `runtime.ui.surface`
+decision for visibility and properties. Rich facts convert once per admitted
+snapshot; keep policy in Rhai and pass only consumed fields to helpers.
+Modelica recording prepares source/recorder slot pairs at layout/admission
+boundaries. Profile named discovery separately from bound appends, and confirm
+deferred admission remains quiescent until recorder membership, settings or
+source layout changes. Preserve rate, archives, lease rejection and paused-reset
+wake behavior when changing those owners.
 Wait for ready surfaces and inspect preparation failures before taking a UI
 performance cohort. This boundary does not isolate the entire fixed runner
 from the presentation thread. Keep

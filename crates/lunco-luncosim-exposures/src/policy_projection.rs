@@ -313,8 +313,7 @@ pub(super) fn submit_preparation(
     let admitted_inputs = inputs.clone();
     let payload = Arc::new(Mutex::new(Some(inputs)));
     let owned_payload = Arc::clone(&payload);
-    let visibility = lunco_hooks::get(RUNTIME_UI_VISIBILITY_HOOK);
-    let properties = lunco_hooks::get(RUNTIME_UI_PROPERTIES_HOOK);
+    let policy = lunco_hooks::get(RUNTIME_UI_SURFACE_HOOK);
     let (sender, receiver) = mpsc::channel();
     let job = move || {
         let _span = bevy::log::info_span!("runtime_ui_policy_preparation").entered();
@@ -328,8 +327,7 @@ pub(super) fn submit_preparation(
                 inputs
                     .into_iter()
                     .map(|input| {
-                        let result =
-                            prepare_surface(&input, visibility.as_deref(), properties.as_deref());
+                        let result = prepare_surface(&input, policy.as_deref());
                         PreparedSurface {
                             namespace: input.namespace.clone(),
                             identity: input.identity.clone(),
@@ -412,45 +410,32 @@ fn invoke(
 }
 fn prepare_surface(
     input: &ProjectionInput,
-    visibility: Option<&RegisteredHook>,
-    properties: Option<&RegisteredHook>,
+    policy: Option<&RegisteredHook>,
 ) -> Result<ExposureSurface, String> {
+    let value = {
+        let _span = bevy::log::info_span!("exposure_runtime_surface_projection").entered();
+        invoke(policy, RUNTIME_UI_SURFACE_HOOK, input)?
+    };
+    let visible = value
+        .get("visible")
+        .and_then(|value| match value {
+            HookValue::Bool(value) => Some(*value),
+            _ => None,
+        })
+        .ok_or("surface policy must return boolean visible")?;
+    let Some(HookValue::Map(values)) = value.get("properties") else {
+        return Err("surface policy must return a typed properties map".into());
+    };
+    // Validate the complete decision before its one publication boundary.
     let mut surface = ExposureSurface {
         subject: input.identity.subject(),
+        visible,
         ..Default::default()
-    };
-    if matches!(input.identity, InputIdentity::Camera(_)) {
-        surface.visible = true;
-        for key in ["active_name", "active_label"] {
-            let value = input
-                .facts
-                .get(key)
-                .and_then(HookValue::as_str)
-                .ok_or_else(|| format!("camera preparation omitted {key}"))?;
-            surface.set_property(key, value);
-        }
-    } else {
-        let _span = bevy::log::info_span!("exposure_runtime_surface_visibility").entered();
-        let value = invoke(visibility, RUNTIME_UI_VISIBILITY_HOOK, input)?;
-        surface.visible = value
-            .get("visible")
-            .and_then(|value| match value {
-                HookValue::Bool(value) => Some(*value),
-                _ => None,
-            })
-            .ok_or("visibility policy must return a map with boolean visible")?;
-    }
-    let value = {
-        let _span = bevy::log::info_span!("exposure_runtime_surface_properties").entered();
-        invoke(properties, RUNTIME_UI_PROPERTIES_HOOK, input)?
-    };
-    let HookValue::Map(values) = value else {
-        return Err("properties policy must return a typed map".into());
     };
     for (name, value) in values {
         surface.set_property(
-            &name,
-            hook_value_to_exposure(value, &input.namespace, &name)?,
+            name,
+            hook_value_to_exposure(value.clone(), &input.namespace, name)?,
         );
     }
     if let Some(vessel) = &input.driven {

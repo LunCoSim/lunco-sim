@@ -1,4 +1,4 @@
-// Run with the current runtime_ui_properties.rhai prepended by the API driver.
+// Run with the current runtime_ui_surface.rhai prepended by the API driver.
 let lunar=coordinate_properties(#{system:"IAU/WGCCRE",body:301,
     latitude_deg:-84.72672255,longitude_deg:29.14428685,height_m:60.125},[1.0,2.0,3.0]);
 let western=coordinate_properties(#{system:"IAU/WGCCRE",body:301,

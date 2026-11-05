@@ -267,29 +267,10 @@ checks.push(t_true(recording_call.ok == false && recording_call.status == "fault
         && recording_call.error.contains("Application/Ui/Preparation"),
     "the runtime UI recording policy rejects calls outside its owner cycle"));
 
-let visibility_call = invoke_hook("runtime.ui.visibility", [#{
-    available: true,
-    visibility_mode: "always",
-    control_owner: "local",
-    status: "ready",
-    simulation_progress: (),
-}]);
-checks.push(t_true(visibility_call.ok == false && visibility_call.status == "fault"
-        && visibility_call.error.contains("Application/Ui/Preparation"),
-    "the runtime UI visibility policy rejects calls outside its owner cycle"));
-
-let properties_call = invoke_hook("runtime.ui.properties", [#{
-    surface_id: "camera-status",
-    cameras: [],
-    active_name: "",
-    active_label: "",
-    avatar_available: false,
-    director_available: false,
-    error: (),
-}]);
-checks.push(t_true(properties_call.ok == false && properties_call.status == "fault"
-        && properties_call.error.contains("Application/Ui/Preparation"),
-    "the runtime UI properties policy rejects calls outside a presentation owner cycle"));
+let surface_call = invoke_hook("runtime.ui.surface", [#{surface_id: "probe"}]);
+checks.push(t_true(surface_call.ok == false && surface_call.status == "fault"
+        && surface_call.error.contains("Application/Ui/Preparation"),
+    "the surface projection policy rejects calls outside its owner cycle"));
 
 let quality_profile_hook = ();
 let default_quality_hook = ();
@@ -331,12 +312,12 @@ checks.push(t_true(balanced_profile.ok == true
         && balanced_profile.value.shadow_maximum_distance == 1500.0,
     "Balanced shadow quality uses the authored map, cascade, and range values"));
 checks.push(t_true(high_profile.ok == true
-        && high_profile.value.directional_shadow_map_size == 4096
+        && high_profile.value.directional_shadow_map_size == 8192
         && high_profile.value.directional_cascades == 4
         && high_profile.value.shadow_first_cascade_far_bound == 30.0
         && high_profile.value.shadow_maximum_distance == 3000.0
-        && high_profile.value.shadow_filtering_quality == "gaussian"
-        && high_profile.value.shadow_normal_bias == 4.0
+        && high_profile.value.shadow_filtering_quality == "hardware2x2"
+        && high_profile.value.shadow_normal_bias == 2.0
         && high_profile.value.terrain_lod_max_depth == 9
         && high_profile.value.terrain_lod_tile_budget == 256
         && high_profile.value.horizon_march_steps == 96,

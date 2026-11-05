@@ -1,5 +1,17 @@
 # High-quality realtime performance handover
 
+## Current telemetry/surface qualification — 2026-11-05
+
+Modelica recording uses checked source/recorder pairs and revision-gated
+admission. Surface policy returns visibility and properties in one Rhai
+transaction. Current Tracy retention averages 0.167 ms/frame and surface
+projection 1.483 ms/decision; prior diagnostic values are 1.646 and 2.224 ms.
+Alternating normal windows remain flat in FPS. Seventeen active film callers
+are migrated through the USD document owner to shared Rhai source, with
+presentation-preservation and live-consumer checks. Policy authoring uses one
+compound document intent. See the [current review](telemetry-surface-projection-2026-11-05.md)
+for owners, lifecycle, exact scopes, validation and inherited gate failures.
+
 ## Current shared-output qualification — 2026-11-05
 
 The consumer pins published Rumoca `e325c2c` and all four maintained Bevy
@@ -13252,7 +13264,7 @@ processes are untouched.
 
 ### Participant summary projection — 2026-10-15
 
-The built-in `runtime.ui.properties` policy counts participant statuses by
+The built-in `runtime.ui.surface` policy counts participant statuses by
 indexed access and passes only the counts to its formatter. This avoids Rhai
 copies of nested Modelica input/output maps during array iteration and helper
 argument passing. Complete typed facts remain available to custom policies;

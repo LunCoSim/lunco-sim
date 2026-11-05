@@ -40,9 +40,9 @@ def main() -> int:
                 output = args.log.read_text(errors="replace")
                 if "TESTS_FAIL" in output:
                     raise RuntimeError("authored UI preparation verdict failed")
-                if "RUNTIME_UI_PREPARATION" in output and "TESTS_OK 9" in output:
+                if "RUNTIME_UI_PREPARATION" in output and "TESTS_OK 13" in output:
                     break
-                for marker in ("first", "invalid", "recovered"):
+                for marker in ("first", "invalid", "invalid-visible", "hidden", "recovered"):
                     if f"UI_POLICY_TEST_STIMULUS:{marker}" in output and marker not in installed:
                         code = f'import "{source}" as test; test::install_policy("{marker}");'
                         result = session.post({"type": "ExecuteCommand", "command": "RunRhai",
@@ -56,7 +56,7 @@ def main() -> int:
             # The held-clock UI observer releases the fixture's first tick.
             # Require that scene verdict too before Exit can stop its observer.
             wait_for_authored_verdict(session, title="AUTHORED RUNTIME CONTRACTS",
-                                     check_count=16, timeout_s=args.timeout)
+                                     check_count=20, timeout_s=args.timeout)
             response = session.post({"type": "ExecuteCommand", "command": "Exit",
                                      "params": {"force": True}})
             if response.get("error"):
@@ -65,7 +65,7 @@ def main() -> int:
     except Exception as error:
         print(f"FAIL — {error}; log={args.log}", file=sys.stderr)
         return 1
-    print("PASS — nine UI and 16 scene checks; API Exit and port release verified")
+    print("PASS — 13 UI and 20 scene checks; API Exit and port release verified")
     return 0
 
 

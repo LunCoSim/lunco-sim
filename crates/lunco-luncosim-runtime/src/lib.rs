@@ -296,7 +296,7 @@ struct AuthoredPolicy {
     entry: String,
     deterministic: bool,
     inline_source: Option<String>,
-    source_path: Option<String>,
+    source_path: Result<Option<String>, lunco_usd_bevy_stage::read::AssetIdentifierReadError>,
 }
 
 fn append_authored_policy(
@@ -305,14 +305,19 @@ fn append_authored_policy(
     entry: Option<String>,
     deterministic: Option<bool>,
     inline_source: Option<String>,
-    source_path: Option<String>,
+    source_path: Result<Option<String>, lunco_usd_bevy_stage::read::AssetIdentifierReadError>,
     out: &mut Vec<AuthoredPolicy>,
 ) {
     let seam = seam.unwrap_or_default();
     let inline_source = inline_source.filter(|source| !source.is_empty());
-    let source_path = source_path.filter(|source| !source.is_empty());
-    if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
+    let source_path = source_path.map(|source| source.filter(|source| !source.is_empty()));
+    if seam.is_empty() || (inline_source.is_none() && matches!(&source_path, Ok(None))) {
         return;
+    }
+    if inline_source.is_none()
+        && let Err(error) = &source_path
+    {
+        warn!(seam, "[policy] file source rejected: {error}");
     }
     out.push(AuthoredPolicy {
         stage_id,
@@ -338,27 +343,7 @@ fn append_usd_policies(
             reader.text(&prim, "lunco:policy:entry"),
             reader.boolean(&prim, "lunco:policy:deterministic"),
             reader.text(&prim, "info:sourceCode"),
-            reader.asset(&prim, "info:sourceAsset"),
-            out,
-        );
-    }
-}
-
-fn append_prepared_usd_policies(
-    plan: &lunco_usd_bevy_stage::UsdStageProjectionPlan,
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    out: &mut Vec<AuthoredPolicy>,
-    policy_prim_paths: &mut std::collections::HashSet<String>,
-) {
-    for prim in plan.prims_of_type(LUNCO_POLICY_TYPE) {
-        policy_prim_paths.insert(prim.path.clone());
-        append_authored_policy(
-            stage_id,
-            prim.text_attribute("lunco:policy:seam").map(str::to_owned),
-            prim.text_attribute("lunco:policy:entry").map(str::to_owned),
-            prim.boolean_attribute("lunco:policy:deterministic"),
-            prim.text_attribute("info:sourceCode").map(str::to_owned),
-            prim.asset_attribute("info:sourceAsset").map(str::to_owned),
+            reader.asset_identifier(&prim, "info:sourceAsset"),
             out,
         );
     }
@@ -375,7 +360,7 @@ fn extract_usd_policies_for_stage(
     match reader {
         lunco_usd_bevy_stage::read::UsdReadSource::Prepared(plan) => {
             let _span = bevy::log::info_span!("usd_policy_prepared_plan_lookup").entered();
-            append_prepared_usd_policies(plan, stage_id, &mut out, &mut policy_prim_paths);
+            append_usd_policies(plan, stage_id, &mut out, &mut policy_prim_paths);
         }
         lunco_usd_bevy_stage::read::UsdReadSource::Live(reader) => {
             let _span = bevy::log::info_span!("usd_policy_live_stage_traversal").entered();
@@ -397,8 +382,8 @@ fn prepared_policy_baseline_for_current_generation(
 ) -> Option<(Vec<AuthoredPolicy>, std::collections::HashSet<String>)> {
     let mut policies = Vec::new();
     let mut policy_prim_paths = std::collections::HashSet::new();
-    append_prepared_usd_policies(
-        &stage_asset.projection_plan,
+    append_usd_policies(
+        stage_asset.projection_plan.as_ref(),
         stage_id,
         &mut policies,
         &mut policy_prim_paths,
@@ -882,7 +867,7 @@ fn project_usd_policies(
         {
             let source = if let Some(source) = &authored.inline_source {
                 source.clone()
-            } else if let Some(path) = &authored.source_path {
+            } else if let Ok(Some(path)) = &authored.source_path {
                 match resolve_policy_source_file(
                     path,
                     authored.stage_id,
@@ -968,7 +953,7 @@ fn on_set_rhai_policy(
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut commands: Commands,
 ) {
-    use lunco_usd_core::commands::ApplyUsdOp;
+    use lunco_usd_core::commands::ApplyUsdOps;
     use lunco_usd_document::document::{LayerId, UsdOp};
 
     let cmd = trigger.event();
@@ -1057,13 +1042,12 @@ fn on_set_rhai_policy(
             value: cmd.deterministic.to_string(),
         },
     ];
-    for op in ops {
-        commands.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op,
-        });
-    }
+    commands.trigger(ApplyUsdOps {
+        doc_id: doc,
+        parent_gen: None,
+        label: format!("Set policy {}", cmd.seam),
+        ops,
+    });
     info!(
         "[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects",
         cmd.seam

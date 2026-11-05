@@ -11,7 +11,7 @@
 
 use bevy::prelude::*;
 use lunco_core::{AppSceneExt, GlobalEntityId, SceneResource};
-use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
+use lunco_signal::{ScalarRecordingBinding, SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -19,7 +19,10 @@ use std::sync::Arc;
 use lunco_modelica_runtime::ModelicaScalarMetadata;
 #[cfg(test)]
 use lunco_modelica_runtime::ModelicaSignalProvenance;
-use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout, ModelicaVariables};
+use lunco_modelica_runtime::{
+    ModelicaModel, ModelicaSignalLayout, ModelicaValueLayout, ModelicaVariableSlot,
+    ModelicaVariables,
+};
 
 /// Plugin that retains landed Modelica state in the shared telemetry registry.
 ///
@@ -55,6 +58,7 @@ fn modelica_telemetry_inputs_changed(
             Changed<ModelicaModel>,
             Changed<ModelicaVariables>,
             Changed<ModelicaSignalLayout>,
+            Changed<GlobalEntityId>,
         )>,
     >,
     settings: Option<Res<TelemetrySettings>>,
@@ -64,8 +68,11 @@ fn modelica_telemetry_inputs_changed(
     sessions.refresh_pending
         || !models.is_empty()
         || settings.is_some_and(|settings| settings.is_changed())
-        || signals
-            .is_some_and(|signals| signals.active_scalar_count() != sessions.active_channel_count)
+        || signals.is_some_and(|signals| {
+            signals.is_added()
+                || signals.recording_revision() != sessions.recording_revision
+                || signals.catalog_revision() != sessions.catalog_revision
+        })
 }
 
 /// Runtime state retained for each Modelica participant.
@@ -79,7 +86,8 @@ pub struct RuntimeTelemetrySessions {
     sessions: HashMap<Entity, RuntimeTelemetrySession>,
     documents: HashMap<SignalRef, lunco_doc::DocumentId>,
     refresh_pending: bool,
-    active_channel_count: usize,
+    recording_revision: u64,
+    catalog_revision: u64,
 }
 
 impl SceneResource for RuntimeTelemetrySessions {
@@ -107,7 +115,9 @@ fn retire_closed_document_signals(
         }
         signals.remove_signal(signal);
         if let Some(session) = sessions.get_mut(&signal.entity) {
-            session.signals.remove(signal.path.as_str());
+            session.signals.retain(|cached| cached.signal != *signal);
+            session.recorders.clear();
+            session.admission_revision = None;
         }
         false
     });
@@ -124,7 +134,7 @@ fn retire_modelica_runtime_session(
 }
 
 fn retire_session_signals(session: &RuntimeTelemetrySession, signals: &mut SignalRegistry) {
-    for cached in session.signals.values() {
+    for cached in session.signals.iter() {
         if signals.scalar_history(&cached.signal).is_some() {
             signals.deactivate_signal(&cached.signal);
         } else {
@@ -136,27 +146,23 @@ fn retire_session_signals(session: &RuntimeTelemetrySession, signals: &mut Signa
 #[derive(Default)]
 struct RuntimeTelemetrySession {
     session_id: u64,
-    signals: HashMap<String, RuntimeSignalCache>,
+    signals: Vec<RuntimeSignalCache>,
+    recorders: Vec<usize>,
+    layout: Option<ModelicaValueLayout>,
     metadata: Option<Arc<BTreeMap<String, ModelicaScalarMetadata>>>,
-    /// Last model-time sample attempted for this solver session. The shared
-    /// registry remains the final per-channel authority; this batch cursor
-    /// only avoids rebuilding the same variable list between due samples.
     last_sample_time: Option<f64>,
-    /// A full live-channel budget may defer a paused solver's initial sample.
-    /// Retry when the registry's active count or telemetry settings change.
-    admission_pending: bool,
-    /// The registry owns archived wire identity. This cursor admits reuse only
-    /// while its catalog and the source's live owner remain unchanged.
+    admission_revision: Option<u64>,
+    max_channels: Option<usize>,
     global_owner: Option<GlobalEntityId>,
     owner_catalog_revision: Option<u64>,
 }
 
 struct RuntimeSignalCache {
     signal: SignalRef,
-    retained: bool,
-    owner_published: bool,
-    /// The registry owns metadata; the producer only tracks its publication.
-    metadata_published: bool,
+    source: ModelicaVariableSlot,
+    recorder: Option<ScalarRecordingBinding>,
+    /// One clear per solver session, including delayed capacity admission.
+    started: bool,
 }
 
 /// Retain the current variables of every live Modelica solver.
@@ -182,9 +188,9 @@ pub fn retain_modelica_runtime_state(
     )>,
 ) {
     sessions.refresh_pending = false;
-    sessions.active_channel_count = signals
+    sessions.recording_revision = signals
         .as_ref()
-        .map_or(0, |signals| signals.active_scalar_count());
+        .map_or(0, |signals| signals.recording_revision());
     let Some(signals) = signals.as_deref_mut() else {
         // The projection is optional for a host that intentionally does not
         // install telemetry.  It must not fabricate a private fallback store.
@@ -194,7 +200,9 @@ pub fn retain_modelica_runtime_state(
     let RuntimeTelemetrySessions {
         sessions,
         documents,
-        active_channel_count,
+        recording_revision,
+        catalog_revision,
+        refresh_pending,
         ..
     } = &mut *sessions;
 
@@ -212,7 +220,8 @@ pub fn retain_modelica_runtime_state(
     }
 
     // Publisher lifetime is independent of recording settings.
-    *active_channel_count = signals.active_scalar_count();
+    *recording_revision = signals.recording_revision();
+    *catalog_revision = signals.catalog_revision();
     let Some(settings) = settings else {
         return;
     };
@@ -227,7 +236,6 @@ pub fn retain_modelica_runtime_state(
         return;
     }
 
-    let mut channel_count = signals.active_scalar_count();
     for (entity, model, variables, layout, global_owner, signal_source) in &models {
         if !model.is_compiled || model.is_compiling || model.last_error.is_some() {
             continue;
@@ -235,121 +243,151 @@ pub fn retain_modelica_runtime_state(
         let session = sessions
             .get_mut(&entity)
             .expect("session was registered above");
-        let metadata_dirty = match (&session.metadata, &model.variable_metadata) {
-            (Some(previous), Some(current)) => !Arc::ptr_eq(previous, current),
-            (None, None) => false,
-            _ => true,
-        } || layout.as_ref().is_some_and(|layout| layout.is_changed());
-        if metadata_dirty {
-            session.metadata = model.variable_metadata.clone();
-        }
-
-        let sample_due = session.admission_pending
-            || session.last_sample_time.is_none_or(|last| {
-                model.current_time < last
-                    || model.current_time - last >= 1.0 / settings.default_rate_hz
-            });
-        if !sample_due && !metadata_dirty {
+        let source_layout = variables.layout();
+        let layout_dirty = session.layout.as_ref() != Some(&source_layout);
+        let metadata_dirty = layout_dirty
+            || match (&session.metadata, &model.variable_metadata) {
+                (Some(previous), Some(current)) => !Arc::ptr_eq(previous, current),
+                (None, None) => false,
+                _ => true,
+            }
+            || layout.as_ref().is_some_and(|layout| layout.is_changed());
+        let owner_dirty = session.global_owner != global_owner.copied()
+            || session.owner_catalog_revision != Some(signals.catalog_revision());
+        let admission_dirty = layout_dirty
+            || session.admission_revision != Some(signals.recording_revision())
+            || session.max_channels != Some(settings.max_channels);
+        let sample_due = session.last_sample_time.is_none_or(|last| {
+            model.current_time < last || model.current_time - last >= 1.0 / settings.default_rate_hz
+        });
+        if !sample_due && !metadata_dirty && !owner_dirty && !admission_dirty {
             continue;
         }
 
-        let owner_dirty = session.global_owner != global_owner.copied()
-            || session.owner_catalog_revision != Some(signals.catalog_revision());
-        if owner_dirty {
-            for cached in session.signals.values_mut() {
-                cached.owner_published = false;
-            }
+        if !model.current_time.is_finite() && !metadata_dirty {
+            continue;
         }
-        let mut retained_any = false;
-        session.admission_pending = false;
-        for (name, &value) in variables.values() {
-            if !value.is_finite() || name.is_empty() {
-                continue;
-            }
 
-            let cached = match session.signals.get_mut(name) {
-                Some(cached) => cached,
-                None => {
-                    let signal = SignalRef::new(entity, name.as_str());
-                    if channel_count >= settings.max_channels
-                        && (signals.scalar_history(&signal).is_none()
-                            || !signals.is_active(&signal))
-                    {
-                        session.admission_pending = true;
+        if layout_dirty {
+            // Inventory ownership issues all read slots. Preserve the per-session
+            // start marker for surviving identities; removed values become archives.
+            let mut previous: HashMap<_, _> = std::mem::take(&mut session.signals)
+                .into_iter()
+                .map(|cached| (cached.signal.path.clone(), cached))
+                .collect();
+            session.signals = variables
+                .values()
+                .keys()
+                .filter(|name| !name.is_empty())
+                .map(|name| {
+                    let source = variables
+                        .resolve(name)
+                        .expect("source inventory issues its slot");
+                    if let Some(mut cached) = previous.remove(name) {
+                        cached.source = source;
+                        cached
+                    } else {
+                        RuntimeSignalCache {
+                            signal: SignalRef::new(entity, name.as_str()),
+                            source,
+                            recorder: None,
+                            started: false,
+                        }
+                    }
+                })
+                .collect();
+            for cached in previous.into_values() {
+                signals.deactivate_signal(&cached.signal);
+            }
+            session.layout = Some(source_layout);
+        }
+
+        if admission_dirty || metadata_dirty || owner_dirty {
+            session.recorders.clear();
+            for (index, cached) in session.signals.iter_mut().enumerate() {
+                let needs_admission = cached
+                    .recorder
+                    .as_ref()
+                    .is_none_or(|binding| !signals.recording_is_current(binding));
+                if admission_dirty && needs_admission && model.current_time.is_finite() {
+                    cached.recorder = signals.admit_scalar(
+                        &cached.signal,
+                        settings.default_retention,
+                        settings.max_channels,
+                    );
+                    if cached.recorder.is_none() {
                         warn_once!(
                             "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
                             settings.max_channels
                         );
                         continue;
                     }
-                    documents.insert(signal.clone(), model.document);
-                    session.signals.insert(
-                        name.clone(),
-                        RuntimeSignalCache {
-                            signal,
-                            retained: false,
-                            owner_published: false,
-                            metadata_published: false,
-                        },
-                    );
-                    session
-                        .signals
-                        .get_mut(name)
-                        .expect("runtime signal identity was just retained")
+                    documents.insert(cached.signal.clone(), model.document);
                 }
-            };
-            let signal = &cached.signal;
-            // An archived identity requires live admission just like a new one.
-            // Existing active recorders continue if the setting is lowered.
-            if channel_count >= settings.max_channels
-                && (signals.scalar_history(signal).is_none() || !signals.is_active(signal))
-            {
-                session.admission_pending = true;
-                warn_once!(
-                    "modelica telemetry: max_channels ({}) reached; additional runtime variables are not retained",
-                    settings.max_channels
+                if cached.recorder.is_none()
+                    && signals.active_scalar_count() >= settings.max_channels
+                {
+                    continue;
+                }
+                if metadata_dirty || needs_admission {
+                    signals.update_meta(
+                        cached.signal.clone(),
+                        model_signal_meta(model, layout.as_deref(), &cached.signal.path),
+                    );
+                }
+                if (owner_dirty || needs_admission)
+                    && let Some(owner) = global_owner
+                {
+                    signals.associate_global_owner(&cached.signal, *owner);
+                }
+                if cached.recorder.is_some() {
+                    session.recorders.push(index);
+                }
+            }
+        }
+        let mut retained_any = false;
+        for &index in &session.recorders {
+            let cached = &mut session.signals[index];
+            let recorder = cached
+                .recorder
+                .as_ref()
+                .expect("prepared recorder membership");
+            let Some(value) = variables.read_slot(&cached.source) else {
+                error!(
+                    "modelica telemetry: prepared source slot is stale for '{}'",
+                    cached.signal.path
                 );
                 continue;
+            };
+            if !model.current_time.is_finite() {
+                continue;
             }
-            if let Some(owner) = global_owner {
-                if !cached.owner_published || !cached.retained {
-                    signals.associate_global_owner(signal, *owner);
-                    cached.owner_published = true;
+            if !cached.started {
+                if let Err(error) = signals.clear_bound_history(recorder) {
+                    error!("modelica telemetry: {error}");
+                    continue;
                 }
+                cached.started = true;
             }
-
-            // A checked FMI inventory changes only when the worker installs
-            // a new component. Draft edits never alter a live solver's facts.
-            if metadata_dirty || !cached.metadata_published {
-                let _span = bevy::log::debug_span!("modelica_telemetry_channel_metadata").entered();
-                let meta = model_signal_meta(model, layout.as_deref(), name);
-                signals.update_meta(signal.clone(), meta);
-                cached.metadata_published = true;
-            }
-
-            // The shared signal registry owns due-time and time-reversal for
-            // every runtime producer. Modelica histories are complete at the
-            // recording rate; notification deadband must not remove elapsed
-            // simulation-time samples from a graph.
-            if !cached.retained && model.current_time.is_finite() {
-                signals.clear_history(signal);
-            }
-            let retained = signals.record_scalar_at_rate(
-                signal,
+            match signals.record_bound_scalar(
+                recorder,
                 model.current_time,
                 value,
                 settings.default_rate_hz,
                 settings.default_retention,
-            );
-            if retained {
-                cached.retained = true;
-                retained_any = true;
-                channel_count = signals.active_scalar_count();
+            ) {
+                Ok(retained) => retained_any |= retained,
+                Err(error) => error!("modelica telemetry: {error}"),
             }
         }
-
+        session.metadata = model.variable_metadata.clone();
         session.global_owner = global_owner.copied();
         session.owner_catalog_revision = Some(signals.catalog_revision());
+        session.admission_revision = model
+            .current_time
+            .is_finite()
+            .then(|| signals.recording_revision());
+        session.max_channels = Some(settings.max_channels);
         if retained_any && signal_source.is_none() {
             commands.entity(entity).try_insert(SignalSource);
         }
@@ -357,7 +395,15 @@ pub fn retain_modelica_runtime_state(
             session.last_sample_time = Some(model.current_time);
         }
     }
-    *active_channel_count = signals.active_scalar_count();
+    *recording_revision = signals.recording_revision();
+    *catalog_revision = signals.catalog_revision();
+    // A later participant can release capacity while refreshing its layout.
+    // Wake earlier deferred producers once for that actual membership change.
+    *refresh_pending = sessions.values().any(|session| {
+        session
+            .admission_revision
+            .is_some_and(|revision| revision != *recording_revision)
+    });
 }
 
 fn model_signal_meta(
@@ -428,6 +474,51 @@ mod tests {
             .spawn((model, variables, ModelicaSignalLayout::default()))
             .id();
         (app, entity)
+    }
+
+    #[test]
+    fn paused_source_wakes_for_registry_installation_and_disabled_projection_sleeps() {
+        #[derive(Resource, Default)]
+        struct Calls(usize);
+        fn count(mut calls: ResMut<Calls>) {
+            calls.0 += 1;
+        }
+        let variables =
+            ModelicaVariables::from_values([("value".into(), 3.0)].into_iter().collect()).unwrap();
+        let (mut app, entity) = app_with_model(ModelicaModel::default(), variables);
+        app.world_mut().remove_resource::<SignalRegistry>();
+        app.init_resource::<Calls>().add_systems(
+            Update,
+            count
+                .after(retain_modelica_runtime_state)
+                .run_if(modelica_telemetry_inputs_changed),
+        );
+        app.update();
+        app.update();
+        let sleeping = app.world().resource::<Calls>().0;
+        app.world_mut().insert_resource(SignalRegistry::default());
+        app.update();
+        let signal = SignalRef::new(entity, "value");
+        assert_eq!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&signal)
+                .unwrap()
+                .back()
+                .unwrap()
+                .value,
+            3.0
+        );
+        assert!(app.world().resource::<Calls>().0 > sleeping);
+        app.world_mut().resource_mut::<TelemetrySettings>().enabled = false;
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .update_meta(SignalRef::global("descriptor"), SignalMeta::default());
+        app.update();
+        let disabled = app.world().resource::<Calls>().0;
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Calls>().0, disabled);
     }
 
     #[test]

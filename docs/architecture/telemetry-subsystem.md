@@ -510,8 +510,9 @@ Three lanes, and they are not interchangeable:
 `ModelicaVariables::values` snapshot, are the live model-inspector surface, and
 `CosimStatus`/`SnapshotVariables` expose the same state to agents and API clients. After a solver
 response lands, `lunco-modelica-telemetry` retains finite `ModelicaVariables::values` in the shared
-`SignalRegistry` at `TelemetrySettings::default_rate_hz`, subject to the shared deadband,
-retention, and active channel cap. The projection archives a solver session's channels when
+`SignalRegistry` at `TelemetrySettings::default_rate_hz`, subject to retention
+and the active channel cap. Recording retains steady samples independently of
+notification deadband. The projection archives a solver session's channels when
 the authoritative Modelica `session_id` changes. Returning variables start fresh histories
 at admission, so reloads cannot mix time bases. Archived channels retain their bounded
 history until document or scene retirement and do not consume live channel admission.
@@ -527,19 +528,35 @@ variables, authored inputs, and experiment outputs; it does not infer observable
 static component types before a solver publishes them.
 
 The model inspector answers "what is the model doing now?"; the telemetry browser answers "what
-channels and history are available?". Both use the shared deadband to suppress numerical jitter,
-with non-finite values excluded from scalar history and solver time resets handled explicitly.
+channels and history are available?". Notification/display deadband does not
+remove elapsed recording samples. Non-finite values are excluded from scalar
+history and solver time resets are handled explicitly.
 
 The physics producer treats metadata as catalog state: it publishes metadata on first channel
 discovery or when an entity's USD owner path changes, then only records samples on later fixed
 steps. This keeps the fixed physics path from rebuilding identical descriptions while the shared
 registry remains the single metadata owner.
 
-Modelica producers likewise retain only a publication flag. First observation
-and document-generation or authored-layout changes build metadata and move it
-into `SignalRegistry::update_meta`, which owns both comparison and storage.
-Settled solver samples reuse the channel identity and do not reconstruct or
-retain a second copy of the metadata strings.
+`SignalRegistry` owns one slot store for identity, metadata, wire owner, active
+state and history. Named discovery/inspection resolves through its name index;
+continuous Modelica recording uses opaque `ScalarRecordingBinding` capabilities
+into the same store. A binding carries its exact slot lease. Archival, removal
+and scene retirement revoke it; a reused slot or another registry cannot accept
+it. Explicit application-owned slots retain their lease across scene teardown.
+Invalid bindings return an owner error and never resolve names or re-admit in
+the append loop. Named dynamic producers share the same append mechanism.
+
+Modelica prepares pairs of inventory-issued `ModelicaVariableSlot` and
+registry-issued recording bindings at source-layout/admission changes. The
+numerical loop visits only admitted pairs, with no text lookup, metadata
+construction, or deferred-row retry. Metadata and wire-owner edits refresh
+their publication at the catalog boundary. The registry's recording revision
+changes for membership/availability, independently of descriptor edits and
+ordinary samples. Deferred rows retry only after that revision, channel-limit
+settings, or source layout changes. Capacity release wakes a paused source;
+scene-cache retirement wakes surviving sources without requiring a solver tick.
+New solver sessions explicitly clear a recorder once, including delayed
+admission, while absent values retain their archived history.
 
 Physics and Modelica producers add `SignalSource` when an entity first retains a sample. The
 marker owns history cleanup on source removal; later sample batches do not rewrite it.

@@ -1434,7 +1434,7 @@ clock sampled from `Time<Real>`. It runs in the UI owner's `PostUpdate` chain
 only when the exposure, policy, or recording revision changes; it does not
 create a second UI cadence. Its Rhai policy rejects off-cycle calls.
 
-Runtime-surface policies consume immutable snapshots prepared by the shared
+The single `runtime.ui.surface` policy consumes immutable snapshots prepared by the shared
 headless/windowed exposure owner. Native pure policy evaluation runs through
 bounded async admission; the page host uses the same kernel with cooperative
 local task execution, without claiming browser worker isolation. Captured hooks
@@ -1443,6 +1443,8 @@ application update independently of the real-time capture cadence or physics
 holds. One in-flight job and one latest pending input per surface bound work;
 source epochs and identity checks reject retired results. Publication changes
 only non-authoritative presentation state and never advances simulation time.
+One invocation returns visibility and properties as a single validated decision;
+the captured rich facts cross the scripting adapter once per admitted snapshot.
 Live-World scripts remain serial. The complete state and failure contract lives
 in [runtime UI architecture](runtime-authored-ui.md); the production
 `runtime_ui_preparation` gate covers held-physics failure and recovery.

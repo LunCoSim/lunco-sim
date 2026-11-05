@@ -1,8 +1,5 @@
-// Generic runtime-surface visibility policy.
-//
-// The engine supplies a typed fact map. A Twin may replace this hook with its
-// own policy when a surface should be always visible, gated by a lesson, or
-// shown only after a capability becomes available.
+// One projection transaction consumes one typed immutable fact snapshot.
+// Visibility and properties are authored together and published atomically.
 fn preparation_active(status, blockers) {
     if status == "compiling" { return true; }
     if blockers == () { return false; }
@@ -19,23 +16,249 @@ fn preparation_active(status, blockers) {
     false
 }
 
-fn runtime_ui_surface(facts) {
-    if runtime_context.scope != "application"
-        || runtime_context.cycle != "ui"
-        || runtime_context.phase != "preparation"
-        || runtime_context.clock != "application" {
-        throw "runtime.ui.visibility requires Application/Ui/Preparation context";
+
+fn status_label(status) {
+    if status == "running" { return "RUNNING"; }
+    if status == "compiling" { return "COMPILING"; }
+    if status == "paused" { return "PAUSED"; }
+    if status == "error" { return "ERROR"; }
+    if status == "idle" { return "READY"; }
+    "UNAVAILABLE"
+}
+
+fn progress_owner_active(blockers, owner) {
+    if blockers == () { return false; }
+    for blocker in blockers {
+        if blocker.owner == owner { return true; }
     }
-    let visible = if preparation_active(facts.status, facts.simulation_progress) {
-        true
-    } else if !facts.available {
-        false
-    } else if facts.visibility_mode == "always" {
-        facts.available
-    } else if facts.visibility_mode == "possessed" {
-        facts.control_owner == "local"
+    false
+}
+
+fn runtime_status_label(status, blockers) {
+    if status == "error" { return "ERROR"; }
+    if progress_owner_active(blockers, "ModelicaPreparation") || status == "compiling" {
+        return "PHYSICS LOADING";
+    }
+    if progress_owner_active(blockers, "TerrainPreparation") { return "WAITING FOR TERRAIN"; }
+    if progress_owner_active(blockers, "SceneLifecycle")
+        || progress_owner_active(blockers, "SceneReferences")
+        || progress_owner_active(blockers, "DocumentPreparation") {
+        return "SCENE PREPARING";
+    }
+    if status == "unavailable" { return "SIMULATION PREPARING"; }
+    status_label(status)
+}
+
+fn status_color(status) {
+    if status == "running" { return "var(--ok-color)"; }
+    if status == "error" { return "var(--danger-color)"; }
+    if status == "paused" { return "var(--caution-color)"; }
+    "var(--accent-color)"
+}
+
+// Display precision only: native physics and telemetry facts remain f64.
+fn number_text(value, scale) {
+    if type_of(value) != "f64" && type_of(value) != "i64" { return value.to_string(); }
+    if scale == 1.0 { return value.to_float().round().to_int().to_string(); }
+    ((value.to_float() * scale).round() / scale).to_string()
+}
+
+fn vector_text(value, scale) {
+    if value == () || value.len != 3 { return "—"; }
+    number_text(value[0], scale) + ", " + number_text(value[1], scale)
+        + ", " + number_text(value[2], scale)
+}
+
+fn telemetry_text(values) {
+    if values.len == 0 { return "TELEMETRY UNAVAILABLE"; }
+    let result = "";
+    for value in values {
+        if result != "" { result += " | "; }
+        let unit = if value.unit == () || value.unit == "" { "" } else { " " + value.unit };
+        result += value.label + " " + number_text(value.value, 100.0) + unit;
+    }
+    result
+}
+
+fn participant_text(counts) {
+    if counts.len() == 0 { return "no simulation participants"; }
+    let result = "";
+    for label in ["RUNNING", "COMPILING", "PAUSED", "ERROR", "READY", "UNAVAILABLE"] {
+        if counts[label] != () {
+            if result != "" { result += " | "; }
+            result += counts[label].to_string() + " " + label;
+        }
+    }
+    result
+}
+
+fn input_value(inputs, name) {
+    if inputs == () { return 0.0; }
+    let value = inputs[name];
+    if value == () { return 0.0; }
+    value
+}
+
+fn camera_ui_properties(facts) {
+    let result = #{};
+    result.active_name = facts.active_name;
+    result.active_label = facts.active_label;
+    // The HTML surface and the generic dropdown renderer consume the same
+    // authored dimensions. A Twin can replace these values in its policy.
+    result.dropdown_width = "380px";
+    result.dropdown_max_height = "420px";
+    let items = [];
+    for camera in facts.cameras {
+        items.push(#{
+            key: camera.name,
+            label: camera.label,
+            action: "camera.select.path." + camera.name,
+            group: camera.group,
+        });
+    }
+    if facts.avatar_available {
+        items.push(#{
+            key: "__avatar__",
+            label: "Observe avatar",
+            action: "camera.observe.avatar",
+            group: "Scene views",
+        });
+    }
+    if facts.director_available {
+        items.push(#{
+            key: "__director__",
+            label: "Resume authored director",
+            action: "camera.resume.director",
+            group: "Scene views",
+        });
+    }
+    items.push(#{key:"__image_settings__",label:"Image controls…",action:"camera.image.settings",group:"Image controls"});
+    let groups=[];
+    for item in items {if !groups.contains(item.group){groups.push(item.group);}}
+    let grouped=[];
+    for group in groups {for item in items {if item.group==group{grouped.push(item);}}}
+    result.camera_items = grouped;
+    result
+}
+
+fn angular_speed_text(value) {
+    if value == () || value.len != 3 { return "—"; }
+    let squared = 0.0;
+    for component in value { squared += component*component; }
+    number_text(sqrt(squared), 1000.0) + " rad/s"
+}
+
+fn angle_text(value, positive, negative) {
+    number_text(abs(value), 100000.0) + "° " + if value < 0.0 { negative } else { positive }
+}
+
+fn coordinate_properties(coordinates, world_position) {
+    if coordinates == () {
+        return #{position: "COORDINATES UNAVAILABLE", height: "—", height_value: "—",
+            height_reference: "DATUM UNAVAILABLE", coordinate_frame: "FRAME UNAVAILABLE"};
+    }
+    if coordinates.system == "world" {
+        return #{position: vector_text(world_position, 100.0) + " m", height: "—",
+            height_value: number_text(world_position[1], 10.0), height_reference: "world Y = 0",
+            coordinate_frame: "WORLD · metres"};
+    }
+    let body = if coordinates.body == 301 { "MOON" } else { "BODY " + coordinates.body };
+    #{position: angle_text(coordinates.latitude_deg, "N", "S") + "  ·  "
+        + angle_text(coordinates.longitude_deg, "E", "W"),
+      height: number_text(coordinates.height_m, 10.0) + " m · mean sphere",
+      height_value: number_text(coordinates.height_m, 10.0), height_reference: "mean sphere",
+      coordinate_frame: body + " · " + coordinates.system + " · east positive"}
+}
+
+fn runtime_ui_surface(facts) {
+    let ui_owner = runtime_context.scope == "application"
+        && runtime_context.cycle == "ui"
+        && runtime_context.phase == "preparation"
+        && runtime_context.clock == "application";
+    let presentation = runtime_context.scope == "application"
+        && runtime_context.cycle == "presentation"
+        && (runtime_context.phase == "initialization" || runtime_context.phase == "event")
+        && runtime_context.clock == "presentation";
+    if !ui_owner && !(presentation && facts.surface_id == "camera-status") {
+        throw "runtime.ui.surface requires Application/Ui/Preparation or camera Application/Presentation initialization/event context";
+    }
+    let visible = if facts.surface_id == "camera-status" { true }
+        else if preparation_active(facts.status, facts.simulation_progress) { true }
+        else if !facts.available { false }
+        else if facts.visibility_mode == "always" { facts.available }
+        else if facts.visibility_mode == "possessed" { facts.control_owner == "local" }
+        else { false };
+    if facts.surface_id == "camera-status" {
+        return #{ visible: visible, properties: camera_ui_properties(facts) };
+    }
+    let result = #{};
+    result.vehicle = facts.label;
+    result.status = if facts.available { status_label(facts.status) } else { "WAITING" };
+    result.status_color = if facts.available { status_color(facts.status) } else { "var(--muted-color)" };
+    result.runtime_status = runtime_status_label(facts.status, facts.simulation_progress);
+    result.owner = facts.control_owner;
+    result.speed = vector_text(facts.velocity, 100.0) + " m/s";
+    let coordinates = coordinate_properties(facts.coordinates, facts.position);
+    result.position = coordinates.position;
+    result.height = coordinates.height;
+    result.altitude = coordinates.height_value;
+    result.height_reference = coordinates.height_reference;
+    result.coordinate_frame = coordinates.coordinate_frame;
+    result.angular_velocity = angular_speed_text(facts.angular_velocity);
+    result.telemetry_summary = telemetry_text(facts.telemetry);
+    // Index only statuses; copying participant maps also copies their model values.
+    let participant_counts = #{};
+    for index in 0..facts.participants.len() {
+        let label = status_label(facts.participants[index].status);
+        participant_counts[label] = if participant_counts[label] == () {
+            1
+        } else {
+            participant_counts[label] + 1
+        };
+    }
+    result.simulation_summary = participant_text(participant_counts);
+    result.scope = if facts.scope == () || facts.scope == "" { "NO PROGRAM SCOPE" } else { facts.scope };
+    let programs = if facts.programs == () { [] } else { facts.programs };
+    result.program_count = programs.len().to_string() + " PROGRAMS";
+    result.program_empty_display = programs.len() == 0;
+    let program_active = programs.len() > 0
+        && input_value(facts.inputs, "program_active") > 0.5;
+    result.program_label = if programs.len() == 0 {
+        "PROGRAM UNAVAILABLE"
+    } else if program_active {
+        "AUTOPILOT ON"
     } else {
-        false
+        "AUTOPILOT OFF"
     };
-    #{ visible: visible }
+    result.program_color = if programs.len() == 0 {
+        "var(--muted-color)"
+    } else if program_active {
+        "var(--ok-color)"
+    } else {
+        "var(--accent-color)"
+    };
+    let items = [];
+    for index in 0..programs.len() {
+        let program = programs[index];
+        let source = if program.source == () || program.source == "" {
+            program.implementation_source
+        } else {
+            program.source
+        };
+        items.push(#{
+            key: program.path,
+            path: program.path,
+            source: source,
+            status: program.status,
+            // Paths are the canonical program identity. Indexes are only a
+            // presentation order and must not select a different program
+            // after a live edit reorders the collection.
+            select_action: "program.select.path." + program.path,
+            edit_action: "program.edit.path." + program.path,
+        });
+    }
+    result.programs = items;
+    result.current_program = if items.len() > 0 { items[0].path } else { "" };
+    result.current_source = if items.len() > 0 { items[0].source } else { "" };
+    #{ visible: visible, properties: result }
 }

@@ -23,7 +23,6 @@
 use bevy::prelude::*;
 use lunco_core::{AppSceneExt, GlobalEntityId, SceneResource};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
-use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -476,74 +475,98 @@ impl ScalarHistory {
     }
 }
 
-/// Global registry of every known signal.
+/// Opaque recording capability for one live slot in one registry. Removal,
+/// archival and scene retirement revoke it; slot reuse cannot revive it.
+#[derive(Clone, Debug)]
+pub struct ScalarRecordingBinding {
+    index: usize,
+    lease: Arc<()>,
+}
+
+#[derive(Debug)]
+struct SignalEntry {
+    signal: SignalRef,
+    lease: Arc<()>,
+    history: Option<ScalarHistory>,
+    kind: Option<SignalType>,
+    meta: Option<SignalMeta>,
+    global_owner: Option<GlobalEntityId>,
+    active: bool,
+    application: bool,
+}
+
+/// Global signal owner. Text resolves at admission/inspection; numerical
+/// producers retain checked recording slots into this same authoritative store.
 #[derive(Resource, Debug, Default)]
 pub struct SignalRegistry {
-    scalar_history: HashMap<SignalRef, ScalarHistory>,
-    /// Live scalar publishers, excluding retained archives. Maintained at the
-    /// same lifecycle boundary as histories so admission does not scan them.
+    entries: Vec<Option<SignalEntry>>,
+    names: HashMap<SignalRef, usize>,
+    free: Vec<usize>,
+    scalar_count: usize,
     active_scalar_count: usize,
-    types: HashMap<SignalRef, SignalType>,
-    meta: HashMap<SignalRef, SignalMeta>,
-    /// Stable wire owners captured while a producer is live.  The ECS component
-    /// may disappear when an archived source despawns, but the API key for its
-    /// retained history must not change with it.
-    global_owners: HashMap<SignalRef, GlobalEntityId>,
-    /// Sources may disappear while their mission history remains useful.  This
-    /// records the live/inactive boundary without deleting samples or metadata.
-    inactive: std::collections::HashSet<SignalRef>,
     default_capacity: usize,
-    /// Monotonic revision of the channel catalog. Sample values deliberately do
-    /// not change it. Catalog readers can retain identity lookups across samples;
-    /// incremental descriptor readers consume `SignalDescriptorsChanged`.
     catalog_revision: u64,
+    recording_revision: u64,
     descriptor_changes: std::collections::HashSet<SignalRef>,
-    /// Explicit process-lifetime channels. All other histories belong to the scene.
-    application_signals: std::collections::HashSet<SignalRef>,
 }
 
 impl SceneResource for SignalRegistry {
     fn clear_scene(&mut self) {
-        // Start with an empty store so future scene fields reset by construction.
-        // Move only explicitly application-owned records into the replacement.
-        let mut outgoing = std::mem::take(self);
-        self.default_capacity = outgoing.default_capacity;
-        self.catalog_revision = outgoing.catalog_revision.wrapping_add(1);
-        self.application_signals = std::mem::take(&mut outgoing.application_signals);
-        self.descriptor_changes = std::mem::take(&mut outgoing.descriptor_changes);
-        self.descriptor_changes
-            .extend(outgoing.types.keys().cloned());
-        self.descriptor_changes
-            .extend(outgoing.meta.keys().cloned());
-        self.descriptor_changes
-            .extend(outgoing.global_owners.keys().cloned());
-        for signal in &self.application_signals {
-            if let Some(history) = outgoing.scalar_history.remove(signal) {
-                self.scalar_history.insert(signal.clone(), history);
-            }
-            if let Some(kind) = outgoing.types.remove(signal) {
-                self.types.insert(signal.clone(), kind);
-            }
-            if let Some(meta) = outgoing.meta.remove(signal) {
-                self.meta.insert(signal.clone(), meta);
-            }
-            if let Some(owner) = outgoing.global_owners.remove(signal) {
-                self.global_owners.insert(signal.clone(), owner);
-            }
-            if outgoing.inactive.remove(signal) {
-                self.inactive.insert(signal.clone());
-            } else if self.scalar_history.contains_key(signal) {
-                self.active_scalar_count += 1;
-            }
+        let retired: Vec<_> = self
+            .entries
+            .iter()
+            .flatten()
+            .filter(|entry| !entry.application)
+            .map(|entry| entry.signal.clone())
+            .collect();
+        for signal in retired {
+            self.remove_signal(&signal);
         }
+        // Wake surviving paused producers even when there were no scene slots.
+        self.recording_revision = self.recording_revision.wrapping_add(1);
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
     }
 }
 
 impl SignalRegistry {
+    fn entry(&self, signal: &SignalRef) -> Option<&SignalEntry> {
+        self.entries
+            .get(*self.names.get(signal)?)
+            .and_then(Option::as_ref)
+    }
+
+    fn ensure_entry(&mut self, signal: &SignalRef) -> usize {
+        if let Some(&index) = self.names.get(signal) {
+            return index;
+        }
+        let entry = Some(SignalEntry {
+            signal: signal.clone(),
+            lease: Arc::new(()),
+            history: None,
+            kind: None,
+            meta: None,
+            global_owner: None,
+            active: true,
+            application: false,
+        });
+        let index = if let Some(index) = self.free.pop() {
+            self.entries[index] = entry;
+            index
+        } else {
+            self.entries.push(entry);
+            self.entries.len() - 1
+        };
+        self.names.insert(signal.clone(), index);
+        index
+    }
+
     /// Give a process-owned signal an explicit lifetime beyond scene replacement.
-    /// Scene producers need no registration: their history expires at teardown.
     pub fn retain_across_scenes(&mut self, signal: SignalRef) {
-        self.application_signals.insert(signal);
+        let index = self.ensure_entry(&signal);
+        self.entries[index]
+            .as_mut()
+            .expect("admitted signal")
+            .application = true;
     }
 
     pub fn with_default_capacity(capacity: usize) -> Self {
@@ -561,76 +584,153 @@ impl SignalRegistry {
         }
     }
 
-    fn push_scalar_sample(
-        &mut self,
-        sig: Cow<'_, SignalRef>,
-        sample: ScalarSample,
-        capacity: usize,
-        resize_existing: bool,
-        rate_hz: Option<f64>,
-    ) -> bool {
-        let key = sig.as_ref();
-        if let Some(history) = self.scalar_history.get_mut(key) {
-            // Rate admission and append borrow the same live history. A rejected
-            // sample must not reactivate a source or resize its retention.
-            if let (Some(rate_hz), Some(previous)) = (rate_hz, history.back()) {
-                if sample.time < previous.time {
-                    history.clear();
-                } else if sample.time - previous.time < 1.0 / rate_hz {
-                    return false;
-                }
-            }
-            if resize_existing && history.capacity != capacity.max(1) {
-                history.set_capacity(capacity);
-            }
-            history.push(sample);
-            if self.inactive.remove(key) {
-                self.active_scalar_count += 1;
-                self.descriptor_changes.insert(key.clone());
-                self.catalog_revision = self.catalog_revision.wrapping_add(1);
-            }
-            return true;
-        }
+    /// Revision of recorder membership/capacity availability. Ordinary samples,
+    /// metadata and wire-owner updates never change it. Deferred producers retry
+    /// admission only after this revision or their own source/settings change.
+    pub fn recording_revision(&self) -> u64 {
+        self.recording_revision
+    }
 
-        let _span = bevy::log::debug_span!(
-            "signal_scalar_channel_create",
-            channels = self.scalar_history.len()
-        )
-        .entered();
-        let was_inactive = self.inactive.remove(key);
-        let was_known = self.types.contains_key(key);
-        let mut history = ScalarHistory::new(capacity);
-        history.push(sample);
-        let sig = sig.into_owned();
-        self.scalar_history.insert(sig.clone(), history);
-        self.active_scalar_count += 1;
-        self.types.entry(sig.clone()).or_insert(SignalType::Scalar);
-        if !was_known || was_inactive {
-            self.descriptor_changes.insert(sig);
+    /// Admit a live scalar recorder subject to the caller's live-channel budget.
+    /// Existing active channels remain admitted when that budget is lowered.
+    /// Admission does not clear archived history; a new producer session owns
+    /// that explicit operation through `clear_bound_history`.
+    pub fn admit_scalar(
+        &mut self,
+        signal: &SignalRef,
+        capacity: usize,
+        max_active: usize,
+    ) -> Option<ScalarRecordingBinding> {
+        let live = self
+            .entry(signal)
+            .is_some_and(|entry| entry.active && entry.history.is_some());
+        if !live && self.active_scalar_count >= max_active {
+            return None;
+        }
+        let index = self.ensure_entry(signal);
+        self.activate_scalar(index, capacity);
+        let entry = self.entries[index].as_ref().expect("admitted scalar");
+        Some(ScalarRecordingBinding {
+            index,
+            lease: entry.lease.clone(),
+        })
+    }
+
+    fn activate_scalar(&mut self, index: usize, capacity: usize) {
+        let entry = self.entries[index].as_mut().expect("admitted signal");
+        let new_history = entry.history.is_none();
+        if new_history {
+            entry.history = Some(ScalarHistory::new(capacity));
+            self.scalar_count += 1;
+        }
+        if new_history || !entry.active {
+            self.active_scalar_count += 1;
+            self.recording_revision = self.recording_revision.wrapping_add(1);
+        }
+        if entry.kind.is_none() || !entry.active {
+            entry.kind = Some(SignalType::Scalar);
+            self.descriptor_changes.insert(entry.signal.clone());
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
+        entry.active = true;
+    }
+
+    /// Check the capability without resolving or hashing a signal name.
+    pub fn recording_is_current(&self, binding: &ScalarRecordingBinding) -> bool {
+        self.entries
+            .get(binding.index)
+            .and_then(Option::as_ref)
+            .is_some_and(|entry| {
+                entry.active && entry.history.is_some() && Arc::ptr_eq(&entry.lease, &binding.lease)
+            })
+    }
+
+    /// Explicit new-session history boundary. A stale capability fails visibly.
+    pub fn clear_bound_history(
+        &mut self,
+        binding: &ScalarRecordingBinding,
+    ) -> Result<(), &'static str> {
+        if !self.recording_is_current(binding) {
+            return Err("scalar recording binding is stale or belongs to another registry");
+        }
+        self.entries[binding.index]
+            .as_mut()
+            .and_then(|entry| entry.history.as_mut())
+            .expect("validated scalar binding")
+            .clear();
+        Ok(())
+    }
+
+    fn append_scalar(
+        &mut self,
+        index: usize,
+        sample: ScalarSample,
+        capacity: Option<usize>,
+        rate_hz: Option<f64>,
+    ) -> bool {
+        // Admission and append operate on the same owner storage. Rejection
+        // cannot reactivate a publisher or resize its retained history.
+        if let Some(history) = self.entries[index]
+            .as_mut()
+            .and_then(|entry| entry.history.as_mut())
+            && let (Some(rate), Some(previous)) = (rate_hz, history.back())
+        {
+            if sample.time < previous.time {
+                history.clear();
+            } else if sample.time - previous.time < 1.0 / rate {
+                return false;
+            }
+        }
+        self.activate_scalar(index, capacity.unwrap_or_else(|| self.capacity_default()));
+        let history = self.entries[index]
+            .as_mut()
+            .and_then(|entry| entry.history.as_mut())
+            .expect("active scalar recorder");
+        if let Some(capacity) = capacity
+            && history.capacity != capacity.max(1)
+        {
+            history.set_capacity(capacity);
+        }
+        history.push(sample);
         true
     }
 
-    /// Push a scalar (time, value) sample. Allocates the history buffer and records the
-    /// type on first sample.
+    /// Append through a live recording capability. Invalid numerical input is a
+    /// rejected sample; an invalid capability is an owner error, never a named
+    /// lookup or implicit re-admission in the numerical loop.
+    pub fn record_bound_scalar(
+        &mut self,
+        binding: &ScalarRecordingBinding,
+        time: f64,
+        value: f64,
+        rate_hz: f64,
+        capacity: usize,
+    ) -> Result<bool, &'static str> {
+        if !self.recording_is_current(binding) {
+            return Err("scalar recording binding is stale or belongs to another registry");
+        }
+        if !time.is_finite() || !value.is_finite() || !rate_hz.is_finite() || rate_hz <= 0.0 {
+            return Ok(false);
+        }
+        Ok(self.append_scalar(
+            binding.index,
+            ScalarSample { time, value },
+            Some(capacity),
+            Some(rate_hz),
+        ))
+    }
+
+    /// Named admission for one-shot producers. Streaming producers retain a
+    /// `ScalarRecordingBinding`; both paths append to the same owner storage.
     pub fn push_scalar(&mut self, sig: SignalRef, time: f64, value: f64) {
         if !value.is_finite() {
             return;
         }
-        self.push_scalar_sample(
-            Cow::Owned(sig),
-            ScalarSample { time, value },
-            self.capacity_default(),
-            false,
-            None,
-        );
+        let index = self.ensure_entry(&sig);
+        self.append_scalar(index, ScalarSample { time, value }, None, None);
     }
 
-    /// Push a sample into a signal with an explicit retention depth — **this is how a
-    /// per-channel `retention` reaches the ring buffer.** Applies the capacity on first
-    /// sight and whenever it changes, so re-authoring a channel's retention resizes its
-    /// buffer in place rather than silently keeping the old depth.
+    /// Apply explicit retention on every accepted sample.
     pub fn push_scalar_with_capacity(
         &mut self,
         sig: SignalRef,
@@ -641,24 +741,11 @@ impl SignalRegistry {
         if !value.is_finite() {
             return;
         }
-        self.push_scalar_sample(
-            Cow::Owned(sig),
-            ScalarSample { time, value },
-            capacity,
-            true,
-            None,
-        );
+        let index = self.ensure_entry(&sig);
+        self.append_scalar(index, ScalarSample { time, value }, Some(capacity), None);
     }
 
-    /// Retain a scalar sample when the shared runtime sampling policy says it is
-    /// due and meaningful.
-    ///
-    /// Producers that discover state at runtime (for example physics bodies)
-    /// use this same policy as authored channels and Modelica state. The
-    /// registry history is the authoritative last-emitted sample, so a
-    /// producer does not need a second clock or duplicate deadband
-    /// implementation. `false` means that the value was invalid, not due, or
-    /// inside the deadband.
+    /// Notification/deadband recording policy, using the authoritative history.
     pub fn retain_scalar_if_changed(
         &mut self,
         sig: SignalRef,
@@ -676,38 +763,31 @@ impl SignalRegistry {
         {
             return false;
         }
-
-        let previous = self
-            .scalar_history(&sig)
+        let index = self.ensure_entry(&sig);
+        if let Some(previous) = self.entries[index]
+            .as_ref()
+            .and_then(|entry| entry.history.as_ref())
             .and_then(ScalarHistory::back)
-            .copied();
-        let previous = match previous {
-            Some(sample) if time >= sample.time => Some(sample),
-            Some(_) => {
-                self.clear_history(&sig);
-                None
-            }
-            None => None,
-        };
-        if let Some(sample) = previous {
-            if time - sample.time < 1.0 / rate_hz || !deadband.changed(sample.value, value) {
+        {
+            if time >= previous.time
+                && (time - previous.time < 1.0 / rate_hz
+                    || !deadband.changed(previous.value, value))
+            {
                 return false;
             }
+            if time < previous.time {
+                self.entries[index]
+                    .as_mut()
+                    .and_then(|entry| entry.history.as_mut())
+                    .expect("observed history")
+                    .clear();
+            }
         }
-
-        self.push_scalar_with_capacity(sig, time, value, capacity);
-        true
+        self.append_scalar(index, ScalarSample { time, value }, Some(capacity), None)
     }
 
-    /// Record one simulation-time sample at a fixed rate, independent of display
-    /// deadband.
-    ///
-    /// Histories are the source for plots, export, and runtime inspection. They
-    /// therefore must advance with the simulation clock even when the value is
-    /// steady. Operator notification policy belongs to the producer/event lane,
-    /// not to this recording primitive. A backwards time jump starts a new
-    /// history segment instead of appending out-of-order points. Borrow the
-    /// identity so a producer can reuse it without cloning its path each sample.
+    /// Record at simulation-time rate independent of notification deadband.
+    /// Named dynamic admission shares the bound recorder's append mechanism.
     pub fn record_scalar_at_rate(
         &mut self,
         sig: &SignalRef,
@@ -719,166 +799,135 @@ impl SignalRegistry {
         if !time.is_finite() || !value.is_finite() || !rate_hz.is_finite() || rate_hz <= 0.0 {
             return false;
         }
-
-        self.push_scalar_sample(
-            Cow::Borrowed(sig),
+        let index = self.ensure_entry(sig);
+        self.append_scalar(
+            index,
             ScalarSample { time, value },
-            capacity,
-            true,
+            Some(capacity),
             Some(rate_hz),
         )
     }
 
     pub fn update_meta(&mut self, sig: SignalRef, meta: SignalMeta) {
-        if self.meta.get(&sig) != Some(&meta) {
-            self.descriptor_changes.insert(sig.clone());
-            self.meta.insert(sig, meta);
+        let index = self.ensure_entry(&sig);
+        let entry = self.entries[index].as_mut().expect("admitted signal");
+        if entry.meta.as_ref() != Some(&meta) {
+            entry.meta = Some(meta);
+            self.descriptor_changes.insert(sig);
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
     }
 
-    /// Remember the stable API owner for a signal while its producer is live.
-    ///
-    /// [`SignalRef`] remains session-local because it is the native registry
-    /// identity.  This separate owner map is the wire-identity projection: it
-    /// lets archived history keep its `api/<GlobalEntityId>` key after the ECS
-    /// source and its [`GlobalEntityId`] component are gone.
+    /// Capture stable wire identity while the source is live; archives retain it.
     pub fn associate_global_owner(&mut self, sig: &SignalRef, owner: GlobalEntityId) {
-        if self.global_owners.get(sig) == Some(&owner) {
-            return;
+        let index = self.ensure_entry(sig);
+        let entry = self.entries[index].as_mut().expect("admitted signal");
+        if entry.global_owner != Some(owner) {
+            entry.global_owner = Some(owner);
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
-        self.global_owners.insert(sig.clone(), owner);
-        self.catalog_revision = self.catalog_revision.wrapping_add(1);
     }
 
-    /// Stable API owner captured for this signal, if its producer supplied one.
     pub fn global_owner(&self, sig: &SignalRef) -> Option<GlobalEntityId> {
-        self.global_owners.get(sig).copied()
+        self.entry(sig)?.global_owner
     }
-
-    /// Revision for UI catalogs. It changes only when their rendered channel
-    /// descriptors can change, never while ordinary samples stream in.
     pub fn catalog_revision(&self) -> u64 {
         self.catalog_revision
     }
-
     pub fn scalar_history(&self, sig: &SignalRef) -> Option<&ScalarHistory> {
-        self.scalar_history.get(sig)
+        self.entry(sig)?.history.as_ref()
     }
-
     pub fn iter_scalar(&self) -> impl Iterator<Item = (&SignalRef, &ScalarHistory)> {
-        self.scalar_history.iter()
+        self.entries
+            .iter()
+            .flatten()
+            .filter_map(|entry| Some((&entry.signal, entry.history.as_ref()?)))
     }
-
-    /// Number of scalar channels currently retained by the registry.
-    #[inline]
     pub fn scalar_count(&self) -> usize {
-        self.scalar_history.len()
+        self.scalar_count
     }
-
-    /// Number of scalar channels with live publishers. Archived histories keep
-    /// their own bounded sample retention without consuming live admission.
-    #[inline]
     pub fn active_scalar_count(&self) -> usize {
         self.active_scalar_count
     }
-
     pub fn signal_type(&self, sig: &SignalRef) -> Option<SignalType> {
-        self.types.get(sig).copied()
+        self.entry(sig)?.kind
     }
-
     pub fn meta(&self, sig: &SignalRef) -> Option<&SignalMeta> {
-        self.meta.get(sig)
+        self.entry(sig)?.meta.as_ref()
     }
-
-    /// Whether this channel has a currently live publisher.  Inactive channels
-    /// deliberately retain their history for plots, export, and post-run review.
     pub fn is_active(&self, sig: &SignalRef) -> bool {
-        !self.inactive.contains(sig)
+        self.entry(sig).is_none_or(|entry| entry.active)
     }
 
-    /// Keep all samples and metadata but mark one channel's live publisher gone.
     pub fn deactivate_signal(&mut self, sig: &SignalRef) {
-        if self.types.contains_key(sig) && self.inactive.insert(sig.clone()) {
-            if self.scalar_history.contains_key(sig) {
+        let Some(&index) = self.names.get(sig) else {
+            return;
+        };
+        let entry = self.entries[index].as_mut().expect("named signal");
+        if entry.kind.is_some() && entry.active {
+            entry.active = false;
+            entry.lease = Arc::new(());
+            if entry.history.is_some() {
                 self.active_scalar_count -= 1;
             }
-            self.descriptor_changes.insert(sig.clone());
+            self.recording_revision = self.recording_revision.wrapping_add(1);
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
+            self.descriptor_changes.insert(sig.clone());
         }
     }
-
-    /// Keep all samples and metadata but mark every channel from this source inactive.
     pub fn deactivate_entity(&mut self, entity: Entity) {
-        let mut changed = false;
-        for sig in self.types.keys().filter(|sig| sig.entity == entity) {
-            if self.inactive.insert(sig.clone()) {
-                if self.scalar_history.contains_key(sig) {
-                    self.active_scalar_count -= 1;
-                }
-                self.descriptor_changes.insert(sig.clone());
-                changed = true;
-            }
-        }
-        if changed {
-            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        let signals: Vec<_> = self
+            .entries
+            .iter()
+            .flatten()
+            .filter(|entry| entry.signal.entity == entity && entry.active)
+            .map(|entry| entry.signal.clone())
+            .collect();
+        for signal in signals {
+            self.deactivate_signal(&signal);
         }
     }
-
     pub fn iter_signals(&self) -> impl Iterator<Item = (&SignalRef, SignalType)> {
-        self.types.iter().map(|(r, t)| (r, *t))
+        self.entries
+            .iter()
+            .flatten()
+            .filter_map(|entry| Some((&entry.signal, entry.kind?)))
     }
-
-    /// Drop every signal owned by `entity`. Called when an entity despawns so stale
-    /// references don't linger.
     pub fn drop_entity(&mut self, entity: Entity) {
-        let changed = self.types.keys().any(|r| r.entity == entity);
-        self.descriptor_changes
-            .extend(self.types.keys().filter(|r| r.entity == entity).cloned());
-        self.scalar_history.retain(|signal, _| {
-            if signal.entity != entity {
-                return true;
-            }
-            if !self.inactive.contains(signal) {
+        let signals: Vec<_> = self
+            .entries
+            .iter()
+            .flatten()
+            .filter(|entry| entry.signal.entity == entity)
+            .map(|entry| entry.signal.clone())
+            .collect();
+        for signal in signals {
+            self.remove_signal(&signal);
+        }
+    }
+    pub fn remove_signal(&mut self, sig: &SignalRef) {
+        let Some(index) = self.names.remove(sig) else {
+            return;
+        };
+        let entry = self.entries[index].take().expect("named signal");
+        if entry.history.is_some() {
+            self.scalar_count -= 1;
+            if entry.active {
                 self.active_scalar_count -= 1;
             }
-            false
-        });
-        self.types.retain(|r, _| r.entity != entity);
-        self.meta.retain(|r, _| r.entity != entity);
-        self.global_owners.retain(|r, _| r.entity != entity);
-        self.inactive.retain(|r| r.entity != entity);
-        self.application_signals.retain(|r| r.entity != entity);
-        if changed {
-            self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
+        self.free.push(index);
+        self.descriptor_changes.insert(sig.clone());
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        self.recording_revision = self.recording_revision.wrapping_add(1);
     }
-
-    /// Forget a signal entirely — history, type, and metadata.
-    ///
-    /// Distinct from [`drop_entity`](Self::drop_entity): a channel that measures a rover is
-    /// its own entity, so when the CHANNEL dies the rover does not, and only that one signal
-    /// should go.
-    pub fn remove_signal(&mut self, sig: &SignalRef) {
-        let removed_history = self.scalar_history.remove(sig).is_some();
-        if removed_history && !self.inactive.contains(sig) {
-            self.active_scalar_count -= 1;
-        }
-        let changed =
-            removed_history | self.types.remove(sig).is_some() | self.meta.remove(sig).is_some();
-        self.global_owners.remove(sig);
-        self.inactive.remove(sig);
-        self.application_signals.remove(sig);
-        if changed {
-            self.descriptor_changes.insert(sig.clone());
-            self.catalog_revision = self.catalog_revision.wrapping_add(1);
-        }
-    }
-
-    /// Clear one signal's history without dropping its type / meta entry.
     pub fn clear_history(&mut self, sig: &SignalRef) {
-        if let Some(h) = self.scalar_history.get_mut(sig) {
-            h.clear();
+        if let Some(index) = self.names.get(sig).copied()
+            && let Some(history) = self.entries[index]
+                .as_mut()
+                .and_then(|entry| entry.history.as_mut())
+        {
+            history.clear();
         }
     }
 }
@@ -988,6 +1037,115 @@ pub fn drop_signals_of_removed_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_bindings_fence_owner_removal_reuse_and_scene_lifetime() {
+        let mut registry = SignalRegistry::default();
+        let signal = SignalRef::global("bound");
+        let binding = registry.admit_scalar(&signal, 8, 1).unwrap();
+        assert!(
+            registry
+                .record_bound_scalar(&binding, 0.0, -0.0, 10.0, 8)
+                .unwrap()
+        );
+        assert!(
+            !registry
+                .record_bound_scalar(&binding, 0.05, 1.0, 10.0, 1)
+                .unwrap()
+        );
+        assert_eq!(registry.scalar_history(&signal).unwrap().capacity, 8);
+        assert_eq!(
+            registry
+                .scalar_history(&signal)
+                .unwrap()
+                .back()
+                .unwrap()
+                .value
+                .to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        let mut other = SignalRegistry::default();
+        let _other_binding = other.admit_scalar(&signal, 8, 1).unwrap();
+        assert!(
+            other
+                .record_bound_scalar(&binding, 1.0, 1.0, 10.0, 8)
+                .is_err()
+        );
+        registry.deactivate_signal(&signal);
+        assert!(
+            registry
+                .record_bound_scalar(&binding, 1.0, 1.0, 10.0, 8)
+                .is_err()
+        );
+        let replacement = registry.admit_scalar(&signal, 8, 1).unwrap();
+        assert!(
+            registry
+                .record_bound_scalar(&replacement, -1.0, 2.0, 10.0, 3)
+                .unwrap()
+        );
+        registry.remove_signal(&signal);
+        let _reused = registry
+            .admit_scalar(&SignalRef::global("reused"), 8, 1)
+            .unwrap();
+        assert!(
+            registry
+                .record_bound_scalar(&replacement, 1.0, 1.0, 10.0, 8)
+                .is_err()
+        );
+        registry.clear_scene();
+        assert!(
+            registry
+                .record_bound_scalar(&_reused, 1.0, 1.0, 10.0, 8)
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "manual named versus bound recorder timing"]
+    fn bound_recording_diagnostic() {
+        let names: Vec<_> = (0..4096)
+            .map(|index| {
+                SignalRef::global(format!(
+                    "participant.subsystem.continuous_state.variable_{index:05}"
+                ))
+            })
+            .collect();
+        for bound in [false, true] {
+            let mut registry = SignalRegistry::default();
+            let bindings: Vec<_> = names
+                .iter()
+                .map(|name| registry.admit_scalar(name, 16, names.len()).unwrap())
+                .collect();
+            let started = std::time::Instant::now();
+            for tick in 0..64 {
+                for (index, name) in names.iter().enumerate() {
+                    let time = f64::from(tick);
+                    let value = index as f64 + time;
+                    let accepted = if bound {
+                        registry
+                            .record_bound_scalar(&bindings[index], time, value, 10.0, 16)
+                            .unwrap()
+                    } else {
+                        registry.record_scalar_at_rate(name, time, value, 10.0, 16)
+                    };
+                    assert!(accepted);
+                }
+            }
+            println!(
+                "RECORDING bound={bound} ns={}",
+                started.elapsed().as_nanos()
+            );
+            for (index, name) in names.iter().enumerate() {
+                let history = registry.scalar_history(name).unwrap();
+                assert_eq!(history.len(), 16);
+                for (offset, sample) in history.iter().enumerate() {
+                    let time = (48 + offset) as f64;
+                    assert_eq!(sample.time.to_bits(), time.to_bits());
+                    assert_eq!(sample.value.to_bits(), (index as f64 + time).to_bits());
+                }
+            }
+        }
+    }
 
     #[test]
     fn active_scalar_admission_tracks_archival_reactivation_and_removal() {

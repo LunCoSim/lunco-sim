@@ -449,12 +449,30 @@ the scheduled call's context and selected visible surface.
 
 The `lunco-luncosim-exposures` owner captures immutable UI facts and their
 `Application/Ui/Preparation` context at the bounded `Time<Real>` cadence.
-Camera properties capture `Application/Presentation/Initialization` at startup
+Camera decisions capture `Application/Presentation/Initialization` at startup
 and `Application/Presentation/Event` on camera changes or policy replacement.
-The owner retains the selected hook registrations and prepares complete views
+The owner captures the single `runtime.ui.surface` registration and prepares complete views
 through `AsyncWorkAdmission`. `RegisteredHook::invoke` applies the same context,
 argument and result validation to captured and registry-dispatched calls.
 No live World, USD reader or authoritative mutation crosses this boundary.
+One invocation consumes one fact snapshot and returns a map containing boolean
+`visible` and a typed `properties` map. The owner validates the entire decision
+before publication. Camera visibility and properties use the same decision.
+Malformed decisions fail the surface without publishing partial properties.
+The Rhai adapter converts the rich facts once per admitted snapshot; the shipped
+policy never passes the rich participant/output fact map to a by-value helper.
+`SetRhaiPolicy` submits scope, policy identity, source, entry and execution
+metadata through one `ApplyUsdOps` intent. Dependency preparation and undo
+therefore cover the complete policy; parallel single-property commands cannot
+expose or retain a partially created implementation. The authored
+`runtime_policy_transaction.rhai` gate exercises creation and one-step undo in
+a referenced production scene.
+
+File-backed policies use the asset-typed `info:sourceAsset`. Both prepared and
+live stages use the same `UsdReadObject::asset_identifier` policy reader, so
+relative paths retain the contributing layer's anchor through composition.
+Identifier errors are reported and exclude that authored implementation from
+installation; the containing scene is never substituted as its source anchor.
 
 Retained views, bounded admission, source fencing and failure recovery follow
 [the publication contract](runtime-authored-ui.md). `runtime_ui_preparation`

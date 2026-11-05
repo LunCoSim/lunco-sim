@@ -6,7 +6,7 @@ from runtime import ROOT, request_json
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--port", type=int, required=True)
 args = parser.parse_args()
-code = (ROOT / "assets/scripting/policy/runtime_ui_properties.rhai").read_text()
+code = (ROOT / "assets/scripting/policy/runtime_ui_surface.rhai").read_text()
 code += "\n" + (ROOT / "assets/scripting/tests/test_runtime_ui_coordinates.rhai").read_text()
 result = request_json(args.port, dict(type="ExecuteCommand", command="RunRhai", params=dict(code=code)))
 output = result.get("data", {}).get("stdout", "")
