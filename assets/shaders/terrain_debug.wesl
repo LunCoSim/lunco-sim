@@ -34,7 +34,7 @@ import super::terrain_surface::{surface_annotation_color, terrain_detail_normal_
 //!@ui      colour_gain 0.05 1.0 "Diagnostic colour brightness"
 //!@default colour_gain 0.25
 //!@ui      slope_band_deg 0 5 "Slope contour interval (degrees; 0 hides contours)"
-//!@default slope_band_deg 1.0
+//!@default slope_band_deg 0.0
 //!@ui      safe_rad    0 1.57 "Safe slope (rad)"
 //!@default safe_rad    0.2617994
 //!@ui      cliff_rad   0 1.57 "Cliff slope (rad)"
