@@ -502,7 +502,9 @@ compiled, ready, numerically observed, or visually accepted.
 ### Declared topology is not a sample
 
 Keep the set of connectable output names separate from the values sampled this
-tick. `DeclaredOutputPorts` records topology; `SimComponent.outputs` records
+tick. `DeclaredOutputPorts` admits immutable names and a retained structural key
+through its constructor; numerical readers consume that key without rehashing
+the name inventory. `SimComponent.outputs` records
 current samples. An empty codeless `LunCoEnvironmentProbeAPI` asset is valid:
 the projection supplies the authoritative environment names, while the
 environment domain removes absent samples instead of fabricating zeroes or
@@ -514,7 +516,10 @@ For a generated Modelica domain, the complete parsed wrapper output interface—
 topology-derived member aliases selected by the authored synthesizer—is published before USD
 telemetry declarations are projected. Keep this lifecycle ordering intact: a compile-pending
 wrapper is assembly state, not a missing-port fallback, and live values still come only from
-`SimComponent.outputs`.
+`SimComponent.outputs`. Deferred compile intent coalesces by exact source owner,
+participant and class across interleaved participants; a class change for the same
+participant preserves its ordered replacement boundary. Certification still
+requires the exact admitted construction session.
 
 ## Handoff report
 

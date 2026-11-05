@@ -16,8 +16,7 @@
 //! integer tick.
 //!
 //! `sim_secs` / MET and the calendar epoch are both derived from the same fixed
-//! tick and mission origin. All real logic is the pure [`advance_clock`] function
-//! (unit-tested headless, no Bevy `Time`). `project_time_transport` applies the
+//! tick and mission origin. `project_time_transport` validates and applies the
 //! transport before the fixed loop; [`advance_world_clock`] publishes the final
 //! completed tick after that loop.
 
@@ -749,6 +748,16 @@ impl Default for TimeTransport {
 }
 
 impl TimeTransport {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !self.rate.is_finite() || !(MIN_REALTIME_RATE..=MAX_REALTIME_RATE).contains(&self.rate) {
+            return Err(format!(
+                "live transport rate must be finite and within {}..={}x",
+                MIN_REALTIME_RATE, MAX_REALTIME_RATE
+            ));
+        }
+        Ok(())
+    }
+
     /// Is time actually flowing (playing AND rate > 0)?
     #[inline]
     pub fn is_running(&self) -> bool {
@@ -848,22 +857,6 @@ impl MissionClock {
     pub fn met_secs(&self, tick: u64) -> f64 {
         (self.epoch_jd(tick) - self.mission_epoch0_jd) * SECS_PER_DAY
     }
-}
-
-/// Return the virtual-clock rate for the transport.
-///
-/// The command owner rejects rates above the fixed-step safety boundary. The
-/// pure helper also clamps direct resource construction so the Bevy projection
-/// cannot create an unbounded fixed-step burst.
-pub fn advance_clock(rate: f64, paused: bool) -> f64 {
-    // The command boundary rejects out-of-range values. Keep this pure owner
-    // defensive for callers that construct the transport resource directly.
-    let rate = if rate.is_finite() {
-        rate.clamp(0.0, MAX_REALTIME_RATE)
-    } else {
-        0.0
-    };
-    if paused || rate == 0.0 { 0.0 } else { rate }
 }
 
 /// The derived causal time view every simulation consumer reads. Published after
@@ -1021,30 +1014,56 @@ pub fn project_time_transport(world: &mut World) {
         .is_some_and(|state| !state.is_ready());
     let held = world.resource::<SimulationStepControl>().is_held();
     let faulted = world.resource::<lunco_core::RuntimeFaults>().active();
-    let mut virtual_time = world.resource_mut::<Time<Virtual>>();
-    project_transport_state(
-        &transport,
-        &mut virtual_time,
-        admission_held || scene_time_pending || held || faulted,
-    );
+    let result = {
+        let mut virtual_time = world.resource_mut::<Time<Virtual>>();
+        let before = (
+            virtual_time.relative_speed_f64().to_bits(),
+            virtual_time.is_paused(),
+        );
+        let result = project_transport_state(
+            &transport,
+            virtual_time.bypass_change_detection(),
+            admission_held || scene_time_pending || held || faulted,
+        );
+        if before
+            != (
+                virtual_time.relative_speed_f64().to_bits(),
+                virtual_time.is_paused(),
+            )
+        {
+            virtual_time.set_changed();
+        }
+        result
+    };
+    if let Err(detail) = result {
+        world.resource_mut::<lunco_core::RuntimeFaults>().raise(
+            "simulation-transport-invalid",
+            None,
+            "simulation transport",
+            detail,
+        );
+        let mut virtual_time = world.resource_mut::<Time<Virtual>>();
+        if !virtual_time.is_paused() {
+            virtual_time.pause();
+        }
+    }
 }
 
 /// Apply transport and an owner-supplied preparation hold to the pacing clock.
-/// The scheduled time spine and lifecycle owners use this same projection.
+/// Invalid state leaves the clock untouched and returns its owner diagnostic.
 pub fn project_transport_state(
     transport: &TimeTransport,
     virtual_time: &mut Time<Virtual>,
     admission_hold: bool,
-) {
+) -> Result<(), String> {
+    transport.validate()?;
     let paused = matches!(transport.mode, TransportMode::Paused) || admission_hold;
-    let relative_speed = advance_clock(transport.rate, paused);
 
     // Frozen transport is projected onto Bevy's `paused` flag, never onto
     // `relative_speed = 0`. Consumers treat relative speed as a divisor, so a
     // positive configured rate is retained while Bevy's pause state supplies
     // the zero effective speed.
-    let frozen = relative_speed <= 0.0;
-    let configured = if frozen { 1.0 } else { relative_speed };
+    let configured = transport.rate;
 
     // Control projection is **change-driven**: only touch `Time<Virtual>` when the
     // rate actually changed. Comparing the value (rather than gating the whole
@@ -1055,13 +1074,14 @@ pub fn project_transport_state(
     if virtual_time.relative_speed_f64() != configured {
         virtual_time.set_relative_speed_f64(configured);
     }
-    if frozen != virtual_time.is_paused() {
-        if frozen {
+    if paused != virtual_time.is_paused() {
+        if paused {
             virtual_time.pause();
         } else {
             virtual_time.unpause();
         }
     }
+    Ok(())
 }
 
 /// Installs the mission-time spine: resources, the `PreUpdate` derivation step,
@@ -1338,19 +1358,6 @@ mod tests {
     }
 
     #[test]
-    fn paused_freezes_tick_and_physics() {
-        // `relative_speed == 0` is the whole "paused" story — frozen tick + physics.
-        assert_eq!(advance_clock(1.0, true), 0.0);
-    }
-
-    #[test]
-    fn realtime_rate_unifies_the_knob() {
-        // Every accepted rate stays on the causal fixed-step path.
-        let rs = advance_clock(MAX_REALTIME_RATE, false);
-        assert_eq!(rs, MAX_REALTIME_RATE); // one rate → relative_speed (> 0 ⇒ running)
-    }
-
-    #[test]
     fn realtime_rate_options_stay_inside_the_causal_transport() {
         assert!(!REALTIME_RATE_OPTIONS.is_empty());
         assert_eq!(
@@ -1366,11 +1373,14 @@ mod tests {
             REALTIME_RATE_OPTIONS.last().copied(),
             Some(MAX_REALTIME_RATE)
         );
-        assert!(
-            REALTIME_RATE_OPTIONS
-                .iter()
-                .all(|&rate| advance_clock(rate, false) > 0.0)
-        );
+        assert!(REALTIME_RATE_OPTIONS.iter().all(|&rate| {
+            TimeTransport {
+                mode: TransportMode::Playing,
+                rate,
+            }
+            .validate()
+            .is_ok()
+        }));
         assert_eq!(realtime_rate_label(0.1), "0.1x");
         assert_eq!(realtime_rate_label(1.0), "1x");
     }
@@ -1966,30 +1976,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rates_above_the_safe_ceiling_are_clamped() {
-        assert_eq!(advance_clock(128.0, false), MAX_REALTIME_RATE);
-        assert_eq!(advance_clock(5000.0, true), 0.0);
-    }
-
-    /// A frozen spine must raise Bevy's `paused` flag and keep `relative_speed`
-    /// a POSITIVE rate — never 0.
-    ///
-    /// `relative_speed` is a rate that consumers divide by: lightyear's
-    /// interpolation timeline computes `delta.div_f32(time.relative_speed())`, so
-    /// a zero there yields `inf` and panics `Duration::from_secs_f32` ("cannot
-    /// convert float seconds to Duration"). This crashed every networked client
-    /// the moment it loaded a DEM-terrain scene, because the terrain readiness wait
-    /// froze the world while the heightfield built. `effective_speed` (0 when
-    /// paused) is what the tick/physics gates read, so freezing still works.
+    /// Pause uses the native paused flag; cadence consumers retain a positive rate.
     #[test]
     fn frozen_spine_pauses_and_never_zeroes_relative_speed() {
         use bevy::ecs::system::RunSystemOnce;
 
-        for (mode, rate) in [
-            (TransportMode::Paused, 1.0),  // explicit user pause
-            (TransportMode::Playing, 0.0), // rate 0 is also "frozen"
-        ] {
+        for (mode, rate) in [(TransportMode::Paused, 1.0), (TransportMode::Paused, 0.25)] {
             let mut world = bevy::prelude::World::new();
             world.init_resource::<SimulationStepControl>();
             world.init_resource::<lunco_core::RuntimeFaults>();
@@ -2012,6 +2004,57 @@ mod tests {
                 vt.relative_speed_f64()
             );
         }
+    }
+
+    #[test]
+    fn invalid_transport_state_faults_and_holds_the_existing_clock() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        for rate in [0.0, -1.0, f64::NAN, f64::INFINITY, MAX_REALTIME_RATE + 1.0] {
+            let mut world = World::new();
+            world.init_resource::<SimulationStepControl>();
+            world.init_resource::<lunco_core::RuntimeFaults>();
+            world.insert_resource(TimeTransport {
+                mode: TransportMode::Playing,
+                rate,
+            });
+            let mut clock = Time::<Virtual>::default();
+            clock.set_relative_speed_f64(0.5);
+            world.insert_resource(clock);
+
+            world.run_system_once(project_time_transport).unwrap();
+
+            let clock = world.resource::<Time<Virtual>>();
+            assert!(clock.is_paused());
+            assert_eq!(clock.relative_speed_f64(), 0.5);
+            assert_eq!(
+                world
+                    .resource::<lunco_core::RuntimeFaults>()
+                    .first
+                    .as_ref()
+                    .unwrap()
+                    .kind,
+                "simulation-transport-invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn unchanged_transport_projection_preserves_change_detection() {
+        let mut world = World::new();
+        world.init_resource::<SimulationStepControl>();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.init_resource::<TimeTransport>();
+        world.init_resource::<Time<Virtual>>();
+        world.clear_trackers();
+
+        project_time_transport(&mut world);
+        assert!(!world.resource_ref::<Time<Virtual>>().is_changed());
+
+        world.resource_mut::<TimeTransport>().rate = 2.0;
+        project_time_transport(&mut world);
+        assert!(world.resource_ref::<Time<Virtual>>().is_changed());
+        assert_eq!(world.resource::<Time<Virtual>>().relative_speed_f64(), 2.0);
     }
 
     /// The complement: a running spine is unpaused and carries the rate.

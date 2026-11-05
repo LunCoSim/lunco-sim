@@ -950,26 +950,19 @@ fn apply_time_transport(
     transport: &mut crate::TimeTransport,
     cmd: &SetTimeTransport,
 ) -> Result<(), String> {
-    if let Some(rate) = cmd.rate
-        && (!rate.is_finite()
-            || !(crate::MIN_REALTIME_RATE..=crate::MAX_REALTIME_RATE).contains(&rate))
-    {
-        return Err(format!(
-            "live transport rate must be finite and within {}..={}x",
-            crate::MIN_REALTIME_RATE,
-            crate::MAX_REALTIME_RATE
-        ));
-    }
+    let mut next = *transport;
     if let Some(playing) = cmd.playing {
-        transport.mode = if playing {
+        next.mode = if playing {
             crate::TransportMode::Playing
         } else {
             crate::TransportMode::Paused
         };
     }
     if let Some(rate) = cmd.rate {
-        transport.rate = rate;
+        next.rate = rate;
     }
+    next.validate()?;
+    *transport = next;
     Ok(())
 }
 
@@ -1411,6 +1404,8 @@ mod tests {
             .resource_mut::<Time<Fixed>>()
             .accumulate_overstep(std::time::Duration::from_millis(20));
         app.init_resource::<crate::lifecycle::SimulationLifecycle>()
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
             .add_observer(on_set_time_transport);
 
         app.world_mut().trigger(SetTimeTransport {
@@ -1545,6 +1540,8 @@ mod tests {
             .init_resource::<LastClockT>()
             .init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<crate::lifecycle::SimulationLifecycle>()
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
             .add_observer(on_set_time_transport);
 
         app.world_mut().trigger(SetTimeTransport {

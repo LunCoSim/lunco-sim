@@ -397,19 +397,19 @@ lunco-theme = { path = "crates/lunco-theme" }
 lunco-web = { path = "crates/lunco-web" }
 
 # Rumoca fork main: checked initialization and runtime preparation share one pinned revision.
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
-rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "5a8dbefbdb41384a62361e9b012cd4693fefbded" }
+rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
+rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "a11b4b2e0adf52818a711af945c7bcbbfbf5c184" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.

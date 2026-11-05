@@ -1,79 +1,63 @@
-# Batched Modelica observation collection
+# Complete Modelica observation collection
 
-## Current owner and measured cost
+Rumoca's common `MeSimulationSession` owns checked observations, warnings,
+input overlays and output cardinality. `visit_visible_values` validates the
+complete component observation before visiting borrowed `rumoca_core::VarName`
+handles and native `f64` values. The common host interns declared output labels
+once through the existing canonical variable-name owner. First input admission
+retains its label and output position; subsequent writes change only the value.
+Reset retires all applied-input facts together. Declared output order precedes
+applied inputs absent from the output inventory, in admission order.
 
-`collect_stepper_observables` in `lunco-modelica-worker` calls `LiveStepper::state`,
-checks the named observation and converts its native `IndexMap<String, f64>` to
-`Vec<(String, f64)>`. Rumoca's `MeSimulationSession::visible_values` clones the
-component's output names, reads its existing batched f64 output, constructs the
-map and overlays host-applied inputs. The worker then discards that map. This
-is distinct from main-thread publication into `ModelicaVariables`.
+RK45 and LunCoSim's fixed session forward the same reader. The live stepper
+clones shared name handles into worker rows, validates finite time and every
+value before publication, and the worker removes `time` in place. There is no
+per-step name interning or text copy. This is execution/transport work, so no
+changeable Rhai policy or hook belongs at the boundary.
 
-The public ME host already exposes `output_names` and `output_values`. Native
-checked lowering includes scalar inputs in the visible inventory. The public
-RK45 wrapper retains the names through `variable_names` but hides the batched
-reader behind its private common backend. `values_for` still constructs the
-complete named map. Rebuilding the adaptive host in LunCoSim would duplicate
-native construction policy, so it is not the proposed solution.
+`ModelicaResult` and accepted `ModelicaStepSample` outputs carry those same
+handles. Their serde representation remains textual names and `f64` values;
+process-local name IDs never cross the worker wire. The worker's binary-codec
+regression checks name bytes against ordinary textual rows, exact decoded f64
+bits and rejection of numeric names. The reflected `ModelicaVariables` snapshot
+retains its existing String keys. One normalized publication reader serves
+compiled metadata and step outputs, preserving indexed alignment, input/parameter
+classification, reordered and omitted rows, duplicate last writes and signed zero.
+The SDK's named-map reader also collects the common visitor and renders names
+as text; it has no independent numeric/input evaluator.
 
-The ignored `named_and_batched_observation_collection` diagnostic in
-`lunco-modelica-solver` compares the existing named collection with native
-batched collection into shared `Arc<str>` labels. It uses one checked inline
-model with 2,304 outputs, an input and a parameter-dependent equation. The
-native session constructs once; five communication points change the input and
-time. Every pair checks all names and f64 bits, including the current input.
-Both timed paths validate finite observations, filter `time`, retain ownership
-of the resulting rows and include their destruction. The candidate also checks
-name/value cardinality. Label preparation, compilation, construction, input
-application and advancement are outside the collection timing.
-
-One regular-profile command, using the normal target and sccache, passes:
+The ignored `observation_diagnostics::named_and_visited_observation_collection`
+uses 2,304 outputs and one input at five changing communication points. It
+checks every name and f64 bit, includes row destruction, and alternates 512
+complete reads per representation. Construction and advancement are excluded.
+Compare independent executable snapshots to isolate a producer change:
 
 ```sh
-cargo test --locked -p lunco-modelica-solver --lib \
-  observation_diagnostics::named_and_batched_observation_collection -j 4 -- \
+cargo test --release --locked -p lunco-modelica-solver --lib \
+  observation_diagnostics::named_and_visited_observation_collection -j 4 -- \
   --ignored --nocapture
 ```
 
-Five alternating pairs of 512 reads give median 134.721 ms named versus
-38.450 ms batched, approximately 71.46 percent less collection time. Width is
-2,305 values. This is a bounded diagnostic, not a worker, complete coupled-tick
-or startup gain. It covers the checked native linked component, not arbitrary
-imported FMUs. No production observation path changes in this commit.
-Raw output remains ignored at
-`.cache/codex-evidence/performance-20261023/modelica-observation-collection-diagnostic.log`.
+Six alternating executable runs yield fifteen timing samples per producer.
+Median direct collection is 36.3211 ms with copied text and 14.5298 ms with
+shared names, 60.00 percent lower. The complete ranges are 35.5682–39.5360 ms
+and 13.9639–15.4763 ms. Names, input/time coordinates and reported value bits
+agree. This is a collection result, not a complete worker or FPS result.
 
-## Proposed SDK extension
+Nine fixed-step numerical tests pass through the current observation API,
+including native/reference arithmetic and exact repeated input schedules.
+Worker admission/fingerprint tests pass; native input/session tests preserve
+hidden inputs, shared label payloads, signed zero, atomic rejection and reset.
+The RK45-enabled SDK Clippy gate passes. The fixed twenty-model canary retains
+twelve strict-high comparisons with zero missing/skipped traces and eight
+unchanged typed refusals. All 562,411 data values and 16,841 timestamps match
+the fresh baseline bit-for-bit. Production qualification status and artifact
+identities belong in [the active Griffin review](griffin-2k-performance-2026-11-04.md).
 
-Dependency approval is required before changing or publishing Rumoca source.
-The proposed change in `../rumoca` / `LunCoSim/rumoca` is limited to exposing the
-existing reader through `rumoca-sim`'s common backend and public RK45 session:
-
-```rust
-pub fn output_values(&self) -> Result<Vec<f64>, SimError>
-```
-
-The common backend forwards to `MeSimulationSession::output_values`; RK45
-forwards to that backend. Keep its current constructor, execution admission,
-adaptive plugin, lifecycle, accepted-point observation, warnings and error
-propagation. No integrator or equation changes, reimplemented input overlay,
-global cache, alternative constructor or application copy of private policy.
-
-The application would consume that API for ordinary adaptive sessions and the
-same public ME reader for fixed sessions. The session owns immutable shared
-labels obtained from its native inventory. All native inputs must have an
-observation entry; mismatch rejects construction rather than inventing a value.
-Each read checks the exact width, finite clock and complete finite sample before
-publication. Cut over worker transport, accepted-step samples and consumers
-together to shared labels, preserving the external serialized shape and
-current input visibility. Initial input capture remains a checked native read.
-Reset/replacement retires the labels with its exact session; no retained batch
-may cross session admission. Existing input/parameter classification stays live.
-
-Required verification: native named/batched equivalence for current inputs,
-aliases, arrays, changed inputs, events, reset and lifecycle rejection; the
-twenty-model MSL canary; complete application collection/publication comparison;
-production variable projection, missing-state and observation-failure negatives,
-metadata and exact accepted-step sample gates. Then inspect a normal landed
-Griffin window and a separate qualified Tracy capture. No performance threshold
-is satisfied by the collection diagnostic alone.
+LunCoSim pins the shared observation API and native optimizations to Rumoca
+`a11b4b2e0adf52818a711af945c7bcbbfbf5c184` in its workspace manifest and lockfile.
+The SDK changes are committed on its local `main`; the application consumer and
+revision pin are integrated together. Both repositories remain unpublished, so
+an independent machine needs that SDK commit before resolving the pin. The
+recorded production evidence uses the same source through its recorded local build
+override; no remote publication or fresh-clone build is claimed.

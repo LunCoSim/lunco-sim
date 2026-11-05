@@ -136,7 +136,7 @@ fn dispatch_parameter_edit(
     if model.is_compiling || model.is_stepping {
         return Err("participant has an outstanding transaction; wait for its completion".into());
     }
-    if !model.compiled_parameter_names.contains(&request.key)
+    if !model.compiled_variables.parameters().contains(&request.key)
         || !model.parameters.contains_key(&request.key)
     {
         return Err(format!(

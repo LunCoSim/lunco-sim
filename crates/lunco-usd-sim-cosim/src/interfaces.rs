@@ -394,9 +394,7 @@ fn publish(
     world
         .entity_mut(entity)
         .insert((
-            DeclaredOutputPorts {
-                names: surface.outputs.iter().cloned().collect(),
-            },
+            DeclaredOutputPorts::new(surface.outputs.iter().cloned().collect()),
             contracts,
             layout,
             runtime_interface,

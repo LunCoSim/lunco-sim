@@ -16,7 +16,7 @@ pub fn on_remove_modelica(
 ) {
     let entity = trigger.entity;
     if let Ok(mut variables) = variables.get_mut(entity) {
-        variables.values.clear();
+        variables.clear();
     }
     commands.queue(move |world: &mut World| {
         if let Ok(mut owner) = world.get_entity_mut(entity) {
@@ -59,15 +59,13 @@ pub fn on_remove_modelica(
     );
 }
 
-fn reject_missing_modelica_variables(
+fn reject_modelica_observation(
     entity: Entity,
     model: &mut ModelicaModel,
     faults: Option<&mut lunco_core::RuntimeFaults>,
+    condition: &'static str,
+    detail: String,
 ) {
-    let detail = format!(
-        "Modelica participant `{}` has no required ModelicaVariables state",
-        model.model_name
-    );
     let first_report = model.last_error.as_deref() != Some(detail.as_str());
     if !first_report {
         return;
@@ -85,7 +83,7 @@ fn reject_missing_modelica_variables(
     model.last_error = Some(detail.clone());
     if let Some(faults) = faults {
         faults.raise(
-            "modelica-variables-missing",
+            condition,
             Some(entity),
             model.model_name.clone(),
             detail.clone(),
@@ -112,7 +110,13 @@ pub fn validate_modelica_variable_ownership(
         (gid.map(lunco_core::GlobalEntityId::get), entity.to_bits())
     });
     for (entity, mut model, _) in missing {
-        reject_missing_modelica_variables(entity, &mut model, faults.as_deref_mut());
+        reject_modelica_observation(
+            entity,
+            &mut model,
+            faults.as_deref_mut(),
+            "modelica-variables-missing",
+            "required ModelicaVariables state is absent".to_owned(),
+        );
     }
 }
 
@@ -251,7 +255,7 @@ pub fn reconcile_modelica_preparation_progress(
             && (!model.is_compiled
                 || model.is_compiling
                 || (!model.paused
-                    && variables.is_none_or(|variables| variables.values.is_empty())));
+                    && variables.is_none_or(|variables| variables.values().is_empty())));
 
         if causal_participant && run_requested && preparation_pending {
             progress.acquire(
@@ -400,8 +404,8 @@ mod compile_admission_tests {
         app.world_mut()
             .get_mut::<ModelicaVariables>(active)
             .unwrap()
-            .values
-            .insert("x".to_owned(), 1.0);
+            .insert_named("x".to_owned(), 1.0)
+            .expect("finite admitted observation");
         app.world_mut().run_schedule(PreUpdate);
         assert!(!app.world().resource::<SimulationProgress>().is_held());
     }
@@ -420,7 +424,7 @@ pub(super) fn ordered_modelica_inputs(
 
 /// Locate a differing ordered sample without formatting every solver variable.
 /// Full sample traces remain necessary to identify the differing values.
-fn scalar_sample_fingerprint(values: &[(String, f64)]) -> u64 {
+fn scalar_sample_fingerprint<'a>(values: impl ExactSizeIterator<Item = (&'a str, f64)>) -> u64 {
     let mut hash = lunco_hash::Fnv1a::new();
     hash.write_u64(values.len() as u64);
     for (name, value) in values {
@@ -489,7 +493,13 @@ pub fn spawn_modelica_requests(
             model.resume_after_compile = false;
         }
         if variables.is_none() {
-            reject_missing_modelica_variables(entity, &mut model, faults.as_deref_mut());
+            reject_modelica_observation(
+                entity,
+                &mut model,
+                faults.as_deref_mut(),
+                "modelica-variables-missing",
+                "required ModelicaVariables state is absent".to_owned(),
+            );
             continue;
         }
         let shared_clock_participant = participants
@@ -725,7 +735,7 @@ fn failed_modelica_step_detail(
     variables: &ModelicaVariables,
     error: &str,
 ) -> String {
-    let mut values = variables.values.iter().collect::<Vec<_>>();
+    let mut values = variables.values().iter().collect::<Vec<_>>();
     values.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
     let mut detail = format!(
@@ -1004,7 +1014,13 @@ pub fn handle_modelica_responses(
                 continue;
             }
             let Some(mut variables) = variables else {
-                reject_missing_modelica_variables(result.entity, &mut model, faults.as_deref_mut());
+                reject_modelica_observation(
+                    result.entity,
+                    &mut model,
+                    faults.as_deref_mut(),
+                    "modelica-variables-missing",
+                    "required ModelicaVariables state is absent".to_owned(),
+                );
                 if let Some(completion) = completion.as_deref_mut() {
                     completion.complete(Err("Modelica participant has no variable state".into()));
                 }
@@ -1544,19 +1560,26 @@ pub fn handle_modelica_responses(
             }
 
             if lifecycle_result {
-                model.compiled_parameter_names =
-                    result.detected_parameter_names.iter().cloned().collect();
+                let inputs = if result.is_new_model {
+                    result.detected_input_names.iter().cloned().collect()
+                } else {
+                    model.compiled_variables.inputs().clone()
+                };
+                model.compiled_variables =
+                    std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                        inputs,
+                        result.detected_parameter_names.iter().cloned().collect(),
+                    ));
                 model.parameters = result
                     .detected_symbols
                     .iter()
-                    .filter(|(name, _)| model.compiled_parameter_names.contains(name))
+                    .filter(|(name, _)| model.compiled_variables.parameters().contains(name))
                     .cloned()
                     .collect();
             }
             if result.is_new_model || result.is_parameter_update {
-                let values = &mut variables.bypass_change_detection().values;
-                variables_changed |= !values.is_empty();
-                values.clear();
+                variables_changed |= !variables.values().is_empty();
+                variables.bypass_change_detection().clear();
                 // A successful Compile leaves the model PAUSED/ready — we do
                 // NOT auto-start a live realtime sim. The one exception is
                 // `RunActiveModel`, which set `resume_after_compile = true`
@@ -1592,7 +1615,6 @@ pub fn handle_modelica_responses(
                 // member defaults are already applied there; inventing zeros
                 // here would overwrite them on the first simulation step.
                 let ui_inputs = std::mem::take(&mut model.inputs);
-                model.compiled_input_names = result.detected_input_names.iter().cloned().collect();
                 if result.error.is_none()
                     && let Some(mut component) = component
                 {
@@ -1633,51 +1655,50 @@ pub fn handle_modelica_responses(
                     model.paused = inactive.contains(result.entity) || !model.resume_after_compile;
                     model.resume_after_compile = false;
                 }
-                let values = &mut variables.bypass_change_detection().values;
-                variables_changed |= !values.is_empty();
-                values.clear();
+                variables_changed |= !variables.values().is_empty();
+                variables.bypass_change_detection().clear();
                 // Inputs retain their admitted owner; parameters above come
                 // from this reset's initialized observation.
             }
 
-            // Align the native ordered map to each admitted observation. Check
-            // the actual name before indexed updates; reorders, omissions and
-            // duplicate samples retain ordinary named, last-write semantics.
-            let values = &mut variables.bypass_change_detection().values;
-            for samples in [&result.detected_symbols, &outputs] {
-                for (index, (name, val)) in samples
-                    .iter()
-                    .filter(|(name, _)| {
-                        !model.inputs.contains_key(name) && !model.parameters.contains_key(name)
-                    })
-                    .enumerate()
-                {
-                    let aligned = values.get_index(index).is_some_and(|(key, _)| key == name);
-                    if !aligned {
-                        let source = match values.get_index_of(name) {
-                            Some(source) => source,
-                            None => {
-                                values.insert(name.clone(), *val);
-                                variables_changed = true;
-                                values.len() - 1
-                            }
-                        };
-                        if index < values.len() {
-                            values.swap_indices(source, index);
-                        }
-                    }
-                    // Duplicate names can extend the input iteration beyond
-                    // the map width; their last sample still wins by name.
-                    let current = if index < values.len() {
-                        values.get_index_mut(index).map(|(_, value)| value)
+            let admitted = {
+                let snapshot = variables.bypass_change_detection();
+                if result.detected_symbols.is_empty() {
+                    snapshot.admit_observation(&model.compiled_variables, &outputs)
+                } else {
+                    // Initialization and step rows have distinct ordered layouts.
+                    // Prove both complete batches finite before committing either.
+                    let initial = result
+                        .detected_symbols
+                        .iter()
+                        .map(|(name, value)| (rumoca_core::VarName::intern(name), *value))
+                        .collect::<Vec<_>>();
+                    if let Some((name, value)) =
+                        outputs.iter().find(|(_, value)| !value.is_finite())
+                    {
+                        Err(format!("non-finite Modelica observation '{name}': {value}"))
                     } else {
-                        values.get_mut(name)
+                        snapshot
+                            .admit_observation(&model.compiled_variables, &initial)
+                            .and_then(|changed| {
+                                snapshot
+                                    .admit_observation(&model.compiled_variables, &outputs)
+                                    .map(|published| changed || published)
+                            })
                     }
-                    .expect("an admitted observable remains in its map");
-                    if current.to_bits() != val.to_bits() {
-                        *current = *val;
-                        variables_changed = true;
-                    }
+                }
+            };
+            match admitted {
+                Ok(changed) => variables_changed |= changed,
+                Err(detail) => {
+                    reject_modelica_observation(
+                        result.entity,
+                        &mut model,
+                        faults.as_deref_mut(),
+                        "invalid-modelica-observation",
+                        detail,
+                    );
+                    continue;
                 }
             }
             if variables_changed {
@@ -1730,8 +1751,8 @@ pub fn handle_modelica_responses(
                     step_id = sample.step_id,
                     input_time_s = sample.input_time_s,
                     output_time_s = sample.output_time_s,
-                    input_fingerprint = %format_args!("{:016x}", scalar_sample_fingerprint(&sample.inputs)),
-                    output_fingerprint = %format_args!("{:016x}", scalar_sample_fingerprint(&sample.outputs)),
+                    input_fingerprint = %format_args!("{:016x}", scalar_sample_fingerprint(sample.inputs.iter().map(|(name, value)| (name.as_str(), *value)))),
+                    output_fingerprint = %format_args!("{:016x}", scalar_sample_fingerprint(sample.outputs.iter().map(|(name, value)| (name.as_str(), *value)))),
                     "accepted Modelica communication sample"
                 );
                 bevy::log::trace!(
@@ -1943,7 +1964,10 @@ mod compile_fault_tests {
         assert!(model.paused && !model.is_stepping && model.in_flight_step.is_none());
         assert_eq!(model.current_time, 0.05);
         assert_eq!(
-            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
+            app.world()
+                .get::<ModelicaVariables>(entity)
+                .unwrap()
+                .values()["x"],
             1.0
         );
         assert!(
@@ -1954,9 +1978,52 @@ mod compile_fault_tests {
     }
 
     #[test]
+    fn shared_output_labels_keep_textual_worker_wire_values() {
+        // This is the external worker serialization boundary.
+        let packet = ModelicaResult {
+            outputs: vec![
+                (
+                    rumoca_core::VarName::from("nozzle.wall[2].T"),
+                    1.2345678901234567,
+                ),
+                (rumoca_core::VarName::from("command"), -0.0),
+            ],
+            ..Default::default()
+        };
+        let wire = serde_json::to_value(&packet).unwrap();
+        assert_eq!(
+            wire["outputs"],
+            serde_json::json!([["nozzle.wall[2].T", 1.2345678901234567], ["command", -0.0]])
+        );
+        let text_rows = packet
+            .outputs
+            .iter()
+            .map(|(name, value)| (name.to_string(), *value))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bincode::serde::encode_to_vec(&packet.outputs, bincode::config::standard()).unwrap(),
+            bincode::serde::encode_to_vec(&text_rows, bincode::config::standard()).unwrap()
+        );
+        let encoded = bincode::serde::encode_to_vec(&packet, bincode::config::standard()).unwrap();
+        let (decoded, consumed): (ModelicaResult, usize) =
+            bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        for ((name, value), (expected_name, expected_value)) in
+            decoded.outputs.iter().zip(&packet.outputs)
+        {
+            assert_eq!(name, expected_name);
+            assert_eq!(value.to_bits(), expected_value.to_bits());
+        }
+        let mut invalid = wire;
+        invalid["outputs"][0][0] = serde_json::json!(42);
+        assert!(serde_json::from_value::<ModelicaResult>(invalid).is_err());
+    }
+
+    #[test]
     fn communication_sample_fingerprint_retains_names_order_and_float_bits() {
         let sample = vec![("a".to_owned(), 0.0), ("bc".to_owned(), 1.0)];
-        let fingerprint = scalar_sample_fingerprint(&sample);
+        let fingerprint =
+            scalar_sample_fingerprint(sample.iter().map(|(name, value)| (name.as_str(), *value)));
         for changed in [
             vec![("a".to_owned(), -0.0), ("bc".to_owned(), 1.0)],
             vec![("ab".to_owned(), 0.0), ("c".to_owned(), 1.0)],
@@ -1966,9 +2033,17 @@ mod compile_fault_tests {
                 ("bc".to_owned(), f64::from_bits(1.0_f64.to_bits() + 1)),
             ],
         ] {
-            assert_ne!(fingerprint, scalar_sample_fingerprint(&changed));
+            assert_ne!(
+                fingerprint,
+                scalar_sample_fingerprint(
+                    changed.iter().map(|(name, value)| (name.as_str(), *value))
+                )
+            );
         }
-        assert_eq!(fingerprint, scalar_sample_fingerprint(&sample));
+        assert_eq!(
+            fingerprint,
+            scalar_sample_fingerprint(sample.iter().map(|(name, value)| (name.as_str(), *value)))
+        );
     }
 
     #[derive(Resource, Default)]
@@ -2196,7 +2271,7 @@ mod compile_fault_tests {
                     checked_interface: Some(crate::worker::test_checked_interface()),
                     variable_metadata: Some(std::collections::BTreeMap::new()),
                     live_solver_snapshot: Some(test_solver_snapshot()),
-                    outputs: vec![("x".to_owned(), 1.0)],
+                    outputs: vec![(rumoca_core::VarName::from("x"), 1.0)],
                     ..Default::default()
                 })
                 .unwrap();
@@ -2211,7 +2286,7 @@ mod compile_fault_tests {
                 app.world()
                     .get::<ModelicaVariables>(entity)
                     .unwrap()
-                    .values
+                    .values()
                     .is_empty()
             );
         }
@@ -2247,11 +2322,18 @@ mod compile_fault_tests {
             .spawn((
                 ModelicaModel {
                     document,
+                    model_name: crate::worker::test_checked_interface().model_name.clone(),
                     session_id: 1,
                     is_compiled: true,
                     is_stepping: true,
                     inputs: [("command".to_owned(), 0.25)].into(),
                     parameters: [("gain".to_owned(), 2.0)].into(),
+                    compiled_variables: std::sync::Arc::new(
+                        lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                            ["command".into()].into(),
+                            ["gain".into()].into(),
+                        ),
+                    ),
                     in_flight_step: Some(lunco_modelica_runtime::InFlightModelicaStep {
                         step_id: 1,
                         stop_tick: 3,
@@ -2262,27 +2344,26 @@ mod compile_fault_tests {
                     }),
                     ..Default::default()
                 },
-                ModelicaVariables {
-                    values: [("x".to_owned(), 0.0)].into_iter().collect(),
-                },
+                ModelicaVariables::from_values([("x".to_owned(), 0.0)].into_iter().collect())
+                    .expect("finite admitted observation"),
             ))
             .id();
         let variable_key = app
             .world()
             .get::<ModelicaVariables>(entity)
             .unwrap()
-            .values
+            .values()
             .get_key_value("x")
             .unwrap()
             .0
             .as_ptr();
         let outputs = vec![
-            ("x".to_owned(), -0.0),
-            ("new".to_owned(), 1.2345678901234567),
-            ("command".to_owned(), 0.25),
-            ("gain".to_owned(), 2.0),
+            (rumoca_core::VarName::from("x"), -0.0),
+            (rumoca_core::VarName::from("new"), 1.2345678901234567),
+            (rumoca_core::VarName::from("command"), 0.25),
+            (rumoca_core::VarName::from("gain"), 2.0),
         ];
-        let output_key = outputs[0].0.as_ptr();
+        let output_key = outputs[0].0.as_str().as_ptr();
         let expected = outputs.clone();
         results
             .send(ModelicaResult {
@@ -2290,7 +2371,7 @@ mod compile_fault_tests {
                 session_id: 0,
                 step_id: Some(1),
                 new_time: 0.05,
-                outputs: vec![("x".to_owned(), 99.0)],
+                outputs: vec![(rumoca_core::VarName::from("x"), 99.0)],
                 ..Default::default()
             })
             .unwrap();
@@ -2301,7 +2382,10 @@ mod compile_fault_tests {
                 .is_empty()
         );
         assert_eq!(
-            app.world().get::<ModelicaVariables>(entity).unwrap().values["x"],
+            app.world()
+                .get::<ModelicaVariables>(entity)
+                .unwrap()
+                .values()["x"],
             0.0
         );
         results
@@ -2324,7 +2408,11 @@ mod compile_fault_tests {
             "successful live steps must not invalidate unchanged document diagnostics"
         );
         let model = app.world().get::<ModelicaModel>(entity).unwrap();
-        let variables = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
+        let variables = &app
+            .world()
+            .get::<ModelicaVariables>(entity)
+            .unwrap()
+            .values();
         assert_eq!(
             variables.get_key_value("x").unwrap().0.as_ptr(),
             variable_key
@@ -2337,7 +2425,7 @@ mod compile_fault_tests {
         assert_eq!(accepted.inputs[0].0.as_ptr(), input_key);
         assert_eq!(&*accepted.outputs, expected);
         assert!(model.in_flight_step.is_none());
-        assert_eq!(accepted.outputs[0].0.as_ptr(), output_key);
+        assert_eq!(accepted.outputs[0].0.as_str().as_ptr(), output_key);
         let retained_outputs = accepted.outputs.clone();
         // Admission follows names across reorders, omitted rows, duplicate
         // writes beyond map width, and changes to live input classification.
@@ -2366,6 +2454,11 @@ mod compile_fault_tests {
             let mut model = app.world_mut().get_mut::<ModelicaModel>(entity).unwrap();
             if index == 4 {
                 model.inputs.insert("new".to_owned(), 77.0);
+                model.compiled_variables =
+                    std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                        ["new".into(), "command".into()].into(),
+                        ["gain".into()].into(),
+                    ));
             }
             model.is_stepping = true;
             model.in_flight_step = Some(lunco_modelica_runtime::InFlightModelicaStep {
@@ -2384,13 +2477,17 @@ mod compile_fault_tests {
                     new_time: stop_time,
                     outputs: outputs
                         .into_iter()
-                        .map(|(name, value)| (name.to_owned(), value))
+                        .map(|(name, value)| (rumoca_core::VarName::from(name), value))
                         .collect(),
                     ..Default::default()
                 })
                 .unwrap();
             app.world_mut().run_schedule(First);
-            let values = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
+            let values = &app
+                .world()
+                .get::<ModelicaVariables>(entity)
+                .unwrap()
+                .values();
             assert_eq!(values["x"].to_bits(), expected[0].to_bits());
             assert_eq!(values["new"].to_bits(), expected[1].to_bits());
             assert!(!values.contains_key("command"));
@@ -2407,13 +2504,17 @@ mod compile_fault_tests {
                 is_reset: true,
                 checked_interface: Some(crate::worker::test_checked_interface()),
                 variable_metadata: Some(std::collections::BTreeMap::new()),
-                outputs: vec![("x".to_owned(), 3.0)],
+                outputs: vec![(rumoca_core::VarName::from("x"), 3.0)],
                 ..Default::default()
             })
             .unwrap();
         app.world_mut().run_schedule(First);
         let model = app.world().get::<ModelicaModel>(entity).unwrap();
-        let variables = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
+        let variables = &app
+            .world()
+            .get::<ModelicaVariables>(entity)
+            .unwrap()
+            .values();
         assert_eq!(variables.len(), 1);
         assert_eq!(variables["x"], 3.0);
         assert!(model.last_accepted_step.is_none());
@@ -2450,12 +2551,24 @@ mod compile_fault_tests {
                 is_compiled: true,
                 inputs: [("command".to_owned(), 0.25)].into(),
                 parameters: [("gain".to_owned(), 2.0)].into(),
+                compiled_variables: std::sync::Arc::new(
+                    lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                        ["command".into()].into(),
+                        ["gain".into()].into(),
+                    ),
+                ),
                 ..Default::default()
             })
             .id();
         let names = (0..2304)
             .map(|index| format!("subsystem.feed.branches[{index}].pressure"))
             .collect::<Vec<_>>();
+        let output_names = names
+            .iter()
+            .map(|name| rumoca_core::VarName::intern(name))
+            .collect::<Vec<_>>();
+        let command = rumoca_core::VarName::from("command");
+        let gain = rumoca_core::VarName::from("gain");
         let began = std::time::Instant::now();
         for step_id in 1..=512 {
             let start_time = (step_id - 1) as f64 / 60.0;
@@ -2470,11 +2583,11 @@ mod compile_fault_tests {
                 sampled_inputs: vec![("command".to_owned(), 0.25)],
                 submitted_at: web_time::Instant::now(),
             });
-            let mut outputs = names
+            let mut outputs = output_names
                 .iter()
                 .map(|name| (name.clone(), step_id as f64))
                 .collect::<Vec<_>>();
-            outputs.extend([("command".to_owned(), 0.25), ("gain".to_owned(), 2.0)]);
+            outputs.extend([(command.clone(), 0.25), (gain.clone(), 2.0)]);
             results
                 .send(ModelicaResult {
                     entity,
@@ -2488,7 +2601,11 @@ mod compile_fault_tests {
             app.world_mut().run_schedule(First);
         }
         let elapsed = began.elapsed();
-        let variables = &app.world().get::<ModelicaVariables>(entity).unwrap().values;
+        let variables = &app
+            .world()
+            .get::<ModelicaVariables>(entity)
+            .unwrap()
+            .values();
         assert_eq!(variables.len(), names.len());
         assert!(
             variables
@@ -3011,7 +3128,7 @@ mod document_runtime_owner_tests {
             app.world()
                 .get::<ModelicaVariables>(geometry)
                 .unwrap()
-                .values
+                .values()
                 .is_empty()
         );
         assert!(

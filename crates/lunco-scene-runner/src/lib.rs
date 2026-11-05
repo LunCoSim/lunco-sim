@@ -1670,8 +1670,8 @@ fn participants_ready(world: &mut World) -> bool {
                         || (model.current_time.is_finite()
                             && model.current_time >= 0.0
                             && variables.is_some_and(|variables| {
-                                !variables.values.is_empty()
-                                    && variables.values.values().all(|value| value.is_finite())
+                                !variables.values().is_empty()
+                                    && variables.values().values().all(|value| value.is_finite())
                             }))))
         })
     };
@@ -1770,7 +1770,7 @@ fn log_participant_readiness_blockers(world: &mut World) {
             model.current_time,
             model.target_time,
             variables
-                .map(|variables| variables.values.len().to_string())
+                .map(|variables| variables.values().len().to_string())
                 .unwrap_or_else(|| "missing".to_owned()),
             status,
             model.last_error.as_deref().unwrap_or("none"),

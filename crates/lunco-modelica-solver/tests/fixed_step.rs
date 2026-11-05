@@ -18,6 +18,17 @@ fn compile(
     session.compile_model_dae_strict_reachable_uncached_with_recovery(model)
 }
 
+fn fixed_values(session: &FixedStepSession) -> std::collections::BTreeMap<String, f64> {
+    let mut values = std::collections::BTreeMap::new();
+    session
+        .visit_visible_values(|name, value| {
+            assert!(value.is_finite());
+            values.insert(name.to_string(), value);
+        })
+        .expect("the fixed observation is available");
+    values
+}
+
 fn ramp_model() -> &'static str {
     "model FixedRamp\n  Real x(start=0);\nequation\n  der(x) = 1;\nend FixedRamp;"
 }
@@ -47,7 +58,7 @@ fn fixed_rk4_admits_parameter_assertions_without_disabling_them() {
         if gain > 0.0 {
             let mut session = result.expect("parameter-only assertion is admitted");
             session.step(0.01).unwrap();
-            assert!((session.state().unwrap().values["x"] - 0.01).abs() < 1.0e-12);
+            assert!((fixed_values(&session)["x"] - 0.01).abs() < 1.0e-12);
         } else {
             let error = result
                 .err()
@@ -86,17 +97,15 @@ fn fixed_rk4_rejects_assertions_that_need_continuous_event_handling() {
 fn fixed_rk4_reads_inputs_and_algebraic_values_from_checked_runtime() {
     let compiled = compile("Coupled", "model Coupled input Real u = 2; Real x(start=0); output Real y; equation y=3*u+x; der(x)=y; end Coupled;", "coupled.mo").unwrap();
     let mut session = FixedStepSession::new(&compiled.dae, options()).unwrap();
-    assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
-    assert_eq!(session.state().unwrap().values.get("y").copied(), Some(6.0));
+    assert_eq!(fixed_values(&session).get("u").copied(), Some(2.0));
+    assert_eq!(fixed_values(&session).get("y").copied(), Some(6.0));
     assert!(session.set_inputs(&[("u", f64::NAN)]).is_err());
     assert!(session.set_inputs(&[("u", 9.0), ("missing", 1.0)]).is_err());
-    assert_eq!(session.state().unwrap().values.get("u").copied(), Some(2.0));
+    assert_eq!(fixed_values(&session).get("u").copied(), Some(2.0));
     session.step(0.01).unwrap();
-    let x = session.state().unwrap().values.get("x").copied().unwrap();
+    let x = fixed_values(&session).get("x").copied().unwrap();
     assert!((x - 6.0 * (0.01_f64.exp() - 1.0)).abs() < 1.0e-10);
-    assert!(
-        (session.state().unwrap().values.get("y").copied().unwrap() - (6.0 + x)).abs() < 1.0e-10
-    );
+    assert!((fixed_values(&session).get("y").copied().unwrap() - (6.0 + x)).abs() < 1.0e-10);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -128,18 +137,16 @@ end NonlinearArray;"#,
         let started = std::time::Instant::now();
         native.set_inputs(&[("command", command)]).unwrap();
         native.step(0.01).unwrap();
-        let actual = native.state().unwrap();
+        let actual = fixed_values(&native);
         native_time += started.elapsed();
         let started = std::time::Instant::now();
         reference.set_inputs(&[("command", command)]).unwrap();
         reference.step(0.01).unwrap();
-        let expected = reference.state().unwrap();
+        let expected = fixed_values(&reference);
         reference_time += started.elapsed();
-        assert_eq!(actual.time.to_bits(), expected.time.to_bits());
-        assert_eq!(actual.values.len(), expected.values.len());
-        for ((name, value), (expected_name, expected_value)) in
-            actual.values.iter().zip(&expected.values)
-        {
+        assert_eq!(native.time().to_bits(), reference.time().to_bits());
+        assert_eq!(actual.len(), expected.len());
+        for ((name, value), (expected_name, expected_value)) in actual.iter().zip(&expected) {
             assert_eq!(name, expected_name);
             assert!(
                 (value - expected_value).abs() <= 1.0e-12,
@@ -163,7 +170,7 @@ fn fixed_rk4_uses_exactly_the_configured_step_lattice() {
     }
 
     assert!((session.time() - 0.1).abs() < 1.0e-14);
-    let x = session.state().expect("read state").values["x"];
+    let x = fixed_values(&session)["x"];
     assert!((x - 0.1).abs() < 1.0e-12, "x={x}");
     assert!(session.step(0.02).is_err(), "variable dt must be rejected");
     for invalid_dt in [0.0, -0.01, f64::NAN, f64::INFINITY] {
@@ -185,12 +192,9 @@ fn fixed_communication_points_preserve_internal_steps_and_reject_invalid_targets
         for _ in 0..6 {
             single.step(0.01).unwrap();
         }
-        let expected = single.state().unwrap();
-        assert_eq!(
-            interval.state().unwrap().time.to_bits(),
-            expected.time.to_bits()
-        );
-        assert_eq!(interval.state().unwrap().values, expected.values);
+        let expected = fixed_values(&single);
+        assert_eq!(interval.time().to_bits(), single.time().to_bits());
+        assert_eq!(fixed_values(&interval), expected);
         interval.advance_to(origin + 0.06).unwrap();
         for target in [
             origin + 0.065,
@@ -203,11 +207,8 @@ fn fixed_communication_points_preserve_internal_steps_and_reject_invalid_targets
                 interval.advance_to(target).is_err(),
                 "invalid target {target}"
             );
-            assert_eq!(
-                interval.state().unwrap().time.to_bits(),
-                expected.time.to_bits()
-            );
-            assert_eq!(interval.state().unwrap().values, expected.values);
+            assert_eq!(interval.time().to_bits(), single.time().to_bits());
+            assert_eq!(fixed_values(&interval), expected);
         }
     }
 }
@@ -226,8 +227,8 @@ fn fixed_rk4_repeats_the_same_operation_sequence() {
 
     assert_eq!(left.time().to_bits(), right.time().to_bits());
     assert_eq!(
-        left.state().expect("left state").values["x"].to_bits(),
-        right.state().expect("right state").values["x"].to_bits()
+        fixed_values(&left)["x"].to_bits(),
+        fixed_values(&right)["x"].to_bits()
     );
 }
 
@@ -308,7 +309,14 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
     assert!(matches!(&left, LiveStepper::Fixed(_)));
     assert!(matches!(&right, LiveStepper::Fixed(_)));
     assert_eq!(left.input_names(), &["u".to_string()]);
-    assert_eq!(left.state().unwrap().values.get("u").copied(), Some(0.0));
+    assert_eq!(
+        left.observables()
+            .unwrap()
+            .iter()
+            .find(|(name, _)| name.as_str() == "u")
+            .map(|(_, value)| *value),
+        Some(0.0)
+    );
 
     for step in 0..512 {
         let input = ((step % 11) as f64 - 5.0) * 0.125;
@@ -317,27 +325,26 @@ fn predicted_live_runtime_is_bitwise_deterministic_over_an_input_schedule() {
         right
             .set_inputs(&[("u", input)])
             .expect("right input is accepted");
-        assert_eq!(left.state().unwrap().values.get("u").copied(), Some(input));
+        assert_eq!(
+            left.observables()
+                .unwrap()
+                .iter()
+                .find(|(name, _)| name.as_str() == "u")
+                .map(|(_, value)| *value),
+            Some(input)
+        );
         left.advance_to((step + 1) as f64 * 0.01)
             .expect("left communication point");
         right
             .advance_to((step + 1) as f64 * 0.01)
             .expect("right communication point");
 
-        let left_state = left.state().expect("left state is observable");
-        let right_state = right.state().expect("right state is observable");
-        assert_eq!(
-            left_state.time.to_bits(),
-            right_state.time.to_bits(),
-            "step {step}"
-        );
-        assert_eq!(
-            left_state.values.len(),
-            right_state.values.len(),
-            "step {step}"
-        );
+        let left_values = left.observables().expect("left observation is available");
+        let right_values = right.observables().expect("right observation is available");
+        assert_eq!(left.time().to_bits(), right.time().to_bits(), "step {step}");
+        assert_eq!(left_values.len(), right_values.len(), "step {step}");
         for ((left_name, left_value), (right_name, right_value)) in
-            left_state.values.iter().zip(right_state.values.iter())
+            left_values.iter().zip(right_values.iter())
         {
             assert_eq!(left_name, right_name, "step {step}");
             assert_eq!(

@@ -435,7 +435,7 @@ impl Panel for TelemetryPanel {
                             return;
                         };
                         (
-                            variables.values.keys().cloned().collect::<Vec<_>>(),
+                            variables.values().keys().cloned().collect::<Vec<_>>(),
                             m.inputs.keys().cloned().collect::<Vec<_>>(),
                         )
                     } else {

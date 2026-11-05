@@ -93,7 +93,9 @@ def main() -> None:
                             "diagnostics": command("RuntimeDiagnostics"), "log": str(log)})
         assert hashlib.sha256(scene.read_bytes()).hexdigest() == source_hash
         print(f"PASS {case}: authored verdict, source preservation and API Exit", flush=True)
-    (evidence / ("results-" + "-".join(r["case"] for r in results) + ".json")).write_text(
+    selection = "\n".join(result["case"] for result in results)
+    result_key = hashlib.sha256(selection.encode("utf-8")).hexdigest()
+    (evidence / f"results-{result_key}.json").write_text(
         json.dumps(results, indent=2) + "\n")
 
 

@@ -1543,7 +1543,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             "paused": model.paused || world.get::<lunco_core::SimulationObjectPaused>(entity).is_some(),
             "parameters": project(&model.parameters, &in_filter),
             "inputs": project(&model.inputs, &in_filter),
-            "variables": project(&variables.values, &in_filter),
+            "variables": project(variables.values(), &in_filter),
             "metadata": metadata,
         }))
     }

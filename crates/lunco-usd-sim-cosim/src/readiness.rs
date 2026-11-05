@@ -357,8 +357,8 @@ fn modelica_wait_kind(
         && (!model.current_time.is_finite()
             || model.current_time < 0.0
             || variables.is_some_and(|variables| {
-                variables.values.is_empty()
-                    || variables.values.values().any(|value| !value.is_finite())
+                variables.values().is_empty()
+                    || variables.values().values().any(|value| !value.is_finite())
             }))
     {
         Some(kinds::PARTICIPANT_INIT)
@@ -487,9 +487,12 @@ mod tests {
         assert_eq!(
             modelica_wait_kind(
                 &initialized,
-                Some(&ModelicaVariables {
-                    values: [("initial_output".to_owned(), 1.0)].into_iter().collect()
-                }),
+                Some(
+                    &ModelicaVariables::from_values(
+                        [("initial_output".to_owned(), 1.0)].into_iter().collect()
+                    )
+                    .expect("finite admitted observation")
+                ),
                 None
             ),
             None,
@@ -521,33 +524,16 @@ mod tests {
         assert_eq!(
             modelica_wait_kind(
                 &invalid_time,
-                Some(&ModelicaVariables {
-                    values: [("initial_output".to_owned(), 1.0)].into_iter().collect()
-                }),
+                Some(
+                    &ModelicaVariables::from_values(
+                        [("initial_output".to_owned(), 1.0)].into_iter().collect()
+                    )
+                    .expect("finite admitted observation")
+                ),
                 None
             ),
             Some(kinds::PARTICIPANT_INIT),
             "a non-finite solver clock is not evidence of an initial exchange"
-        );
-
-        let invalid_snapshot = ModelicaModel {
-            is_compiled: true,
-            paused: false,
-            current_time: 0.0,
-            ..default()
-        };
-        assert_eq!(
-            modelica_wait_kind(
-                &invalid_snapshot,
-                Some(&ModelicaVariables {
-                    values: [("initial_output".to_owned(), f64::NAN)]
-                        .into_iter()
-                        .collect()
-                }),
-                None
-            ),
-            Some(kinds::PARTICIPANT_INIT),
-            "non-finite initial observables cannot release participant readiness"
         );
     }
 

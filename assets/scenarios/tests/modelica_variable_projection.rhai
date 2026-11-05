@@ -11,6 +11,13 @@ fn on_start(me, ctx) {
     this.phase = 0;
     let variables = get(this.engine, "ModelicaVariables.values");
     this.initial = variables.thrust;
+    this.raw_write_rejected = !set(this.engine, "ModelicaVariables.values", #{thrust: this.initial + 1.0});
+    this.root_write_rejected = !set(this.engine, "ModelicaVariables", #{values: #{thrust: this.initial + 1.0}});
+    this.snapshot_replace_rejected = !add(this.engine, "ModelicaVariables", #{values: #{thrust: this.initial + 1.0}});
+    this.default_snapshot_replace_rejected = !add(this.engine, "ModelicaVariables");
+    this.input_map_write_rejected = !set(this.engine, "ModelicaModel.inputs", #{throttle: 1.0});
+    this.parameter_map_write_rejected = !set(this.engine, "ModelicaModel.parameters", #{});
+    this.read_after_rejection = get(this.engine, "ModelicaVariables.values").thrust == this.initial;
     this.paused = set(this.engine, "ModelicaModel.paused", true);
 }
 
@@ -33,6 +40,11 @@ fn on_tick(me, ctx) {
     let variables = get(this.engine, "ModelicaVariables.values");
     this.done = true;
     report_verdict([
+        t_true(this.raw_write_rejected && this.root_write_rejected
+               && this.snapshot_replace_rejected && this.default_snapshot_replace_rejected,
+               "owner-maintained snapshots reject raw reflected mutation and component replacement"),
+        t_true(this.input_map_write_rejected && this.parameter_map_write_rejected, "input and parameter namespaces require typed owner commands"),
+        t_true(this.read_after_rejection, "rejected mutation preserves the accepted numerical snapshot"),
         t_true(this.paused && this.resumed, "the isolated participant paused and resumed"),
         t_true(this.retained, "the paused native snapshot remained published"),
         t_true(this.command_ok, "the public input command was accepted"),

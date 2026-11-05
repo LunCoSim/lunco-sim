@@ -57,6 +57,16 @@ The live transport exposes one bounded ladder: `0.1x, 0.25x, 0.5x, 1x, 2x,
 world. The fixed timestep does not change, so a higher rate performs more
 completed physics ticks per rendered frame.
 
+Pause, scene preparation and manual holds use the native pacing clock's paused
+flag while retaining its configured positive rate. Transport commands validate
+the complete requested state before mutation. The same owner validates runtime
+projection: invalid resource state raises `simulation-transport-invalid` and
+holds the existing clock rather than clamping or substituting a rate. Projection
+runs before frame time sampling. A command issued inside a fixed tick updates
+the transport authority immediately; the pacing clock projects it at its next
+frame boundary. Several admitted fixed ticks can run before that boundary. Rate
+changes preserve the fixed quantum and all previously admitted elapsed demand.
+
 The time owner holds one `FramePacingDemand` realtime request while automatic
 transport or queued manual cycles need service. Native background pacing therefore
 services a running world even when it has no Modelica participants. Pause and

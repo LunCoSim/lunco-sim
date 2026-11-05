@@ -73,7 +73,10 @@ source, then use the generic helpers in
 surface to evaluate it.
 
 For Modelica observable publication, use the required `ModelicaVariables.values`
-reflection surface and public output ports. `modelica_variable_projection`
+reflection surface and public output ports. Owner-controlled snapshots carry `ReflectReadOnly`:
+negative cases reject whole-component and nested map mutation, including generic
+`add` insertion/replacement, while retaining
+named reads and typed control commands. `modelica_variable_projection`
 checks snapshot retention while paused, then resumes the solver after a public
 input command to compare the native snapshot, output port and accepted result.
 `modelica_variables_missing` removes

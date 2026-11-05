@@ -322,12 +322,12 @@ fn strip_rigid_body_ports(
 /// outputs; direction outputs are materialized from composed wire demand by
 /// the generic direction publisher.
 fn environment_probe_interface() -> DeclaredOutputPorts {
-    DeclaredOutputPorts {
-        names: lunco_cosim_core::ENVIRONMENT_PROBE_BASE_OUTPUTS
+    DeclaredOutputPorts::new(
+        lunco_cosim_core::ENVIRONMENT_PROBE_BASE_OUTPUTS
             .iter()
             .map(|name| (*name).to_owned())
             .collect(),
-    }
+    )
 }
 
 /// A compile-specific port-contract verdict already reported to the console.
@@ -1539,9 +1539,9 @@ fn process_usd_cosim_prim_read(
         shared_inputs = inputs.into();
     }
     let shared_outputs = if modelica_path.is_some() {
-        commands.entity(entity).try_insert(DeclaredOutputPorts {
-            names: outputs.keys().cloned().collect(),
-        });
+        commands
+            .entity(entity)
+            .try_insert(DeclaredOutputPorts::new(outputs.keys().cloned().collect()));
         Default::default()
     } else {
         outputs.into()
@@ -1629,17 +1629,17 @@ fn modelica_port_contract_error(
 ) -> Option<String> {
     let missing_inputs: Vec<_> = contract
         .inputs
-        .difference(&model.compiled_input_names)
+        .difference(model.compiled_variables.inputs())
         // An unconnected USD `inputs:` value is also the authored parameter
         // boundary for a Modelica participant. Parameters are compile-time
         // values, not causal solver inputs, so the compiler correctly omits
-        // them from `compiled_input_names`. The checked parameter inventory is
+        // them from the checked input declarations. The checked parameter inventory is
         // independent of the availability of a numeric presentation value.
-        .filter(|name| !model.compiled_parameter_names.contains(*name))
+        .filter(|name| !model.compiled_variables.parameters().contains(*name))
         .filter(|name| !resolved.is_some_and(|surface| surface.native_inputs.contains(*name)))
         .cloned()
         .collect();
-    let actual_outputs: BTreeSet<_> = variables.values.keys().cloned().collect();
+    let actual_outputs: BTreeSet<_> = variables.values().keys().cloned().collect();
     let missing_outputs: Vec<_> = contract
         .outputs
         .difference(&actual_outputs)
@@ -2185,7 +2185,7 @@ pub(crate) fn wrap_modelica_into_simcomponent(
             // Publish the admitted observation; live synchronization owns
             // subsequent snapshots and status transitions.
             outputs: variables
-                .values
+                .values()
                 .iter()
                 .map(|(name, value)| (name.clone(), *value))
                 .collect(),
@@ -2199,9 +2199,9 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         // exposes the participant for the compiler's source lease.
         entity_commands.insert(lunco_port_core::PortSurfacePending);
         if let Some(contract) = contract {
-            entity_commands.try_insert(DeclaredOutputPorts {
-                names: contract.outputs.iter().cloned().collect(),
-            });
+            entity_commands.try_insert(DeclaredOutputPorts::new(
+                contract.outputs.iter().cloned().collect(),
+            ));
         }
     }
 }
@@ -2246,7 +2246,7 @@ pub(crate) fn request_modelica_parameter_recompile(
 ) {
     for (entity, defaults, mut model, mut variables, mut component) in &mut q {
         let parameter_changed = defaults.0.iter().any(|(name, value)| {
-            model.compiled_parameter_names.contains(name)
+            model.compiled_variables.parameters().contains(name)
                 && model
                     .parameters
                     .get(name)
@@ -2280,14 +2280,13 @@ pub(crate) fn request_modelica_parameter_recompile(
         model.is_stepping = false;
         model.in_flight_step = None;
         model.next_step_id = 1;
-        model.compiled_input_names.clear();
-        model.compiled_parameter_names.clear();
+        model.compiled_variables = std::sync::Arc::default();
         model.last_error = None;
         model.paused = true;
         model.resume_after_compile = resume_after_compile;
         model.clear_clock();
-        variables.values.clear();
-        component.outputs.clear();
+        variables.clear();
+        component.outputs.invalidate_samples();
         component.status = SimStatus::Compiling;
 
         commands
@@ -2340,11 +2339,11 @@ pub(crate) fn seed_usd_input_defaults(
                 if !model.is_compiled {
                     continue;
                 }
-                if model.compiled_parameter_names.contains(port) {
+                if model.compiled_variables.parameters().contains(port) {
                     // Parameter changes use the recompile admission above;
                     // mutating a display value cannot update the solver.
                     continue;
-                } else if model.compiled_input_names.contains(port) {
+                } else if model.compiled_variables.inputs().contains(port) {
                     model.inputs.insert(port.clone(), *value);
                     sim.inputs.insert(port.clone(), *value);
                 } else if !resolved.is_some_and(|surface| surface.native_inputs.contains(port)) {
@@ -3341,7 +3340,7 @@ mod tests {
         let outputs = environment_probe_interface();
         assert_eq!(
             outputs
-                .names
+                .names()
                 .iter()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>(),
@@ -3350,7 +3349,7 @@ mod tests {
                 .copied()
                 .collect::<BTreeSet<_>>()
         );
-        assert!(outputs.names.iter().all(|name| {
+        assert!(outputs.names().iter().all(|name| {
             lunco_environment::DirectionSourceId::from_mount_connector(name).is_none()
         }));
     }
@@ -3499,10 +3498,14 @@ mod tests {
             outputs: ["thrust".to_string()].into_iter().collect(),
         };
         let mut model = dispatched_but_unsolved();
-        model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
-        let variables = ModelicaVariables {
-            values: [("mass".to_owned(), 1.0)].into_iter().collect(),
-        };
+        model.compiled_variables =
+            std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                ["throttle".to_string()].into_iter().collect(),
+                model.compiled_variables.parameters().clone(),
+            ));
+        let variables =
+            ModelicaVariables::from_values([("mass".to_owned(), 1.0)].into_iter().collect())
+                .expect("finite admitted observation");
 
         let error = modelica_port_contract_error(&contract, &model, &variables, None)
             .expect("a USD port the DAE does not expose must fail projection");
@@ -3517,10 +3520,14 @@ mod tests {
             outputs: ["thrust".to_string()].into_iter().collect(),
         };
         let mut model = dispatched_but_unsolved();
-        model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
-        let variables = ModelicaVariables {
-            values: [("thrust".to_owned(), 42.0)].into_iter().collect(),
-        };
+        model.compiled_variables =
+            std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                ["throttle".to_string()].into_iter().collect(),
+                model.compiled_variables.parameters().clone(),
+            ));
+        let variables =
+            ModelicaVariables::from_values([("thrust".to_owned(), 42.0)].into_iter().collect())
+                .expect("finite admitted observation");
 
         assert_eq!(
             modelica_port_contract_error(&contract, &model, &variables, None),
@@ -3535,9 +3542,11 @@ mod tests {
             outputs: BTreeSet::new(),
         };
         let mut model = dispatched_but_unsolved();
-        model
-            .compiled_parameter_names
-            .insert("filter_time_constant_s".into());
+        model.compiled_variables =
+            std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                model.compiled_variables.inputs().clone(),
+                ["filter_time_constant_s".into()].into(),
+            ));
         let variables = ModelicaVariables::default();
 
         assert_eq!(
@@ -3553,10 +3562,14 @@ mod tests {
             outputs: BTreeSet::new(),
         };
         let mut model = dispatched_but_unsolved();
-        model.compiled_input_names.clear();
-        let variables = ModelicaVariables {
-            values: [("force_y".to_owned(), 42.0)].into_iter().collect(),
-        };
+        model.compiled_variables =
+            std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                Default::default(),
+                model.compiled_variables.parameters().clone(),
+            ));
+        let variables =
+            ModelicaVariables::from_values([("force_y".to_owned(), 42.0)].into_iter().collect())
+                .expect("finite admitted observation");
 
         assert!(
             modelica_port_contract_error(&contract, &model, &variables, None).is_some(),
@@ -3568,9 +3581,11 @@ mod tests {
     fn physical_sink_inputs_do_not_hide_same_named_modelica_outputs() {
         let mut model = dispatched_but_unsolved();
         model.inputs.insert("guidance_throttle".into(), 0.0);
-        model
-            .compiled_input_names
-            .insert("guidance_throttle".into());
+        model.compiled_variables =
+            std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                ["guidance_throttle".into()].into(),
+                model.compiled_variables.parameters().clone(),
+            ));
         let mut component = SimComponent::default();
         component.inputs.insert("guidance_throttle".into(), 0.75);
         component.inputs.insert("force_y".into(), 0.0);
@@ -3596,11 +3611,12 @@ mod tests {
             current_time: 1.0,
             ..Default::default()
         };
-        let variables = ModelicaVariables {
-            values: [("force_y".to_owned(), 4.0), ("internal".to_owned(), 7.0)]
+        let variables = ModelicaVariables::from_values(
+            [("force_y".to_owned(), 4.0), ("internal".to_owned(), 7.0)]
                 .into_iter()
                 .collect(),
-        };
+        )
+        .expect("finite admitted observation");
         let component = SimComponent {
             status: SimStatus::Running,
             ..Default::default()
@@ -3611,9 +3627,7 @@ mod tests {
                 variables,
                 component,
                 UsdSourcedCosim,
-                DeclaredOutputPorts {
-                    names: ["force_y".to_owned()].into_iter().collect(),
-                },
+                DeclaredOutputPorts::new(["force_y".to_owned()].into_iter().collect()),
             ))
             .id();
 
@@ -3657,8 +3671,8 @@ mod tests {
             .entity_mut(entity)
             .get_mut::<ModelicaVariables>()
             .expect("variable state remains present")
-            .values
-            .insert("force_y".into(), 5.0);
+            .insert_named("force_y".into(), 5.0)
+            .expect("finite admitted observation");
         world
             .run_system_cached(sync::sync_modelica_outputs)
             .expect("changed output snapshot sync runs");
@@ -3685,7 +3699,11 @@ mod tests {
     fn authored_command_surface_reaches_shared_modelica_input() {
         let mut model = dispatched_but_unsolved();
         model.inputs.insert("throttle".into(), 0.0);
-        model.compiled_input_names.insert("throttle".into());
+        model.compiled_variables =
+            std::sync::Arc::new(lunco_modelica_runtime::ModelicaVariableDeclarations::new(
+                ["throttle".into()].into(),
+                model.compiled_variables.parameters().clone(),
+            ));
         let component = SimComponent::default();
         let command_surface = lunco_port_core::InputPorts::with_defaults([
             ("throttle".to_string(), 0.75),

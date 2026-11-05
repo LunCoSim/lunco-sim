@@ -28,6 +28,17 @@ or compatibility shim because the first search was incomplete.
 | Native asset resolution and bytes | `lunco-assets-core` and `lunco-storage` | One root order and first-entry selection; adapters supply source context, never another cache search |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
+For numerical co-simulation, resolve authored names at interface/connection
+admission and use the existing `PortRegistry` slot contract in steady exchange.
+Preserve complete registry/entity/topology/owner leases and atomic batch validation;
+never cache permission from a name alone or reinterpret a stale slot. Modelica's
+`ModelicaVariables` owns accepted values and indexed publication; its immutable
+compiled declarations own variable classification. Generic reflection respects
+`ReflectReadOnly`; use typed domain commands for controls and edits. Preserve
+textual USD/Rhai and portable wire identities rather than persisting local slots.
+`DeclaredOutputPorts` admits immutable names and their structural key together;
+backend liveness checks read that retained fact without rehashing the inventory.
+
 For cross-domain execution, read
 [`62-deterministic-runtime-and-async-boundaries.md`](../../docs/architecture/62-deterministic-runtime-and-async-boundaries.md).
 Keep parsing, source resolution, and immutable preparation off the UI/fixed
@@ -333,6 +344,11 @@ cycle while solver stepping stays in `FixedUpdate`, so compilation can be
 requested while virtual simulation time is held. The Modelica execution owner
 consumes typed `CompileRequested` intent, validates its pinned document runtime
 lifetime, and owns same-owner source gathering and worker dispatch; the UI command only chooses the class and publishes intent.
+Deferred requests coalesce across interleaved participants only for the exact
+source owner, participant and class. A class change for that participant remains
+an ordered replacement boundary; every completion listener and the latest run
+intent survive coalescing. Initialization certification keeps its exact session
+check.
 On native, source-root installation, compile requests, Reset, parameter updates,
 and cache-invalidating Step auto-init share one single-owner Rumoca actor FIFO.
 Results return asynchronously and commit in submission order; actor requests

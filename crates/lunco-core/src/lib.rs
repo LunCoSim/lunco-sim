@@ -239,3 +239,6 @@ pub struct Ground;
 /// (`"LodTile d3 4,7"`) — names are display text and will drift.
 #[derive(Component)]
 pub struct SystemManaged;
+
+mod reflection;
+pub use reflection::ReflectReadOnly;

@@ -29,6 +29,7 @@ use lunco_modelica_runtime::{
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_modelica_runtime::{ModelicaPreparationId, ModelicaResponseSender};
 use lunco_modelica_solver::simulation_session::LiveStepper;
+use rumoca_core::VarName;
 
 #[cfg(not(target_arch = "wasm32"))]
 const PREPARED_SOLVE_CACHE_VERSION: u32 = 13;
@@ -441,6 +442,9 @@ fn build_prepared_stepper(
     let mut symbols = {
         let _span = bevy::log::info_span!("modelica_initial_observation").entered();
         collect_stepper_observables(&stepper)?
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect::<Vec<_>>()
     };
     symbols.extend(stepper.parameter_values()?);
     if let Some(expected) = &plan.initial_state_values {
@@ -2704,13 +2708,10 @@ fn submit_cached_solve_preparation(
 /// Project the admitted live observation without hiding solver diagnostics.
 fn collect_stepper_observables(
     stepper: &LiveStepper,
-) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
-    Ok(stepper
-        .state()?
-        .values
-        .into_iter()
-        .filter(|(name, _)| name != "time")
-        .collect())
+) -> Result<Vec<(VarName, f64)>, rumoca_sim::SimulationDiagnosticError> {
+    let mut values = stepper.observables()?;
+    values.retain(|(name, _)| name.as_str() != "time");
+    Ok(values)
 }
 
 /// Admit causal inputs, integrate, and read the complete checked observation
@@ -2719,7 +2720,7 @@ fn advance_checked_step(
     stepper: &mut LiveStepper,
     inputs: &[(String, f64)],
     stop_time: f64,
-) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
+) -> Result<Vec<(VarName, f64)>, rumoca_sim::SimulationDiagnosticError> {
     {
         let _span =
             bevy::log::info_span!("modelica_admit_step_inputs", count = inputs.len()).entered();
@@ -2742,16 +2743,20 @@ fn advance_checked_step(
 fn capture_initial_inputs(
     stepper: &LiveStepper,
 ) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
-    let state = stepper.state()?;
+    let values = stepper.observables()?;
     stepper
         .input_names()
         .iter()
         .map(|name| {
-            let value = state.values.get(name).copied().ok_or_else(|| {
-                rumoca_sim::SimulationDiagnosticError::Solver(format!(
-                    "admitted input '{name}' has no runtime observation"
-                ))
-            })?;
+            let value = values
+                .iter()
+                .find(|(candidate, _)| candidate.as_str() == name.as_str())
+                .map(|(_, value)| *value)
+                .ok_or_else(|| {
+                    rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                        "admitted input '{name}' has no runtime observation"
+                    ))
+                })?;
             if !value.is_finite() {
                 return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
                     "admitted input '{name}' is not finite"
@@ -6328,7 +6333,14 @@ mod checked_step_tests {
                 .expect("an adaptive session must honor the requested communication point");
             assert!((stepper.time() - stop_time).abs() < 1e-12);
             assert!(
-                (values.iter().find(|(name, _)| name == "x").unwrap().1 - stop_time).abs() < 1e-12
+                (values
+                    .iter()
+                    .find(|(name, _)| name.as_str() == "x")
+                    .unwrap()
+                    .1
+                    - stop_time)
+                    .abs()
+                    < 1e-12
             );
         }
     }

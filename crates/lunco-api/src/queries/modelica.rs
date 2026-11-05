@@ -78,28 +78,24 @@ impl ApiQueryProvider for ReadModelicaStepSamplesProvider {
                     format!("ReadModelicaStepSamples: duplicate api_id {api_id}"),
                 ));
             }
-            let input_names = parse_selected_names(
-                target,
-                "input_names",
-                "ReadModelicaStepSamples",
-            )
-            .map_err(|error| {
-                ApiQueryError::new(
-                    error.code,
-                    format!("ReadModelicaStepSamples target {api_id}: {}", error.message),
-                )
-            })?;
-            let output_names = parse_selected_names(
-                target,
-                "output_names",
-                "ReadModelicaStepSamples",
-            )
-            .map_err(|error| {
-                ApiQueryError::new(
-                    error.code,
-                    format!("ReadModelicaStepSamples target {api_id}: {}", error.message),
-                )
-            })?;
+            let input_names =
+                parse_selected_names(target, "input_names", "ReadModelicaStepSamples").map_err(
+                    |error| {
+                        ApiQueryError::new(
+                            error.code,
+                            format!("ReadModelicaStepSamples target {api_id}: {}", error.message),
+                        )
+                    },
+                )?;
+            let output_names =
+                parse_selected_names(target, "output_names", "ReadModelicaStepSamples").map_err(
+                    |error| {
+                        ApiQueryError::new(
+                            error.code,
+                            format!("ReadModelicaStepSamples target {api_id}: {}", error.message),
+                        )
+                    },
+                )?;
             total_requested_rows += input_names.len() + output_names.len();
             if total_requested_rows > super::MAX_PORT_READ_ROWS {
                 return Err(ApiQueryError::new(
@@ -158,7 +154,7 @@ impl ApiQueryProvider for ReadModelicaStepSamplesProvider {
                                 .inputs
                                 .iter()
                                 .find_map(|(sampled_name, value)| {
-                                    (sampled_name == name).then_some(*value)
+                                    (sampled_name.as_str() == name.as_str()).then_some(*value)
                                 })
                                 .ok_or_else(|| {
                                     ApiQueryError::new(
@@ -188,7 +184,7 @@ impl ApiQueryProvider for ReadModelicaStepSamplesProvider {
                                 .outputs
                                 .iter()
                                 .find_map(|(sampled_name, value)| {
-                                    (sampled_name == name).then_some(*value)
+                                    (sampled_name.as_str() == name.as_str()).then_some(*value)
                                 })
                                 .ok_or_else(|| {
                                     ApiQueryError::new(

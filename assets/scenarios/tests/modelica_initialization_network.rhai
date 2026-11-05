@@ -160,7 +160,10 @@ fn step_clock_case(state, a, b) {
         state.b_start = b.modelica_target_time;
         return state;
     }
-    if clock.sim_tick - state.clock_start.sim_tick < 12 { return state; }
+    // Fixed debt can service several ticks before the pacing clock samples its
+    // next frame. Check the projected rate only after that owner's update.
+    if clock.sim_tick - state.clock_start.sim_tick < 12
+        || clock.wall_elapsed_s <= state.clock_start.wall_elapsed_s { return state; }
     state = check_clock(state, a, b, if state.phase == 1 { "4x" } else if state.phase == 2 { "0.25x" } else { "resumed" });
     if state.phase == 1 {
         state.phase = 2;
@@ -215,9 +218,15 @@ fn on_event(me, evt, ctx) {
         this.paused_b = b.modelica_current_time;
         emit(PAUSE_PROBE, 0);
     } else if this.phase == 4 {
+        if clock.wall_elapsed_s <= this.clock_start.wall_elapsed_s {
+            emit(PAUSE_PROBE, 0);
+            return;
+        }
         this.failures += [
             t_true(clock.virtual_paused && !clock.simulation_is_running,
                 "pause holds the shared simulation transport"),
+            t_true(clock.virtual_rate == clock.transport_rate && clock.transport_rate == 0.25,
+                "pause retains the requested transport rate"),
             t_true(clock.sim_tick == this.clock_start.sim_tick
                 && clock.fixed_elapsed_s == this.clock_start.fixed_elapsed_s
                 && clock.physics_elapsed_s == this.clock_start.physics_elapsed_s,

@@ -45,6 +45,9 @@ const MODELICA_INPUT_BACKEND: PortBackend = PortBackend {
         );
     },
     topology_key: |world, entity| {
+        if world.get::<SimComponent>(entity).is_some() {
+            return 0;
+        }
         world.get::<ModelicaModel>(entity).map_or(0, |model| {
             modelica_input_topology_key(
                 model,

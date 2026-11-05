@@ -71,8 +71,9 @@ fn upsert_ports<'a>(
 pub fn sync_modelica_outputs(
     mut q: Query<
         (
+            Entity,
             Ref<ModelicaModel>,
-            Ref<ModelicaVariables>,
+            &mut ModelicaVariables,
             Ref<UsdSourcedCosim>,
             Ref<DeclaredOutputPorts>,
             Has<lunco_core::SimulationObjectPaused>,
@@ -84,17 +85,20 @@ pub fn sync_modelica_outputs(
                 Changed<ModelicaModel>,
                 Changed<ModelicaVariables>,
                 Changed<DeclaredOutputPorts>,
-                Added<SimComponent>,
+                Changed<SimComponent>,
                 Added<UsdSourcedCosim>,
             )>,
         ),
     >,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
-    for (model, variables, source, declared, suspended, mut comp) in &mut q {
-        let reconcile_outputs = declared.is_changed() || comp.is_added();
+    for (entity, model, mut variables, source, declared, suspended, mut comp) in &mut q {
+        let reconcile_outputs = declared.is_changed()
+            || comp.is_added()
+            || variables.needs_output_binding(&comp.outputs);
         let publish_outputs =
             variables.is_changed() || model.is_added() || source.is_added() || reconcile_outputs;
-        let changed = {
+        let changed = 'publication: {
             let comp = comp.bypass_change_detection();
             // Inspection and telemetry retain the full variable inventory.
             // Public samples follow the checked directional port declaration.
@@ -103,23 +107,40 @@ pub fn sync_modelica_outputs(
                 let retired = comp
                     .outputs
                     .keys()
-                    .filter(|name| !declared.names.contains(*name))
+                    .filter(|name| !declared.names().contains(*name))
                     .map(str::to_owned)
                     .collect::<Vec<_>>();
                 changed |= !retired.is_empty();
                 for name in retired {
                     comp.outputs.remove(&name);
                 }
+                let mut names = declared.names().iter().collect::<Vec<_>>();
+                names.sort_unstable();
+                for name in names {
+                    changed |= comp.outputs.declare(name.clone());
+                }
             }
             if publish_outputs {
                 let _span = bevy::log::info_span!("modelica_outputs_copy_variables").entered();
-                changed |= comp.outputs.upsert_samples(
-                    variables
-                        .values
-                        .iter()
-                        .filter(|(name, _)| declared.names.contains(*name))
-                        .map(|(name, value)| (name.as_str(), value)),
-                );
+                match variables
+                    .bypass_change_detection()
+                    .publish_outputs(&mut comp.outputs)
+                {
+                    Ok(published) => changed |= published,
+                    Err(detail) => {
+                        if let Some(faults) = faults.as_deref_mut() {
+                            faults.raise(
+                                "modelica-output-projection",
+                                Some(entity),
+                                model.model_name.clone(),
+                                detail.clone(),
+                            );
+                        }
+                        comp.status = SimStatus::Error(detail.clone());
+                        error!("Modelica output projection rejected: {detail}");
+                        break 'publication true;
+                    }
+                }
             }
             let input_span = bevy::log::info_span!("modelica_outputs_seed_inputs").entered();
             for (k, v) in &model.inputs {
@@ -178,7 +199,7 @@ pub(crate) fn copy_modelica_input_values(
                     changed = true;
                 }
             }
-            EntryRef::Vacant(entry) if model.compiled_input_names.contains(name) => {
+            EntryRef::Vacant(entry) if model.compiled_variables.inputs().contains(name) => {
                 entry.insert(*value);
                 changed = true;
             }

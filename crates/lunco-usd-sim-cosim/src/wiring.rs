@@ -1188,10 +1188,10 @@ pub(super) fn rewire_usd_connections(
             }
         }
         let current = declared_probe_outputs.get(&entity).copied().flatten();
-        if current.is_none_or(|current| current.names != names) {
+        if current.is_none_or(|current| current.names() != &names) {
             commands
                 .entity(entity)
-                .try_insert(DeclaredOutputPorts { names });
+                .try_insert(DeclaredOutputPorts::new(names));
         }
     }
 }

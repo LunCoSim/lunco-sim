@@ -928,7 +928,7 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
             .ok_or("initialized participant has no required state observation")?;
         for (name, expected) in states.into_iter().flatten() {
             let value = variables
-                .values
+                .values()
                 .get(name)
                 .copied()
                 .filter(|value| value.is_finite())

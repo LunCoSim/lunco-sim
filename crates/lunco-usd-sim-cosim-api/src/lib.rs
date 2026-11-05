@@ -26,6 +26,7 @@ use lunco_usd_sim_core::PendingDifferential;
 use lunco_usd_sim_cosim::{BindingEpochWait, modelica_models_terminal};
 
 mod broken_connections;
+mod shadow_inputs;
 
 fn api_ok(value: ApiValue) -> ApiQueryResult {
     Ok(Some(value))
@@ -827,7 +828,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "has_simcomponent": comp.is_some(),
                     "model": comp.map(|c| c.model_name.clone()).unwrap_or_default(),
                     "status": status,
-                    "modelica_var_count": model.zip(variables).map(|(_, v)| v.values.len()).unwrap_or(0),
+                    "modelica_var_count": model.zip(variables).map(|(_, v)| v.values().len()).unwrap_or(0),
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
                     "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),
@@ -864,7 +865,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                         "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
                         "has_simcomponent": comp.is_some(),
                         "status": status,
-                        "modelica_var_count": model.zip(variables).map(|(_, v)| v.values.len()).unwrap_or(0),
+                        "modelica_var_count": model.zip(variables).map(|(_, v)| v.values().len()).unwrap_or(0),
                         "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                         "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
                         "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),
@@ -1372,7 +1373,40 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
         "SceneCameraAudit"
     }
 
-    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+    fn schema(&self) -> lunco_api_core::ApiQuerySchema {
+        lunco_api_core::ApiQuerySchema {
+            name: self.name().to_owned(),
+            description: Some("Read scene-camera identities and optional native directional-shadow inputs.".to_owned()),
+            parameters: Some(vec![lunco_api_core::ApiQueryParameterSchema {
+                name: "shadow_inputs".to_owned(),
+                type_name: "bool".to_owned(),
+                required: false,
+                description: "Include exact native f32 cascade matrices and candidate caster fingerprints. Omitted means false. This is diagnostic candidacy, not render-cache admission.".to_owned(),
+                allowed_values: None,
+            }, lunco_api_core::ApiQueryParameterSchema {
+                name: "shadow_caster_offset".to_owned(), type_name: "usize".to_owned(), required: false,
+                description: "First candidate in each map's sorted raw-pose page. Omitted means zero; requires shadow_inputs: true.".to_owned(), allowed_values: None,
+            }, lunco_api_core::ApiQueryParameterSchema {
+                name: "shadow_caster_limit".to_owned(), type_name: "usize".to_owned(), required: false,
+                description: "Raw candidate poses per map, 0 through 64. Omitted means zero (fingerprints only); requires shadow_inputs: true.".to_owned(), allowed_values: None,
+            }]),
+            exactly_one_of: Vec::new(),
+            response: Some("{ count, candidates, shadow_inputs?: { host_frame, native_types_registered, lights } }. host_frame is the optional native main-loop frame counter, not an FPS sample. Native entity and asset identities are process-scoped; missing native data is unit, never an invented identity or empty caster list.".to_owned()),
+        }
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let include_shadow_inputs = match params.get("shadow_inputs") {
+            None => false,
+            Some(ApiValue::Bool(value)) => *value,
+            Some(_) => {
+                return api_error(
+                    ApiErrorCode::DeserializationError,
+                    "SceneCameraAudit: shadow_inputs must be a boolean",
+                );
+            }
+        };
+        let caster_page = shadow_inputs::page_options(params, include_shadow_inputs)?;
         let Some(mut query) = QueryState::<
             (
                 Entity,
@@ -1439,9 +1473,16 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
             )
             .collect();
         candidates.sort_by_key(|row| row.get("entity").and_then(api_u64));
-        api_ok(api_value!({
-            "count": candidates.len(),
-            "candidates": candidates,
-        }))
+        let mut result = vec![
+            ("count".to_owned(), api_value!(candidates.len())),
+            ("candidates".to_owned(), api_value!(candidates)),
+        ];
+        if include_shadow_inputs {
+            result.push((
+                "shadow_inputs".to_owned(),
+                shadow_inputs::snapshot(world, &caster_page),
+            ));
+        }
+        api_ok(ApiValue::Map(result))
     }
 }

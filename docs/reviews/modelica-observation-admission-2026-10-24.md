@@ -1,19 +1,13 @@
 # Modelica observation admission — 2026-10-24
 
-`lunco-modelica-runtime::ModelicaVariables` owns the landed observable map.
-It uses Bevy's reflected `HashMap`; every consumer still reads this same map.
-Worker admission reuses existing keys, preserves f64 bits and detected-symbol /
-step-output precedence, and commits the clock at the existing serial boundary.
-Regular development builds optimize `lunco-modelica-worker` at level 3 with
-assertions enabled. Connection ordering still belongs to the authoritative wire
-comparator; observable hash-table iteration does not select causal write order.
-
-The API projects borrowed entries through its existing name filter, accepting
-both parameter/input maps and the observable store. Ready participant publication
-collects directly into its existing scalar-port map. There is no additional
-state owner, cache, policy hook, dependency patch or duplicate observation path.
-Rumoca still supplies the complete checked observation; no solver, communication
-period, precision, physics substeps or rendering quality changes.
+`lunco-modelica-runtime::ModelicaVariables` owns the landed numerical inventory.
+Its named reflection view is read-only, and compiled canonical-name bindings
+commit accepted observations by index while preserving exact f64 bits and
+initial-symbol/step-output precedence. Public outputs bind to declared scalar
+slots. The authoritative ownership and lifetime contract is
+[architecture 22](../architecture/22-domain-cosim.md#names-bindings-and-numerical-exchange).
+The measurements below have their recorded source cohorts and do not qualify
+the current implementation.
 
 The manual owner benchmark admits 512 steps with 2304 named observables,
 an input and a parameter. Exact final observable bits, filtered cardinality and

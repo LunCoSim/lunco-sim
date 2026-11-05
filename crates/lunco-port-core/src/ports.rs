@@ -278,6 +278,29 @@ impl<T: Copy> PortMap<T> {
         self.layout_id
     }
 
+    /// Check a declared slot's lifetime independently of numerical availability.
+    /// Unsampled declarations are live; removed, cloned and compacted slots are not.
+    pub fn contains_slot(&self, handle: u64) -> bool {
+        let Some((layout, index)) = decode_port_slot(handle) else {
+            return false;
+        };
+        layout == self.layout_id
+            && self
+                .slots
+                .get(index)
+                .is_some_and(|slot| slot.name.is_some())
+    }
+
+    /// Withdraw numerical samples while preserving the declared namespace and
+    /// its resolved slots. Readers observe unavailable values until publication.
+    pub fn invalidate_samples(&mut self) -> bool {
+        let mut changed = false;
+        for slot in &mut self.slots {
+            changed |= slot.value.take().is_some();
+        }
+        changed
+    }
+
     /// Read by a previously resolved slot. Removing that entry retires its
     /// handle; compaction and map replacement retire the old layout.
     #[inline]
@@ -1248,10 +1271,10 @@ pub struct PortBackend {
     ///
     /// The key must ignore live values and change when port names, directions,
     /// bounds, units, frames, writability, or other published metadata change.
-    /// The owning plugin's change-filtered structural
-    /// check publishes [`PortTopologyRevision`] when that key changes; the key
-    /// is evaluated only on the changed-owner path. It lets consumers cache
-    /// metadata while still observing dynamic authored surfaces.
+    /// The owning plugin publishes [`PortTopologyRevision`] when this key changes.
+    /// Resolved leases also check the complete precedence prefix at exchange;
+    /// owners should retain precomputed structural keys rather than scan values.
+    /// This validates cached metadata while observing dynamic authored surfaces.
     pub topology_key: fn(&World, Entity) -> u64,
     /// Publish this backend's live declarations (outputs then inputs) through
     /// the query. Use its requested name for indexed discovery; never infer a
@@ -1287,7 +1310,8 @@ pub struct PortBackend {
     /// The registry preflights every write in a batch against the same
     /// exclusive `World` before invoking any writer. This callback is therefore
     /// an infallible commit operation: it must only update the already-resolved
-    /// value and must not alter port topology.
+    /// value and must not alter port topology. Aliases of one writable storage
+    /// cell must declare the same slot, which is the batch's duplicate identity.
     pub write_slot: Option<fn(&mut World, Entity, u64, f64)>,
 }
 
@@ -1339,14 +1363,14 @@ pub struct ResolvedPort {
     backend: usize,
     /// Backend-private opaque locator.
     slot: u64,
-    /// Canonical name required to validate the live owner contract.
+    /// Text retained for inspection and terminal diagnostics, not numerical lookup.
     name: Arc<str>,
     /// Declared direction at resolution, preserved for live metadata reads.
     direction: PortDirection,
     /// Required owner contract at resolution time.
     metadata: PortMetadata,
-    /// Structural revision at which the owner and metadata were resolved.
-    revision: u64,
+    /// Exact registry, entity and complete precedence-prefix contract admitted at resolution.
+    lease: PortContractLease,
     /// Causality side used to resolve this locator.
     side: ResolvedPortSide,
 }
@@ -1355,6 +1379,40 @@ pub struct ResolvedPort {
 enum ResolvedPortSide {
     Input,
     Output,
+}
+
+/// Immutable contract captured at name resolution, shared by its numeric writes.
+/// Prefix keys include higher-precedence backends even when they own no endpoint.
+#[derive(Clone)]
+struct PortContractLease {
+    registry: Arc<Vec<PortBackend>>,
+    world: bevy::ecs::world::WorldId,
+    entity: Entity,
+    revision: u64,
+    owner_keys: Arc<[u64]>,
+}
+
+impl fmt::Debug for PortContractLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PortContractLease")
+            .field("registry", &Arc::as_ptr(&self.registry))
+            .field("world", &self.world)
+            .field("entity", &self.entity)
+            .field("revision", &self.revision)
+            .field("owner_keys", &self.owner_keys)
+            .finish()
+    }
+}
+
+impl PartialEq for PortContractLease {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.registry, &other.registry)
+            && self.world == other.world
+            && self.entity == other.entity
+            && self.revision == other.revision
+            && self.owner_keys == other.owner_keys
+    }
 }
 
 /// Why a value could not be admitted by the owning input port.
@@ -1471,7 +1529,7 @@ pub struct PreparedPortWrite {
     name: Arc<str>,
     direction: PortDirection,
     metadata: PortMetadata,
-    revision: u64,
+    lease: PortContractLease,
     slot: u64,
     value: f64,
 }
@@ -1512,7 +1570,7 @@ pub struct InputWriteBuffer {
 struct StagedInputWrite {
     commit: fn(&mut World, Entity, u64, f64),
     entity: Entity,
-    name: Arc<str>,
+    backend: usize,
     slot: u64,
     value: f64,
 }
@@ -1561,11 +1619,24 @@ impl InputWriteTransaction<'_> {
 
     fn stage(&mut self, write: PreparedPortWrite) -> Result<(), PortWriteError> {
         let writes = &self.buffer.writes;
-        let hash = FixedHasher.hash_one((write.entity, write.name.as_ref()));
+        let identity = (write.entity, write.backend, write.slot);
+        let hash = FixedHasher.hash_one(identity);
         match self.buffer.unique.entry(
             hash,
-            |&index| writes[index].entity == write.entity && writes[index].name == write.name,
-            |&index| FixedHasher.hash_one((writes[index].entity, writes[index].name.as_ref())),
+            |&index| {
+                (
+                    writes[index].entity,
+                    writes[index].backend,
+                    writes[index].slot,
+                ) == identity
+            },
+            |&index| {
+                FixedHasher.hash_one((
+                    writes[index].entity,
+                    writes[index].backend,
+                    writes[index].slot,
+                ))
+            },
         ) {
             Entry::Occupied(_) => {
                 return Err(PortWriteError {
@@ -1583,7 +1654,7 @@ impl InputWriteTransaction<'_> {
                 .write_slot
                 .expect("prepared input write has an admitted commit callback"),
             entity: write.entity,
-            name: write.name,
+            backend: write.backend,
             slot: write.slot,
             value: write.value,
         });
@@ -1690,6 +1761,46 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
 };
 
 impl PortRegistry {
+    /// Whether compiled handles belong to this exact immutable backend table.
+    pub fn same_registration(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.backends, &other.backends)
+    }
+
+    /// Capture name-resolution facts once; samples do not enter this contract.
+    fn contract_lease(
+        &self,
+        world: &World,
+        entity: Entity,
+        backend: usize,
+    ) -> Option<PortContractLease> {
+        Some(PortContractLease {
+            registry: Arc::clone(&self.backends),
+            world: world.id(),
+            entity,
+            revision: world.get_resource::<PortTopologyRevision>()?.0,
+            owner_keys: self.backends[..=backend]
+                .iter()
+                .map(|owner| (owner.topology_key)(world, entity))
+                .collect(),
+        })
+    }
+
+    /// Check live contract facts without resolving the requested port name.
+    fn lease_is_current(&self, world: &World, entity: Entity, lease: &PortContractLease) -> bool {
+        Arc::ptr_eq(&self.backends, &lease.registry)
+            && world.id() == lease.world
+            && entity == lease.entity
+            && world.entities().contains(entity)
+            && world
+                .get_resource::<PortTopologyRevision>()
+                .is_some_and(|revision| revision.0 == lease.revision)
+            && self
+                .backends
+                .iter()
+                .zip(lease.owner_keys.iter())
+                .all(|(owner, key)| (owner.topology_key)(world, entity) == *key)
+    }
+
     fn resolved_port(
         &self,
         world: &World,
@@ -1705,14 +1816,14 @@ impl PortRegistry {
             owner.direction,
             owner.slot,
         );
-        let revision = world.get_resource::<PortTopologyRevision>()?.0;
+        let lease = self.contract_lease(world, entity, owner.backend)?;
         Some(ResolvedPort {
             backend: owner.backend,
             slot: owner.slot?,
             name: Arc::from(name),
             direction: owner.direction,
             metadata,
-            revision,
+            lease,
             side,
         })
     }
@@ -2194,6 +2305,44 @@ impl PortRegistry {
         Ok(())
     }
 
+    /// Validate numerical samples against their admitted engineering contract.
+    fn validate_input_sample(
+        name: &str,
+        metadata: &PortMetadata,
+        value: f64,
+    ) -> Result<(), PortWriteError> {
+        metadata
+            .validate_contract()
+            .map_err(|error| PortWriteError {
+                port: name.to_string(),
+                owner: Some(metadata.source.to_string()),
+                kind: PortWriteErrorKind::InvalidMetadata {
+                    reason: error.to_string(),
+                },
+            })?;
+        if !metadata.writable {
+            return Err(PortWriteError {
+                port: name.to_string(),
+                owner: Some(metadata.source.to_string()),
+                kind: PortWriteErrorKind::NotWritable,
+            });
+        }
+        metadata
+            .validate_value(value)
+            .map_err(|reason| PortWriteError {
+                port: name.to_string(),
+                owner: Some(metadata.source.to_string()),
+                kind: PortWriteErrorKind::InvalidValue {
+                    value,
+                    unit: metadata.unit.as_ref().map(|unit| unit.id().to_owned()),
+                    min: metadata.min,
+                    max: metadata.max,
+                    reason,
+                },
+            })?;
+        Ok(())
+    }
+
     /// Validate a write without changing simulation state. Callers that need
     /// an all-or-none multi-port operation prepare every write before applying
     /// any of them. Compiled callers pass their shared name identity so admission
@@ -2216,35 +2365,7 @@ impl PortRegistry {
         let direction = owner.direction;
         let metadata =
             (self.backends[owner.backend].metadata)(world, entity, &name, direction, owner.slot);
-        metadata
-            .validate_contract()
-            .map_err(|error| PortWriteError {
-                port: name.to_string(),
-                owner: Some(metadata.source.to_string()),
-                kind: PortWriteErrorKind::InvalidMetadata {
-                    reason: error.to_string(),
-                },
-            })?;
-        if !metadata.writable {
-            return Err(PortWriteError {
-                port: name.to_string(),
-                owner: Some(metadata.source.into_owned()),
-                kind: PortWriteErrorKind::NotWritable,
-            });
-        }
-        metadata
-            .validate_value(value)
-            .map_err(|reason| PortWriteError {
-                port: name.to_string(),
-                owner: Some(metadata.source.to_string()),
-                kind: PortWriteErrorKind::InvalidValue {
-                    value,
-                    unit: metadata.unit.as_ref().map(|unit| unit.id().to_owned()),
-                    min: metadata.min,
-                    max: metadata.max,
-                    reason,
-                },
-            })?;
+        Self::validate_input_sample(&name, &metadata, value)?;
         let backend = &self.backends[owner.backend];
         let slot = owner
             .slot
@@ -2254,9 +2375,8 @@ impl PortRegistry {
                 owner: Some(metadata.source.to_string()),
                 kind: PortWriteErrorKind::UnsupportedWritePath,
             })?;
-        let revision = world
-            .get_resource::<PortTopologyRevision>()
-            .map(|revision| revision.0)
+        let lease = self
+            .contract_lease(world, entity, owner.backend)
             .ok_or_else(|| PortWriteError {
                 port: name.to_string(),
                 owner: Some(metadata.source.to_string()),
@@ -2268,7 +2388,7 @@ impl PortRegistry {
             name,
             direction,
             metadata,
-            revision,
+            lease,
             slot,
             value,
         })
@@ -2321,7 +2441,7 @@ impl PortRegistry {
         let mut unique = HashSet::with_capacity_and_hasher(prepared.len(), FixedHasher);
         let mut writers = Vec::with_capacity(prepared.len());
         for write in prepared {
-            if !unique.insert((write.entity, Arc::clone(&write.name))) {
+            if !unique.insert((write.entity, write.backend, write.slot)) {
                 return Err(PortWriteError {
                     port: write.name.to_string(),
                     owner: Some(write.metadata.source.to_string()),
@@ -2357,71 +2477,20 @@ impl PortRegistry {
             owner: Some(prepared.metadata.source.to_string()),
             kind: PortWriteErrorKind::StaleResolution,
         };
-        let Some(revision) = world.get_resource::<PortTopologyRevision>() else {
+        if world.get_resource::<PortTopologyRevision>().is_none() {
             return Err(PortWriteError {
                 port: prepared.name.to_string(),
                 owner: Some(prepared.metadata.source.to_string()),
                 kind: PortWriteErrorKind::TopologyRevisionUnavailable,
             });
-        };
-        if revision.0 != prepared.revision {
+        }
+        if prepared.lease.owner_keys.len() != prepared.backend + 1
+            || !self.lease_is_current(world, prepared.entity, &prepared.lease)
+        {
             return Err(stale());
         }
-        let Some(owner) = self.port_owner(
-            world,
-            prepared.entity,
-            &prepared.name,
-            ResolvedPortSide::Input,
-        ) else {
-            return Err(stale());
-        };
-        if owner.backend != prepared.backend {
-            return Err(stale());
-        }
-        let direction = owner.direction;
-        let metadata = (self.backends[owner.backend].metadata)(
-            world,
-            prepared.entity,
-            &prepared.name,
-            direction,
-            owner.slot,
-        );
-        if direction != prepared.direction || metadata != prepared.metadata {
-            return Err(stale());
-        }
-        metadata
-            .validate_contract()
-            .map_err(|error| PortWriteError {
-                port: prepared.name.to_string(),
-                owner: Some(metadata.source.to_string()),
-                kind: PortWriteErrorKind::InvalidMetadata {
-                    reason: error.to_string(),
-                },
-            })?;
-        if !metadata.writable {
-            return Err(PortWriteError {
-                port: prepared.name.to_string(),
-                owner: Some(metadata.source.into_owned()),
-                kind: PortWriteErrorKind::NotWritable,
-            });
-        }
-        metadata
-            .validate_value(prepared.value)
-            .map_err(|reason| PortWriteError {
-                port: prepared.name.to_string(),
-                owner: Some(metadata.source.to_string()),
-                kind: PortWriteErrorKind::InvalidValue {
-                    value: prepared.value,
-                    unit: metadata.unit.as_ref().map(|unit| unit.id().to_owned()),
-                    min: metadata.min,
-                    max: metadata.max,
-                    reason,
-                },
-            })?;
+        Self::validate_input_sample(&prepared.name, &prepared.metadata, prepared.value)?;
         let backend = self.backends.get(prepared.backend).ok_or_else(stale)?;
-        if owner.slot != Some(prepared.slot) {
-            return Err(stale());
-        }
         backend.write_slot.ok_or_else(|| PortWriteError {
             port: prepared.name.to_string(),
             owner: Some(prepared.metadata.source.to_string()),
@@ -2485,6 +2554,9 @@ impl PortRegistry {
     /// live value. A compiled consumer rebuilds handles from the shared topology
     /// revision; this operation never retries through name resolution.
     pub fn read_resolved(&self, world: &World, entity: Entity, r: &ResolvedPort) -> Option<f64> {
+        if !self.lease_is_current(world, entity, &r.lease) {
+            return None;
+        }
         let backend = self.backends.get(r.backend)?;
         let read = match r.side {
             ResolvedPortSide::Input => backend.read_input_slot?,
@@ -2526,33 +2598,17 @@ impl PortRegistry {
                 kind: PortWriteErrorKind::StaleResolution,
             });
         }
-        let Some(revision) = world.get_resource::<PortTopologyRevision>() else {
-            return Err(PortWriteError {
-                port: r.name.to_string(),
-                owner: Some(r.metadata.source.to_string()),
-                kind: PortWriteErrorKind::TopologyRevisionUnavailable,
-            });
+        let prepared = PreparedPortWrite {
+            backend: r.backend,
+            entity,
+            name: Arc::clone(&r.name),
+            direction: r.direction,
+            metadata: r.metadata.clone(),
+            lease: r.lease.clone(),
+            slot: r.slot,
+            value,
         };
-        if revision.0 != r.revision {
-            return Err(PortWriteError {
-                port: r.name.to_string(),
-                owner: None,
-                kind: PortWriteErrorKind::StaleResolution,
-            });
-        }
-        let prepared = self.prepare_input_write(world, entity, Arc::clone(&r.name), value)?;
-        if prepared.backend != r.backend
-            || prepared.slot != r.slot
-            || prepared.revision != r.revision
-            || prepared.direction != r.direction
-            || prepared.metadata != r.metadata
-        {
-            return Err(PortWriteError {
-                port: r.name.to_string(),
-                owner: Some(r.metadata.source.to_string()),
-                kind: PortWriteErrorKind::StaleResolution,
-            });
-        }
+        self.preflight_prepared_input_write(world, &prepared)?;
         Ok(prepared)
     }
 }
@@ -2560,6 +2616,123 @@ impl PortRegistry {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    #[test]
+    fn input_transactions_reject_aliases_of_one_storage_slot() {
+        #[derive(Component)]
+        struct AliasedInput(f64);
+        let mut world = test_world();
+        let entity = world.spawn(AliasedInput(0.0)).id();
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |world, entity| u64::from(world.get::<AliasedInput>(entity).is_some()),
+            declare_ports: |world, entity, ports| {
+                if world.get::<AliasedInput>(entity).is_some() {
+                    ports.declare("primary", PortDirection::In, Some(0));
+                    ports.declare("alias", PortDirection::In, Some(0));
+                }
+            },
+            metadata: |_, _, _, direction, _| {
+                PortMetadata::scalar(
+                    direction,
+                    None,
+                    None,
+                    None,
+                    "alias probe",
+                    "probe",
+                    true,
+                    None,
+                )
+            },
+            read_output: no_read,
+            read_input: no_read,
+            initial_expression: None,
+            read_slot: None,
+            read_input_slot: None,
+            write_slot: Some(|world, entity, _, value| {
+                world.get_mut::<AliasedInput>(entity).unwrap().0 = value;
+            }),
+        });
+        let primary = registry.resolve_input(&world, entity, "primary").unwrap();
+        let alias = registry.resolve_input(&world, entity, "alias").unwrap();
+        let mut other_world = test_world();
+        let other_entity = other_world.spawn(AliasedInput(0.0)).id();
+        assert_eq!(entity, other_entity);
+        assert!(
+            registry
+                .write_resolved(&mut other_world, other_entity, &primary, 3.0)
+                .is_err()
+        );
+        assert_eq!(
+            other_world.get::<AliasedInput>(other_entity).unwrap().0,
+            0.0
+        );
+        let mut buffer = super::InputWriteBuffer::default();
+        let result = registry.input_transaction(&mut world, &mut buffer, |transaction| {
+            transaction.stage_input(entity, "primary", 1.0)?;
+            transaction.stage_resolved(entity, &alias, 2.0)
+        });
+        assert!(matches!(
+            result.unwrap_err().kind,
+            super::PortWriteErrorKind::DuplicateWrite
+        ));
+        assert_eq!(
+            world.get::<AliasedInput>(entity).unwrap().0.to_bits(),
+            0.0_f64.to_bits()
+        );
+        let prepared = [
+            registry
+                .prepare_resolved_input_write(&world, entity, &primary, 1.0)
+                .unwrap(),
+            registry
+                .prepare_resolved_input_write(&world, entity, &alias, 2.0)
+                .unwrap(),
+        ];
+        assert!(matches!(
+            registry
+                .apply_prepared_input_writes(&mut world, &prepared)
+                .unwrap_err()
+                .kind,
+            super::PortWriteErrorKind::DuplicateWrite
+        ));
+        assert_eq!(
+            world.get::<AliasedInput>(entity).unwrap().0.to_bits(),
+            0.0_f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn resolved_ports_are_bound_to_their_registry_and_entity() {
+        let mut world = test_world();
+        let first = world.spawn(crate::InputPorts::new(&["command"])).id();
+        let second = world.spawn(crate::InputPorts::new(&["command"])).id();
+        let registry = PortRegistry::default();
+        let locator = registry.resolve_input(&world, first, "command").unwrap();
+        assert!(
+            registry
+                .write_resolved(&mut world, second, &locator, 1.0)
+                .is_err()
+        );
+        let foreign = PortRegistry::default();
+        assert!(
+            foreign
+                .write_resolved(&mut world, first, &locator, 1.0)
+                .is_err()
+        );
+        registry
+            .clone()
+            .write_resolved(&mut world, first, &locator, 1.0)
+            .unwrap();
+        assert_eq!(
+            registry.read_input_port(&world, first, "command"),
+            Some(1.0)
+        );
+        assert_eq!(
+            registry.read_input_port(&world, second, "command"),
+            Some(0.0)
+        );
+    }
 
     use super::{
         PortBackend, PortCollisionDirection, PortDeclarationQuery, PortDirection, PortMetadata,
@@ -3290,8 +3463,13 @@ mod tests {
         snapshot
             .write_resolved(&mut world, entity, &original, 0.5)
             .unwrap();
+        assert!(
+            registry
+                .write_resolved(&mut world, entity, &original, 0.5)
+                .is_err()
+        );
         registry
-            .write_resolved(&mut world, entity, &original, 0.5)
+            .write_resolved(&mut world, entity, &current, 0.5)
             .unwrap();
     }
 
@@ -3466,7 +3644,11 @@ mod tests {
         let registry = PortRegistry {
             backends: Arc::new(vec![PortBackend {
                 list_entities: |_, _| {},
-                topology_key: |_, _| 0,
+                topology_key: |world, entity| {
+                    world
+                        .get::<Input>(entity)
+                        .map_or(0, |input| 1 + u64::from(input.writable))
+                },
                 declare_ports: |world, entity, ports| {
                     if world.get::<Input>(entity).is_some() {
                         world
@@ -3561,14 +3743,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             world.resource::<MetadataReads>().0.load(Ordering::Relaxed),
-            1
+            0
         );
         assert_eq!(
             world
                 .resource::<SlotResolutions>()
                 .0
                 .load(Ordering::Relaxed),
-            1
+            0
         );
         for value in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
             assert!(matches!(
@@ -3622,8 +3804,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             world.resource::<MetadataReads>().0.load(Ordering::Relaxed),
-            2,
-            "one atomic exchange must validate each live owner once"
+            1,
+            "only the named target performs discovery; the resolved target validates its lease"
         );
         world.get_mut::<Input>(other).unwrap().writable = false;
         assert!(
@@ -3657,7 +3839,7 @@ mod tests {
         assert!(matches!(
             registry.write_resolved(&mut world, entity, &locator, 0.75),
             Err(super::PortWriteError {
-                kind: super::PortWriteErrorKind::NotWritable,
+                kind: super::PortWriteErrorKind::StaleResolution,
                 ..
             })
         ));

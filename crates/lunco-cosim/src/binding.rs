@@ -499,9 +499,7 @@ mod tests {
         let source = world
             .spawn((
                 SimComponent::default(),
-                DeclaredOutputPorts {
-                    names: ["spacecraft_a_mount_x".to_owned()].into_iter().collect(),
-                },
+                DeclaredOutputPorts::new(["spacecraft_a_mount_x".to_owned()].into_iter().collect()),
                 EndpointLifecycle::Ready,
             ))
             .id();

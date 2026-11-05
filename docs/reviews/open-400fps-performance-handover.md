@@ -1,5 +1,178 @@
 # High-quality realtime performance handover
 
+## Current root-dispatch qualification — 2026-11-05
+
+The application consumer pins local Rumoca commit
+`a11b4b2e0adf52818a711af945c7bcbbfbf5c184`; SDK and application
+work are committed together for local-main integration. Neither repository is
+pushed. The measured source is unchanged by that revision-pin promotion.
+
+Rumoca prepares fixed root selections as checked source-program batches. The
+normal candidate `cf990754b7894ef6e93a127ba1327d818075dae0b71f50b91e045dcc2219de06`
+is installed at `target/release/luncosim`. The native root fixture is 93.11% faster.
+One source-matched production headless candidate lowers AttitudeActuation service
+from 2.3895/2.9588 to 0.3613 ms/job and aggregate work from 6.1114/6.8420 to
+3.0653 ms/physics tick. A repeat under heavy foreign compilation/memory pressure
+keeps AttitudeActuation at 0.8772 ms but regresses aggregate service to 10.7364 ms.
+A further run is rejected for live source changes. Stable whole-Modelica and
+FPS gains are not qualified. MainPropulsion remains the next major participant,
+and the 1 ms/150 FPS targets remain unmet.
+
+The candidate passes 562 solver tests, bit-identical fixed-canary trajectories,
+264 authored production checks and two expected-fault scenes. The exact canonical
+scene is selected explicitly because the dirty Twin default now points to a film
+plan. A graphical capture with a presentation OOM is excluded. Source hashes,
+complete inventories, physics and handoff remain guarded. See
+[the current review](modelica-root-batches-2026-11-05.md) for ownership, timing
+scopes, errors, concurrent workloads and artifact provenance. Work remains local.
+
+## Compiled bindings qualification — 2026-11-04
+
+The selected normal release is
+`510711b5dc3b6803893bcbe07cb7c3a89d6deec92bc062422a00e02e34d969bd`,
+independently retained and restored at `target/release/luncosim`. It passes 297
+unique authored checks, two expected-fault scenes and 53 focused mechanism/
+consumer tests. The final compiler-monitored High/2K run qualifies at 50.2348 FPS
+with thirteen participants, 3,035 Main variables, unchanged 528 source hashes and
+zero runtime errors. MainPropulsion mean worker service remains 1.7472 ms.
+
+Canonical-ID bindings, retained declaration keys and indexed publication reduce
+Tracy response self/publication work to 0.2527/0.0783 ms/tick; live input validation
+remains enabled. The admission fixture is 55.54% faster. Product FPS gain is not
+established; the 1 ms solver and 150 FPS targets remain unmet. No model, precision,
+period or quality changes and no additional dependency edits are introduced.
+All owned sessions/ports close; nothing is committed or pushed. See
+[the binding review](modelica-slot-bindings-2026-11-04.md) for owners, exact scopes,
+cohort limitations, GPU costs and verification receipts.
+
+## Main integration baseline — 2026-11-04
+
+The checkout is fast-forwarded to local main `d6379130f`, preserving application
+work and aligning the local Rumoca source with its `5a8dbefb` consumer pin.
+Both stashes remain as backups; conflicts preserve the new parameter/source-
+lease contracts and the performance work. Integrated fixed-step, wire/admission,
+initialized-parameter and bit-identical canary checks pass. The production app
+passes 294 unique authored checks plus two expected-fault scenes. The command
+reference is regenerated with all 317 main commands retained. An overlong test
+receipt filename is fixed at its canonical writer, and the complete suite exits
+zero on rerun.
+
+The integrated baseline executable is
+`ea3c34aaa2ad507636d23b12cc67025ae9bc2991172514ea554123c94808617d`, independently
+retained as the pre-binding reference. The qualified High/2K Griffin
+retry measures 51.38 FPS, MainPropulsion mean 1.7753 ms and aggregate Modelica
+work 2.8727 ms/tick over thirteen participants. This is a new physics/lifecycle
+cohort, not a paired improvement claim; a concurrent Node health probe is
+recorded. A prior take with pointer/thrust input is excluded. All owned sessions
+and ports are closed, and the canonical lock is restored. The 150 FPS and
+1–2 ms aggregate-work targets remain unmet. Rendering is the next major owner
+identified by the retained Tracy GPU evidence. See the current qualification
+and `.cache/perf/main-sync-tangent-20261104/`.
+
+The pre-integration selected normal executable is
+`d8c7002761ba8dd181674677571a606ba3b1ef96e1cdd9c3aa65a5d7091649a6`.
+Its tangent workspace change reduces MainPropulsion mean service to 1.8018 ms
+from bracketed 2.0242/2.2446 ms (10.99–19.73%), and aggregate worker work to
+2.8931 ms/tick from 3.0479/3.1588 ms (5.08–8.41%). The warm largest-participant
+mean median is 1.4350 ms; these are service-work scopes, not barrier latency.
+Five native boundary tests, evaluator/backend Clippy, a bit-identical fixed
+canary and 111 production authored checks plus two expected-fault scenes pass.
+No compiler overlap is observed in guarded windows. FPS remains 47.68–50.53,
+with candidate 49.19; no whole-scene gain is established. All owned apps/ports
+are closed. Evidence is `.cache/perf/modelica-tangent-workspace-20261104/`.
+The 150 FPS and 1–2 ms aggregate-work targets remain unmet. The retained Tracy
+GPU window identifies 9.48 ms opaque work and 7.93 ms shadow work as the next
+major owners; the shadow child zone must not be double-counted. See the current
+qualification for exact scopes, bounds and unchanged quality settings.
+
+`optimization` is integrated with fetched/local main `dc92300ce`, preserving
+all source edits. After the user confirms cleanup is finished, fresh normal and
+symbol-rich Tracy executables are rebuilt. The normal baseline passes 100
+authored checks and two expected-fault scenes; runtime-schema documentation is
+regenerated from the 307-command windowed host. Fresh High/2K baseline windows
+are affected by foreign Rust compilation and do not establish a clean FPS gain.
+The matching Tracy capture and source/ELF/JIT evidence are retained under
+`.cache/perf/modelica-after-main-20261104/`. Earlier artifact paths below were
+removed during cleanup and serve only as historical measurements.
+
+The current Modelica candidate retains shared canonical `VarName` output labels
+through the native host, worker and accepted sample, eliminating per-step text
+copies. Its collection fixture is 60.00% faster; fixed-step, input/session,
+admission, fingerprint and binary-wire checks pass. The fixed twenty-model
+canary retains twelve strict-high traces with all numeric/time bits unchanged
+and eight unchanged typed refusals. The production candidate passes 192 unique
+authored checks and two expected-fault scenes. Its first High/2K landing window
+measures 50.43 FPS and 3.3501 ms aggregate Modelica worker work per tick. The
+baseline and candidate repeat are affected by foreign Cargo/compiler activity,
+so neither a confirmed FPS gain nor improved tails is established. Collection
+speed is not a whole-worker or FPS result. Fresh candidate evidence is
+`.cache/perf/modelica-shared-labels-20261104/`; candidate normal binary SHA-256
+is `8ed0f97238ee5292009da37fd24fdca246abce6b83b205980eda1357c8ef937f`.
+
+The selected-output execution workspace is also qualified: sixteen native
+visibility tests and a fresh bit-identical twenty-model canary pass, followed by
+111 production authored checks and two expected-fault scenes. A normal
+baseline/candidate/baseline bracket reduces MainPropulsion mean service from
+2.3803/2.4165 to 2.2384 ms (5.96–7.37%) and aggregate Modelica work from
+3.6334/3.6429 to 3.5216 ms per physics tick (3.08–3.33%). No compiler overlap is
+observed in guarded windows. FPS references drift from 49.55 to 45.81, versus
+46.91 for the candidate, so there is no confirmed whole-scene gain or improved
+tail. The selected-output stage normal binary is
+`08ce42b0ce88cfd075af5d38ab44f459ede899f1997220ba18be85a558b93be3`, retained
+independently and installed at `target/release/luncosim`. All owned apps and
+ports are closed. Evidence is
+`.cache/perf/modelica-selected-output-workspace-20261104/`. Full solver Clippy
+remains blocked by three known nesting sites in unchanged files; no new lint is
+introduced or suppressed.
+
+The target remains 150 FPS at 2560×1440 without quality loss, using canonical
+`lunar-base-model` Griffin landing tests. The 150 FPS, sustained powered-descent
+and 1–2 ms aggregate Modelica-work gates remain unmet. Local Rumoca and existing
+clean Bevy overrides are explicit build inputs; canonical dependency pins are
+not advanced. No dependency patch is published, and nothing is committed or
+pushed. Trello is excluded by request. See the
+[current qualification](griffin-2k-performance-2026-11-04.md) and
+[observation contract](modelica-batched-observation-2026-10-24.md).
+
+The current shadow audit passes 39 authored checks and records consecutive
+native inputs: all four active 3D cascades change projection and pose
+fingerprints in every measured running pair. Input-equality map reuse has no
+admitted pairs in that window. Shader arithmetic experiments are reverted.
+The normal High/2K native GPU-preparation and occlusion trial also establishes
+no gain and is reverted; CPU preparation remains installed. Its paired rendering
+fixtures pass, while whole-suite discovery has a separate composition blocker.
+No additional graphics gain is claimed by those experiments.
+Modelica is now the active owner. Standard release lowers MainPropulsion mean
+worker service from the retained development baseline's 6.66 ms to 4.30 ms. A bounded
+exact native power cache then measures 3.82 ms, versus 4.30/4.14 ms surrounding
+release baselines (7.7–11.2% lower service). All 400 thermal trajectory values
+and 100 timestamps match bit-for-bit; production thermal, initialization/clock,
+receipt and negative-fault checks pass. Scene FPS stays around 48.7; the 1–2 ms
+worker and 150 FPS targets remain open. See the current qualification for build
+hashes, profiling attribution, ownership and verification limits.
+Bounded complete-function result reuse subsequently measures 2.33–2.52 ms,
+against a fresh 3.65 ms power-cache baseline (31–36% lower mean service).
+Nine native tests, 104 authored plume/fault/clock/receipt checks and the
+initialization-fault gate pass; the fixed canary's twelve completed traces have
+identical bits across 562,411 values and 16,841 timestamps. Scene FPS remains
+around 48.5. One 32 ms worker maximum does not repeat (repeat maximum 9.30 ms),
+so tail improvement is not established. The targets remain open.
+The later bracketed terrain ablations locate substantial opaque-pass work in
+lighting: material colour alone takes 2.975 ms versus surrounding original
+10.606/10.775 ms means. The deliberately altered images are not candidates;
+all original images match exactly. CPU light clustering also shows no useful
+normal gain and is restored. Existing clean zero-output local-light dependency
+code is now qualified with current Modelica: paired High/2K runs measure
+48.91→51.70 FPS with read-only GPU monitoring and 49.12→51.04 FPS in clean
+confirmation. Seven authored shadow checks pass and both fixture images match
+their baselines byte-for-byte. The selected normal executable is
+`4df412386cbcf916645253ea1854f68649cd81a70b51394a346d2040f4d2772a`.
+It requires local Rumoca and Bevy overrides; canonical pins are not advanced,
+and no dependency source is edited or published for this trial. All diagnostic
+range edits remain restored. The 150 FPS and 1–2 ms aggregate Modelica targets
+remain unmet. A validation-loop tracing-check microtrial is reverted because
+its small overlapping fixture result does not establish a product gain.
+
 ## Cache and GPU attribution
 
 The [cache and GPU review](griffin-cache-and-gpu-attribution-2026-10-27.md)

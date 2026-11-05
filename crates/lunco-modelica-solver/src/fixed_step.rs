@@ -6,8 +6,9 @@
 //! the component outside the host-issued derivative capability.
 
 use rumoca_compile::compile::Dae;
+use rumoca_core::VarName;
 use rumoca_ir_solve::fmi::FmiComponent;
-use rumoca_sim::{SessionState, SimOptions, SimulationDiagnosticError};
+use rumoca_sim::{SimOptions, SimulationDiagnosticError};
 use rumoca_solver::fmi_me::{
     MeAdvanceRequest, MeContinuousPoint, MeDerivativeHandle, MeInstanceConfig, MeIntegrationError,
     MeIntegratorBackend, MeModelSource, MeStepCandidate, accepted_interval_contains,
@@ -20,6 +21,7 @@ use rumoca_solver::fmi_me::{
 pub struct FixedStepSession {
     session: MeSimulationSession<'static, 'static>,
     input_names: Vec<String>,
+    output_count: usize,
     time_origin: f64,
     step_index: u64,
     fixed_dt: f64,
@@ -86,9 +88,11 @@ impl FixedStepSession {
         };
         let session = host.into_session(plugin).map_err(solver_error)?;
         let input_names = session.input_names();
+        let output_count = session.output_names().len();
         Ok(Self {
             session,
             input_names,
+            output_count,
             time_origin: canonical_coordinate(options.t_start),
             step_index: 0,
             fixed_dt,
@@ -147,22 +151,27 @@ impl FixedStepSession {
     pub fn time(&self) -> f64 {
         self.session.time()
     }
-    pub fn state(&self) -> Result<SessionState, SimulationDiagnosticError> {
-        Ok(SessionState {
-            time: self.time(),
-            values: self.session.visible_values().map_err(solver_error)?,
-        })
+    pub fn visit_visible_values(
+        &self,
+        visit: impl FnMut(&VarName, f64),
+    ) -> Result<(), SimulationDiagnosticError> {
+        self.session
+            .visit_visible_values(visit)
+            .map_err(solver_error)
     }
     pub fn input_names(&self) -> &[String] {
         &self.input_names
     }
-
     /// Initialized parameters read by the shared Model Exchange host.
     pub fn parameter_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
         self.session
             .parameter_values()
             .map(|values| values.into_iter().collect())
             .map_err(solver_error)
+    }
+
+    pub(crate) fn output_count(&self) -> usize {
+        self.output_count
     }
 }
 
@@ -330,13 +339,13 @@ fn validate_fixed_step_component(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod observation_diagnostics {
     use super::*;
-    use std::{hint::black_box, sync::Arc, time::Instant};
+    use std::{hint::black_box, time::Instant};
 
     /// Compare complete observation collection through the existing public ME
     /// surfaces. Construction and communication-point advancement are excluded.
     #[test]
     #[ignore = "manual observation collection timing diagnostic"]
-    fn named_and_batched_observation_collection() {
+    fn named_and_visited_observation_collection() {
         let mut compiler = rumoca_compile::Session::default();
         compiler
             .add_document(
@@ -366,45 +375,40 @@ end ObservationProbe;
             },
         )
         .unwrap();
-        let labels: Vec<Arc<str>> = stepper
-            .session
-            .output_names()
-            .into_iter()
-            .map(Arc::from)
-            .collect();
+        let labels = stepper.session.output_names();
         assert_eq!(labels.len(), 2305);
-        assert!(labels.iter().any(|name| name.as_ref() == "command"));
+        assert!(labels.iter().any(|name| name == "command"));
         let named = |stepper: &FixedStepSession| {
-            let state = stepper.state().unwrap();
-            assert!(state.time.is_finite());
-            assert!(state.values.values().all(|value| value.is_finite()));
-            state
-                .values
+            assert!(stepper.time().is_finite());
+            let values = stepper.session.visible_values().unwrap();
+            assert!(values.values().all(|value| value.is_finite()));
+            values
                 .into_iter()
                 .filter(|(name, _)| name != "time")
                 .collect::<Vec<_>>()
         };
-        let batched = |stepper: &FixedStepSession| {
+        let visited = |stepper: &FixedStepSession| {
             assert!(stepper.time().is_finite());
-            let values = stepper.session.output_values().unwrap();
-            assert_eq!(labels.len(), values.len());
-            assert!(values.iter().all(|value| value.is_finite()));
-            labels
-                .iter()
-                .cloned()
-                .zip(values)
-                .filter(|(name, _)| name.as_ref() != "time")
-                .collect::<Vec<_>>()
+            let mut values = Vec::with_capacity(labels.len());
+            stepper
+                .visit_visible_values(|name, value| {
+                    assert!(value.is_finite());
+                    if name.as_str() != "time" {
+                        values.push((name.to_owned(), value));
+                    }
+                })
+                .unwrap();
+            values
         };
         for pair in 0..5 {
             let command = (f64::from(pair) - 2.0) * 0.125;
             stepper.set_inputs(&[("command", command)]).unwrap();
             stepper.step(0.01).unwrap();
             let expected = named(&stepper);
-            let actual = batched(&stepper);
+            let actual = visited(&stepper);
             assert_eq!(expected.len(), actual.len());
             for ((name, value), (label, sample)) in expected.iter().zip(&actual) {
-                assert_eq!(name, label.as_ref());
+                assert_eq!(name.as_str(), label.as_str());
                 assert_eq!(value.to_bits(), sample.to_bits());
             }
             let mut timings = [0_u128; 2];
@@ -415,13 +419,13 @@ end ObservationProbe;
                     if mode == 0 {
                         drop(black_box(named(&stepper)));
                     } else {
-                        drop(black_box(batched(&stepper)));
+                        drop(black_box(visited(&stepper)));
                     }
                 }
                 timings[mode] = start.elapsed().as_nanos();
             }
             println!(
-                "OBSERVATION_COLLECTION pair={pair} named_ns={} batched_ns={} width={} command_bits={} time_bits={} last_bits={}",
+                "OBSERVATION_COLLECTION pair={pair} named_ns={} visited_ns={} width={} command_bits={} time_bits={} last_bits={}",
                 timings[0],
                 timings[1],
                 labels.len(),
