@@ -211,13 +211,13 @@ private dock layout.
    expand or collapse their complete diagnostics when the row is clicked
    and expose that affordance
    through the row cursor and tooltip, while attention rows retain their typed
-   action control. The performance HUD reserves room for the FPS, frame-time,
-   and published physics-step fields before allocating its optional p99 detail
-   and sparkline; its rolling raw frame-time samples come from the shared
+   action control. The performance HUD measures its complete metric line and
+   reserves enough room for it before allocating a sparkline. When space is
+   tight, it shortens the metric text and scales it to remain on one row; its
+   rolling raw frame-time samples come from the shared
    `EngineHealthSnapshot`, so the graph remains live before a Twin is active.
    The loaded-scene chip appears only while a Twin is active, and the metric
-   line uses one formatter in both states. The complete metric line remains
-   available through its tooltip. Active progress entries use the same StatusBus reader
+   line uses one formatter in both states. Active progress entries use the same StatusBus reader
    while they belong on the visible surface. Consecutive identical discrete snapshots
    are coalesced by StatusBus before the renderers read them. Warning and error rows
    copy the unmodified message without depending on the window width; attention rows

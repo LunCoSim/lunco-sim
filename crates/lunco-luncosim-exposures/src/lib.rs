@@ -140,6 +140,9 @@ fn publish_engine_health_exposure(
         surface.property("physics_step_ms", step_time_ms);
         surface.property("physics_step_number", physics.step_number as f64);
     }
+    if let Some(fps) = physics.fps {
+        surface.property("physics_fps", fps);
+    }
     let modelica_available = modelica.as_ref().is_some_and(|sample| sample.fps.is_some());
     if let Some(modelica) = modelica {
         if let Some(fps) = modelica.fps {
@@ -1440,6 +1443,7 @@ mod engine_health_exposure_tests {
             ..Default::default()
         })
         .insert_resource(PhysicsHealthSnapshot {
+            fps: Some(60.0),
             step_time_ms: Some(0.5),
             step_number: 42,
             revision: 9,

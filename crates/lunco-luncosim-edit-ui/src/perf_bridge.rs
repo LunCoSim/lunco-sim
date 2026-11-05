@@ -35,7 +35,40 @@ impl Plugin for PerfBridgePlugin {
                 .after(avian3d::schedule::PhysicsSystems::StepSimulation)
                 .in_set(lunco_core::RuntimeCycleSet::Simulation),
         );
+        app.add_systems(Update, publish_physics_rate);
     }
+}
+
+fn publish_physics_rate(
+    mut snapshot: ResMut<PhysicsHealthSnapshot>,
+    mut window: Local<Option<(bevy::platform::time::Instant, u64)>>,
+) {
+    if snapshot.step_time_ms.is_none() {
+        if snapshot.fps.is_some() {
+            snapshot.fps = None;
+            snapshot.revision = snapshot.revision.wrapping_add(1);
+        }
+        *window = None;
+        return;
+    }
+    let now = bevy::platform::time::Instant::now();
+    let Some((start, previous)) = *window else {
+        *window = Some((now, snapshot.step_number));
+        return;
+    };
+    let elapsed = now.duration_since(start).as_secs_f64();
+    if elapsed < 1.0 {
+        return;
+    }
+    let fps = snapshot
+        .step_number
+        .checked_sub(previous)
+        .map(|steps| steps as f64 / elapsed);
+    if snapshot.fps != fps {
+        snapshot.fps = fps;
+        snapshot.revision = snapshot.revision.wrapping_add(1);
+    }
+    *window = Some((now, snapshot.step_number));
 }
 
 fn publish_physics_step(

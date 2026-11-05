@@ -180,7 +180,7 @@ def main():
                 session.capture_screenshot(output / "modelica-running.png")
                 run_authored_scenario(
                     session, "lunco://scenarios/tests/modelica_perf_hud.rhai",
-                    title="MODELICA PERFORMANCE HUD", check_count=10,
+                    title="MODELICA PERFORMANCE HUD", check_count=18,
                     params={"participants": args.participants},
                 )
                 session.capture_screenshot(output / "modelica-cleared.png")

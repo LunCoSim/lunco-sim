@@ -2,7 +2,7 @@
 // Run on an admitted Modelica scene; retained across the negative clear case.
 fn simulation_dependencies(me, ctx) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
-      query_reads: ["ReadExposures", "GetReadiness"], required_inputs: []}
+      query_reads: ["ReadExposures", "GetReadiness", "ListTelemetryChannels", "QueryTelemetryHistory"], required_inputs: []}
 }
 
 fn health() {
@@ -34,6 +34,26 @@ fn on_tick(me, ctx) {
             "Modelica timing has no complete wall-clock/physics-step window"));
         this.checks.push(t_true(value.modelica_participants == this.participants.to_string(),
             "Modelica performance participant count disagrees with the scene"));
+        let channels = query("ListTelemetryChannels", #{name: "engine.modelica_worker_ms_per_physics_step"}).channels;
+        this.checks.push(t_true(channels.len == 1, "Modelica engine timing telemetry channel is missing"));
+        if channels.len == 1 {
+            let history = query("QueryTelemetryHistory", #{key: channels[0].key, limit: 10});
+            let valid = history.samples.len > 0;
+            for sample in history.samples { valid = valid && sample.v.is_finite() && sample.v > 0.0; }
+            this.checks.push(t_true(valid, "Modelica engine timing history has no positive samples"));
+        } else {
+            this.checks.push(t_true(false, "Modelica engine timing history is unavailable"));
+        }
+        for name in ["engine.fps", "engine.frame_time", "engine.physics_fps", "engine.physics_step_time", "engine.modelica_fps", "engine.modelica_worker_step_time"] {
+            let matches = query("ListTelemetryChannels", #{name: name}).channels;
+            let valid = matches.len == 1;
+            if valid {
+                let history = query("QueryTelemetryHistory", #{key: matches[0].key, limit: 10});
+                valid = history.samples.len > 0;
+                for sample in history.samples { valid = valid && sample.v.is_finite() && sample.v > 0.0; }
+            }
+            this.checks.push(t_true(valid, "missing positive engine telemetry samples for " + name));
+        }
         cmd("SetTimeTransport", #{playing: false, rate: 1.0});
         this.phase = 1;
         this.since = clock_snapshot().wall_elapsed_s;

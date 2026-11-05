@@ -398,6 +398,15 @@ The status-bar HUD displays this in milliseconds per physics step. Parallel
 worker contributions overlap: the figure measures total worker work, not coupled
 barrier latency, queue waiting, or rendering. Different Modelica communication
 periods contribute only the work actually completed during those physics steps.
+The telemetry channel `engine.modelica_worker_ms_per_physics_step` retains the
+same measurement on the simulation clock for plots and history queries. No
+sample is recorded when the measurement is unavailable.
+`engine.physics_fps` is completed Avian steps per wall-clock second, and
+`engine.physics_step_time` is the measured Avian step duration. `engine.modelica_fps`
+is the slowest participant's completion rate. `engine.fps` and `engine.frame_time`
+describe application frames, including graphics presentation; they are not GPU-only timings.
+`engine.modelica_worker_step_time` is the largest per-instance mean worker
+service duration in the window.
 
 `modelica_sample_physics_steps` retains the exact denominator as a string;
 `modelica_sample_wall_secs` and `modelica_participants` describe the window and

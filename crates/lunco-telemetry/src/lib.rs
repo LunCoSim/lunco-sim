@@ -344,35 +344,47 @@ pub struct EngineHealthChannel;
 
 /// Publish the engine's own health as telemetry channels.
 ///
-/// FPS was previously a number that could only ever reach a HUD. As a channel it is
-/// subscribable, retained, plottable, and queryable by a ground system — exactly like a
-/// motor current. That is the shared publication path used by the perf HUD and other
-/// consumers; the HUD does not own a separate history.
-///
-/// **Self-gating:** only spawns a channel whose `Diagnostic` actually exists. A headless
-/// server links `bevy_diagnostic` but nobody adds `FrameTimeDiagnosticsPlugin` there (it
-/// comes with the perf HUD), so a `--no-ui` run publishes no FPS channel rather than an
-/// always-silent one that clutters the catalog.
-///
-/// Frame time is admitted at the fixed ceiling so its raw samples preserve short hitches in
-/// the shared history. The headline remains smoothed through `EngineHealthSnapshot`; the
-/// extra two scalar samples per fixed step are bounded by the same SignalRegistry retention
-/// policy and replace the old HUD-owned ring.
+/// Frame channels require registered diagnostics; Modelica channels require the
+/// execution snapshot. Physics and Modelica values use their shared snapshots.
+/// Frame-time history retains raw samples so short hitches remain visible.
 fn spawn_engine_health_channels(
     diags: Option<Res<bevy::diagnostic::DiagnosticsStore>>,
+    modelica: Option<Res<lunco_core_runtime::ModelicaHealthSnapshot>>,
+    physics: Option<Res<lunco_core_runtime::PhysicsHealthSnapshot>>,
     existing: Query<(), With<EngineHealthChannel>>,
     mut signals: ResMut<lunco_signal::SignalRegistry>,
     mut commands: Commands,
 ) {
-    let Some(diags) = diags else { return };
     if !existing.is_empty() {
         return;
     }
     for (path, name, unit) in [
         ("fps", "engine.fps", "1/s"),
         ("frame_time", "engine.frame_time", "ms"),
+        ("physics_fps", "engine.physics_fps", "1/s"),
+        ("physics_step_ms", "engine.physics_step_time", "ms/step"),
+        ("modelica_fps", "engine.modelica_fps", "1/s"),
+        (
+            "modelica_worker_step_ms",
+            "engine.modelica_worker_step_time",
+            "ms/step",
+        ),
+        (
+            "modelica_worker_ms_per_physics_step",
+            "engine.modelica_worker_ms_per_physics_step",
+            "ms/step",
+        ),
     ] {
-        if !diags.iter().any(|d| d.path().as_str() == path) {
+        let available = if path.starts_with("modelica_") {
+            modelica.is_some()
+        } else if path.starts_with("physics_") {
+            physics.is_some()
+        } else {
+            diags
+                .as_ref()
+                .is_some_and(|diags| diags.iter().any(|d| d.path().as_str() == path))
+        };
+        if !available {
             continue;
         }
         signals.retain_across_scenes(lunco_signal::SignalRef::new(Entity::PLACEHOLDER, name));
@@ -1368,6 +1380,28 @@ fn read_value(
 /// Not entity-scoped — a diagnostic is global. Diagnostic channels use the global signal
 /// identity, so their retained history is not duplicated once per channel-tag entity.
 fn read_diagnostic(world: &World, path: &str) -> Option<TelemetryValue> {
+    if matches!(path, "physics_fps" | "physics_step_ms") {
+        let snapshot = world.get_resource::<lunco_core_runtime::PhysicsHealthSnapshot>()?;
+        return match path {
+            "physics_fps" => snapshot.fps,
+            _ => snapshot.step_time_ms,
+        }
+        .map(TelemetryValue::F64);
+    }
+    if matches!(path, "modelica_fps" | "modelica_worker_step_ms") {
+        let snapshot = world.get_resource::<lunco_core_runtime::ModelicaHealthSnapshot>()?;
+        return match path {
+            "modelica_fps" => snapshot.fps,
+            _ => snapshot.worker_step_ms,
+        }
+        .map(TelemetryValue::F64);
+    }
+    if path == "modelica_worker_ms_per_physics_step" {
+        return world
+            .get_resource::<lunco_core_runtime::ModelicaHealthSnapshot>()?
+            .worker_ms_per_physics_step
+            .map(TelemetryValue::F64);
+    }
     // Engine health is published once at the runtime boundary. These two
     // canonical paths never fall back to a second diagnostics reader: the
     // snapshot is the owner that HUD, telemetry, and API consumers share.
@@ -2880,14 +2914,18 @@ mod tests {
         assert!(seen.lock().unwrap().is_empty());
     }
 
-    /// …and with no FPS diagnostic registered, no engine-health channel is published at
-    /// all — a `--no-ui` run must not carry an always-silent channel in its catalog.
+    /// A host without frame diagnostics does not advertise frame channels.
     #[test]
     fn engine_health_channels_are_not_published_without_diagnostics() {
         let mut app = app();
         app.update();
-        let mut q = app.world_mut().query::<&EngineHealthChannel>();
-        assert_eq!(q.iter(app.world()).count(), 0);
+        let mut q = app
+            .world_mut()
+            .query::<(&EngineHealthChannel, &Parameter)>();
+        assert!(
+            q.iter(app.world())
+                .all(|(_, p)| p.name != "engine.fps" && p.name != "engine.frame_time")
+        );
     }
 
     /// Samples carry `sim_secs` — the timebase you can actually difference. `timestamp`

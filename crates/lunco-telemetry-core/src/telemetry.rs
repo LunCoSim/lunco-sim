@@ -186,13 +186,14 @@ pub enum ChannelSource {
     /// the only one that can carry `Bool`/`String`. Slower: it needs exclusive world
     /// access and a type-registry lookup per sample.
     Reflect(String),
-    /// **The engine's own health.** A `bevy::diagnostic::Diagnostic` admitted by its path
-    /// string — `"fps"`, `"frame_time"`, or another explicitly selected app diagnostic.
+    /// **The engine's own health.** An explicitly admitted engine health path,
+    /// including `"fps"`, `"frame_time"`, and Modelica worker time, or a
+    /// `bevy::diagnostic::Diagnostic` path.
     ///
     /// This is what makes FPS a first-class telemetry channel rather than a number that
     /// only ever reaches a HUD: it can be subscribed to, retained, plotted, and queried by
-    /// a ground system exactly like a motor current. `f64` only — a `Diagnostic` is a
-    /// float and nothing else. The diagnostic ring is only the source; retained application
+    /// a ground system exactly like a motor current. These values are `f64`.
+    /// The health snapshot or diagnostic ring is only the source; retained application
     /// history belongs to `SignalRegistry`.
     ///
     /// It is a *string* rather than a `DiagnosticPath` so this crate (and every domain
