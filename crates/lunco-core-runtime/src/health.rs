@@ -45,6 +45,8 @@ pub struct EngineHealthSnapshot {
 #[derive(Resource, Reflect, Debug, Clone, Copy, Default)]
 #[reflect(Resource, Debug)]
 pub struct PhysicsHealthSnapshot {
+    /// Completed Avian steps per wall-clock second over the latest window.
+    pub fps: Option<f64>,
     /// Measured Avian step time in milliseconds.
     pub step_time_ms: Option<f64>,
     /// Avian's step counter at publication time.

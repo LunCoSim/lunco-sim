@@ -1947,6 +1947,12 @@ contributions overlap. It excludes queue waiting and render delay, so do not cal
 it complete coupled-step latency. Its tooltip also reports the largest
 per-instance mean worker service time. The execution owner supplies both from
 existing receipts; HUDs do not add timers or calculate cost from completion FPS.
+Telemetry history exposes the same per-step cost as
+`engine.modelica_worker_ms_per_physics_step`.
+The engine telemetry catalog also provides `engine.physics_fps`,
+`engine.physics_step_time`, `engine.modelica_fps`, and
+`engine.modelica_worker_step_time`; `engine.fps` and
+`engine.frame_time` describe application frames rather than GPU-only work.
 Inspect `modelica_sample_physics_steps`, `modelica_sample_wall_secs`, and
 `modelica_participants` for the exact denominator and cohort. Paused physics and
 cleared scenes unpublish per-step cost. `modelica_fps` remains a diagnostic

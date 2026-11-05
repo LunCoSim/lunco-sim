@@ -125,6 +125,9 @@ sums measured worker service over the shared one-second window and normalizes by
 completed physics ticks; parallel contributions overlap. Exact sample counts,
 wall duration, and per-instance service stay available through the same exposure.
 Paused physics and cleared scenes have no per-step sample.
+The HUD measures the complete metric line at the active UI font size. It reserves
+that width in the status bar, or uses compact text and scales it to remain on
+one row when the window is narrow; it does not truncate physics or Modelica timing.
 
 ## Core Principles
 
