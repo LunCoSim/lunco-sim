@@ -4,7 +4,7 @@ The compiler keeps an enclosing component reference as a dependency when passing
 parameter into a nested modifier. The simulator retains compiled-artifact reuse;
 it does not flatten the dependency into an old literal, copy values into children,
 or force recompilation. The canonical Rumoca Git dependency is pinned to
-`87b117a0c28c021977f4c0fbe483e0d4c938887c`. Its commit is local and unpublished.
+`87b117a0c28c021977f4c0fbe483e0d4c938887c`. Its exact commit is retained for the authorized source publication.
 A one-command Git transport override fetched that local repository while retaining
 the canonical HTTPS source and exact revision in the manifest and lockfile.
 
@@ -42,4 +42,4 @@ JIT source check and ir-solve totality assertion ceiling. The relevant failing
 sources were unchanged by this fix. Coverage was not reached; GATE_OK is not claimed.
 The user explicitly approved this scoped local merge with the five failures
 recorded. No full-cohort, coverage, cross-platform or live 100 fps claim is made.
-No dependency or simulator commit was pushed.
+These checks completed locally before the user authorized source publication.
