@@ -11,7 +11,7 @@ import bevy_pbr::prepass::bindings::previous_view_uniforms;
 @if((!(PREPASS_PIPELINE)))
 import bevy_pbr::render::forward_io::VertexOutput;
 import super::transfer::{slope_hazard_color, slope_of};
-import super::terrain_surface::{surface_annotation_color, terrain_detail_position, terrain_morph_weight};
+import super::terrain_surface::{surface_annotation_color, terrain_detail_normal_to_local, terrain_detail_position, terrain_morph_weight};
 
 //!@capability lunco.surface-annotations.v1
 //! Dedicated streamed-terrain diagnostic material.
@@ -31,6 +31,10 @@ import super::terrain_surface::{surface_annotation_color, terrain_detail_positio
 //!@default mode        1
 //!@ui      opacity     0 1   "Diagnostic colour intensity"
 //!@default opacity     1.0
+//!@ui      colour_gain 0.05 1.0 "Diagnostic colour brightness"
+//!@default colour_gain 0.25
+//!@ui      slope_band_deg 0 5 "Slope contour interval (degrees; 0 hides contours)"
+//!@default slope_band_deg 1.0
 //!@ui      safe_rad    0 1.57 "Safe slope (rad)"
 //!@default safe_rad    0.2617994
 //!@ui      cliff_rad   0 1.57 "Cliff slope (rad)"
@@ -54,6 +58,8 @@ struct Material {
     morph_end:    f32,
     stitch_edges: vec4<f32>,
     terrain_half_extent: f32,
+    colour_gain: f32,
+    slope_band_deg: f32,
 }
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> material: Material;
@@ -127,17 +133,29 @@ fn lod_color(lod: u32) -> vec3<f32> {
 
 @fragment
 fn fragment(in: forward_io::VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    let n = normalize(in.world_normal);
+    // The DEM's up axis is local +Y, not render-world +Y. A celestial frame
+    // can rotate the entire terrain without changing any hillside's slope.
+    let n = terrain_detail_normal_to_local(normalize(in.world_normal), in.instance_index);
     var colour = vec3<f32>(0.5, 0.5, 0.5);
+    var contour = 0.0;
     if (material.mode < 1.5) {
+        let slope = slope_of(n);
         colour = slope_hazard_color(
-            slope_of(n), material.safe_rad, material.cliff_rad);
+            slope, material.safe_rad, material.cliff_rad);
+        // These isolines mark equal slope, not equal elevation. Derivative
+        // filtering keeps their width stable as the camera moves.
+        if (material.slope_band_deg > 0.0) {
+            let bands = degrees(slope) / material.slope_band_deg;
+            let edge = min(fract(bands), 1.0 - fract(bands));
+            let width = max(fwidth(bands), 1e-5);
+            contour = 1.0 - smoothstep(0.6 * width, 1.4 * width, edge);
+        }
     } else {
         colour = lod_color(u32(material.lod + 0.5));
     }
     let shade = 0.45 + 0.55 * clamp(n.y, 0.0, 1.0);
     let neutral = vec3<f32>(0.5, 0.5, 0.5) * shade;
-    var result = vec4<f32>(mix(neutral, colour * shade, material.opacity), 1.0);
+    var result = vec4<f32>(mix(neutral, colour * shade, material.opacity) * material.colour_gain * mix(1.0, 0.55, contour), 1.0);
     @if((VERTEX_UVS_A)) result = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, result, -1);
     return result;
 }

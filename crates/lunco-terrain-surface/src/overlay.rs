@@ -9,12 +9,10 @@
 //! WESL module), so the colour RAMP matches the legend swatch.
 //!
 //! **The slope it ramps is view-dependent, and that is a known limit.** The shader
-//! takes its slope from the baked DEM-resolution normal map where that map is bound
-//! (`weight_normal > 0` — the far/coarse tiles, exactly where the LOD mesh has thrown
-//! the relief away), and otherwise from the tile's own geometric normal. Near tiles
-//! out-resolve the map, so their mesh normal IS the finer truth; but a tile whose
-//! geometry is coarse and whose map is not yet baked still shades from LOD geometry
-//! and can under-report a cliff. So the pixel is a good guide, **not** a substitute
+//! takes its slope from the tile's morphed geometric normal, transformed back to
+//! the DEM's local frame so celestial-frame rotation does not change the angle.
+//! It does not sample the baked DEM normal map. Coarse LOD geometry can therefore
+//! under-report a cliff. The pixel is a good guide, **not** a substitute
 //! for querying the field: a headless `TerrainField`/`SlopeField` read (un-band-limited
 //! oracle, `eps = cell size`) is the authority a traversability decision must use.
 //!

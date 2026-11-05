@@ -50,7 +50,7 @@ fn slope_hazard_color(slope_rad: f32, safe_rad: f32, cliff_rad: f32) -> vec3<f32
     return hazard_color(hazard_from_slope(slope_rad, safe_rad, cliff_rad));
 }
 
-/// Slope angle (radians) of a world-space geometric normal. `0` = flat ground,
+/// Slope angle (radians) of a terrain-local geometric normal. `0` = flat ground,
 /// `π/2` = a vertical wall.
 fn slope_of(n_geo: vec3<f32>) -> f32 {
     return acos(clamp(n_geo.y, -1.0, 1.0));
