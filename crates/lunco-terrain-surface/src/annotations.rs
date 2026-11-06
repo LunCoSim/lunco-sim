@@ -406,10 +406,50 @@ impl Index {
         self.free.entry(length).or_default().insert(address);
         undo.free.push((length, address, false));
     }
+
+    /// Conservative one-axis render bound for a leaf's strokes. A reversed
+    /// interval selects terrain-local Y; an ordered interval selects X.
+    fn leaf_render_interval(&self, node: &Node) -> [f32; 2] {
+        if node.members.is_empty() {
+            return [0.0; 2];
+        }
+        // Keep all intermediate f32 dot products finite for in-bounds terrain
+        // coordinates. Outside this range the index remains valid, but cannot
+        // prove that a fragment is safely outside its GPU stroke calculations.
+        if self.half > f64::from(f32::MAX).sqrt() / 16.0 {
+            return [-f32::MAX, f32::MAX];
+        }
+        let mut lo = DVec2::splat(f64::INFINITY);
+        let mut hi = DVec2::splat(f64::NEG_INFINITY);
+        for slot in &node.members {
+            let segment = &self.segments[&self.slots[slot]];
+            let radius = DVec2::splat(segment.radius);
+            lo = lo.min(segment.pair[0].min(segment.pair[1]) - radius);
+            hi = hi.max(segment.pair[0].max(segment.pair[1]) + radius);
+        }
+        let select_x = hi.x - lo.x <= hi.y - lo.y;
+        let (lower, upper) = if select_x { (lo.x, hi.x) } else { (lo.y, hi.y) };
+        // Bounds are narrowed only for the GPU. Expand for f32 coordinate and
+        // segment math before rounding outward, so loss of precision can only
+        // admit extra fragments, never remove a covered fragment.
+        let margin = 16.0 * f64::from(f32::EPSILON) * (self.half + 1.0);
+        let limit = f64::from(f32::MAX);
+        let lower = ((lower - margin).max(-limit) as f32)
+            .next_down()
+            .max(-f32::MAX);
+        let upper = ((upper + margin).min(limit) as f32).next_up().min(f32::MAX);
+        if select_x {
+            [lower, upper]
+        } else {
+            [upper, lower]
+        }
+    }
+
     fn leaf(&mut self, id: usize, undo: &mut Undo) -> Result<(), String> {
         self.backup_node(id, undo);
         let node = self.nodes[&id].clone();
         let count = node.members.len();
+        let interval = self.leaf_render_interval(&node);
         let required = count.max(1).next_power_of_two();
         let old = node.references;
         let block = if count == 0 {
@@ -436,7 +476,7 @@ impl Index {
         };
         self.nodes.get_mut(&id).unwrap().references = block;
         if let Some((address, _)) = block {
-            for (i, slot) in node.members.into_iter().enumerate() {
+            for (i, slot) in node.members.iter().copied().enumerate() {
                 self.write(address + i, [slot as f32, 0.0, 0.0, 0.0], undo);
             }
         }
@@ -445,8 +485,8 @@ impl Index {
             [
                 block.map_or(0, |(address, _)| address) as f32,
                 count as f32,
-                0.0,
-                0.0,
+                interval[0],
+                interval[1],
             ],
             undo,
         );
@@ -1367,6 +1407,65 @@ mod tests {
         assert_eq!(index.texels[slot + 1][1], 0.0);
         assert_eq!(index.texels[slot + 1][2], 0.0);
     }
+
+    #[test]
+    fn surface_annotation_leaf_interval_tracks_edits_and_rolls_back() {
+        let source = Entity::from_bits(1);
+        let settings = SurfaceAnnotationSettings {
+            grid_resolution: 1,
+            ..default()
+        };
+        let mut index = Index::new(100.0, settings.clone()).unwrap();
+        index
+            .apply(vec![patch(
+                source,
+                [(0, Some(pair(1.0))), (1, Some(pair(3.0)))],
+            )])
+            .unwrap();
+        let initial = index.texels[2];
+        assert!(initial[2] > initial[3], "horizontal strokes select Y");
+        assert!(initial[3] < -0.1 && initial[2] > 0.1);
+
+        let mut wider = patch(source, []);
+        wider.width = 2.0;
+        index.apply(vec![wider]).unwrap();
+        let wide = index.texels[2];
+        assert!(wide[3] < -1.0 && wide[2] > 1.0);
+        index.apply(vec![patch(source, [(1, None)])]).unwrap();
+        let narrowed = index.texels[2];
+        assert!(narrowed[3] < -0.1 && narrowed[2] > 0.1);
+        assert!(narrowed[3] > wide[3] && narrowed[2] < wide[2]);
+
+        let before = index.texels.clone();
+        assert!(
+            index
+                .apply(vec![patch(
+                    source,
+                    [
+                        (0, Some([DVec2::new(2.0, 0.0), DVec2::new(2.0, 10.0)])),
+                        (2, Some(pair(101.0))),
+                    ]
+                )])
+                .is_err()
+        );
+        assert_eq!(index.texels, before, "failed edits restore the interval");
+
+        index
+            .apply(vec![patch(
+                source,
+                [(0, Some([DVec2::new(2.0, 0.0), DVec2::new(2.0, 10.0)]))],
+            )])
+            .unwrap();
+        let vertical = index.texels[2];
+        assert!(vertical[2] < vertical[3], "vertical strokes select X");
+        assert!(vertical[2] < 1.9 && vertical[3] > 2.1);
+
+        let mut huge = Index::new(1.0e20, settings).unwrap();
+        huge.apply(vec![patch(source, [(0, Some(pair(1.0)))])])
+            .unwrap();
+        assert_eq!(&huge.texels[2][2..], &[-f32::MAX, f32::MAX]);
+    }
+
     #[test]
     fn surface_annotation_index_edits_are_local_and_transactional() {
         let source = Entity::from_bits(1);

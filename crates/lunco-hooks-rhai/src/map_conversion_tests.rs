@@ -45,6 +45,20 @@ fn map_conversion_preserves_nested_values_and_last_duplicate() {
         let input = HookValue::Str(text);
         assert_eq!(dynamic_to_hook(&hook_to_dynamic(&input)).unwrap(), input);
     }
+    let mut wide = vec![("duplicate".to_owned(), HookValue::Int(1))];
+    wide.extend(
+        (0..80)
+            .rev()
+            .map(|index| (format!("key_{index:03}"), HookValue::Int(index))),
+    );
+    wide.push(("duplicate".to_owned(), HookValue::Int(2)));
+    wide.push(("duplicate".to_owned(), HookValue::Int(3)));
+    let wide = hook_to_dynamic(&HookValue::Map(wide));
+    let wide = wide.as_map_ref().unwrap();
+    assert_eq!(wide.len(), 81);
+    assert_eq!(wide["duplicate"].as_int().unwrap(), 3);
+    assert_eq!(wide["key_000"].as_int().unwrap(), 0);
+    assert_eq!(wide["key_079"].as_int().unwrap(), 79);
 }
 
 #[test]
@@ -84,7 +98,7 @@ fn map_conversion_diagnostic() {
             let iterations = 262_144 / width;
             let started = std::time::Instant::now();
             for _ in 0..iterations {
-                std::hint::black_box(hook_to_dynamic(std::hint::black_box(&input)));
+                let _ = std::hint::black_box(hook_to_dynamic(std::hint::black_box(&input)));
             }
             println!(
                 "MAP_CONVERSION width={width} order={order} iterations={iterations} ns={}",

@@ -12,7 +12,7 @@ import bevy_pbr::prepass::bindings::previous_view_uniforms;
 @if((!(PREPASS_PIPELINE)))
 import bevy_pbr::render::forward_io::VertexOutput;
 import super::transfer::{slope_hazard_color, slope_of};
-import super::terrain_surface::{surface_annotation_color, terrain_detail_normal_to_local, terrain_detail_position, terrain_morph_weight};
+import super::terrain_surface::{surface_annotation_tints, terrain_detail_normal_to_local, terrain_detail_position, terrain_morph_weight};
 
 //!@capability lunco.surface-annotations.v1
 //! Dedicated streamed-terrain diagnostic material.
@@ -157,6 +157,9 @@ fn fragment(in: forward_io::VertexOutput, @builtin(front_facing) is_front: bool)
     let shade = 0.45 + 0.55 * clamp(n.y, 0.0, 1.0);
     let neutral = vec3<f32>(0.5, 0.5, 0.5) * shade;
     var result = vec4<f32>(mix(neutral, colour * shade, material.opacity) * material.colour_gain * mix(1.0, 0.55, contour), 1.0);
-    @if((VERTEX_UVS_A)) result = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, result, -1);
+    @if((VERTEX_UVS_A)) {
+        let tint = surface_annotation_tints(surface_annotations, terrain_detail_position(in.uv, material.terrain_half_extent).xz, true).overlay;
+        result = vec4(mix(result.rgb, tint.rgb, tint.a), result.a);
+    }
     return result;
 }

@@ -348,14 +348,21 @@ fn annotation_texel(data: texture_2d<f32>, index: u32) -> vec4<f32> {
     return textureLoad(data, vec2<i32>(i32(index % 256u), i32(index / 256u)), 0);
 }
 
-fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>, lighting: i32) -> vec4<f32> {
-    // lighting: -1 = diagnostic view (all marks), 0 = overlays, 1 = material marks.
+struct SurfaceAnnotationTints {
+    material: vec4<f32>,
+    overlay: vec4<f32>,
+}
+
+// Traverse the shared index once. In diagnostic mode, overlay contains the
+// strongest mark of either kind, with the original segment order breaking ties.
+fn surface_annotation_tints(data: texture_2d<f32>, p: vec2<f32>, show_all: bool) -> SurfaceAnnotationTints {
+    var result = SurfaceAnnotationTints(vec4<f32>(0.0), vec4<f32>(0.0));
     // Derivatives precede nonuniform bounds/cell branches. The stroke remains
     // antialiased at grazing angles and when its physical width is subpixel.
     let footprint = fwidth(p);
-    if (textureDimensions(data).x != 256u) { return base; }
+    if (textureDimensions(data).x != 256u) { return result; }
     let bounds = annotation_texel(data, 0u);
-    if (any(p < bounds.xy - footprint) || any(p > bounds.zw + footprint)) { return base; }
+    if (any(p < bounds.xy - footprint) || any(p > bounds.zw + footprint)) { return result; }
     let header = annotation_texel(data, 1u);
     let grid = u32(header.x);
     let normalized = clamp((p - bounds.xy) / (bounds.zw - bounds.xy), vec2<f32>(0.0), vec2<f32>(1.0));
@@ -371,17 +378,27 @@ fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>
         lo = select(lo, middle, quadrant == vec2<u32>(1u));
         hi = select(middle, hi, quadrant == vec2<u32>(1u));
     }
-    var tint = vec4<f32>(0.0);
+    if (cell.y == 0.0) { return result; }
+    // The index stores an outward-rounded union interval for one local axis.
+    // Include both footprint components to cover antialiasing at any angle.
+    let axis_position = select(p.y, p.x, cell.z <= cell.w);
+    let interval_padding = footprint.x + footprint.y + 0.00001;
+    if (axis_position < min(cell.z, cell.w) - interval_padding
+        || axis_position > max(cell.z, cell.w) + interval_padding) { return result; }
     for (var i = 0u; i < u32(cell.y); i += 1u) {
         let segment = u32(annotation_texel(data, u32(cell.x) + i).x);
         let record = segment;
         let endpoints = annotation_texel(data, record);
+        let style = annotation_texel(data, record + 1u);
+        if (!show_all && i32(style.y) != 0 && i32(style.y) != 1) { continue; }
+        let radius = style.x;
+        // Outside this deliberately generous box, the segment cannot reach
+        // the fragment even with its derivative-based antialiasing footprint.
+        let pad = 2.0 * (radius + footprint.x + footprint.y + 0.00001);
+        if (any(p < min(endpoints.xy, endpoints.zw) - pad) || any(p > max(endpoints.xy, endpoints.zw) + pad)) { continue; }
         let delta = endpoints.zw - endpoints.xy;
         let t = clamp(dot(p - endpoints.xy, delta) / dot(delta, delta), 0.0, 1.0);
         let dist = length(p - endpoints.xy - delta * t);
-        let style = annotation_texel(data, record + 1u);
-        if (lighting >= 0 && i32(style.y) != lighting) { continue; }
-        let radius = style.x;
         let right = abs(vec2<f32>(-delta.y, delta.x) / length(delta));
         let aa = max(dot(right, footprint) * 0.5, 0.00001);
         let coverage = clamp((radius - dist + aa) / (2.0 * aa), 0.0, 1.0)
@@ -393,7 +410,12 @@ fn surface_annotation_color(data: texture_2d<f32>, p: vec2<f32>, base: vec4<f32>
         }
         let alpha = coverage * edge_profile * color.a;
         // A joint is one stroke, not several overlapping transparent quads.
-        if (alpha >= tint.a) { tint = vec4<f32>(color.rgb, alpha); }
+        if ((show_all || i32(style.y) == 0) && alpha >= result.overlay.a) {
+            result.overlay = vec4<f32>(color.rgb, alpha);
+        }
+        if (!show_all && i32(style.y) == 1 && alpha >= result.material.a) {
+            result.material = vec4<f32>(color.rgb, alpha);
+        }
     }
-    return vec4<f32>(mix(base.rgb, tint.rgb, tint.a), base.a);
+    return result;
 }

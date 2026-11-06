@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify receiver raster admission, source retirement and unchanged GPU output."""
+"""Verify receiver raster and clear admission against native GPU output."""
 import argparse
 import hashlib
 import json
@@ -61,6 +61,76 @@ def main():
         params.update(bounded=True, reason="receiver-bounded")
         run_authored_scenario(session, "lunco://scenarios/tests/shadow_receiver_crop.rhai",
                               title="SHADOW RECEIVER RASTER", check_count=4, params=params)
+        # The previous rectangle contains stale depth outside its bounds. Move
+        # the camera in both directions and compare fresh native/full reads.
+        moving_checks = []
+        for index, x in enumerate([4.5, -1.5]):
+            result = execute(session, "RunRhai", code=control_source +
+                             "\nset_shadow_test_camera_x(" + json.dumps(params["camera_path"]) +
+                             "," + str(x) + ");")
+            assert result["stdout"].strip() == "true", result
+            time.sleep(1)
+            camera_audit = execute(session, "SceneCameraAudit")
+            active = [candidate for candidate in camera_audit["candidates"]
+                      if candidate.get("usd_path") == params["camera_path"]
+                      and candidate.get("camera_active")]
+            assert len(active) == 1 and abs(active[0]["world_translation"][0] - x) < 1e-3, active
+            control(True)
+            session.capture_screenshot(output / f"moving-{index}-full.png")
+            control(False)
+            session.capture_screenshot(output / f"moving-{index}-bounded.png")
+            moved_equality = subprocess.run([
+                "compare", "-metric", "AE", str(output / f"moving-{index}-full.png"),
+                str(output / f"moving-{index}-bounded.png"), "null:"
+            ], capture_output=True, text=True)
+            assert moved_equality.returncode == 0, moved_equality.stderr
+            assert moved_equality.stderr.strip() == "0", moved_equality.stderr
+            moving_checks.append({"camera_x": x, "pixel_difference": moved_equality.stderr.strip()})
+        result = execute(session, "RunRhai", code=control_source +
+                         "\nset_shadow_test_camera_x(" + json.dumps(params["camera_path"]) + ",1.5);")
+        assert result["stdout"].strip() == "true", result
+        time.sleep(1)
+        # Remove every fixture caster through transient composed USD intent.
+        # The receiver remains visible, so stale shadow depth is observable.
+        doc_id = execute(session, "QueryUsdPrim", path="/VertexShadowAlignment/Caster")["doc_id"]
+        def set_casting(enabled):
+            execute(session, "ApplyUsdTransientOps", doc_id=doc_id, label="Shadow clear test", ops=[
+                {"SetAttribute": {"edit_target": "@view@", "path": path,
+                                  "name": "primvars:doNotCastShadows", "type_name": "bool",
+                                  "value": "false" if enabled else "true"}}
+                for path in ["/VertexShadowAlignment/Caster", "/VertexShadowAlignment/Receiver"]
+            ])
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                audit = execute(session, "SceneCameraAudit", shadow_inputs=True)
+                maps = [entry for light in audit["shadow_inputs"]["lights"]
+                        if light["shadow_maps_enabled"] for entry in light["maps"]
+                        if entry["camera_name"] == params["camera_path"]]
+                if maps and all((entry["caster_total"] or 0) > 0 if enabled
+                                else entry["caster_total"] == 0 for entry in maps):
+                    return [entry["caster_total"] for entry in maps]
+                time.sleep(.1)
+            raise RuntimeError(f"caster transition did not settle: {maps}")
+        empty_casters = set_casting(False)
+        time.sleep(1)
+        session.capture_screenshot(output / "empty-bounded.png")
+        control(True)
+        session.capture_screenshot(output / "empty-full.png")
+        empty_equality = subprocess.run([
+            "compare", "-metric", "AE", str(output / "empty-bounded.png"),
+            str(output / "empty-full.png"), "null:"
+        ], capture_output=True, text=True)
+        assert empty_equality.returncode == 0, empty_equality.stderr
+        assert empty_equality.stderr.strip() == "0", empty_equality.stderr
+        empty_difference = subprocess.run([
+            "compare", "-metric", "AE", str(output / "bounded.png"),
+            str(output / "empty-bounded.png"), "null:"
+        ], capture_output=True, text=True)
+        assert empty_difference.returncode == 1, empty_difference.stderr
+        assert int(empty_difference.stderr.strip()) > 0, empty_difference.stderr
+        restored_casters = set_casting(True)
+        control(False)
+        time.sleep(1)
         # Source text is a transient Shader asset override; no file is authored.
         try:
             execute(session, "SetShaderSource", path="lunco://shaders/tests/vertex_shadow_receiver.wesl",
@@ -100,6 +170,9 @@ def main():
     assert_render_log_clean(log)
     assert originals == {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in originals}
     result = dict(pid=pid, binary=str(BINARY), pixels=pixels, pixel_difference=equality.stderr.strip(),
+                  moving_checks=moving_checks, empty_casters=empty_casters,
+                  restored_casters=restored_casters, empty_pixel_difference=empty_equality.stderr.strip(),
+                  changed_pixels_without_casters=empty_difference.stderr.strip(),
                   diagnostics=diagnostics, port_released=True, source_unchanged=True)
     (output / "validation.json").write_text(json.dumps(result, indent=2) + "\n")
     assert equality.returncode == 0 and equality.stderr.strip() == "0", result

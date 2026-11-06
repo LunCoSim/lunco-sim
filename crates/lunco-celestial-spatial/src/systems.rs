@@ -96,6 +96,17 @@ pub fn body_rotation_system(
     }
 }
 
+fn publish_sun_illuminance(
+    sun: &mut ResMut<lunco_environment::SunState>,
+    illuminance: Option<f32>,
+) {
+    let previous_revision = sun.revision;
+    sun.bypass_change_detection().publish(illuminance);
+    if sun.revision != previous_revision {
+        sun.set_changed();
+    }
+}
+
 /// Publish presentation illuminance at the cadence selected for rendered
 /// celestial transforms. Physical irradiance and directions are sampled by the
 /// communication-boundary publisher, independently of this render budget.
@@ -110,7 +121,7 @@ pub fn update_sun_light_system(
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let Some(ephemeris) = ephemeris else {
-        sun_state.publish(None);
+        publish_sun_illuminance(&mut sun_state, None);
         return;
     };
 
@@ -128,7 +139,7 @@ pub fn update_sun_light_system(
         });
     }
     if !contract_findings.is_empty() {
-        sun_state.publish(None);
+        publish_sun_illuminance(&mut sun_state, None);
         if let Some(mut diagnostics) = diagnostics {
             diagnostics.replace_producer("celestial-sun", contract_findings);
         }
@@ -143,7 +154,7 @@ pub fn update_sun_light_system(
         .map(|anchor| anchor.body)
         .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
     else {
-        sun_state.publish(None);
+        publish_sun_illuminance(&mut sun_state, None);
         return;
     };
 
@@ -155,7 +166,7 @@ pub fn update_sun_light_system(
             .provider
             .global_position(observer_body, celestial_time.epoch_jd),
     ) else {
-        sun_state.publish(None);
+        publish_sun_illuminance(&mut sun_state, None);
         return;
     };
 
@@ -163,14 +174,14 @@ pub fn update_sun_light_system(
         // Orbital views without a site do not own a local ENU light frame.
         // Their authored DistantLight remains render-only; it is not a
         // substitute physical irradiance sample.
-        sun_state.publish(None);
+        publish_sun_illuminance(&mut sun_state, None);
         return;
     }
     let irradiance = sun_cal.as_deref().and_then(|cal| {
         let r2 = (p_sun - p_observer).length_squared();
         (r2 > 1.0e-4).then_some((cal.illuminance_lux as f64 / r2) as f32)
     });
-    sun_state.publish(irradiance);
+    publish_sun_illuminance(&mut sun_state, irradiance);
 }
 
 pub fn celestial_visuals_system(
@@ -338,4 +349,60 @@ pub fn celestial_visuals_system(
         }
     }
     std::mem::swap(&mut *last_per_body, &mut *current_per_body);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct IlluminanceInput(Option<f32>);
+
+    #[derive(Resource, Default)]
+    struct ObservedChanges(usize);
+
+    fn publish(input: Res<IlluminanceInput>, mut sun: ResMut<lunco_environment::SunState>) {
+        publish_sun_illuminance(&mut sun, input.0);
+    }
+
+    fn observe(sun: Res<lunco_environment::SunState>, mut observed: ResMut<ObservedChanges>) {
+        if sun.is_changed() {
+            observed.0 += 1;
+        }
+    }
+
+    #[test]
+    fn illuminance_publishes_only_semantic_changes() {
+        let mut app = App::new();
+        app.init_resource::<lunco_environment::SunState>()
+            .init_resource::<IlluminanceInput>()
+            .init_resource::<ObservedChanges>()
+            .add_systems(Update, (publish, observe).chain());
+        app.update(); // Initial resource publication.
+        app.update();
+        assert_eq!(app.world().resource::<ObservedChanges>().0, 1);
+        app.world_mut().resource_mut::<IlluminanceInput>().0 = Some(100.0);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<ObservedChanges>().0, 2);
+        app.world_mut().resource_mut::<IlluminanceInput>().0 = Some(f32::NAN);
+        app.update();
+        assert_eq!(app.world().resource::<ObservedChanges>().0, 2);
+        assert_eq!(
+            app.world()
+                .resource::<lunco_environment::SunState>()
+                .irradiance_lux,
+            Some(100.0)
+        );
+        app.world_mut().resource_mut::<IlluminanceInput>().0 = None;
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<ObservedChanges>().0, 3);
+        assert_eq!(
+            app.world()
+                .resource::<lunco_environment::SunState>()
+                .irradiance_lux,
+            None
+        );
+    }
 }
