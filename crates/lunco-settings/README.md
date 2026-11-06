@@ -7,6 +7,12 @@ typed-section API that domain crates use to register their own slice. The crate
 handles load-on-startup, persist-on-change, and atomic disk writes — call sites
 just read & mutate their `Res<MySection>` like any other resource.
 
+`read_optional_section` and `write_optional_field` reuse typed section decoding
+and storage for an explicitly scoped settings document. The scope owner picks
+its path, runs I/O off-thread, serializes writes, and owns lifetime and error
+handling. Missing sections inherit; malformed documents are reported. Field
+writes preserve other sections and fields.
+
 ## Why one file
 
 Per-feature files (`recents.json`, `perf_hud.json`, …) make it impossible to

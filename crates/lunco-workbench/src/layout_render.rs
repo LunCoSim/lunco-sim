@@ -1244,7 +1244,7 @@ pub(super) fn render_layout(
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .interactable(!actions.is_empty())
                 .show(ctx, |ui| {
-                    if actions.is_empty() {
+                    if actions.is_empty() && guidance.is_none() {
                         ui.label(
                             egui::RichText::new(message)
                                 .color(theme.tokens.text_subdued)
@@ -1271,40 +1271,45 @@ pub(super) fn render_layout(
                                     ));
                                 }
                                 ui.add_space(theme.spacing.item_spacing * 2.0);
-                                ui.vertical(|ui| {
-                                    let action_height = ui
-                                        .spacing()
-                                        .interact_size
-                                        .y
-                                        .max(theme.spacing.titlebar_control_size.y);
-                                    for (index, action) in actions.iter().enumerate() {
-                                        let button = egui::Button::new(action.label.as_str())
-                                            .corner_radius(theme.rounding.button);
-                                        let button = if action.primary {
-                                            button
-                                                .fill(theme.tokens.surface_raised)
-                                                .stroke(egui::Stroke::new(1.5, theme.tokens.accent))
-                                        } else {
-                                            button
-                                        };
-                                        if ui
-                                            .add_sized(
-                                                [ui.available_width(), action_height],
-                                                button,
-                                            )
-                                            .clicked()
-                                        {
-                                            activate = Some(action.activate);
+                                egui::ScrollArea::vertical()
+                                    .max_height(ctx.viewport_rect().height() * 0.45)
+                                    .auto_shrink([true, true])
+                                    .show(ui, |ui| {
+                                        let action_height = ui
+                                            .spacing()
+                                            .interact_size
+                                            .y
+                                            .max(theme.spacing.titlebar_control_size.y);
+                                        for (index, action) in actions.iter().enumerate() {
+                                            let button = egui::Button::new(action.label.as_str())
+                                                .corner_radius(theme.rounding.button);
+                                            let button = if action.primary {
+                                                button.fill(theme.tokens.surface_raised).stroke(
+                                                    egui::Stroke::new(1.5, theme.tokens.accent),
+                                                )
+                                            } else {
+                                                button
+                                            };
+                                            if ui
+                                                .add_sized(
+                                                    [ui.available_width(), action_height],
+                                                    button,
+                                                )
+                                                .clicked()
+                                            {
+                                                activate = Some(action.activate.clone());
+                                            }
+                                            if !action.description.is_empty() {
+                                                ui.label(
+                                                    egui::RichText::new(&action.description)
+                                                        .color(theme.tokens.text_subdued),
+                                                );
+                                            }
+                                            if index + 1 < actions.len() {
+                                                ui.add_space(theme.spacing.item_spacing);
+                                            }
                                         }
-                                        ui.label(
-                                            egui::RichText::new(&action.description)
-                                                .color(theme.tokens.text_subdued),
-                                        );
-                                        if index + 1 < actions.len() {
-                                            ui.add_space(theme.spacing.item_spacing);
-                                        }
-                                    }
-                                });
+                                    });
                             });
                     }
                 });

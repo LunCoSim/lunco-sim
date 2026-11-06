@@ -136,7 +136,10 @@ use a `Twin/Lifecycle` route whose generation is the mounted Twin's nonzero
 `TwinId`; startup/reload, asset events, and teardown use `Start`, `Event`, and
 `Stop` phases with no elapsed clock. The `assets_mounted` lifecycle event receives the
 parsed Twin manifest, indexed relative paths, exact `twin://` authority, and
-active-Twin fact. Its ordered `{command, params}` actions go through the generic
+active-Twin fact. It also receives `scene_override` and `scene_loading` with
+the admitted `load_default` value and scope `source`. An explicit override
+must be opened exactly once; when automatic loading is disabled the policy
+must not select the manifest default. Its ordered `{command, params}` actions go through the generic
 typed command bridge; Rhai chooses loaders and order, while each domain owner
 validates paths and performs asynchronous work. A malformed plan faults and
 queues no commands; a rejected command is reported while later actions
@@ -167,10 +170,12 @@ replace it. Keep authored selector names in `facts.policy`; do not construct
 dynamic hook ids or expose process-local ECS entity ids as deterministic policy
 facts.
 
-The application `twin.lifecycle` policy selects the active Twin's default USD
-scene, tool libraries, timeline data, SysML/KerML sources, and Modelica roots
+The application `twin.lifecycle` policy selects the active Twin's explicit or
+enabled default USD scene, tool libraries, timeline data, SysML/KerML sources, and Modelica roots
 from its typed manifest and indexed file inventory. Loader commands keep only
 generic ownership, safe-path, asset-read, and domain-registration mechanics.
+An ephemeral workspace uses the application policy only for explicit scene
+selection; it has no Twin policy overrides, tools, timelines, or source sets.
 
 For application UI contributions, reuse the optional
 `application.asset.lifecycle(event, ctx)` hook. The shared asset layer emits

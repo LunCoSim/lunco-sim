@@ -78,7 +78,7 @@ pub const USD_DOCUMENT_KIND: &str = "usd";
 #[derive(Resource, Default)]
 pub struct EmptyViewportReason(pub Option<String>);
 
-/// Emitted after a USD file has been admitted to the canonical document
+/// Emitted after a USD document has been admitted to the canonical document
 /// registry. Presentation adapters can claim a preview and surface a
 /// non-fatal reload outcome; headless consumers can ignore it.
 #[derive(bevy::prelude::Event, Clone, Copy, Debug)]

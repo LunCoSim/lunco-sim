@@ -456,7 +456,7 @@ Choose the command that owns the address type and check its result:
 
 | command | takes | notes |
 |---|---|---|
-| `OpenTwin` | a **folder** containing `twin.toml` | auto-loads `[usd] default_scene` |
+| `OpenTwin` | a **folder** containing `twin.toml` | loads `[usd] default_scene` when the effective scene-loading setting enables it |
 | `LoadScene` | a root-qualified `twin://` or `lunco://` address | mounts a scene address; it is not a filesystem opener |
 | `OpenFile` | a filesystem path or supported URI | extension-routes the document to its owning domain; USD paths resolve their Twin root |
 

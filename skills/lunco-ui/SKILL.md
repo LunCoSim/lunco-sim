@@ -32,6 +32,16 @@ preference and pre-app console setup. Changes apply on restart. Use the
 and the [console guide](../../docs/apps/luncosim/README.md#windows-debug-console)
 when changing this menu or process boundary.
 
+**Settings → General** holds the global scene-loading preference; **Settings →
+Project** edits the local override, and Twin settings owns the shared
+override. Show the inherited value and report higher-priority overrides when
+present. Route project and Twin edits through typed commands. Verify the menu
+and panels with native input and `GetSceneLoadingSettings` in an owned session.
+When a Twin has no live scene, the viewport offers its configured scene
+choices and Editor; retain the generic welcome actions only with no open Twin.
+Use `SceneMountState` so an Editor preview cannot hide that empty live state.
+Verify its buttons with `scripts/api/test_scene_loading_ui.py --port <free-port>`.
+
 ## Graph readability
 
 Analyze places the live viewport in the center and Graphs in the bottom dock,
@@ -224,6 +234,14 @@ launched by `scripts/api/test_usd_source_isolation.py` with an exact scene,
 source and composed selection path in an owned production session. Successful
 and rejected sources preserve the
 active Twin and physics topology, and physics continues while a preview opens.
+Creating a USD Stage also publishes `UsdDocumentReady`, so an untitled
+document opens in its own Editor preview even when the Twin has no live scene.
+The preview does not select or mount the Twin's default scene. Verify creation,
+editing, save and reopen with `scripts/api/test_scene_loading_settings.py`.
+A folder without its own `twin.toml` is a temporary workspace: show no open
+Twin, omit project settings, and offer only root-level USD files without
+discovering child Twins. Show an empty message when none exist. The Editor still
+opens standalone documents.
 Scene clear and reload also retire `StatusBus` history, progress and handles
 through its owner-installed scene resource registration. Check the recent-status
 popup after clearing a compiling scene; old completion text must not remain.

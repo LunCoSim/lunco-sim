@@ -40,7 +40,7 @@
 //! crate persists the change next frame.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -103,6 +103,72 @@ fn decode_persisted_section<S: SettingsSection>(
         .map_err(|reason| format!("invalid section after migration: {reason}"))?;
     let migrated = section != before;
     Ok((section, migrated))
+}
+
+/// Read an optional typed section from a settings document at an explicit path.
+/// Missing files and sections are absent; malformed or unreadable files are errors.
+/// Call this on an I/O worker when the path is on the local filesystem.
+pub fn read_optional_section<S: SettingsSection>(path: &Path) -> Result<Option<S>, String> {
+    let raw = read_document(path)?;
+    raw.get(S::KEY)
+        .cloned()
+        .map(|value| {
+            decode_persisted_section::<S>(value)
+                .map(|(section, _)| section)
+                .map_err(|error| format!("{} [{}]: {error}", path.display(), S::KEY))
+        })
+        .transpose()
+}
+
+fn read_document(path: &Path) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let bytes = match lunco_storage::read_file_sync(path) {
+        Ok(bytes) => bytes,
+        Err(lunco_storage::StorageError::NotFound) => return Ok(BTreeMap::new()),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    serde_json::from_slice(&bytes).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Atomically update a field in an explicitly located settings document.
+/// Other sections and fields are preserved. `None` removes the override.
+/// The caller serializes concurrent writes to the same document and runs I/O
+/// off the UI thread.
+pub fn write_optional_field<T: Serialize>(
+    path: &Path,
+    section: &str,
+    field: &str,
+    value: Option<&T>,
+) -> Result<(), String> {
+    let mut raw = read_document(path)?;
+    if value.is_none() && !raw.contains_key(section) {
+        return Ok(());
+    }
+    let entry = raw
+        .entry(section.to_owned())
+        .or_insert_with(|| serde_json::json!({}));
+    let fields = entry.as_object_mut().ok_or_else(|| {
+        format!(
+            "{}: settings section {section:?} must be an object",
+            path.display()
+        )
+    })?;
+    match value {
+        Some(value) => {
+            fields.insert(
+                field.to_owned(),
+                serde_json::to_value(value).map_err(|error| error.to_string())?,
+            );
+        }
+        None => {
+            fields.remove(field);
+        }
+    }
+    if fields.is_empty() {
+        raw.remove(section);
+    }
+    let bytes = serde_json::to_vec_pretty(&raw).map_err(|error| error.to_string())?;
+    lunco_storage::write_file_sync(path, &bytes)
+        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// Resolves the user-level configuration directory for LunCoSim.

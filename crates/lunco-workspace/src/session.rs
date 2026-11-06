@@ -211,6 +211,13 @@ pub struct WorkspacePlugin;
 
 impl Plugin for WorkspacePlugin {
     fn build(&self, app: &mut App) {
+        use lunco_settings::AppSettingsExt;
+        app.register_settings_section::<crate::SceneLoadingSettings>();
+        app.register_type::<crate::SceneLoadingSettings>();
+        app.init_resource::<crate::SceneLoadingCli>();
+        app.init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core::CommandResults>();
+        crate::scene_settings::install(app);
         app.init_resource::<WorkspaceResource>()
             .add_observer(on_register_document)
             .add_observer(on_unregister_document)

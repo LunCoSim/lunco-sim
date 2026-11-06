@@ -12263,9 +12263,11 @@ name = "lunco-workspace"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-settings",
  "lunco-storage",
  "lunco-telemetry-core",
  "lunco-twin",
@@ -12282,6 +12284,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-api-core",
+ "lunco-core",
  "lunco-doc",
  "lunco-twin",
  "lunco-workspace",

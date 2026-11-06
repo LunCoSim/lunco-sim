@@ -9,6 +9,7 @@ description = "API query providers for the headless-capable LunCoSim workspace s
 bevy = { workspace = true, default-features = false, features = ["bevy_log"] }
 lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }
+lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-workspace = { path = "../lunco-workspace" }

@@ -8,9 +8,8 @@ a remote URL), every open `Document` (including Untitled scratch
 buffers and loose files outside any Twin), which tab and which Twin
 are active, the chosen Perspective, and a bounded recents list.
 
-Headless, UI-free, ECS-free. A Bevy `Resource` wrapper
-(`WorkspaceResource`) lives in `lunco-workbench` so the core type
-stays reusable from headless CI and API-only servers.
+Headless and UI-free. The Bevy `WorkspaceResource` and open pipeline live in
+this crate and are shared by desktop, headless and API hosts.
 
 ## Ontology at a glance
 
@@ -32,6 +31,10 @@ stays reusable from headless CI and API-only servers.
 └─────────────────────────────────────────────────────────┘
 ```
 
+An opened folder without its own `twin.toml` is an ephemeral workspace, not an
+authored Twin. It indexes only files at that folder's root and accepts explicit
+standalone file opens. It has no project settings or Twin-owned policies.
+
 **Twin folders provide the authoring and display lens.** All open documents
 live in the Workspace. `twin_for` answers folder association; each document's
 `runtime_context` records its exact admitted source lifetime independently.
@@ -47,6 +50,13 @@ publishes `TwinAdded`. A failed candidate scan preserves the current workspace.
 Individual Twin closure closes the documents whose stored runtime owner is that
 `LocalTwin`. Replicated documents follow their replication session. Shared
 application caches and registrations outlive editor sessions.
+
+Twin-open preparation reads the project-local `.lunco/settings.json` on a
+worker and combines its scene-loading override with global, Twin and CLI
+values. An explicit scene request is kept separately for the admitted Twin
+session. Pending project-setting writes and settings revisions fence open
+preparation so stale values cannot be admitted after a write; closing a Twin
+retires its runtime selection and project-settings view.
 
 ## Types
 

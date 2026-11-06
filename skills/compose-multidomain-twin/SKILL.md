@@ -258,12 +258,13 @@ name = "luncosim"
 version = "0.1.0"
 description = "…"
 [usd]
-default_scene = "sandbox_scene.usda"   # loaded as the active stage on open; other .usda here are a referenceable library
+default_scene = "sandbox_scene.usda"   # active stage on open when default-scene loading is enabled
 ```
 
 Everything the mission needs lives under that folder: the scene, referenced
 vehicle assets, `.mo` models, `.rhai` scenarios. Open the Twin and the default
-scene loads.
+scene loads when the effective default-scene setting is enabled. See
+`docs/architecture/13-twin-and-workflow.md` for scoped overrides.
 
 Keep interactive stages in `scenes/` and verdict fixtures in `scenes/tests/`,
 paired with `scenarios/tests/` observers. Declare both directories in

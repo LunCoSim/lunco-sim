@@ -87,12 +87,25 @@ fn into_twin_setting(value: TwinSettingInput) -> TwinSettingValue {
 }
 
 #[on_command(SetTwinSetting)]
-fn on_set_twin_setting(trigger: On<SetTwinSetting>, mut workspace: ResMut<WorkspaceResource>) {
+fn on_set_twin_setting(
+    trigger: On<SetTwinSetting>,
+    mut workspace: ResMut<WorkspaceResource>,
+    pending: Res<PendingTwinOpens>,
+) -> Result<lunco_core::CommandOutcome, String> {
     let event = trigger.event();
+    if event.key == crate::scene_settings::SCENE_LOAD_DEFAULT_KEY
+        && !matches!(&event.value, TwinSettingInput::Bool(_))
+    {
+        let error = "scene.load_default must be a boolean";
+        warn!("SetTwinSetting rejected: {error}");
+        return Ok(lunco_core::CommandOutcome::Rejected(
+            lunco_command_contracts::Reject::InvalidOp(error.into()),
+        ));
+    }
     let twin_id = workspace.active_twin;
     let Some(twin_id) = twin_id else {
-        warn!("SetTwinSetting ignored: no active Twin");
-        return;
+        warn!("SetTwinSetting requires an active Twin");
+        return Err("SetTwinSetting requires an active Twin".into());
     };
     let old = workspace
         .twin(twin_id)
@@ -105,21 +118,23 @@ fn on_set_twin_setting(trigger: On<SetTwinSetting>, mut workspace: ResMut<Worksp
                 Ok(changed) => changed,
                 Err(error) => {
                     warn!("SetTwinSetting rejected: {error}");
-                    return;
+                    return Err(format!("SetTwinSetting rejected: {error}"));
                 }
             },
             None => {
-                warn!("SetTwinSetting ignored: active workspace root is not a Twin");
-                return;
+                warn!("SetTwinSetting requires a Twin manifest");
+                return Err("SetTwinSetting requires a Twin manifest".into());
             }
         },
         None => {
-            warn!("SetTwinSetting ignored: active Twin no longer exists");
-            return;
+            warn!("SetTwinSetting: active Twin no longer exists");
+            return Err("SetTwinSetting: active Twin no longer exists".into());
         }
     };
     if !changed {
-        return;
+        return Ok(lunco_core::CommandOutcome::Succeeded(
+            lunco_command_contracts::Ack::default(),
+        ));
     }
 
     if let Err(error) = workspace
@@ -139,12 +154,24 @@ fn on_set_twin_setting(trigger: On<SetTwinSetting>, mut workspace: ResMut<Worksp
                 }
             }
         }
-        warn!("SetTwinSetting failed to persist `{}`: {error}", event.key);
+        let message = format!("SetTwinSetting failed to persist `{}`: {error}", event.key);
+        warn!("{message}");
+        return Err(message);
     }
+    pending
+        .settings_revision
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    Ok(lunco_core::CommandOutcome::Succeeded(
+        lunco_command_contracts::Ack::default(),
+    ))
 }
 
 #[on_command(ResetTwinSetting)]
-fn on_reset_twin_setting(trigger: On<ResetTwinSetting>, mut workspace: ResMut<WorkspaceResource>) {
+fn on_reset_twin_setting(
+    trigger: On<ResetTwinSetting>,
+    mut workspace: ResMut<WorkspaceResource>,
+    pending: Res<PendingTwinOpens>,
+) {
     let event = trigger.event();
     if let Err(error) = TwinManifest::validate_setting_key(&event.key) {
         warn!("ResetTwinSetting rejected: {error}");
@@ -176,6 +203,10 @@ fn on_reset_twin_setting(trigger: On<ResetTwinSetting>, mut workspace: ResMut<Wo
             "ResetTwinSetting failed to persist `{}`: {error}",
             event.key
         );
+    } else {
+        pending
+            .settings_revision
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
@@ -538,6 +569,8 @@ fn close_all_open_folders(world: &mut World, log_tag: &str) {
 #[derive(Resource, Default)]
 pub struct PendingTwinOpens {
     tasks: Vec<TwinOpenTask>,
+    pub(crate) settings_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    replacement_generation: u64,
 }
 
 impl PendingTwinOpens {
@@ -550,7 +583,7 @@ impl PendingTwinOpens {
 }
 
 struct TwinOpenTask {
-    task: Task<Result<TwinMode, TwinError>>,
+    task: Task<(u64, Result<PreparedTwinOpen, TwinError>)>,
     path: std::path::PathBuf,
     log_tag: String,
     /// Scene to select once the scan lands, relative to the scanned folder.
@@ -558,6 +591,50 @@ struct TwinOpenTask {
     scene: Option<String>,
     /// Replacement is committed only after this task returns a valid Twin.
     mode: TwinOpenMode,
+    replacement_generation: Option<u64>,
+}
+
+struct PreparedTwinOpen {
+    twin: TwinMode,
+    settings: Result<(crate::ProjectSceneSettings, Option<bool>), TwinError>,
+}
+
+fn prepare_twin_open(twin: TwinMode) -> PreparedTwinOpen {
+    let settings = prepare_twin_settings(&twin);
+    PreparedTwinOpen { twin, settings }
+}
+
+fn refresh_twin_open(twin: TwinMode) -> Result<PreparedTwinOpen, TwinError> {
+    match twin {
+        TwinMode::Twin(twin) | TwinMode::Folder(twin) => {
+            TwinMode::open(&twin.root).map(prepare_twin_open)
+        }
+        orphan @ TwinMode::Orphan(_) => Ok(prepare_twin_open(orphan)),
+    }
+}
+
+fn prepare_twin_settings(
+    twin: &TwinMode,
+) -> Result<(crate::ProjectSceneSettings, Option<bool>), TwinError> {
+    let twin = match twin {
+        TwinMode::Twin(twin) => twin,
+        TwinMode::Folder(_) | TwinMode::Orphan(_) => return Ok((Default::default(), None)),
+    };
+    let root = &twin.root;
+    let project = crate::scene_settings::read_project_scene_settings(root).map_err(|error| {
+        TwinError::Io {
+            path: crate::scene_settings::project_settings_path(root),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+        }
+    })?;
+    let twin_load_default = crate::scene_settings::twin_scene_loading_setting(
+        twin.manifest.as_ref(),
+    )
+    .map_err(|error| TwinError::Io {
+        path: root.join(lunco_twin::MANIFEST_FILENAME),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+    })?;
+    Ok((project, twin_load_default))
 }
 
 /// Shared helper for Open Folder / Open Twin / Add Folder / Add Twin.
@@ -599,9 +676,17 @@ pub fn enqueue_twin_scan(
     scene: Option<String>,
     mode: TwinOpenMode,
 ) {
-    if mode == TwinOpenMode::Replace {
+    let replacement_generation = if mode == TwinOpenMode::Replace {
         pending.cancel_all();
-    }
+        let Some(next) = pending.replacement_generation.checked_add(1) else {
+            error!("Twin replacement generation exhausted");
+            return;
+        };
+        pending.replacement_generation = next;
+        Some(next)
+    } else {
+        None
+    };
     match &scene {
         Some(rel) => info!(
             "[{log_tag}] scanning {} for `{rel}` (off-thread)…",
@@ -609,38 +694,140 @@ pub fn enqueue_twin_scan(
         ),
         None => info!("[{log_tag}] scanning {} (off-thread)…", path.display()),
     }
+    let revision = pending
+        .settings_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let twin = task.await;
+        (revision, twin.map(prepare_twin_open))
+    });
     pending.tasks.push(TwinOpenTask {
         task,
         path,
         log_tag: log_tag.to_string(),
         scene,
         mode,
+        replacement_generation,
     });
 }
 
 /// Poll each in-flight folder scan. Ready scans add their Twin to the Workspace
 /// and fire [`TwinAdded`]; in-flight ones are kept for the next frame.
-pub fn drain_pending_twin_opens(mut pending: ResMut<PendingTwinOpens>, mut commands: Commands) {
+pub fn drain_pending_twin_opens(
+    mut pending: ResMut<PendingTwinOpens>,
+    writes: Option<Res<crate::scene_settings::PendingProjectSceneWrites>>,
+    mut commands: Commands,
+) {
     use bevy::tasks::futures_lite::future;
-    if pending.tasks.is_empty() {
+    if pending.tasks.is_empty() || writes.as_deref().is_some_and(|writes| writes.has_pending()) {
         return;
     }
     let mut still_running = Vec::with_capacity(pending.tasks.len());
+    let settings_revision = pending.settings_revision.clone();
     for mut entry in pending.tasks.drain(..) {
         match future::block_on(future::poll_once(&mut entry.task)) {
             None => still_running.push(entry),
-            Some(Ok(TwinMode::Twin(mut twin))) | Some(Ok(TwinMode::Folder(mut twin))) => {
-                // Opened by scene file → select it, so the doc-first mount that
-                // `TwinAdded` kicks off loads that scene rather than whatever
-                // `twin.toml` happened to name as default.
-                if let Some(rel) = &entry.scene {
-                    twin.set_default_scene(rel.clone());
-                }
+            Some((revision, Ok(prepared)))
+                if revision != settings_revision.load(std::sync::atomic::Ordering::Acquire) =>
+            {
+                let revision = settings_revision.clone();
+                entry.task = AsyncComputeTaskPool::get().spawn(async move {
+                    let current = revision.load(std::sync::atomic::Ordering::Acquire);
+                    (current, refresh_twin_open(prepared.twin))
+                });
+                still_running.push(entry);
+            }
+            Some((
+                _,
+                Ok(PreparedTwinOpen {
+                    settings: Err(e), ..
+                }),
+            )) => {
+                warn!(
+                    "[{}] failed to prepare {}: {e}",
+                    entry.log_tag,
+                    entry.path.display()
+                );
+                commands.trigger(twin_open_failed(format!(
+                    "{} failed: cannot open {} — {e}",
+                    entry.log_tag,
+                    entry.path.display()
+                )));
+            }
+            Some((
+                read_revision,
+                Ok(PreparedTwinOpen {
+                    twin: twin_mode @ (TwinMode::Twin(_) | TwinMode::Folder(_)),
+                    settings: Ok((project, twin_load_default)),
+                }),
+            )) => {
+                let revision = settings_revision.clone();
                 commands.queue(move |world: &mut World| {
+                    if entry.replacement_generation.is_some_and(|generation| {
+                        world.resource::<PendingTwinOpens>().replacement_generation != generation
+                    }) {
+                        return;
+                    }
+                    let writing = world
+                        .get_resource::<crate::scene_settings::PendingProjectSceneWrites>()
+                        .is_some_and(|writes| writes.has_pending());
+                    if writing
+                        || read_revision != revision.load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        let next_revision = revision.clone();
+                        entry.task = AsyncComputeTaskPool::get().spawn(async move {
+                            let current = next_revision.load(std::sync::atomic::Ordering::Acquire);
+                            (current, refresh_twin_open(twin_mode))
+                        });
+                        world.resource_mut::<PendingTwinOpens>().tasks.push(entry);
+                        return;
+                    }
+                    let Some(global) = world
+                        .get_resource::<crate::SceneLoadingSettings>()
+                        .map(|value| value.load_default)
+                    else {
+                        let detail =
+                            "Cannot open Twin: global scene-loading settings are not installed";
+                        warn!("{detail}");
+                        world.trigger(twin_open_failed(detail));
+                        return;
+                    };
+                    let Some(cli) = world
+                        .get_resource::<crate::SceneLoadingCli>()
+                        .map(|value| value.0)
+                    else {
+                        let detail = "Cannot open Twin: scene-loading CLI state is not installed";
+                        warn!("{detail}");
+                        world.trigger(twin_open_failed(detail));
+                        return;
+                    };
+                    let twin = match twin_mode {
+                        TwinMode::Twin(twin) | TwinMode::Folder(twin) => twin,
+                        TwinMode::Orphan(path) => {
+                            let detail =
+                                format!("Cannot open {}: expected a Twin folder", path.display());
+                            warn!("{detail}");
+                            world.trigger(twin_open_failed(detail));
+                            return;
+                        }
+                    };
                     if entry.mode == TwinOpenMode::Replace {
                         close_all_open_folders(world, &entry.log_tag);
                     }
-                    let twin_id = world.resource_mut::<WorkspaceResource>().add_twin(twin);
+                    let decision = crate::scene_settings::resolve_scene_loading(
+                        global,
+                        project.load_default,
+                        twin_load_default,
+                        cli,
+                    );
+                    let mut workspace = world.resource_mut::<WorkspaceResource>();
+                    let twin_id = workspace.add_twin(twin);
+                    workspace.project_scene_settings.insert(twin_id, project);
+                    workspace.scene_loading_decisions.insert(twin_id, decision);
+                    if let Some(rel) = &entry.scene {
+                        workspace.scene_overrides.insert(twin_id, rel.clone());
+                    }
+                    drop(workspace);
                     world.trigger(TwinAdded { twin: twin_id });
                     match &entry.scene {
                         Some(rel) => info!(
@@ -652,7 +839,13 @@ pub fn drain_pending_twin_opens(mut pending: ResMut<PendingTwinOpens>, mut comma
                     }
                 });
             }
-            Some(Ok(TwinMode::Orphan(_))) => {
+            Some((
+                _,
+                Ok(PreparedTwinOpen {
+                    twin: TwinMode::Orphan(_),
+                    settings: Ok(_),
+                }),
+            )) => {
                 warn!(
                     "[{}] {} resolved to Orphan unexpectedly — ignoring",
                     entry.log_tag,
@@ -664,7 +857,7 @@ pub fn drain_pending_twin_opens(mut pending: ResMut<PendingTwinOpens>, mut comma
                     entry.path.display()
                 )));
             }
-            Some(Err(e)) => {
+            Some((_, Err(e))) => {
                 warn!(
                     "[{}] failed to index {}: {e}",
                     entry.log_tag,
@@ -703,6 +896,118 @@ register_commands!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setting_change_during_scan_refreshes_the_scanned_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        lunco_storage::write_file_sync(
+            &root.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"gate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let TwinMode::Twin(twin) = TwinMode::open(root.path()).unwrap() else {
+            panic!("expected Twin")
+        };
+        let stale = TwinMode::open(root.path()).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::WorkspacePlugin);
+        let old = app
+            .world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(twin);
+        let (send, receive) = std::sync::mpsc::channel();
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            receive.recv().unwrap();
+            Ok(stale)
+        });
+        enqueue_twin_scan(
+            task,
+            root.path().to_path_buf(),
+            &mut app.world_mut().resource_mut::<PendingTwinOpens>(),
+            "test",
+            None,
+            TwinOpenMode::Replace,
+        );
+        app.world_mut().trigger(SetTwinSetting {
+            key: crate::scene_settings::SCENE_LOAD_DEFAULT_KEY.into(),
+            value: TwinSettingInput::Bool(false),
+        });
+        send.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.world().resource::<WorkspaceResource>().active_twin == Some(old) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "refreshed scan timed out"
+            );
+            app.update();
+            std::thread::yield_now();
+        }
+        let workspace = app.world().resource::<WorkspaceResource>();
+        assert_eq!(
+            workspace.scene_loading_decision(workspace.active_twin.unwrap()),
+            Some(crate::SceneLoadingDecision {
+                load_default: false,
+                source: crate::SceneLoadingSource::Twin,
+            })
+        );
+    }
+
+    #[test]
+    fn settings_change_refreshes_an_already_prepared_twin_scan() {
+        let root = tempfile::tempdir().unwrap();
+        lunco_storage::write_file_sync(
+            &root.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"gate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let TwinMode::Twin(twin) = TwinMode::open(root.path()).unwrap() else {
+            panic!("expected Twin")
+        };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::WorkspacePlugin);
+        let old = app
+            .world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(twin);
+        {
+            let mut pending = app.world_mut().resource_mut::<PendingTwinOpens>();
+            spawn_twin_from_path(root.path(), &mut pending, "test", TwinOpenMode::Replace);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.world().resource::<PendingTwinOpens>().tasks[0]
+            .task
+            .is_finished()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "prepared scan timed out"
+            );
+            std::thread::yield_now();
+        }
+        app.world_mut().trigger(SetTwinSetting {
+            key: crate::scene_settings::SCENE_LOAD_DEFAULT_KEY.into(),
+            value: TwinSettingInput::Bool(false),
+        });
+        while app.world().resource::<WorkspaceResource>().active_twin == Some(old) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "refreshed scan timed out"
+            );
+            app.update();
+            std::thread::yield_now();
+        }
+        let workspace = app.world().resource::<WorkspaceResource>();
+        let new = workspace.active_twin.unwrap();
+        assert_eq!(
+            workspace.scene_loading_decision(new),
+            Some(crate::SceneLoadingDecision {
+                load_default: false,
+                source: crate::SceneLoadingSource::Twin,
+            })
+        );
+    }
 
     #[test]
     fn replacement_drains_teardown_before_twin_added() {
@@ -775,16 +1080,14 @@ mod tests {
                 });
         }
         let task = AsyncComputeTaskPool::get().spawn(async move { Ok(TwinMode::Twin(new_twin)) });
-        app.world_mut()
-            .resource_mut::<PendingTwinOpens>()
-            .tasks
-            .push(TwinOpenTask {
-                task,
-                path: new.path().to_path_buf(),
-                log_tag: "test".into(),
-                scene: None,
-                mode: TwinOpenMode::Replace,
-            });
+        enqueue_twin_scan(
+            task,
+            new.path().to_path_buf(),
+            &mut app.world_mut().resource_mut::<PendingTwinOpens>(),
+            "test",
+            None,
+            TwinOpenMode::Replace,
+        );
         for _ in 0..1000 {
             app.update();
             if app.world().resource::<PendingTwinOpens>().tasks.is_empty() {
@@ -961,6 +1264,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<WorkspaceResource>()
             .init_resource::<PendingTwinOpens>()
+            .init_resource::<crate::SceneLoadingSettings>()
+            .init_resource::<crate::SceneLoadingCli>()
             .add_systems(Update, drain_pending_twin_opens);
         app.world_mut()
             .resource_mut::<WorkspaceResource>()

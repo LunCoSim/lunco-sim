@@ -64,7 +64,7 @@ pub struct ViewportPlaceholderAction {
     /// Whether this is the primary action in the empty state.
     pub primary: bool,
     /// Queue the owning application's typed command after the UI pass.
-    pub activate: for<'w> fn(&mut PanelCtx<'w>),
+    pub activate: std::sync::Arc<dyn for<'w> Fn(&mut PanelCtx<'w>) + Send + Sync>,
 }
 
 /// Optional empty-state presentation drawn over the viewport region.

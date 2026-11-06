@@ -10,9 +10,11 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # `#[Command]` / `on_command` / `register_commands!` for `OpenTwin` — the
 # command substrate, no domain types. See `crate::open`.
 lunco-core         = { path = "../lunco-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-doc          = { path = "../lunco-doc" }
 lunco-twin         = { path = "../lunco-twin" }
 lunco-storage      = { path = "../lunco-storage" }
+lunco-settings     = { path = "../lunco-settings" }
 # Twin edit-journal persistence (B1): `JournalResource` (the in-memory journal
 # handle) + `Journal` save/load. Neither depends on this crate, so no cycle.
 lunco-twin-journal = { path = "../lunco-twin-journal" }

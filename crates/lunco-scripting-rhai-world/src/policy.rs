@@ -1136,6 +1136,15 @@ fn plan_twin_asset_loading_for(
     let Some(twin) = workspace.twin(twin_id) else {
         return;
     };
+    let Some(scene_loading) = workspace.scene_loading_decision(twin_id) else {
+        registry.lifecycle = LifecyclePolicyReport {
+            event: "assets_mounted".into(),
+            status: "fault".into(),
+            error: Some("Twin was mounted without an admitted scene-loading decision".into()),
+            ..Default::default()
+        };
+        return;
+    };
 
     let manifest = match twin.manifest.as_ref() {
         Some(manifest) => match lunco_api_core::api_value_from_serializable(manifest) {
@@ -1167,6 +1176,20 @@ fn plan_twin_asset_loading_for(
             HookValue::Bool(workspace.active_twin == Some(twin_id)),
         ),
         ("manifest", manifest),
+        (
+            "scene_loading",
+            HookValue::map([
+                ("load_default", HookValue::Bool(scene_loading.load_default)),
+                ("source", HookValue::str(scene_loading.source.as_str())),
+            ]),
+        ),
+        (
+            "scene_override",
+            workspace
+                .scene_override(twin_id)
+                .map(HookValue::str)
+                .unwrap_or(HookValue::Unit),
+        ),
         ("files", files),
     ]);
     let report = invoke_twin_lifecycle_context(
@@ -1237,6 +1260,59 @@ fn plan_twin_asset_loading_for(
             command: command.to_owned(),
             params,
         });
+    }
+    if let Some(explicit) = workspace.scene_override(twin_id) {
+        let selected: Vec<_> = parsed
+            .iter()
+            .filter(|action| action.command == "OpenTwinScene")
+            .collect();
+        let valid = selected.len() == 1
+            && selected[0]
+                .params
+                .get("relative_path")
+                .and_then(HookValue::as_str)
+                == Some(explicit)
+            && selected[0]
+                .params
+                .get("twin_id")
+                .and_then(HookValue::as_i64)
+                == Some(twin_id.raw() as i64)
+            && selected[0].params.get("name").and_then(HookValue::as_str)
+                == Some(mounted.name.as_str());
+        if !valid {
+            registry.lifecycle = LifecyclePolicyReport {
+                status: "fault".into(),
+                error: Some(format!(
+                    "Twin loading policy must open explicitly requested scene {explicit:?} exactly once"
+                )),
+                ..report
+            };
+            return;
+        }
+    } else if !scene_loading.load_default {
+        let default = twin
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.usd.as_ref())
+            .and_then(|usd| usd.default_scene.as_deref())
+            .map(|path| path.replace('\\', "/"));
+        if default.is_some_and(|default| {
+            parsed.iter().any(|action| {
+                action.command == "OpenTwinScene"
+                    && action
+                        .params
+                        .get("relative_path")
+                        .and_then(HookValue::as_str)
+                        == Some(default.as_str())
+            })
+        }) {
+            registry.lifecycle = LifecyclePolicyReport {
+                status: "fault".into(),
+                error: Some("Twin loading policy selected the authored default while automatic loading is disabled".into()),
+                ..report
+            };
+            return;
+        }
     }
     if let Some(message) = result
         .get("info")

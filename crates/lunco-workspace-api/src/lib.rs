@@ -7,6 +7,7 @@
 
 use bevy::prelude::*;
 use lunco_api::api_param_u64;
+use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
 use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
 use lunco_api_core::api_value;
 use lunco_api_core::{ApiErrorCode, ApiValue};
@@ -14,17 +15,146 @@ use lunco_doc::DocumentOrigin;
 use lunco_twin::{DocumentKindId, FileEntry, FileKind};
 use lunco_workspace::WorkspaceResource;
 
+#[derive(Resource, Default)]
+struct PendingProjectSettingsReplies(Vec<(u64, u64)>);
+
+fn has_project_settings_replies(pending: Res<PendingProjectSettingsReplies>) -> bool {
+    !pending.0.is_empty()
+}
+
+fn capture_project_settings_reply(
+    _: On<lunco_workspace::SetProjectSceneLoading>,
+    active: Res<lunco_core::ActiveCommandId>,
+    request: Res<PendingApiRequest>,
+    mut pending: ResMut<PendingProjectSettingsReplies>,
+) {
+    if let Some(id) = active.get() {
+        if request.correlation_id != 0 {
+            pending.0.push((id, request.correlation_id));
+        }
+    }
+}
+
+fn finish_project_settings_replies(world: &mut World) {
+    let pending = std::mem::take(&mut world.resource_mut::<PendingProjectSettingsReplies>().0);
+    let mut waiting = Vec::new();
+    for (id, correlation) in pending {
+        let outcome = world
+            .resource::<lunco_core::CommandResults>()
+            .get(id)
+            .cloned();
+        let (result, code) = match outcome {
+            Some(lunco_core::CommandOutcome::Succeeded(ack)) => {
+                (Ok(ack), ApiErrorCode::InternalError)
+            }
+            Some(lunco_core::CommandOutcome::Rejected(error)) => {
+                (Err(error.to_string()), ApiErrorCode::CommandRejected)
+            }
+            Some(lunco_core::CommandOutcome::Failed(error)) => {
+                (Err(error), ApiErrorCode::InternalError)
+            }
+            Some(lunco_core::CommandOutcome::Pending) | None => {
+                waiting.push((id, correlation));
+                continue;
+            }
+        };
+        let admitted = world
+            .get_resource::<lunco_workspace::scene_settings::PendingProjectSceneWrites>()
+            .is_some_and(|pending| pending.was_admitted(id));
+        if !admitted {
+            // The dispatcher has already answered an admission failure.
+            continue;
+        }
+        world
+            .resource_mut::<lunco_workspace::scene_settings::PendingProjectSceneWrites>()
+            .forget_admitted(id);
+        finish_command_result(world, Some(id), Some(correlation), result, code);
+    }
+    world.resource_mut::<PendingProjectSettingsReplies>().0 = waiting;
+}
+
 /// Registers the Workspace session queries with the transport-neutral API.
 pub struct WorkspaceApiQueriesPlugin;
 
 impl Plugin for WorkspaceApiQueriesPlugin {
     fn build(&self, app: &mut App) {
+        app.register_deferred_command::<lunco_workspace::SetProjectSceneLoading>()
+            .init_resource::<PendingProjectSettingsReplies>()
+            .add_observer(capture_project_settings_reply)
+            .add_systems(
+                Update,
+                finish_project_settings_replies.run_if(has_project_settings_replies),
+            );
         app.init_resource::<ApiQueryRegistry>();
         let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
         registry.register(ListOpenDocumentsProvider);
         registry.register(ListRecentFilesProvider);
         registry.register(ListTwinProvider);
         registry.register(ReadActiveTwinContractProvider);
+        registry.register(ReadActiveWorkspaceProvider);
+        registry.register(SceneLoadingSettingsProvider);
+    }
+}
+
+struct SceneLoadingSettingsProvider;
+
+impl ApiQueryProvider for SceneLoadingSettingsProvider {
+    fn name(&self) -> &'static str {
+        "GetSceneLoadingSettings"
+    }
+
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let workspace = world.get_resource::<WorkspaceResource>().ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "WorkspacePlugin is not installed",
+            )
+        })?;
+        let global = world
+            .get_resource::<lunco_workspace::SceneLoadingSettings>()
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "Scene loading settings are not installed",
+                )
+            })?;
+        let cli = world
+            .get_resource::<lunco_workspace::SceneLoadingCli>()
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "Scene loading CLI settings are not installed",
+                )
+            })?;
+        let id = workspace.active_twin;
+        let twin = id.and_then(|id| workspace.twin(id));
+        let project = id
+            .and_then(|id| workspace.project_scene_settings(id))
+            .and_then(|value| value.load_default);
+        let twin_value = lunco_workspace::scene_settings::twin_scene_loading_setting(
+            twin.and_then(|twin| twin.manifest.as_ref()),
+        )
+        .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?;
+        let effective = lunco_workspace::scene_settings::resolve_scene_loading(
+            global.load_default,
+            project,
+            twin_value,
+            cli.0,
+        );
+        let admitted = id.and_then(|id| workspace.scene_loading_decision(id));
+        Ok(Some(api_value!({
+            "global": global.load_default,
+            "project": project,
+            "twin": twin_value,
+            "cli": cli.0,
+            "effective": effective.load_default,
+            "source": effective.source.as_str(),
+            "admitted": admitted.map(|value| value.load_default),
+            "admitted_source": admitted.map(|value| value.source.as_str()),
+            "scene_override": id.and_then(|id| workspace.scene_override(id)),
+            "project_pending": id.is_some_and(|id| workspace.project_settings_pending(id)),
+            "project_error": id.and_then(|id| workspace.project_settings_error(id)),
+        })))
     }
 }
 
@@ -150,6 +280,9 @@ impl ApiQueryProvider for ListTwinProvider {
         let Some(twin) = ws.twin(twin_id) else {
             return Ok(Some(api_value!({ "open": false })));
         };
+        if twin.manifest.is_none() {
+            return Ok(Some(api_value!({ "open": false })));
+        }
 
         let all = twin.files();
         let total = all.len();
@@ -180,6 +313,37 @@ impl ApiQueryProvider for ListTwinProvider {
 /// them through the asset validator's report projection.
 struct ReadActiveTwinContractProvider;
 
+struct ReadActiveWorkspaceProvider;
+
+impl ApiQueryProvider for ReadActiveWorkspaceProvider {
+    fn name(&self) -> &'static str {
+        "ReadActiveWorkspace"
+    }
+
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let ws = world.get_resource::<WorkspaceResource>().ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ReadActiveWorkspace requires WorkspacePlugin",
+            )
+        })?;
+        let Some((id, twin)) = ws
+            .active_twin
+            .and_then(|id| ws.twin(id).map(|twin| (id, twin)))
+        else {
+            return Ok(Some(api_value!({ "open": false })));
+        };
+        let kind = match ws.scope_kind(id) {
+            Some(lunco_workspace::WorkspaceScopeKind::AuthoredTwin) => "twin",
+            Some(lunco_workspace::WorkspaceScopeKind::Ephemeral) => "ephemeral",
+            None => return Ok(Some(api_value!({ "open": false }))),
+        };
+        Ok(Some(
+            api_value!({ "open": true, "kind": kind, "scope_id": id.raw(), "root": twin.root.to_string_lossy().into_owned() }),
+        ))
+    }
+}
+
 impl ApiQueryProvider for ReadActiveTwinContractProvider {
     fn name(&self) -> &'static str {
         "ReadActiveTwinContract"
@@ -198,6 +362,9 @@ impl ApiQueryProvider for ReadActiveTwinContractProvider {
         let Some(twin) = ws.twin(twin_id) else {
             return Ok(Some(api_value!({ "open": false })));
         };
+        if twin.manifest.is_none() {
+            return Ok(Some(api_value!({ "open": false })));
+        }
 
         // Paths remain native PathBuf values in Twin; their textual form is
         // created only for this API/Rhai addressing boundary.

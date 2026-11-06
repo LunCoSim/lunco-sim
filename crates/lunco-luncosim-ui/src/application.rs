@@ -315,6 +315,8 @@ FLAGS:
                          assets/, relative to the current directory, or absolute.
                          Without --scene, start with an empty persistent world
                          shell; the sandbox is an explicit scene/test fixture.
+        --load-default-scene     Enable automatic default-scene loading for this run.
+        --no-load-default-scene  Disable automatic default-scene loading for this run.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
         --validate PATH…   Pre-flight-check asset files (.mo/.usda/.sysml/.kerml/.wesl/.rhai):
                          parse-only, no window/GPU/app. Prints a report and
@@ -413,6 +415,13 @@ pub fn run_gui() -> AppExit {
     // `ui` build because it is provided by this UI package.
     let offscreen = cfg!(feature = "api-transport") && std::env::args().any(|a| a == "--offscreen");
     let args: Vec<String> = std::env::args().collect();
+    let scene_loading_cli = match lunco_workspace::scene_settings::parse_scene_loading_cli(&args) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("luncosim: {error}");
+            return AppExit::error();
+        }
+    };
     let max_speed_requested = args.iter().any(|arg| arg == "--headless-max-speed");
     if max_speed_requested {
         eprintln!(
@@ -484,6 +493,7 @@ pub fn run_gui() -> AppExit {
             return AppExit::error();
         }
     };
+    app.insert_resource(scene_loading_cli);
 
     #[cfg(all(
         feature = "api-transport",

@@ -558,9 +558,14 @@ impl TwinPolicySetInputs {
 
 /// Snapshot policy-manifest candidate paths from the already-indexed Twin.
 pub fn twin_policy_set_inputs(twin: &lunco_twin::Twin) -> TwinPolicySetInputs {
-    // A folder Twin can contain other complete Twins. Their manifests and
-    // policies belong to those containers, not to the mounted parent scope.
-    // Use the indexed boundaries rather than opening files on the live thread.
+    if twin.manifest.is_none() {
+        return TwinPolicySetInputs {
+            root: twin.root.clone(),
+            candidate_paths: Vec::new(),
+        };
+    }
+    // Nested authored Twins own their own policy manifests. Use the indexed
+    // boundaries rather than opening files on the live thread.
     let child_roots: Vec<_> = twin
         .files()
         .iter()
@@ -648,7 +653,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mounted_folder_does_not_install_nested_twins_policies() {
+    fn ephemeral_workspace_does_not_install_twin_policies() {
         let open = |path: &Path| match lunco_twin::TwinMode::open(path).unwrap() {
             lunco_twin::TwinMode::Folder(twin) | lunco_twin::TwinMode::Twin(twin) => twin,
             lunco_twin::TwinMode::Orphan(_) => panic!("fixture must be a folder"),
@@ -685,7 +690,7 @@ mod tests {
         assert!(
             twin_policy_set(twin_policy_set_inputs(&parent))
                 .unwrap()
-                .is_some()
+                .is_none()
         );
         let child = open(&folder.path().join("first"));
         assert!(

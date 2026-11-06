@@ -21,7 +21,6 @@ use bevy::prelude::*;
 use lunco_doc::{DocumentId, OpenOutcome};
 use lunco_doc_bevy::{DocumentClosed, DocumentOpened, DocumentRegistry, SaveAsDocument};
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
-use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench_browser::{BrowserSectionRegistry, TwinBrowserPlugin};
 use lunco_workbench_core::PanelId;
 use lunco_workbench_core::presentation::ViewportPlaceholder;
@@ -136,14 +135,17 @@ pub const GENERIC_EMPTY_HINT: &str = "No scene is open yet.";
 /// the domain-owned empty-scene diagnostic. The placeholder is presentation;
 /// [`EmptyViewportReason`] remains the only reason owner.
 fn update_viewport_placeholder(
-    scene: Query<(), With<UsdPrimPath>>,
+    scene: Option<Res<lunco_core::SceneMountState>>,
     empty_reason: Res<EmptyViewportReason>,
     placeholder: Option<ResMut<ViewportPlaceholder>>,
 ) {
     let Some(mut placeholder) = placeholder else {
         return;
     };
-    if !scene.is_empty() {
+    if scene
+        .as_deref()
+        .is_some_and(|scene| scene.active_root().is_some())
+    {
         placeholder.message = None;
         return;
     }

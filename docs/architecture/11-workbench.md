@@ -917,9 +917,9 @@ the former stays closed on restore, while the latter opens through normal
 document readiness. No active Twin means there is no workspace-state load or
 save.
 
-Twin startup policy remains authored in Rhai: `twin.lifecycle` chooses the
-Twin's authored default scene and startup assets through the normal typed open
-commands. Replaying the user's saved editor session is generic per-Twin
+Twin startup policy remains authored in Rhai: `twin.lifecycle` selects an
+explicit scene override or the enabled authored default, along with startup
+assets, through the normal typed open commands. Replaying the user's saved editor session is generic per-Twin
 workspace persistence, not Twin product policy; it reuses document codecs,
 `DocumentRegistry`, `lunco-storage`, and the existing document lifecycle
 events. The Twin journal continues to record authored document operations and
@@ -1136,12 +1136,25 @@ The workbench's **Twin settings** panel walks the active Twin's generic
 and renders the stored scalar type directly: booleans, integers, numbers, and
 text. Edits dispatch the generic `SetTwinSetting` command;
 `ResetTwinSetting` removes a key so the owning authored surface's declared
-default applies. There is no per-setting Rust list or duplicate policy layer.
+default applies.
 
-The panel is Twin-scoped and is cleared on `TwinClosed`; workspace changes
+**Settings → General** holds the global scene-loading default. **Settings →
+Project** edits the active project's local override and reports a
+shared Twin or CLI override only when present. The Twin settings panel edits
+the shared value. Project writes use `<project>/.lunco/settings.json`; Twin
+values use `twin.toml`. Changes apply when the Twin is next opened. See
+[`13-twin-and-workflow.md`](13-twin-and-workflow.md#default-scene-loading).
+
+When the active Twin has no live scene, the viewport replaces the welcome
+actions with the Twin's default scene, indexed scene choices and an Editor
+action. These choices use the mounted Twin authority and the same scene
+command as other Twin loads. The live `SceneMountState` decides whether this
+empty state is visible, so an isolated Editor preview does not hide it.
+
+The Twin view is cleared on `TwinClosed`; workspace changes
 rebuild the snapshot, so setting edits, reload, Twin replacement, and reset
 use the same manifest/storage owner. The panel is intentionally limited to
-the generic scalar map. Structured manifest sections such as `[usd]`,
+the generic scalar map for other Twin settings. Structured manifest sections such as `[usd]`,
 `[downloads]`, and `[journal]` remain owned by their domain/workspace
 surfaces, and user-global preferences remain in `settings.json`.
 

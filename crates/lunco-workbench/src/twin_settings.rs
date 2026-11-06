@@ -1,19 +1,15 @@
-//! Generic Twin-scoped settings editor.
-//!
-//! The Twin manifest's `[settings]` map is the only settings inventory here.
-//! This panel does not maintain a second per-setting registry: it snapshots
-//! the typed values from the workspace and sends edits through the generic
-//! workspace commands.
+//! Project and Twin settings editor.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_twin::TwinSettingValue;
 use lunco_workbench_widgets::{UiIcon, icon_button, text_editor};
 use lunco_workspace::{
-    ResetTwinSetting, SetTwinSetting, TwinClosed, TwinId, TwinSettingInput, WorkspaceResource,
+    ResetTwinSetting, SceneLoadingCli, SceneLoadingSettings, SetProjectSceneLoading,
+    SetTwinSetting, TwinClosed, TwinId, TwinSettingInput, WorkspaceResource,
 };
 
-use crate::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
+use crate::{MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot, WorkbenchMenuRegistry};
 
 /// Stable panel id for the Twin-scoped settings editor.
 pub(crate) const TWIN_SETTINGS_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_settings");
@@ -33,7 +29,9 @@ pub(crate) struct TwinSettingsView {
 
 /// Rebuild the small settings snapshot after workspace/Twin changes.
 pub(crate) fn refresh_view(workspace: Res<WorkspaceResource>, mut view: ResMut<TwinSettingsView>) {
-    let active_twin = workspace.active_twin;
+    let active_twin = workspace.active_twin.filter(|id| {
+        workspace.scope_kind(*id) == Some(lunco_workspace::WorkspaceScopeKind::AuthoredTwin)
+    });
     let rows = active_twin
         .and_then(|id| workspace.twin(id))
         .and_then(|twin| twin.manifest.as_ref())
@@ -41,6 +39,9 @@ pub(crate) fn refresh_view(workspace: Res<WorkspaceResource>, mut view: ResMut<T
             manifest
                 .settings
                 .iter()
+                .filter(|(key, _)| {
+                    key.as_str() != lunco_workspace::scene_settings::SCENE_LOAD_DEFAULT_KEY
+                })
                 .map(|(key, value)| TwinSettingRow {
                     key: key.clone(),
                     value: value.clone(),
@@ -102,7 +103,7 @@ impl Panel for TwinSettingsPanel {
 
             let Some(active_twin) = view.active_twin else {
                 ui.separator();
-                ui.label("Open a Twin to inspect its settings.");
+                ui.label("No Twin is open.");
                 return;
             };
             ui.label(
@@ -110,6 +111,8 @@ impl Panel for TwinSettingsPanel {
                     .weak()
                     .small(),
             );
+            render_shared_scene_setting(ui, ctx, active_twin);
+            ui.separator();
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Find").strong());
                 ui.add(
@@ -156,6 +159,209 @@ impl Panel for TwinSettingsPanel {
             }
         });
     }
+}
+
+/// Register the app-wide opening preference under Settings → General.
+pub(crate) fn register_scene_loading_settings_menu(world: &mut World) {
+    if let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() {
+        menus.register_settings_submenu("General", render_global_scene_setting);
+        menus.register_settings_submenu("Project", render_project_scene_setting);
+    }
+}
+
+fn render_global_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+    let Some(mut settings) = ctx.resource::<SceneLoadingSettings>().cloned() else {
+        return;
+    };
+    if ui
+        .checkbox(
+            &mut settings.load_default,
+            "Load the default scene when opening a Twin",
+        )
+        .changed()
+    {
+        ctx.set_resource(settings);
+    }
+}
+
+fn render_project_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+    let Some(workspace) = ctx.resource::<WorkspaceResource>() else {
+        return;
+    };
+    let Some(id) = workspace.active_twin else {
+        ui.label("Open a project to change its settings.");
+        return;
+    };
+    let Some(twin) = workspace.twin(id) else {
+        return;
+    };
+    if twin.manifest.is_none() {
+        ui.label("No project is open.");
+        return;
+    }
+    let name = twin
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.name.as_str())
+        .or_else(|| twin.root.file_name().and_then(|name| name.to_str()))
+        .unwrap_or("Project")
+        .to_owned();
+    let shared =
+        lunco_workspace::scene_settings::twin_scene_loading_setting(twin.manifest.as_ref());
+    let Some(project) = workspace.project_scene_settings(id).cloned() else {
+        ui.label("Project settings are unavailable.");
+        return;
+    };
+    let pending = workspace.project_settings_pending(id);
+    let error = workspace.project_settings_error(id).map(str::to_owned);
+    let Some(global) = ctx.resource::<SceneLoadingSettings>().cloned() else {
+        return;
+    };
+    let Some(cli) = ctx.resource::<SceneLoadingCli>().copied() else {
+        return;
+    };
+    ui.label(egui::RichText::new(name).weak());
+    let inherited = format!(
+        "Use app setting ({})",
+        scene_choice_label(global.load_default)
+    );
+    let selected = match project.load_default {
+        None => inherited.as_str(),
+        Some(value) => scene_choice_label(value),
+    };
+    let mut value = project.load_default;
+    let changed = ui
+        .add_enabled_ui(!pending, |ui| {
+            crate::render::settings_choice_menu(
+                ui,
+                format!("Default scene on open: {selected}"),
+                &mut value,
+                [
+                    (None, inherited.clone()),
+                    (Some(true), "Load default scene".into()),
+                    (Some(false), "Start empty".into()),
+                ],
+            )
+        })
+        .inner;
+    if changed {
+        ctx.trigger_command(
+            SetProjectSceneLoading {
+                twin: id.raw(),
+                value,
+            },
+            local_user(),
+        );
+    }
+    if pending {
+        ui.label("Saving…");
+    }
+    if let Some(error) = error {
+        ui.label(format!("Could not save project setting: {error}"));
+    }
+    match shared {
+        Ok(Some(value)) => {
+            ui.label(format!(
+                "The shared Twin setting overrides this project: {}.",
+                scene_choice_label(value)
+            ));
+            if ui.button("Edit Twin setting…").clicked() {
+                ctx.trigger(lunco_workbench_core::commands::FocusPanel {
+                    id: TWIN_SETTINGS_PANEL_ID.as_str().into(),
+                });
+                ui.close();
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            ui.label(error);
+        }
+    }
+    if let Some(value) = cli.0 {
+        ui.label(format!("A command-line flag controls this run: {}. The saved project setting applies when higher-priority overrides are absent.", scene_choice_label(value)));
+    }
+}
+
+fn scene_choice_label(value: bool) -> &'static str {
+    if value {
+        "Load default scene"
+    } else {
+        "Start empty"
+    }
+}
+
+fn scene_choice(ui: &mut egui::Ui, id: &str, value: &mut Option<bool>, inherited: String) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(match value {
+            None => inherited.as_str(),
+            Some(value) => scene_choice_label(*value),
+        })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, inherited);
+            ui.selectable_value(value, Some(true), "Load default scene");
+            ui.selectable_value(value, Some(false), "Start empty");
+        });
+}
+
+fn local_user() -> lunco_core::CommandOrigin {
+    lunco_core::CommandOrigin::LocalUser {
+        session_id: lunco_command_contracts::SessionId::LOCAL,
+    }
+}
+
+fn render_shared_scene_setting(ui: &mut egui::Ui, ctx: &mut PanelCtx, id: TwinId) {
+    let Some(workspace) = ctx.resource::<WorkspaceResource>() else {
+        return;
+    };
+    let Some(twin) = workspace.twin(id) else {
+        return;
+    };
+    let Some(manifest) = twin.manifest.as_ref() else {
+        ui.label("No Twin is open.");
+        return;
+    };
+    let current = match lunco_workspace::scene_settings::twin_scene_loading_setting(Some(manifest))
+    {
+        Ok(value) => value,
+        Err(error) => {
+            ui.label(error);
+            return;
+        }
+    };
+    let project = workspace
+        .project_scene_settings(id)
+        .and_then(|settings| settings.load_default);
+    let Some(global) = ctx.resource::<SceneLoadingSettings>() else {
+        return;
+    };
+    let inherited = project.unwrap_or(global.load_default);
+    ui.label(egui::RichText::new("Shared with this Twin").strong());
+    ui.label("Default scene on open");
+    let mut selected = current;
+    scene_choice(
+        ui,
+        "twin_scene_loading",
+        &mut selected,
+        format!("Use project setting ({})", scene_choice_label(inherited)),
+    );
+    if selected != current {
+        match selected {
+            Some(value) => ctx.trigger_command(
+                SetTwinSetting {
+                    key: lunco_workspace::scene_settings::SCENE_LOAD_DEFAULT_KEY.into(),
+                    value: TwinSettingInput::Bool(value),
+                },
+                local_user(),
+            ),
+            None => ctx.trigger_command(
+                ResetTwinSetting {
+                    key: lunco_workspace::scene_settings::SCENE_LOAD_DEFAULT_KEY.into(),
+                },
+                local_user(),
+            ),
+        }
+    }
+    ui.label("This setting is saved with the Twin and takes precedence over project settings.");
 }
 
 fn matches_query(key: &str, query: &str) -> bool {

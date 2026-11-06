@@ -118,6 +118,9 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `ListOpenDocuments` | `{}` | List all documents currently open in the workspace, including origin and dirty state. |
 | `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
+| `ReadActiveWorkspace` | `{}` | Read the active scope (`kind` is `twin` or `ephemeral`), its `scope_id` and root, or `open: false`. An ephemeral scope is not an authored Twin. |
+| `ReadActiveTwinContract` | `{}` | Read the active authored Twin contract, or `open: false` when no authored Twin is open. |
+| `GetSceneLoadingSettings` | `{}` | Read global, project, Twin and CLI scene-loading values, the effective and admitted source, the session scene override, and project-write status. |
 | `ListSpawnCatalog` | `{}` | List authored spawnable USD entries, including their standard `doc` description, provenance, and spawn source. |
 | `ListUsdAssetMetadata` | `{}` | List the scanned USD metadata projection used by the Scenarios menu and scripts; `ready` distinguishes an incomplete asynchronous scan from an empty result, while each settled entry reports `read_ok`, `parse_ok`, and any corresponding error. |
 | `ListLibrary` | `{"cursor": u64, "limit": u64, "filter": {...}}` | Search and list classes from admitted Modelica source libraries. |
@@ -428,6 +431,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `FocusTarget` | Orbit-camera a target through a selected or local camera rig. |
 | | `CaptureScreenshot` | Trigger an in-sim screenshot. |
 | **USD** | `LoadScene` | Mount or reload a USD stage from a root-qualified `lunco://` or `twin://` address. |
+| **Workspace** | `SetProjectSceneLoading` | Persist or reset the specified open Twin's project-local automatic default-scene setting. The deferred response reports the storage outcome. |
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
 | | `ApplyUsdOps` | Apply an ordered multi-op USD intent as one journal/undo change set. |
 | | `SetUsdPreviewProjection` | Choose perspective or orthographic presentation for one explicit USD preview view. |

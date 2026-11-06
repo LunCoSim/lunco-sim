@@ -25,6 +25,8 @@ pub mod scene;
 mod scene_runtime;
 mod twin_projection;
 
+pub use scene_runtime::OpenTwinScene;
+
 /// Install the USD scene admission and live projection systems.
 ///
 /// Document registration and typed authoring commands remain in

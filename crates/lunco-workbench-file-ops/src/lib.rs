@@ -54,10 +54,7 @@ use lunco_workbench_file_dialog::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_workspace::FileRenamed;
-use lunco_workspace::open::{
-    AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin, PendingTwinOpens,
-    drain_pending_twin_opens,
-};
+use lunco_workspace::open::{AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin};
 use lunco_workspace::{WorkspaceResource, rename::RenameTwinEntry};
 
 /// Request a system "Open File" dialog.
@@ -1448,13 +1445,9 @@ impl Plugin for FileOpsPlugin {
             .add_observer(retire_document_picks)
             .add_observer(retire_twin_picks)
             .add_observer(retire_replication_picks);
-        // Off-thread folder-scan pipeline: each `Open*` / `Add*` parks
-        // a `Task<Result<TwinMode, _>>` in `PendingTwinOpens`; this
-        // system polls them every frame and registers Twins as scans
-        // complete. Keeps the UI thread responsive on huge trees
-        // (`~/.cargo`, `node_modules`, …).
-        app.init_resource::<PendingTwinOpens>();
-        app.add_systems(Update, drain_pending_twin_opens);
+        if !app.is_plugin_added::<lunco_workspace::WorkspacePlugin>() {
+            app.add_plugins(lunco_workspace::WorkspacePlugin);
+        }
     }
 }
 

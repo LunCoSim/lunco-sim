@@ -5,7 +5,7 @@
 //! for a windowed run; the shared simulator core and headless runner do not
 //! compile this crate.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
@@ -122,6 +122,10 @@ pub struct LunCoSimUiConfig {
 
 fn install_viewport_placeholder_actions(world: &mut World) {
     let mut placeholder = world.resource_mut::<ViewportPlaceholder>();
+    set_welcome_actions(&mut placeholder);
+}
+
+fn set_welcome_actions(placeholder: &mut ViewportPlaceholder) {
     placeholder.guidance = Some("Choose what you'd like to do:".into());
     placeholder.actions = vec![
         ViewportPlaceholderAction {
@@ -129,22 +133,192 @@ fn install_viewport_placeholder_actions(world: &mut World) {
             description: "A 30-minute workshop: drive, measure, compare, and save your Twin."
                 .into(),
             primary: true,
-            activate: start_rover_lab,
+            activate: Arc::new(start_rover_lab),
         },
         ViewportPlaceholderAction {
             label: "Explore demo sandbox".into(),
             description: "Explore the larger collection of vehicles and physics demonstrations."
                 .into(),
             primary: false,
-            activate: load_sandbox_demo,
+            activate: Arc::new(load_sandbox_demo),
         },
         ViewportPlaceholderAction {
             label: "Open Twin".into(),
             description: "Choose a Twin project folder from your computer.".into(),
             primary: false,
-            activate: open_twin,
+            activate: Arc::new(open_twin),
         },
     ];
+}
+
+/// Exact asset authorities, scoped to the workspace Twin identities.
+#[derive(Resource, Default)]
+struct PlaceholderTwinMounts(BTreeMap<lunco_workspace::TwinId, String>);
+
+fn remember_placeholder_twin(
+    event: On<lunco_assets_runtime::TwinAssetMounted>,
+    mut mounts: ResMut<PlaceholderTwinMounts>,
+) {
+    mounts
+        .0
+        .insert(event.event().twin, event.event().name.clone());
+}
+
+fn forget_placeholder_twin(
+    event: On<lunco_workspace::TwinClosed>,
+    mut mounts: ResMut<PlaceholderTwinMounts>,
+) {
+    mounts.0.remove(&event.event().twin);
+}
+
+fn twin_scene_action(
+    twin: lunco_workspace::TwinId,
+    authority: &str,
+    path: &str,
+    primary: bool,
+) -> ViewportPlaceholderAction {
+    let name = authority.to_owned();
+    let relative_path = path.to_owned();
+    ViewportPlaceholderAction {
+        label: if primary {
+            "Load default scene".into()
+        } else {
+            path.to_owned()
+        },
+        description: if primary {
+            path.to_owned()
+        } else {
+            String::new()
+        },
+        primary,
+        activate: Arc::new(move |ctx| {
+            ctx.trigger_command(
+                lunco_usd_bevy_runtime_core::OpenTwinScene {
+                    twin_id: twin.raw(),
+                    name: name.clone(),
+                    relative_path: relative_path.clone(),
+                },
+                lunco_core::CommandOrigin::LocalUser {
+                    session_id: lunco_command_contracts::SessionId::LOCAL,
+                },
+            );
+        }),
+    }
+}
+
+fn sync_twin_empty_actions(
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    mounts: Res<PlaceholderTwinMounts>,
+    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut placeholder: ResMut<ViewportPlaceholder>,
+) {
+    if !workspace.is_changed()
+        && !mounts.is_changed()
+        && !manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.is_changed())
+    {
+        return;
+    }
+    let Some((id, twin)) = workspace
+        .active_twin
+        .and_then(|id| workspace.twin(id).map(|twin| (id, twin)))
+    else {
+        set_welcome_actions(&mut placeholder);
+        return;
+    };
+    let Some(authority) = mounts.0.get(&id) else {
+        placeholder.guidance = Some("Preparing workspace…".into());
+        placeholder.actions.clear();
+        return;
+    };
+    if twin.manifest.is_none() {
+        let mut actions = Vec::new();
+        for file in twin.files() {
+            if file.relative_path.components().count() != 1 {
+                continue;
+            }
+            let Some(path) = file.relative_path.to_str() else {
+                continue;
+            };
+            if lunco_usd_core::commands::is_usd_path(path) {
+                actions.push(twin_scene_action(id, authority, path, false));
+            }
+        }
+        actions.sort_by(|a, b| a.label.cmp(&b.label));
+        placeholder.guidance = Some(if actions.is_empty() {
+            "This folder has no scenes to load.".into()
+        } else {
+            "Choose a scene from this folder.".into()
+        });
+        placeholder.actions = actions;
+        return;
+    }
+    let twin_name = twin
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.name.as_str())
+        .or_else(|| twin.root.file_name().and_then(|name| name.to_str()))
+        .unwrap_or("Project");
+    let declared_default = twin
+        .manifest
+        .as_ref()
+        .and_then(|manifest| manifest.usd.as_ref())
+        .and_then(|usd| usd.default_scene.as_deref())
+        .map(|path| path.replace('\\', "/"));
+    let default = declared_default.clone().filter(|path| {
+        twin.files().iter().any(|file| {
+            file.relative_path
+                .components()
+                .eq(std::path::Path::new(path).components())
+        })
+    });
+    let missing_default = declared_default.is_some() && default.is_none();
+    let mut actions = Vec::new();
+    if let Some(default) = default.as_deref() {
+        actions.push(twin_scene_action(id, authority, default, true));
+    }
+    let scenes = match (manifest.as_deref(), roots.as_deref()) {
+        (Some(manifest), Some(roots)) => {
+            lunco_assets_runtime::discovery::list_indexed_scene_assets(manifest, roots, &[twin])
+                .map(|assets| {
+                    assets
+                        .into_iter()
+                        .filter(|asset| asset.twin.is_some())
+                        .map(|asset| asset.rel)
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|error| error.to_string())
+        }
+        _ => Err("Scene catalog is unavailable.".into()),
+    };
+    placeholder.guidance = Some(match scenes {
+        Ok(mut scenes) => {
+            scenes.sort();
+            scenes.dedup();
+            for path in scenes
+                .iter()
+                .filter(|path| Some(path.as_str()) != default.as_deref())
+            {
+                actions.push(twin_scene_action(id, authority, path, false));
+            }
+            if actions.is_empty() && missing_default {
+                "This folder has no scenes to load. The configured default scene was not found."
+                    .to_owned()
+            } else if actions.is_empty() {
+                "This folder has no scenes to load.".to_owned()
+            } else if missing_default {
+                format!(
+                    "{twin_name} · The configured default scene was not found. Choose another scene."
+                )
+            } else {
+                format!("{twin_name} · Choose a scene.")
+            }
+        }
+        Err(error) => format!("{twin_name} · Scene list unavailable: {error}"),
+    });
+    placeholder.actions = actions;
 }
 
 fn load_sandbox_demo(ctx: &mut PanelCtx<'_>) {
@@ -343,6 +517,10 @@ impl Plugin for LunCoSimUiPlugin {
             .add_plugins(|app: &mut App| {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 install_viewport_placeholder_actions(app.world_mut());
+                app.init_resource::<PlaceholderTwinMounts>()
+                    .add_observer(remember_placeholder_twin)
+                    .add_observer(forget_placeholder_twin)
+                    .add_systems(Update, sync_twin_empty_actions);
                 app.init_resource::<scripted_menus::ScriptedMenuBindings>();
                 scripted_menus::register_all_commands(app);
                 app.add_observer(on_runtime_ui_action)

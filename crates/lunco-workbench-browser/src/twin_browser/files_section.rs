@@ -453,7 +453,11 @@ impl BrowserSection for FilesSection {
             } else {
                 ""
             };
-            let header_label = format!("{active_marker}{folder_name}");
+            let header_label = if twin.manifest.is_some() {
+                format!("{active_marker}{folder_name}")
+            } else {
+                format!("{active_marker}{folder_name} · temporary workspace")
+            };
             let hover_path = twin.root.to_string_lossy().into_owned();
             let salt = twin.root.to_string_lossy().into_owned();
             let twin_root = twin.root.clone();

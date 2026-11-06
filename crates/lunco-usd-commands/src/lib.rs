@@ -1164,6 +1164,10 @@ fn on_new_document(
         };
         register_usd_document_runtime(world, doc_id, runtime);
         claim_user_document_if_projected(world, doc_id);
+        world.trigger(UsdDocumentReady {
+            doc: doc_id,
+            outcome: OpenOutcome::Allocated,
+        });
         bevy::log::info!("[NewUsd] created untitled USD stage as {}", doc_id);
     });
 }

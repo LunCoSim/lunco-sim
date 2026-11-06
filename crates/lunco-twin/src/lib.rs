@@ -268,9 +268,10 @@ impl TwinMode {
         visited.insert(canonical_self.clone());
 
         let manifest_path = canonical_self.join(MANIFEST_FILENAME);
-        let mut twin = Twin::index(canonical_self)?;
+        let has_manifest = manifest_path.is_file();
+        let mut twin = Twin::index(canonical_self, has_manifest)?;
 
-        if manifest_path.is_file() {
+        if has_manifest {
             let manifest = TwinManifest::read(&manifest_path)?;
 
             if let Some(default_scene) = manifest
@@ -423,59 +424,6 @@ pub struct Twin {
 }
 
 impl Twin {
-    /// Point this Twin's `default_scene` at `rel` (a path relative to
-    /// [`Twin::root`]), synthesising a manifest if the folder has none.
-    ///
-    /// Opening a *scene file* is opening its root with that scene selected, so
-    /// every entry point — the `--scene` boot arg, `OpenFile` on a `.usda`, a
-    /// recents reopen — funnels through here rather than re-deriving the
-    /// manifest shape. Keeping it in one place is what stops the boot path and
-    /// the command path from drifting.
-    ///
-    /// The synthetic manifest leaves `uuid` as `None` on purpose: a plain
-    /// folder remains local until it is explicitly promoted with a
-    /// `twin.toml` carrying a stable UUID.
-    pub fn set_default_scene(&mut self, rel: impl Into<String>) {
-        let rel = rel.into();
-        match &mut self.manifest {
-            Some(manifest) => match &mut manifest.usd {
-                Some(usd) => usd.default_scene = Some(rel),
-                None => {
-                    manifest.usd = Some(UsdManifest {
-                        default_scene: Some(rel),
-                        scenes: None,
-                    })
-                }
-            },
-            None => {
-                self.manifest = Some(TwinManifest {
-                    name: self
-                        .root
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    description: None,
-                    version: "0.1.0".into(),
-                    uuid: None,
-                    default_perspective: None,
-                    children: Vec::new(),
-                    usd: Some(UsdManifest {
-                        default_scene: Some(rel),
-                        scenes: None,
-                    }),
-                    sysml: None,
-                    verification: None,
-                    components: Vec::new(),
-                    modelica: None,
-                    journal: None,
-                    native_plugins: Vec::new(),
-                    settings: Default::default(),
-                });
-            }
-        }
-    }
-
     /// Whether this Twin persists its edit journal to
     /// `<root>/history/journal.json`.
     ///
@@ -493,23 +441,25 @@ impl Twin {
     /// Walk the folder and classify every file by extension.
     ///
     /// Does *not* touch the manifest; callers pre-load that if present.
-    fn index(root: PathBuf) -> Result<Self, TwinError> {
+    fn index(root: PathBuf, recursive: bool) -> Result<Self, TwinError> {
         let mut files = Vec::new();
 
-        for entry in walkdir::WalkDir::new(&root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                // Skip .lunco/ (session state), .git/, and any dotfile dir,
-                // but never filter the root itself — it may legitimately live
-                // under a dotfile parent (e.g. /tmp/.tmpXXXXXX on Linux).
-                if e.depth() == 0 {
-                    return true;
-                }
-                let name = e.file_name().to_string_lossy();
-                !(e.file_type().is_dir() && name.starts_with('.'))
-            })
-        {
+        let walker = walkdir::WalkDir::new(&root);
+        let walker = if recursive {
+            walker
+        } else {
+            walker.max_depth(1)
+        };
+        for entry in walker.follow_links(false).into_iter().filter_entry(|e| {
+            // Skip .lunco/ (session state), .git/, and any dotfile dir,
+            // but never filter the root itself — it may legitimately live
+            // under a dotfile parent (e.g. /tmp/.tmpXXXXXX on Linux).
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            !(e.file_type().is_dir() && name.starts_with('.'))
+        }) {
             let entry = entry.map_err(|e| TwinError::WalkDir(e.to_string()))?;
             if !entry.file_type().is_file() {
                 continue;
@@ -1044,7 +994,7 @@ impl Twin {
     /// Walk the folder again and replace the file index. Useful after
     /// external edits (creating / deleting files outside LunCoSim).
     pub fn reload(&mut self) -> Result<(), TwinError> {
-        let fresh = Twin::index(self.root.clone())?;
+        let fresh = Twin::index(self.root.clone(), self.manifest.is_some())?;
         self.files = fresh.files;
         Ok(())
     }
@@ -1113,6 +1063,11 @@ mod tests {
         write(&tmp.path().join("a.mo"), "model A end A;");
         write(&tmp.path().join("b.usda"), "#usda 1.0\n");
         write(&tmp.path().join("regolith.png"), "");
+        write(&tmp.path().join("nested/twin.toml"), "invalid manifest [");
+        write(
+            &tmp.path().join("nested/hidden.mo"),
+            "model Hidden end Hidden;",
+        );
 
         match TwinMode::open(tmp.path()).unwrap() {
             TwinMode::Folder(twin) => {
@@ -1149,13 +1104,17 @@ mod tests {
     #[test]
     fn indexed_file_roots_are_extension_agnostic_and_minimal() {
         let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("twin.toml"),
+            "name = \"index\"\nversion = \"0.1.0\"\n",
+        );
         write(&tmp.path().join("models/Vehicle/package.mo"), "");
         write(&tmp.path().join("models/Vehicle/Sub/Part.MO"), "");
         write(&tmp.path().join("examples/Example.mo"), "");
         write(&tmp.path().join("examples/Example.rhai"), "");
 
-        let TwinMode::Folder(twin) = TwinMode::open(tmp.path()).unwrap() else {
-            panic!("expected Folder mode");
+        let TwinMode::Twin(twin) = TwinMode::open(tmp.path()).unwrap() else {
+            panic!("expected Twin mode");
         };
 
         assert_eq!(

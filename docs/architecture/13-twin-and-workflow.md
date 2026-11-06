@@ -170,7 +170,7 @@ more structured experiences without ceremony:
 | Mode | What you open | What you get | What you don't |
 |------|---------------|--------------|----------------|
 | **Single File** (orphan) | `balloon.mo`, `scene.usda`, ... | Editor for that one file. Save in place. | No library / file tree. No cross-document tooling. |
-| **Folder** (VS Code–like) | `my_models/` (no `twin.toml`) | File browser for the folder. Edit any file in tabs. | No Twin-level manifest. No registered external libraries. No automatic cross-reference rewriting. |
+| **Folder** | `my_models/` (no `twin.toml`) | Temporary workspace indexing files directly in the folder; open other files explicitly in tabs. | No authored Twin or project settings. No registered external libraries. No automatic cross-reference rewriting. |
 | **Twin** (full project) | `my_base/` with `twin.toml` | Library browser with categorization, cross-reference tracking, app-aware rename with preview, explicit-save workflow, external library linking, workspace presets, environment config, reference-repair flow. | *(the full experience)* |
 
 | VS Code analog | LunCoSim mode |
@@ -367,6 +367,10 @@ default = "build"                 # which workspace opens by default
 "ui.camera_status" = true
 ```
 
+Opening a scene explicitly selects it for the current Twin session. The
+selection is delivered to the lifecycle policy as `scene_override`; it does
+not change the authored `default_scene`. Closing the Twin retires the override.
+
 For a componentized Twin, add explicit ownership records. Each component owns
 one requirement source and one qualified verification case; the case owns its
 USD fixture and Rhai observer. The loader rejects shared or missing acceptance
@@ -391,9 +395,73 @@ manifest without a Rust field for each setting. Rhai reads them with
 workspace's generic `SetTwinSetting` command. A missing key is not the same as
 an explicit `false`: each consuming authored surface declares its own default
 with `setting_default`; the shipped camera-status surface declares `true`.
-Twin settings are project-owned and are reset with Twin lifecycle; user-global
-preferences such as diagnostics, theme, input visualisation, and window
-geometry remain in `~/.lunco/settings.json`.
+Twin settings are authored in `twin.toml`; user-global preferences are stored
+in `<OS config dir>/lunco/settings.json` (or `LUNCOSIM_CONFIG/settings.json`).
+
+#### Default scene loading
+
+The global `scene.load_default` preference defaults to `true`. A project can
+override it in `<project>/.lunco/settings.json`, while the Twin's shared
+`[settings]` may override that with `"scene.load_default" = false`. The
+process flags `--load-default-scene` and `--no-load-default-scene` override
+all persisted scopes. An omitted project or Twin value means inherit; the
+project JSON also accepts `null` as inherit. `false` is an explicit value.
+The global checkbox is under **Settings → General**. **Settings → Project**
+edits the local choice and reports a shared Twin or CLI override
+when one takes precedence. Its **Edit Twin setting…** action opens the shared
+Twin settings. A plain folder has neither project nor shared Twin settings. Changes apply on the
+next Twin open.
+
+```json
+{ "scene": { "load_default": false } }
+```
+
+The project file uses the same section format as global settings, is local to
+the project, and is excluded from Twin distribution. The settings owner reads
+it on the open worker and persists changes through atomic storage. A malformed
+file or non-boolean Twin override rejects the candidate open and preserves the
+current workspace. `SetProjectSceneLoading` writes or removes the project
+override; `GetSceneLoadingSettings` reports the scopes, the next-open decision,
+the admitted decision, and the runtime scene override.
+
+An explicit scene selected while opening a Twin, including `--scene PATH`,
+overrides automatic selection even when default loading is disabled. It is
+scoped to that Twin session; it does not modify `[usd].default_scene` or
+fabricate a manifest for a plain folder. Opening a USD document inside an
+already-open Twin remains a document operation; it does not automatically
+replace the running stage. The Editor perspective remains available with an
+empty live scene: open a USD file from the Twin browser, or use **File → New
+→ USD Stage**, then edit and save the document in its preview.
+
+A folder without its own manifest is an ephemeral workspace, not an authored
+Twin. It does not load Twin policies, tools, timelines, project settings, or
+domain source sets. Explicit file and scene opens remain available. The empty
+viewport offers USD files directly in the opened folder. If none are present,
+it says the folder has no scenes to load. Its index does not traverse child
+folders; files within them can still be opened explicitly.
+`ReadActiveWorkspace` distinguishes `ephemeral` from `twin` scopes;
+`ReadActiveTwinContract` reports no open Twin for the ephemeral case.
+
+With a Twin open and no mounted scene, the viewport offers its declared
+default when the file exists and the scenes selected by its `[usd].scenes` globs.
+Scene buttons dispatch the ordinary Twin scene command with the active Twin's
+mounted authority. The general welcome actions appear when no Twin is open.
+
+To set the project override through the HTTP API, obtain the active `twin_id`
+from `ReadActiveTwinContract`, then send this request to `/api/commands`,
+substituting that ID:
+
+```json
+{"type":"ExecuteCommand","command":"SetProjectSceneLoading","params":{"twin":42,"value":false}}
+```
+
+Use `true` to load the default, or `null` to remove the local override. The
+response reports the completed write or its error. Use `SetTwinSetting` with
+`{"key":"scene.load_default","value":false}` to write the Twin override and
+`ResetTwinSetting` with `{"key":"scene.load_default"}` to remove it. The
+`GetSceneLoadingSettings` query reports the current scopes, next-open value,
+admitted value and runtime scene override. For the global preference, Rhai
+can call `set_setting("SceneLoadingSettings.load_default", false)`.
 
 ### Twin input and runtime UI
 
@@ -742,8 +810,9 @@ system) reads and writes through it.
 Opening a folder or Twin first runs the Rust bootstrap that parses the manifest,
 indexes files, establishes the Twin identity and `twin://` authority, and emits
 the mounted event. The `twin.lifecycle` Rhai policy then receives the typed
-manifest and indexed relative paths and returns an ordered command plan. That
-policy selects the default USD scene, tool libraries, timelines, SysML/KerML
+manifest, indexed relative paths and the admitted scene-selection inputs, then
+returns an ordered command plan. That policy selects an explicit scene or the
+enabled default USD scene, tool libraries, timelines, SysML/KerML
 sources, and Modelica roots. Typed Rust commands validate active-Twin identity,
 path ownership, and asset authority, then use the domain's asynchronous loader.
 Rust owns the filesystem and lifecycle mechanisms; Rhai owns content selection

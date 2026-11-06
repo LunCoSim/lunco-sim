@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**316 commands** across **60** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**318 commands** across **61** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -108,6 +108,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-modelica-runtime`](#lunco-modelica-runtime) (1 command)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
+- [`lunco-networking-core`](#lunco-networking-core) (1 command)
 - [`lunco-networking-sync`](#lunco-networking-sync) (8 commands)
 - [`lunco-notifications-core`](#lunco-notifications-core) (1 command)
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
@@ -130,7 +131,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
-- [`lunco-workspace`](#lunco-workspace) (8 commands)
+- [`lunco-workspace`](#lunco-workspace) (9 commands)
 
 ---
 
@@ -2865,6 +2866,23 @@ actually call, with the fields the deserializer actually accepts. See the
 | `qualified` | `String` |  Fully-qualified class path, for example  `Modelica.Blocks.Examples.PID_Controller`. |
 | `action` | `ClassAction` |  Whether to view or duplicate the class. |
 
+### `lunco-networking-core` <a id="lunco-networking-core"></a>
+
+#### `SetVisualLead`
+
+ Live-tune [`VisualLeadSettings`] (all fields optional → set only what you pass):
+ `SetVisualLead {enabled?, yaw_rate?, speed?, lead_secs?}`. Lets you A/B the
+ render-lead strength while driving, no rebuild.
+
+- *defined in:* `crates/lunco-networking-core/src/prediction.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `Option < bool >` |   |
+| `yaw_rate` | `Option < f32 >` |   |
+| `speed` | `Option < f32 >` |   |
+| `lead_secs` | `Option < f32 >` |   |
+
 ### `lunco-networking-sync` <a id="lunco-networking-sync"></a>
 
 #### `PromoteScenario`
@@ -4692,6 +4710,17 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `key` | `String` |  Namespaced setting key to remove. |
 
+#### `SetProjectSceneLoading`
+
+ Request a local project override; `None` restores inheritance.
+
+- *defined in:* `crates/lunco-workspace/src/scene_settings.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `twin` | `u64` |  Twin whose project settings are being edited. |
+| `value` | `Option < bool >` |  Explicit override or inheritance. |
+
 #### `SetTwinSetting`
 
  Persist one generic project-owned setting on the active Twin.
@@ -4705,7 +4734,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 316 commands from the runtime schema; scanned 1086 .rs files for docs (0 parse failure(s) skipped).
+<!-- 318 commands from the runtime schema; scanned 1088 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetVisualLead, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

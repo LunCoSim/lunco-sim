@@ -935,6 +935,7 @@ impl Plugin for WorkbenchPlugin {
             (
                 register_graphics_settings_menu,
                 register_workbench_appearance_settings_menu,
+                twin_settings::register_scene_loading_settings_menu,
             ),
         );
     }

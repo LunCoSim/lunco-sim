@@ -225,7 +225,11 @@ pub fn build_headless_app_with_scene(
 /// to install their own clock and loop.
 pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> std::io::Result<App> {
     let args: Vec<String> = std::env::args().collect();
-    build_headless_app_with_scene(compute_threads, startup_scene_arg(&args))
+    let scene_loading_cli = lunco_workspace::scene_settings::parse_scene_loading_cli(&args)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+    let mut app = build_headless_app_with_scene(compute_threads, startup_scene_arg(&args))?;
+    app.insert_resource(scene_loading_cli);
+    Ok(app)
 }
 
 /// Build the normal headless app with the production schedule runner.
@@ -246,7 +250,7 @@ pub fn run_headless() -> lunco_luncosim_core::AppExit {
     lunco_luncosim_core::log_build_identity(mode);
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed] [--host [PORT] | --connect ADDRESS]\n\nNetworking is idle unless --host or --connect is supplied."
+            "luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--load-default-scene | --no-load-default-scene] [--headless-max-speed] [--host [PORT] | --connect ADDRESS]\n\nNetworking is idle unless --host or --connect is supplied."
         );
         return lunco_luncosim_core::AppExit::Success;
     }

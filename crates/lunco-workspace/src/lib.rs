@@ -45,10 +45,15 @@ pub mod journal_persistence;
 pub mod open;
 pub mod recents;
 pub mod rename;
+pub mod scene_settings;
 pub mod session;
 
 pub use open::{ResetTwinSetting, SetTwinSetting, TwinSettingInput};
 pub use recents::Recents;
+pub use scene_settings::{
+    ProjectSceneSettings, SceneLoadingCli, SceneLoadingDecision, SceneLoadingSettings,
+    SceneLoadingSource, SetProjectSceneLoading,
+};
 pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded, TwinClosed,
     UnregisterDocument, WorkspacePlugin, WorkspaceResource,
@@ -87,6 +92,15 @@ pub use lunco_twin::{DocumentKindId, FileKind, Twin, TwinMode, TwinSettingValue}
     serde::Deserialize,
 )]
 pub struct TwinId(u64);
+
+/// The kind of workspace scope associated with an identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceScopeKind {
+    /// A Twin with an authored `twin.toml`.
+    AuthoredTwin,
+    /// A temporary workspace for a folder without a Twin manifest.
+    Ephemeral,
+}
 
 impl TwinId {
     /// Construct from a raw `u64`.
@@ -449,6 +463,15 @@ pub struct Workspace {
     /// in the order the user added them unless the consumer sorts.
     twins: Vec<(TwinId, Twin)>,
 
+    /// Explicit scene selections, scoped to their open Twin identities.
+    scene_overrides: std::collections::BTreeMap<TwinId, String>,
+
+    /// Project settings and the decision captured for each admitted open.
+    project_scene_settings: std::collections::BTreeMap<TwinId, ProjectSceneSettings>,
+    scene_loading_decisions: std::collections::BTreeMap<TwinId, SceneLoadingDecision>,
+    project_settings_pending: std::collections::BTreeSet<TwinId>,
+    project_settings_errors: std::collections::BTreeMap<TwinId, String>,
+
     /// Monotonically-increasing counter for [`TwinId`] allocation.
     /// Starts at 1 so `TwinId(0)` can remain the "unassigned" sentinel.
     next_twin_id: u64,
@@ -506,6 +529,11 @@ impl Workspace {
     /// and drain its teardown before admitting a replacement; that edge closes
     /// the domain documents and removes their workspace entries.
     pub fn close_twin(&mut self, id: TwinId) {
+        self.scene_overrides.remove(&id);
+        self.project_scene_settings.remove(&id);
+        self.scene_loading_decisions.remove(&id);
+        self.project_settings_pending.remove(&id);
+        self.project_settings_errors.remove(&id);
         let active_document_belongs_to_closed_twin = self
             .active_document
             .and_then(|doc| self.document(doc))
@@ -523,6 +551,48 @@ impl Workspace {
                 .find(|entry| self.document_is_in_active_scope(entry))
                 .map(|entry| entry.id);
         }
+    }
+
+    /// Explicit scene requested when this Twin was opened.
+    pub fn scene_override(&self, id: TwinId) -> Option<&str> {
+        self.scene_overrides.get(&id).map(String::as_str)
+    }
+
+    /// Local project overrides loaded for this Twin session.
+    pub fn project_scene_settings(&self, id: TwinId) -> Option<&ProjectSceneSettings> {
+        self.project_scene_settings.get(&id)
+    }
+
+    /// Automatic-loading decision captured when this Twin was opened.
+    pub fn scene_loading_decision(&self, id: TwinId) -> Option<SceneLoadingDecision> {
+        self.scene_loading_decisions.get(&id).copied()
+    }
+
+    /// Scene selected at Twin admission, before the mount completes.
+    pub fn selected_scene(&self, id: TwinId) -> Option<&str> {
+        if let Some(scene) = self.scene_override(id) {
+            return Some(scene);
+        }
+        if !self.scene_loading_decision(id)?.load_default {
+            return None;
+        }
+        self.twin(id)?
+            .manifest
+            .as_ref()?
+            .usd
+            .as_ref()?
+            .default_scene
+            .as_deref()
+    }
+
+    /// Whether a local project settings write is in flight.
+    pub fn project_settings_pending(&self, id: TwinId) -> bool {
+        self.project_settings_pending.contains(&id)
+    }
+
+    /// Most recent local project settings write error for this session.
+    pub fn project_settings_error(&self, id: TwinId) -> Option<&str> {
+        self.project_settings_errors.get(&id).map(String::as_str)
     }
 
     /// Whether a document belongs to the active Twin, or to the loose-file
@@ -549,6 +619,17 @@ impl Workspace {
             .iter()
             .find(|(tid, _)| *tid == id)
             .map(|(_, t)| t)
+    }
+
+    /// Distinguish an authored Twin from an ephemeral workspace folder.
+    pub fn scope_kind(&self, id: TwinId) -> Option<WorkspaceScopeKind> {
+        self.twin(id).map(|scope| {
+            if scope.manifest.is_some() {
+                WorkspaceScopeKind::AuthoredTwin
+            } else {
+                WorkspaceScopeKind::Ephemeral
+            }
+        })
     }
 
     /// Mutable look up. Required by callers that need to call
@@ -709,6 +790,21 @@ mod tests {
         assert_eq!(ws.twins().count(), 0);
         assert_eq!(ws.documents().len(), 0);
         assert!(ws.active_twin.is_none());
+    }
+
+    #[test]
+    fn scene_override_is_retired_with_its_twin() {
+        let root = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::new();
+        let twin = workspace.add_twin(load_twin(root.path()));
+        workspace
+            .scene_overrides
+            .insert(twin, "selected.usda".into());
+        assert_eq!(workspace.scene_override(twin), Some("selected.usda"));
+        workspace.close_twin(twin);
+        assert_eq!(workspace.scene_override(twin), None);
+        let reopened = workspace.add_twin(load_twin(root.path()));
+        assert_eq!(workspace.scene_override(reopened), None);
     }
 
     #[test]

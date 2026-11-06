@@ -271,6 +271,9 @@ fn load_twin_text_assets(
     else {
         return;
     };
+    if twin.manifest.is_none() {
+        return;
+    }
     let twin_id = trigger.event().twin;
     readiness.terminal.retain(|id, _| {
         !catalog.entries.iter().any(|entry| {

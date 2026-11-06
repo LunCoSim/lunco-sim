@@ -1645,8 +1645,7 @@ fn on_promote_scenario(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
     connection: Res<lunco_core_session::ClientConnection>,
-    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
-    mut commands: Commands,
+    mut pending: ResMut<lunco_workspace::open::PendingTwinOpens>,
 ) {
     if !remote.is_live(*role, connection.0) {
         warn!("[promote] no live scenario connection");
@@ -1661,23 +1660,19 @@ fn on_promote_scenario(
         warn!("[promote] no downloaded scenario to promote");
         return;
     };
-    promote_scenario_to_folder(&manifest, &folder, &mut workspace, &mut commands);
+    promote_scenario_to_folder(&manifest, &folder, &mut pending);
 }
 
 /// Materialize + promote (native). Copies each manifest asset from the scenario
 /// cache into `folder` through the storage API (no raw dir walk — only the
 /// scenario's own assets), writes a `twin.toml` that **preserves the scenario
 /// identity as the Twin uuid** (so a future re-download / bidirectional sync
-/// recognizes it), then `add_twin` + `TwinAdded` — which the USD observer turns
-/// into a `twin://` scene load backed by the promoted folder instead of the
-/// read-only revision cache. The workspace asset owner assigns the promoted
-/// Twin a live load authority; stable logical provenance remains owner-derived.
+/// recognizes it), then admits it through the workspace open pipeline.
 #[cfg(not(target_arch = "wasm32"))]
 fn promote_scenario_to_folder(
     manifest: &ScenarioManifestMsg,
     folder: &str,
-    workspace: &mut lunco_workspace::WorkspaceResource,
-    commands: &mut Commands,
+    pending: &mut lunco_workspace::open::PendingTwinOpens,
 ) {
     let target = PathBuf::from(folder);
     let cache_root = scenario_cache_root(&manifest.scenario_id, &manifest.revision);
@@ -1726,8 +1721,12 @@ fn promote_scenario_to_folder(
         error!("[promote] write twin.toml in {target:?}: {e}");
         return;
     }
-    let id = workspace.add_twin(twin);
-    commands.trigger(lunco_workspace::TwinAdded { twin: id });
+    lunco_workspace::open::spawn_twin_from_path(
+        &target,
+        pending,
+        "PromoteScenario",
+        lunco_workspace::open::TwinOpenMode::Add,
+    );
     info!(
         "[promote] scenario '{}' promoted to editable Twin at {target:?}",
         manifest.name
@@ -1738,8 +1737,7 @@ fn promote_scenario_to_folder(
 fn promote_scenario_to_folder(
     _manifest: &ScenarioManifestMsg,
     _folder: &str,
-    _workspace: &mut lunco_workspace::WorkspaceResource,
-    _commands: &mut Commands,
+    _pending: &mut lunco_workspace::open::PendingTwinOpens,
 ) {
     warn!(
         "[promote] promotion needs a native filesystem folder; web (File System Access) is a TODO"

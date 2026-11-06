@@ -52,6 +52,62 @@ ship its own task presets; follow [Twin perspectives](../../tutorials/05-twin-pe
 The [workbench architecture](../../architecture/11-workbench.md#4-perspectives)
 defines composition, validation and personal layout persistence.
 
+### Open a Twin without its default scene
+
+LunCoSim normally loads the default scene declared by a Twin. To change the
+app-wide default, choose **Settings → General** and toggle **Load the default
+scene when opening a Twin**. This checkbox is available without an open Twin.
+
+To change one project, open it and choose **Settings → Project → Default scene
+on open**. Select **Use app setting**, **Load default scene**, or **Start
+empty**. This choice is local to the project folder. The menu reports
+when a shared Twin setting or command-line flag takes precedence; follow
+**Edit Twin setting…** to change the shared value saved in `twin.toml`.
+To set a shared value for the first time, open **View → Lunica → Twin settings**.
+Reopen the Twin with **File → Open Folder/Twin…** to apply changes.
+
+When the Twin opens without a scene, the viewport lists its configured scenes
+and offers **Load default scene** if the declared file exists. Choosing a scene
+starts it for the current session without changing the saved loading preference
+or the Twin's default scene. If there are no scenes, the viewport says so.
+
+A folder without its own `twin.toml` is a temporary workspace: no Twin or
+project is open. The viewport lists USD files directly in that folder, or says
+that the folder has no scenes to load. Open standalone USD, Modelica, Rhai, and other supported
+files in the Editor. Project and shared Twin settings do not apply to this
+workspace; LunCoSim does not look for Twins inside the folder.
+
+To use the Editor with no default scene, select **Editor** in the title bar.
+Open a USD file from the Twin browser or **File → Open File…**, or create one
+with **File → New → USD Stage**. The document opens in an isolated preview;
+edit and save it normally. Opening a document inside the active Twin does not
+load it into the live simulation or change the Twin's authored default scene.
+
+You can also edit the project file `<project>/.lunco/settings.json` before
+opening the Twin:
+
+```json
+{ "scene": { "load_default": false } }
+```
+
+Remove `load_default` or use `null` to inherit the global preference. The
+global preference uses the same JSON section in `lunco/settings.json` under the
+OS configuration directory: normally `~/.config/lunco/` on Linux,
+`~/Library/Application Support/lunco/` on macOS, and `%APPDATA%\lunco\` on
+Windows. `LUNCOSIM_CONFIG` replaces that directory. Edit the global file while
+the application is closed, or use the checkbox in the running application.
+
+For a shared Twin override, use this in `twin.toml`:
+
+```toml
+[settings]
+"scene.load_default" = false
+```
+
+Remove the key to inherit the project setting. The
+[Twin workflow guide](../../architecture/13-twin-and-workflow.md#default-scene-loading)
+also documents programmatic access and error handling.
+
 ### Desktop updates
 
 The official installers are platform-specific:
@@ -107,6 +163,8 @@ actually parses, so prefer it if this table and the binary ever disagree.
 | `--headless-max-speed` | With `--no-ui` (or the headless server launcher), run the fixed simulation lattice as fast as the CPU and causal participants permit. This removes wall-clock pacing; it does not bypass the co-simulation barrier. |
 | `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
 | `--scene <PATH>` | Load a specific USD scene from a relative or absolute filesystem path. Startup resolves its owning root and mounts it through the canonical `twin://` address, and opens the simulator in the **View** perspective even if that Twin was last left in Design/Lunica. Without it, luncosim starts with an empty persistent world shell. |
+| `--no-load-default-scene` | Disable automatic default-scene loading for Twins opened in this run. An explicit `--scene` still opens. |
+| `--load-default-scene` | Enable automatic default-scene loading for Twins opened in this run. Overrides saved preferences. |
 | `--render-profile <standard\|fast>` | Select the startup compatibility profile. `fast` uses unlit, texture-free materials and disables HDR, bloom, and MSAA. |
 | `--render-quality <low\|balanced\|high>` | Override the Graphics quality for this process. Fresh settings default to `high`; choose `low` for lower-end machines. `high` is the highest shipped visual preset, raising shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. |
 | `--record-offline <dir\|out.mp4>` | Arm a GPU-backed PNG sequence or direct video recording; offscreen captures begin after the authored scene is presentable. |

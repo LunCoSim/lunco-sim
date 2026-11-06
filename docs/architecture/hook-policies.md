@@ -200,6 +200,21 @@ hook for its own authored behavior. A missing optional lifecycle policy is a
 valid unconfigured state, and a lifecycle fault is reported without crashing
 or silently selecting another implementation.
 
+At `assets_mounted`, the scripting owner supplies the indexed Twin, an optional
+session `scene_override`, and the admitted `scene_loading` value and source.
+The application policy returns an ordered typed command plan. When an explicit
+scene is requested, validation requires exactly one `OpenTwinScene` for that
+Twin, authority and path; when no override exists and automatic default loading
+is disabled, the plan cannot open the authored default. The scene command owner
+validates the source and performs the document-first mount. The decision is
+fixed at Twin-open admission and retired with that Twin; the hook is installed
+at application scope and may be replaced by the active Twin. A malformed plan
+or missing required explicit-scene action reports a lifecycle fault and queues
+no actions. `scene_loading_settings.rhai` exercises the production policy.
+For an ephemeral workspace the application hook handles explicit scene opens,
+but does not select Twin tools, timelines, source sets, or authored policy
+overrides; there is no Twin manifest.
+
 Every `twin.lifecycle` invocation carries `Twin/Lifecycle` with generation
 zero and the mounted Twin's stable ID in `owner_id`, `RuntimeClock::None`, and
 the phase `Start`, `Event`, or `Stop`. `TwinId` is allocated monotonically for
@@ -308,16 +323,17 @@ The lifecycle dispatcher validates the returned map, retains the typed result
 as the current lifecycle record, and exposes it through `policy_status()` and
 the API status view. On `assets_mounted`, the application policy receives
 `twin_id`, the exact asset authority `name`, `root`, `active`, the parsed
-`manifest` as a typed map (or `Unit` for a plain folder), and indexed relative
-`files`. It returns an ordered `actions` array whose entries contain a reflected
+`manifest` as a typed map (or `Unit` for a plain folder), indexed relative
+`files`, `scene_override`, and the admitted `scene_loading` value and source.
+It returns an ordered `actions` array whose entries contain a reflected
 `command` name and typed `params` map. The generic executor validates the plan
-shape and dispatches each entry through the ordinary typed command bridge; it
-has no Twin-field or domain-loader branches. The queue is applied only while
+shape and scene-selection invariants and dispatches each entry through the
+ordinary typed command bridge. The queue is applied only while
 that Twin remains active. A malformed plan faults the lifecycle result and
 queues no actions; an individual command rejection is logged and later actions
 continue. This lets Rhai own the choice and ordering while domain owners retain
 path validation and asynchronous loading mechanics. The application policy
-selects the default USD scene, Twin tool libraries, timelines, SysML/KerML
+selects an explicit or enabled default USD scene, Twin tool libraries, timelines, SysML/KerML
 source files, and Modelica roots from the typed manifest and indexed inventory.
 If a lifecycle seam is only a notification, its contract should instead return
 `Unit`.
@@ -349,8 +365,9 @@ engine-library sources as preludes or unrelated scenario content; admission,
 asset publication, and runtime preparation run in that order. During a policy
 replacement, a temporarily unavailable classifier leaves the current admitted
 sources intact and closes script execution until the authored policy returns.
-Twin tool libraries are selected and loaded by the `twin.lifecycle` action
-plan.
+Twin tool libraries and timelines are selected by the `twin.lifecycle` action
+plan. Their loaders validate the supplied live authority against its root;
+they do not substitute another authority that happens to name the same folder.
 
 ### Tool layers and shutdown
 

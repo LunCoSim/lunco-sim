@@ -1268,6 +1268,7 @@ use lunco_twin::is_runtime_state;
 fn collect_scenario_input(
     owner: lunco_workspace::TwinId,
     twin: &Twin,
+    selected_scene: Option<&str>,
     journal_head: Option<lunco_twin_journal::EntryId>,
     limits: &lunco_assets_core::FileClosureLimits,
 ) -> Result<Option<ScenarioBuildInput>, String> {
@@ -1308,11 +1309,7 @@ fn collect_scenario_input(
         }
     }
 
-    let default_scene_raw = twin
-        .manifest
-        .as_ref()
-        .and_then(|m| m.usd.as_ref())
-        .and_then(|usd| usd.default_scene.clone());
+    let default_scene_raw = selected_scene.map(str::to_owned);
 
     Ok(Some(ScenarioBuildInput {
         owner,
@@ -1628,6 +1625,7 @@ fn reconcile_host_scenario_owner(
 fn spawn_manifest_build(
     owner: lunco_workspace::TwinId,
     twin: &Twin,
+    selected_scene: Option<&str>,
     roots: Option<&lunco_assets_core::TwinRoots>,
     journal_head: Option<lunco_twin_journal::EntryId>,
     limits: &lunco_assets_core::FileClosureLimits,
@@ -1652,7 +1650,8 @@ fn spawn_manifest_build(
             return;
         }
     };
-    let mut input = match collect_scenario_input(owner, twin, journal_head, limits) {
+    let mut input = match collect_scenario_input(owner, twin, selected_scene, journal_head, limits)
+    {
         Ok(Some(input)) => input,
         Ok(None) => {
             pending.preparation_error = Some(format!(
@@ -1709,6 +1708,7 @@ fn spawn_initial_scenario_manifest(
         spawn_manifest_build(
             active,
             twin,
+            workspace.selected_scene(active),
             roots.as_deref(),
             journal_head(&journal, twin),
             &limits,
@@ -1818,6 +1818,7 @@ fn on_twin_added_host(
         spawn_manifest_build(
             trigger.event().twin,
             twin,
+            workspace.selected_scene(trigger.event().twin),
             roots.as_deref(),
             journal_head(&journal, twin),
             &limits,
@@ -1898,6 +1899,9 @@ fn ingest_asset_offers(
         spawn_manifest_build(
             owner,
             twin,
+            workspace
+                .as_ref()
+                .and_then(|workspace| workspace.selected_scene(owner)),
             roots.as_deref(),
             journal_head(&journal, twin),
             &limits,
@@ -1933,6 +1937,9 @@ fn service_manifest_rebuild_request(
     spawn_manifest_build(
         owner,
         twin,
+        workspace
+            .as_ref()
+            .and_then(|workspace| workspace.selected_scene(owner)),
         roots.as_deref(),
         journal_head(&journal, twin),
         &limits,

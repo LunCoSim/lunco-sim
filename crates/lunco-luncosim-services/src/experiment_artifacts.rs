@@ -360,6 +360,9 @@ fn load_added_twin(
     let Some(twin) = workspace.twin(event.twin) else {
         return;
     };
+    if twin.manifest.is_none() {
+        return;
+    }
     let admission = ArtifactAdmission {
         root: twin.root.clone(),
         limits: settings.result_limits,

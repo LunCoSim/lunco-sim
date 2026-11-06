@@ -641,7 +641,7 @@ pub(crate) fn new_document_menu_label(index: usize, display: &str, shortcut: &st
     }
 }
 
-fn settings_choice_menu<T>(
+pub(crate) fn settings_choice_menu<T>(
     ui: &mut egui::Ui,
     label: String,
     current: &mut T,

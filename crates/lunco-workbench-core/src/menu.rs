@@ -113,6 +113,17 @@ where
     }
 }
 
+struct CommandIntent<E>(E, lunco_core::CommandOrigin);
+
+impl<E: bevy::ecs::event::Event> MenuIntent for CommandIntent<E>
+where
+    for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
+{
+    fn apply(self: Box<Self>, world: &mut World) {
+        trigger_command_with_origin(world, self.0, self.1);
+    }
+}
+
 /// Deferred menu intents collected during a menu pass.
 pub struct MenuIntents(Vec<Box<dyn MenuIntent>>);
 
@@ -175,6 +186,17 @@ impl<'w> MenuCtx<'w> {
         for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
     {
         self.intents.push(Box::new(TriggerIntent(event)));
+    }
+
+    /// Queue a typed command with its UI interaction origin.
+    pub fn trigger_command<E: bevy::ecs::event::Event>(
+        &mut self,
+        event: E,
+        origin: lunco_core::CommandOrigin,
+    ) where
+        for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
+    {
+        self.intents.push(Box::new(CommandIntent(event, origin)));
     }
 }
 
@@ -423,6 +445,55 @@ mod tests {
             app.world().resource::<SeenOrigins>().0,
             [Some(lunco_core::CommandOrigin::LocalUser {
                 session_id: lunco_command_contracts::SessionId(7),
+            })]
+        );
+        let active = app.world().resource::<lunco_core::ActiveCommandId>();
+        assert_eq!(active.get(), Some(41));
+        assert_eq!(
+            active.origin(),
+            Some(lunco_core::CommandOrigin::ApiTransport)
+        );
+    }
+
+    #[test]
+    fn deferred_menu_command_retains_and_restores_its_user_origin() {
+        let mut app = App::new();
+        app.init_resource::<SeenOrigins>();
+        app.world_mut()
+            .insert_resource(lunco_core::ActiveCommandId::default());
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set_with_origin(41, Some(lunco_core::CommandOrigin::ApiTransport));
+        app.add_observer(
+            |_: On<RenderIntent>,
+             active: bevy::prelude::Res<lunco_core::ActiveCommandId>,
+             mut seen: bevy::prelude::ResMut<SeenOrigins>| {
+                seen.0.push(active.origin());
+            },
+        );
+        app.world_mut()
+            .insert_resource(DeferredWorldTriggers::default());
+        let intents = {
+            let mut menu = MenuCtx::new(app.world_mut());
+            menu.trigger_command(
+                RenderIntent,
+                lunco_core::CommandOrigin::LocalUser {
+                    session_id: lunco_command_contracts::SessionId(8),
+                },
+            );
+            menu.take_intents()
+        };
+        intents.apply(app.world_mut());
+        assert!(app.world().resource::<SeenOrigins>().0.is_empty());
+        let deferred = app
+            .world_mut()
+            .remove_resource::<DeferredWorldTriggers>()
+            .unwrap();
+        deferred.apply(app.world_mut());
+        assert_eq!(
+            app.world().resource::<SeenOrigins>().0,
+            [Some(lunco_core::CommandOrigin::LocalUser {
+                session_id: lunco_command_contracts::SessionId(8),
             })]
         );
         let active = app.world().resource::<lunco_core::ActiveCommandId>();

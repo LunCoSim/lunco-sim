@@ -1,0 +1,9 @@
+name = "Scene Loading Settings"
+version = "0.1.0"
+uuid = "e5056738-d098-4973-b4d4-284b102133e8"
+
+[usd]
+default_scene = "gate.usda"
+
+[settings]
+"scene.load_default" = false

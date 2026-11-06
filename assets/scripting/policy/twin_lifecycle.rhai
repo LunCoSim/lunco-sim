@@ -48,7 +48,10 @@ fn twin_command(command_name, params) {
 
 fn twin_scene_actions(ctx) {
     let actions = [];
-    let scene = twin_default_scene(ctx.manifest);
+    let scene = ctx.scene_override;
+    if scene == () && ctx.scene_loading.load_default {
+        scene = twin_default_scene(ctx.manifest);
+    }
     if scene != () {
         let params = #{};
         params.twin_id = ctx.twin_id;
@@ -56,11 +59,13 @@ fn twin_scene_actions(ctx) {
         params.relative_path = scene;
         actions.push(twin_command("OpenTwinScene", params));
     } else {
-        let reason = ctx.root;
+        let reason = "";
         if ctx.manifest == () {
-            reason += " has no twin.toml, so there is no scene to load. You may have opened the wrong folder; open the Twin root containing twin.toml.";
+            reason = "No Twin is open.";
+        } else if !ctx.scene_loading.load_default {
+            reason = "Automatic default scene loading is off.";
         } else {
-            reason += " has a twin.toml but declares no default scene — nothing to load.";
+            reason = "This Twin has no default scene.";
         }
         let params = #{};
         params.reason = reason;
@@ -359,22 +364,24 @@ fn twin_lifecycle(event, ctx) {
         for action in scene_actions {
             actions.push(action);
         }
-        let tool_actions = twin_tool_actions(ctx);
-        for action in tool_actions {
-            actions.push(action);
-        }
-        let timeline_actions = twin_timeline_actions(ctx);
-        for action in timeline_actions {
-            actions.push(action);
-        }
-        let sysml_plan = twin_sysml_actions(ctx, ctx.manifest);
-        for action in sysml_plan.actions {
-            actions.push(action);
-        }
-        info = sysml_plan.info;
-        let modelica_actions = twin_modelica_actions(ctx, ctx.manifest);
-        for action in modelica_actions {
-            actions.push(action);
+        if ctx.manifest != () {
+            let tool_actions = twin_tool_actions(ctx);
+            for action in tool_actions {
+                actions.push(action);
+            }
+            let timeline_actions = twin_timeline_actions(ctx);
+            for action in timeline_actions {
+                actions.push(action);
+            }
+            let sysml_plan = twin_sysml_actions(ctx, ctx.manifest);
+            for action in sysml_plan.actions {
+                actions.push(action);
+            }
+            info = sysml_plan.info;
+            let modelica_actions = twin_modelica_actions(ctx, ctx.manifest);
+            for action in modelica_actions {
+                actions.push(action);
+            }
         }
     }
     let result = #{};
