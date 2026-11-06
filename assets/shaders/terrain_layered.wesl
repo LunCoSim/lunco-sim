@@ -10,7 +10,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
+import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
 
 //!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
@@ -508,7 +508,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             mix(mat.photometry_gain, mat.site_photometry.z, mat.site_base_color.a * site_material_weight));
     }
     // Wheel marks change the ground reflectance and receive the same shadows.
-    @if((VERTEX_UVS_A)) albedo = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, vec4(albedo, 1.0), 1).rgb;
+    var annotations = SurfaceAnnotationTints(vec4<f32>(0.0), vec4<f32>(0.0));
+    @if((VERTEX_UVS_A)) annotations = surface_annotation_tints(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, false);
+    @if((VERTEX_UVS_A)) albedo = mix(albedo, annotations.material.rgb, annotations.material.a);
     pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
@@ -544,7 +546,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         color = vec4(mix(color.rgb, m, mat.weight_mineral), color.a);
     }
 
-    @if((VERTEX_UVS_A)) color = surface_annotation_color(surface_annotations, terrain_detail_position(in.uv, mat.terrain_half_extent).xz, color, 0);
+    @if((VERTEX_UVS_A)) color = vec4(mix(color.rgb, annotations.overlay.rgb, annotations.overlay.a), color.a);
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;
 }

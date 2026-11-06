@@ -86,6 +86,16 @@ after lighting so their colours remain readable. Physical marks set
 `SurfaceCurveAnnotation.receives_lighting`: wheel trails use this mode and
 blend into the ground albedo before PBR, directional shadows and terrain
 horizon shadows. The diagnostic view shows both kinds without lighting.
+The shared shader traverses the sparse stroke index once per terrain fragment,
+retaining separate strongest material and overlay tints. It applies the former
+before lighting and the latter afterward; diagnostic mode selects the strongest
+stroke across both kinds in segment order. A conservative segment box expanded
+beyond its radius and antialiasing footprint rejects distant fragments before
+the distance and coverage calculation. Each index leaf also carries an
+outward-rounded interval enclosing all of its strokes on the narrower local
+axis. The same transactional worker updates the interval with the leaf's
+segment list; a full-range interval is used when finite GPU arithmetic cannot
+be established. Fragments outside it skip the list entirely.
 The second segment-record texel stores radius in x and the lighting flag in y;
 style-only updates preserve segment identities and update that flag.
 Physical wheel sampling uses native contacts for every `PhysicalWheel`, including

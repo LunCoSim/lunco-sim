@@ -10,23 +10,30 @@ use crate::{ShaderMaterial, ShaderSchemas};
 use bevy::{
     asset::AssetId,
     camera::visibility::{RenderLayers, VisibilitySystems},
+    core_pipeline::FullscreenShader,
     light::{
         CascadeShadowConfig, Cascades, DirectionalLightShadowMap, ShadowFilteringMethod,
         SimulationLightSystems, cascade::Cascade,
     },
     math::DVec2,
     pbr::{
-        ExtractedDirectionalLight, LightEntity, MeshMaterial3d, Shadow, StandardMaterial,
-        ViewLightEntities, prepare_lights,
+        CORE_3D_SHADOW_MAP_FORMAT, ExtractedDirectionalLight, LightEntity, MeshMaterial3d, Shadow,
+        ShadowView, StandardMaterial, ViewLightEntities, prepare_lights,
     },
     platform::collections::HashMap,
     prelude::*,
     render::{
-        Render, RenderApp, RenderSystems,
+        Render, RenderApp, RenderStartup, RenderSystems,
         camera::TemporalJitter,
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_phase::{Draw, DrawError, DrawFunctions, TrackedRenderPass},
+        render_resource::{
+            CachedRenderPipelineId, CompareFunction, DepthStencilState, PipelineCache,
+            RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, StoreOp,
+        },
+        renderer::{RenderContext, ViewQuery},
         sync_world::RenderEntity,
+        texture::DepthStencilViewAttachment,
         view::ExtractedView,
     },
     shader::Shader,
@@ -44,6 +51,15 @@ impl SceneResource for ReceiverCropInputs {}
 
 #[derive(Resource, Default)]
 struct ReceiverCropViews(HashMap<Entity, (UVec4, u32)>);
+
+#[derive(Resource)]
+pub(super) struct ReceiverClearPipeline(CachedRenderPipelineId);
+
+#[derive(Resource, Default)]
+pub(super) struct ReceiverClearViews {
+    views: HashMap<Entity, UVec4>,
+    pipeline: Option<RenderPipeline>,
+}
 
 /// Main-world render admission and projected work; GPU acceptance is measured
 /// independently. This component belongs to the camera and retires with it.
@@ -87,7 +103,9 @@ pub(super) fn build(app: &mut App) {
     if let Some(render) = app.get_sub_app_mut(RenderApp) {
         render
             .init_resource::<ReceiverCropViews>()
+            .init_resource::<ReceiverClearViews>()
             .init_resource::<WrappedShadowDraws>()
+            .add_systems(RenderStartup, init_receiver_clear_pipeline)
             .add_systems(
                 Render,
                 (
@@ -98,6 +116,27 @@ pub(super) fn build(app: &mut App) {
                 ),
             );
     }
+}
+
+fn init_receiver_clear_pipeline(
+    mut commands: Commands,
+    fullscreen: Res<FullscreenShader>,
+    cache: Res<PipelineCache>,
+) {
+    commands.insert_resource(ReceiverClearPipeline(cache.queue_render_pipeline(
+        RenderPipelineDescriptor {
+            label: Some("receiver_shadow_clear".into()),
+            vertex: fullscreen.to_vertex_state(),
+            depth_stencil: Some(DepthStencilState {
+                format: CORE_3D_SHADOW_MAP_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(CompareFunction::Always),
+                stencil: default(),
+                bias: default(),
+            }),
+            ..default()
+        },
+    )));
 }
 
 fn admit_materials(
@@ -395,11 +434,22 @@ fn receiver_rect(
 fn prepare_receiver_views(
     inputs: Res<ReceiverCropInputs>,
     mut output: ResMut<ReceiverCropViews>,
+    mut clear_views: ResMut<ReceiverClearViews>,
+    clear_pipeline: Option<Res<ReceiverClearPipeline>>,
+    cache: Res<PipelineCache>,
     cameras: Query<(Entity, &ViewLightEntities)>,
     lights: Query<&LightEntity>,
     directional: Query<&ExtractedDirectionalLight>,
+    mut shadows: Query<(&mut ShadowView, &ExtractedView)>,
 ) {
     output.0.clear();
+    clear_views.views.clear();
+    // Pipeline cache processing can run between preparation and the shadow
+    // pass. Pin the prepared pipeline for this frame alongside its views.
+    clear_views.pipeline = clear_pipeline
+        .as_ref()
+        .and_then(|pipeline| cache.get_render_pipeline(pipeline.0))
+        .cloned();
     for (camera, views) in &cameras {
         for view in &views.lights {
             if let Ok(LightEntity::Directional {
@@ -412,8 +462,66 @@ fn prepare_receiver_views(
                 && let Some(rect) = inputs.0.get(&(*light_entity, camera, *cascade_index))
             {
                 output.0.insert(*view, *rect);
+                // The replacement attachment and its clear command are admitted
+                // together. Without the pipeline or the matching native viewport,
+                // the native full clear remains responsible for this view.
+                if clear_views.pipeline.is_some()
+                    && let Ok((mut shadow, extracted)) = shadows.get_mut(*view)
+                    && extracted.viewport.x == 0
+                    && extracted.viewport.y == 0
+                    && extracted.viewport.z == rect.1
+                    && extracted.viewport.w == rect.1
+                {
+                    shadow.depth_attachment = DepthStencilViewAttachment::new(
+                        shadow.depth_attachment.depth_stencil_views.clone(),
+                        None,
+                        None,
+                    );
+                    clear_views.views.insert(*view, rect.0);
+                }
             }
         }
+    }
+}
+
+pub(super) fn clear_receiver_shadow_rects(
+    camera: ViewQuery<&ViewLightEntities>,
+    shadows: Query<&ShadowView>,
+    views: Res<ReceiverClearViews>,
+    mut ctx: RenderContext,
+) {
+    let Some(pipeline) = views.pipeline.as_ref() else {
+        return;
+    };
+    let lights = &camera.into_inner().lights;
+    if !lights.iter().any(|view| views.views.contains_key(view)) {
+        return;
+    }
+    // This runs immediately before the native early shadow pass. A depth-only
+    // fullscreen triangle writes the native reverse-Z clear value inside the
+    // admitted rectangle, including for an otherwise empty shadow phase.
+    for view in lights {
+        let Some(rect) = views.views.get(view) else {
+            continue;
+        };
+        let Ok(shadow) = shadows.get(*view) else {
+            continue;
+        };
+        let mut pass = ctx
+            .command_encoder()
+            .begin_render_pass(&RenderPassDescriptor {
+                label: Some("receiver_shadow_clear"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(
+                    shadow.depth_attachment.get_attachment(StoreOp::Store),
+                ),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        pass.set_pipeline(pipeline);
+        pass.set_scissor_rect(rect.x, rect.y, rect.z, rect.w);
+        pass.draw(0..3, 0..1);
     }
 }
 

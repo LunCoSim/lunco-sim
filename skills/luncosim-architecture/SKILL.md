@@ -891,6 +891,10 @@ Terrain strokes use producer-owned segment IDs and the mutable
 `lunco-terrain-surface` index. Ordinary edits publish dirty texels through
 `lunco-render::data_texture` and the renderer's partial-upload adapter;
 capacity growth follows the shared image descriptor and material refresh path.
+Each leaf's conservative render interval is updated and rolled back with its
+segment list. The shared terrain shader traverses that list once and retains
+separate pre-lighting material and post-lighting overlay tints; its diagnostic
+mode resolves both in segment order.
 The same typed queue carries complete R8 horizon visibility updates without
 reallocating equal-size GPU textures.
 See `docs/architecture/50-usd-driven-visuals.md` for the ownership and lifecycle

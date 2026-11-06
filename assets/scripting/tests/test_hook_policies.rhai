@@ -344,6 +344,27 @@ checks.push(t_true(invoked.ok == true && invoked.installed == true
         && invoked.value == "application/repl/evaluation/application",
     "nested hook invocation exposes the caller's typed REPL context to Rhai"));
 
+let wide_bound = bind_policy(
+    "camera.default_presentation",
+    "check_wide",
+    `fn check_wide(facts) {
+        if facts.len() != 81 || facts.nested.unit != "m/s" { throw "invalid wide facts"; }
+        for index in 0..80 {
+            if facts["value_" + index] != index { throw "invalid wide value"; }
+        }
+        "wide-ok"
+    }`,
+);
+let wide_facts = #{nested: #{unit: "m/s"}};
+for index in 0..80 { wide_facts["value_" + index] = index; }
+let wide_call = invoke_hook("camera.default_presentation", [wide_facts]);
+checks.push(t_true(wide_bound.ok && wide_call.ok && wide_call.value == "wide-ok",
+    "large typed hook maps retain every value and nested fact"));
+wide_facts["value_37"] = -1;
+let bad_wide_call = invoke_hook("camera.default_presentation", [wide_facts]);
+checks.push(t_true(!bad_wide_call.ok && bad_wide_call.error.contains("invalid wide value"),
+    "large typed hook maps deliver changed values to the policy"));
+
 let missing = invoke_hook("test.rhai.missing", []);
 checks.push(t_true(missing.ok == false && missing.status == "unavailable"
         && missing.installed == false,

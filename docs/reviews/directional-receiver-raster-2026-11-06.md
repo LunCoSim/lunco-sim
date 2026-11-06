@@ -141,6 +141,107 @@ millisecond but removes detail and is rejected. A standalone four-map 8192²
 hierarchy reduction costs roughly 3.81 ms; High uses Hardware2x2 comparison,
 while Balanced selects Gaussian. None of those trial implementations remains.
 
+The follow-up `target/perf/fps-20261106/material-detail/` assay uses the
+qualified diagnostic executable, paused at tick 1600. Transient shader-source
+changes conservatively retire receiver admission, so all five windows use full
+native shadow raster (7.636–7.659 ms). Original opaque means are
+8.446 / 8.340 / 8.759 ms. Disabling the three optional detail-texture branches
+produces byte-identical scene pixels but takes 9.227 ms; sharing their stochastic
+sample coordinates takes 9.509 ms, also with identical pixels. Neither trial
+establishes a gain and neither is retained. The green shader sentinel covers
+97.73% of the image, proving the edited terrain shader is the live consumer.
+All 548 model source hashes match, runtime diagnostics are clear and owned
+API/Tracy ports 6140/8220 close. This is GPU attribution, not new normal FPS
+acceptance; it does not justify removing authored detail or adding material
+specialization machinery.
+
+The `fps-20261106/shadow-reuse/` and `shadow-reuse-raw/` captures inspect
+native cascade inputs once per second in the fixed Griffin view. Four paused
+samples have unchanged matrices, membership, pose and mesh fingerprints. In
+20 playing samples, all four cascade matrices and pose fingerprints change in
+every one of 19 intervals; membership and mesh fingerprints stay constant.
+World-space changes alone are not a reuse verdict because the scene rebases.
+For the first 64 candidates per cascade, composing the captured f32 light and
+caster matrices in f64 still shows movement: the median per-interval shift of
+their local origins is approximately 0.298, 0.080, 0.038 and 0.007 shadow
+texels for cascades 0–3, respectively. This is an estimate at sampled origins,
+not a bound on all geometry or proof of per-frame changes. A cache must account
+for light-space movement, deformation, materials, raster state and allocation;
+unchanged membership alone cannot validate reuse. Both captures have matching
+548 source hashes, clean runtime diagnostics and closed owned API/Tracy ports
+6142/8222 and 6144/8224. They are diagnostic captures, not FPS measurements.
+
+The `fps-20261106/caster-inventory/` frozen-pose diagnostic paged every native
+caster bound for the Avatar's four Sun cascades. An offline estimate projects
+each local AABB with its captured transform and cascade matrix, retaining
+uncullable or missing bounds. It assumes the High preset's 30–3000 m split and
+pads the projected receiver rectangle by 0.05 NDC on each side. It identifies
+36/1070, 16/1109, 20/1150 and 68/1219 candidate entries outside those padded
+rectangles: 140/4548, or 3.08%, at this pose. Page fingerprints and matrices
+match across the paused inventory; source hashes and runtime diagnostics pass.
+This is a broad-phase estimate, not an exact native crop, draw-count or GPU-time
+measurement, and does not cover moving views. It does not establish an FPS
+gain sufficient to justify an extra per-frame visibility pass. The temporary
+diagnostic fields are removed, the qualified normal executable is restored,
+and owned API port 6146 is closed. The runtime log also reports a separate
+`environment_sun_light_projection` run-condition warning for follow-up.
+
+The celestial illuminance publisher now marks `SunState` changed only when its
+semantic revision changes. Its focused resource-change test covers unchanged,
+changed, invalid and withdrawn illuminance. The `fps-20261106/sun-change-normal/`
+Griffin run retains identical full/cropped shadow pixels, valid physics clocks,
+four authored checks, zero runtime diagnostic findings and all 548 source hashes.
+Cropped FPS windows are 52.27 and 53.88; this separate run does not establish a
+causal FPS improvement. The production directional-light GPU controls also pass.
+
+Tracy captures `sun-change-tracy/` and `sun-change-tracy-baseline/` have the
+same paused/live phase protocol; the older diagnostic executable has other
+renderer differences. In settled paused windows both show zero projection
+executions. In live windows the changed and older builds respectively measure
+about 40.9 and 42.6 projection executions/s, averaging 0.0099 and 0.0090 ms.
+This does not establish a Griffin performance improvement. The startup gate
+warning remains, and the input responsible is not yet attributed. Both Tracy
+captures retain matching source hashes and clear runtime diagnostics; all
+owned ports are closed. The normal production executable is restored.
+
+`fps-20261106/shadow-clear/` isolates the native shadow-pass floor with a
+temporary application draw-wrapper probe. In one paused 2K Griffin process,
+normal / suppressed / normal / suppressed / normal native shadow GPU means
+are 6.3190 / 3.1145 / 6.2542 / 3.1163 / 6.7742 ms. Suppressed phases retain
+the native shadow pass and attachments but issue no shadow draw commands;
+their visible lander shadow disappears. Normal images before, between and
+after are byte-identical. The remaining ~3.1 ms includes attachment clearing,
+storage and other pass overhead; this experiment does not isolate the clear
+operation alone. The probe is removed, source hashes and runtime diagnostics
+pass, owned API/Tracy ports 6158/8230 are closed, and the normal executable is
+restored. This diagnostic is not a product FPS result.
+
+The bounded-clear implementation uses the same proven receiver rectangle for a
+depth-only clear before native directional rasterization. The temporary
+`fps-20261106/bounded-clear-direct-ab/` control changed only the clear method,
+leaving the raster crop enabled in all phases. Native / bounded / native /
+bounded / native shadow GPU means were 6.2532 / 4.1870 / 6.2510 / 4.2083 /
+6.2678 ms; all five 2560×1360 scene viewports matched exactly. The final
+pipeline-pinned build's separate Tracy capture `bounded-clear-pinned-tracy/`
+measured 4.2078 ms paused and 4.1982 ms playing. The control was removed.
+
+The final normal build `c5e68dc93cf9c182703b39b1ce931c2901569722eb08d0e802cd9e662e37569f`
+passes `bounded-clear-pinned-fixture/`: native/bounded pixel equality after
+camera moves in both directions, unbounded-material retirement, 24 authored
+checks and camera teardown. `bounded-clear-verified-fixture/` additionally uses
+transient USD intent to remove all fixture casters, verifies the native cascade
+lists are empty, compares bounded/full pixels, and restores the casters. All
+four lists change from two casters to zero and back; removing the casters changes
+13,450 image pixels while the empty bounded/full images remain identical.
+`bounded-clear-shared-pinned/` passes four authored
+point/spot controls. In `bounded-clear-pinned-normal/`, pooled full and bounded
+windows measure 52.7085 and 58.3826 FPS, with median/p95 frame times 18.6494 /
+22.5959 and 16.9248 / 19.6919 ms. The comparison includes the existing raster
+crop as well as the clear. GPU SM means are 2525/2518/2528/2432/2507 MHz
+across A0/B0/A1/B1/A2; all frames and the worst 34.0625 ms bounded frame are
+retained. Physics advances 614–619 ticks per window, source hashes match and
+diagnostics are clear. The 100 and 150 FPS targets remain unmet.
+
 Initial normal cross-process crop windows show roughly 51.8→54.2–54.6 FPS but
 worse tails. Typed registration removes an unnecessary exclusive-world access;
 a subsequent cohort's baseline itself rises from 51.96 to 55.04 FPS, invalidating
@@ -152,3 +253,13 @@ sampled CPU clock collapse and 96–101 C temperatures. That is correlated
 clock/thermal evidence, not proof of a firmware mechanism. No power or fan
 policy is changed, and the short settled acceptance does not certify indefinite
 thermal stability. The 150 FPS and 1 ms Modelica targets remain open.
+
+An offline geometric estimate uses the previously captured fixed-pose camera,
+Sun cascade matrices and caster inventory to compare the current projected
+receiver rectangle with bands bounding its padded convex frustum projection.
+With a deliberately conservative 0.05 NDC padding on both axes, two equal
+horizontal or vertical bands retain approximately 92–94% of the rectangle's
+area; four retain approximately 89–91%. This estimate is not native GPU timing
+or a rigorous raster-proof implementation. Replaying every shadow draw for such
+a small area reduction is not currently justified; no banded path is retained.
+The inputs and per-cascade ratios are in `target/perf/fps-20261106/caster-inventory/run/estimated-bands.json`.

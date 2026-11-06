@@ -43,3 +43,12 @@ fn set_shadow_test_control(camera_path, full) {
         remove(camera, "TemporalJitter")
     }
 }
+
+// Move the live test camera without authoring its USD source, so each pixel
+// comparison exercises a different receiver rectangle.
+fn set_shadow_test_camera_x(camera_path, x) {
+    let camera = find_path(camera_path);
+    if camera < 0 { throw "shadow-control camera missing"; }
+    if !set(camera, "Transform.translation.x", x) { throw "shadow-control camera move failed"; }
+    true
+}
