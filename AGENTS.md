@@ -398,7 +398,9 @@ package checks after changing skill metadata or packaging.
   feed, not the human installer source. Windows uses an MSI with a selected
   installation directory (`current\` is the live payload). macOS installs `LunCoSim.app` where Installer
   selects, normally `/Applications` or `~/Applications`. Linux AppImage has no
-  system install: keep it writable and relaunch it from its placed path.
+  system install: keep it writable and relaunch it from its placed path. On
+  launch it registers a per-user application-menu entry and icon for desktop
+  integration.
 - The user asset cache is separate from the app: Linux `~/.cache/lunco/`, macOS
   `~/Library/Caches/lunco/`, Windows `%LOCALAPPDATA%\lunco\`. A real updater
   test launches the installed app/shortcut or the same writable AppImage;

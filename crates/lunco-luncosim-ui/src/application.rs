@@ -493,6 +493,10 @@ pub fn run_gui() -> AppExit {
             return AppExit::error();
         }
     };
+    #[cfg(all(target_os = "linux", feature = "package-icons"))]
+    if !offscreen {
+        crate::desktop_launcher::register_appimage_launcher();
+    }
     app.insert_resource(scene_loading_cli);
 
     #[cfg(all(

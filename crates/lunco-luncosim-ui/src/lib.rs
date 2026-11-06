@@ -9,6 +9,8 @@ mod application;
 mod camera;
 #[cfg(not(target_family = "wasm"))]
 mod debug_console;
+#[cfg(all(feature = "package-icons", any(target_os = "linux", test)))]
+mod desktop_launcher;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_simulation_host;
 #[cfg(feature = "api-transport")]

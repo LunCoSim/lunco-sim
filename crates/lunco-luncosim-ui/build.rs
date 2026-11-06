@@ -39,10 +39,13 @@ mod package_icons {
 
         let icon_rgba = out_dir.join("luncosim-icon.rgba");
         write_window_icon(&tree, &icon_rgba);
+        if target_os == "linux" {
+            write_png(&tree, 256, &out_dir.join("luncosim-desktop.png"));
+        }
         if target_os == "windows" {
             let icon_ico = out_dir.join("luncosim.ico");
             write_windows_ico(&tree, &icon_ico);
-            embed_windows_icon(&icon_ico);
+            println!("cargo::metadata=icon_path={}", icon_ico.display());
         }
         if let Some(icon_output_dir) = std::env::var_os("LUNCOSIM_ICON_OUTPUT_DIR") {
             write_package_icons(&tree, &target_os, Path::new(&icon_output_dir));
@@ -201,18 +204,6 @@ mod package_icons {
             )
         });
     }
-
-    #[cfg(windows)]
-    fn embed_windows_icon(icon: &std::path::Path) {
-        let mut resource = winresource::WindowsResource::new();
-        resource.set_icon(icon.to_str().expect("Windows icon path is valid UTF-8"));
-        resource
-            .compile()
-            .expect("failed to embed LunCoSim executable icon");
-    }
-
-    #[cfg(not(windows))]
-    fn embed_windows_icon(_icon: &std::path::Path) {}
 }
 
 fn main() {

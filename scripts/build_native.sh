@@ -355,7 +355,7 @@ verify_linux_appimage() {
         error "Velopack did not create a Linux AppImage in $appimage_dir"
         return 1
     fi
-    bash "$SCRIPT_DIR/verify_linux_appimage.sh" "$appimage"
+    bash "$SCRIPT_DIR/verify_linux_appimage.sh" "$appimage" "$PACKAGE_ICON"
 }
 
 # ── Write a README for the package ────────────────────────────────────────
@@ -771,16 +771,7 @@ if [ "$VELOPACK" -eq 1 ]; then
     # Keep one feed per runtime so a client can never select another
     # architecture's full package. Velopack channels accept this slug format.
     VPK_CHANNEL="$VPK_RUNTIME"
-    VPK_ICON_ARGS=()
-    VPK_INSTALLER_ARGS=()
-    if [ "$PLATFORM" = "windows" ]; then
-        VPK_INSTALLER_ARGS=(--msi --instLocation Either --msiVersion "$MSI_VERSION")
-    fi
-    if [ -n "$PACKAGE_ICON" ]; then
-        VPK_ICON_ARGS=(--icon "$PACKAGE_ICON")
-    fi
-    info "Creating Velopack release: version $RELEASE_VERSION, runtime $VPK_RUNTIME, channel $VPK_CHANNEL"
-    vpk pack \
+    VPK_ARGS=(pack \
         --packId "$VPK_PACK_ID" \
         --packTitle LunCoSim \
         --packVersion "$RELEASE_VERSION" \
@@ -788,9 +779,19 @@ if [ "$VELOPACK" -eq 1 ]; then
         --runtime "$VPK_RUNTIME" \
         --packDir "$OUT_DIR" \
         --mainExe "$BIN_NAME" \
-        "${VPK_ICON_ARGS[@]}" \
-        "${VPK_INSTALLER_ARGS[@]}" \
-        --outputDir "$VELOPACK_OUT"
+        --outputDir "$VELOPACK_OUT")
+    if [ "$PLATFORM" = "windows" ]; then
+        VPK_ARGS+=(--msi --instLocation Either --msiVersion "$MSI_VERSION")
+    fi
+    if [ -n "$PACKAGE_ICON" ]; then
+        VPK_ARGS+=(--icon "$PACKAGE_ICON")
+    fi
+    info "Creating Velopack release: version $RELEASE_VERSION, runtime $VPK_RUNTIME, channel $VPK_CHANNEL"
+    vpk "${VPK_ARGS[@]}"
+    if [ "$PLATFORM" = "windows" ] && [ "$BINARY" = "luncosim" ]; then
+        python3 "$SCRIPT_DIR/verify_windows_icons.py" "$PROJECT_DIR/$BIN_PATH" "$PACKAGE_ICON" \
+            "$VELOPACK_OUT/${VPK_PACK_ID}-${VPK_RUNTIME}-Portable.zip"
+    fi
     if ! find "$VELOPACK_OUT" -maxdepth 1 -type f -name "releases.$VPK_CHANNEL.json" -print -quit | grep -q .; then
         error "Velopack did not create releases.$VPK_CHANNEL.json in $VELOPACK_OUT"
         exit 1

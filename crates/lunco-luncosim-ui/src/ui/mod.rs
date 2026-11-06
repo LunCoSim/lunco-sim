@@ -1462,33 +1462,29 @@ fn init_current_scene_path(
 
 #[cfg(all(feature = "package-icons", not(target_arch = "wasm32")))]
 fn install_window_icon(
+    mut created: MessageReader<bevy::window::WindowCreated>,
     windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
-    winit_windows: Option<NonSend<bevy_winit::WinitWindows>>,
-    icon: Option<Res<WindowIconBytes>>,
-    mut installed: Local<bool>,
+    icon: Res<WindowIconBytes>,
+    _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
-    if *installed {
-        return;
-    }
-    let Some(winit_windows) = winit_windows else {
-        return;
-    };
-    let Some(icon_bytes) = icon else {
-        return;
-    };
-    for entity in &windows {
-        let Some(window) = winit_windows.get_window(entity) else {
-            continue;
-        };
-        match winit::window::Icon::from_rgba(icon_bytes.0.to_vec(), 64, 64) {
-            Ok(icon) => {
-                window.set_window_icon(Some(icon));
-                *installed = true;
-                info!("[window] installed LunCoSim icon");
+    bevy_winit::WINIT_WINDOWS.with_borrow(|winit_windows| {
+        for event in created.read() {
+            if windows.get(event.window).is_err() {
+                continue;
             }
-            Err(error) => warn!("[window] failed to install LunCoSim icon: {error}"),
+            let Some(window) = winit_windows.get_window(event.window) else {
+                warn!("[window] created primary window has no winit window");
+                continue;
+            };
+            match winit::window::Icon::from_rgba(icon.0.to_vec(), 64, 64) {
+                Ok(icon) => {
+                    window.set_window_icon(Some(icon));
+                    info!("[window] requested LunCoSim icon");
+                }
+                Err(error) => warn!("[window] failed to install LunCoSim icon: {error}"),
+            }
         }
-    }
+    });
 }
 
 /// Settings ▸ Data & libraries — the generic view over

@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -11,6 +12,40 @@ ROOT = Path(__file__).parents[2]
 
 
 class NightlyReleaseContractTests(unittest.TestCase):
+    def test_velopack_arguments_support_empty_options_under_nounset(self) -> None:
+        builder = (ROOT / "scripts/build_native.sh").read_text(encoding="utf-8")
+        script = builder.split("    VPK_ARGS=(pack \\\n", 1)[1]
+        script = "VPK_ARGS=(pack \\\n" + script.split('    vpk "${VPK_ARGS[@]}"', 1)[0]
+        script += '    vpk "${VPK_ARGS[@]}"\n'
+        harness = 'set -eu\ninfo() { :; }\nvpk() { printf "%s\\n" "$@"; }\n' + script
+        for platform, icon in (
+            ("macos", ""),
+            ("macos", "icon with spaces.icns"),
+            ("linux", "icon.png"),
+            ("windows", "icon.ico"),
+        ):
+            with self.subTest(platform=platform, icon=icon):
+                env = dict(
+                    os.environ, PLATFORM=platform, PACKAGE_ICON=icon,
+                    MSI_VERSION="1.0.15101", VPK_PACK_ID="luncosim",
+                    RELEASE_VERSION="0.6.0-nightly.151.1", VPK_CHANNEL="test-channel",
+                    VPK_RUNTIME="test-runtime", OUT_DIR="folder with spaces",
+                    BIN_NAME="luncosim", VELOPACK_OUT="output folder",
+                )
+                bash = "/bin/bash" if sys.platform == "darwin" else "bash"
+                result = subprocess.run([bash, "-c", harness], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = result.stdout.splitlines()
+                self.assertEqual(args[args.index("--packDir") + 1], "folder with spaces")
+                self.assertEqual(args[args.index("--outputDir") + 1], "output folder")
+                self.assertEqual("--msi" in args, platform == "windows")
+                if platform == "windows":
+                    self.assertEqual(args[args.index("--instLocation") + 1], "Either")
+                    self.assertEqual(args[args.index("--msiVersion") + 1], "1.0.15101")
+                self.assertEqual("--icon" in args, bool(icon))
+                if icon:
+                    self.assertEqual(args[args.index("--icon") + 1], icon)
+
     def test_version_generation_rejects_failed_or_missing_metadata(self) -> None:
         workflow = (ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
         step = workflow.split("      - id: version\n", 1)[1]
@@ -155,10 +190,11 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn('PACKAGE_FEATURE_ARGS+=(--features package-icons,updates)', package_builder)
         self.assertIn('LUNCOSIM_ICON_OUTPUT_STAMP="$ICON_OUTPUT_STAMP"', package_builder)
         self.assertIn("prepare_package_icon", package_builder)
-        self.assertIn('VPK_ICON_ARGS=(--icon "$PACKAGE_ICON")', package_builder)
+        self.assertIn('VPK_ARGS+=(--icon "$PACKAGE_ICON")', package_builder)
         self.assertIn('iconutil -c icns', package_builder)
         self.assertIn("write_windows_ico", icon_builder)
-        self.assertIn("embed_windows_icon", icon_builder)
+        self.assertIn("cargo::metadata=icon_path=", icon_builder)
+        self.assertIn("verify_windows_icons.py", package_builder)
         self.assertIn("write_macos_iconset", icon_builder)
         self.assertIn("write_linux_icons", icon_builder)
         self.assertIn("LUNCOSIM_ICON_OUTPUT_DIR", icon_builder)

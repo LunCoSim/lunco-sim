@@ -22,6 +22,10 @@ Background #0A0A0F · letters #FFFFFF · S-glyph #4DE3F5. Mark only, no wordmark
   32-bit PNG frames.
   The Windows build embeds it as the PE `ICON` resource and Velopack consumes
   the same file for Setup, Update, and shortcut branding.
+- The UI package generates the ICO and exports its path to the application
+  binary's build script, which links the resource into `luncosim.exe`. Velopack
+  copies that resource to its launcher. Windows packaging verifies both the
+  executable and the launcher against the generated ICO.
 - Geometry: full-bleed square, r = 6%.
 
 ## Linux
@@ -34,6 +38,9 @@ Background #0A0A0F · letters #FFFFFF · S-glyph #4DE3F5. Mark only, no wordmark
   entry from that package identity; the staging directory must not add another
   desktop entry. The final AppImage check requires the root filename, icon,
   `Exec`, `.DirIcon`, and `StartupWMClass` to agree.
+- When an AppImage starts, it registers a per-user `luncosim.desktop` launcher
+  pointing to that AppImage and its generated icon. This supplies the desktop
+  identity used by Wayland; an unrelated existing launcher is preserved.
 - Geometry: full-bleed rounded square, r = 24%.
 
 ## Vector sources

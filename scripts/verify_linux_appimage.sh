@@ -3,12 +3,13 @@
 
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-    echo "usage: $0 <appimage>" >&2
+if [ "$#" -ne 2 ]; then
+    echo "usage: $0 <appimage> <expected-icon.png>" >&2
     exit 2
 fi
 
 appimage="$(realpath "$1")"
+expected_icon="$(realpath "$2")"
 if [ ! -f "$appimage" ]; then
     echo "AppImage does not exist: $appimage" >&2
     exit 1
@@ -53,6 +54,11 @@ if [ "$(basename "$desktop_file")" != "$icon_name.desktop" ]; then
 fi
 if [ ! -e "$appdir/.DirIcon" ]; then
     echo "AppImage is missing root .DirIcon" >&2
+    exit 1
+fi
+if [ ! -f "$appdir/$icon_name.png" ] || ! cmp -s "$expected_icon" "$appdir/$icon_name.png" ||
+    ! cmp -s "$expected_icon" "$appdir/.DirIcon"; then
+    echo "AppImage root icon and .DirIcon must match the generated application icon" >&2
     exit 1
 fi
 

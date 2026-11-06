@@ -102,7 +102,7 @@ updates = ["ui", "lunco-luncosim-ui/updates", "dep:lunco-updater"]
 # Native package builds opt into icon rasterization only when the packaging
 # script requests it; ordinary GUI development keeps those build dependencies
 # out of the UI package graph.
-package-icons = ["lunco-luncosim-ui?/package-icons"]
+package-icons = ["lunco-luncosim-ui?/package-icons", "dep:winresource"]
 # Lean headless multiplayer server: API + networking host, NO `ui`. Build with
 # `--no-default-features --features server`. Celestial data remains external
 # through the runtime asset and dataset pipelines.
@@ -192,3 +192,6 @@ lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-workspace = { path = "../lunco-workspace" }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1.31", optional = true }

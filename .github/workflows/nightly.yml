@@ -164,6 +164,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify macOS packaging arguments
+        if: matrix.platform == 'macos'
+        run: python3 -m unittest scripts.tests.test_nightly_release_contract.NightlyReleaseContractTests.test_velopack_arguments_support_empty_options_under_nounset
+
       - name: Setup .NET for Velopack CLI
         uses: actions/setup-dotnet@v4
         with:

@@ -8848,6 +8848,7 @@ dependencies = [
  "lunco-workspace",
  "mimalloc",
  "serde_json",
+ "winresource",
 ]
 
 [[package]]
@@ -9355,12 +9356,12 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "tempfile",
  "usvg",
  "wasm-bindgen-futures",
  "web-sys",
  "windows-sys 0.61.2",
  "winit",
- "winresource",
 ]
 
 [[package]]

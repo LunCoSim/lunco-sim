@@ -119,6 +119,14 @@ The official installers are platform-specific:
 | macOS Intel | `LunCoSim-macOS-Intel.pkg` | The installed `LunCoSim.app` |
 | Linux x86_64 | `LunCoSim-Linux-x86_64.AppImage` | The same AppImage from a writable location |
 
+On Linux, starting the AppImage adds a per-user application-menu entry and icon
+so desktop environments, including Wayland, can identify its window. The entry
+follows the AppImage if you move and launch it again. An existing unrelated
+`luncosim.desktop` is left untouched. After deleting the AppImage, remove
+`~/.local/share/applications/luncosim.desktop` and
+`~/.local/share/icons/hicolor/256x256/apps/io.github.luncosim.AppImage.png` to
+remove this integration; use `$XDG_DATA_HOME` instead of `~/.local/share` if set.
+
 LunCoSim checks the matching runtime feed once when the GUI starts. When a new
 version is found, the status bar shows a red, clickable update notice. Click
 **Download update** to start or retry the download; the status bar reports the

@@ -39,6 +39,21 @@ build the fork's `Velopack.Vpk` project for `net8.0` in Debug mode. Put its
 The workflow contains the exact commands. Linux and macOS use the pinned
 published Velopack CLI.
 
+The Windows packaging script verifies that both the application executable and
+the Velopack launcher contain the generated ICO frames. A missing or incorrect
+resource fails the build before publication. With `LUNCOSIM_BIN` set to the
+production Windows executable, run `python scripts/api/test_windows_icon.py
+--port <free-port>` to verify the running window's icon and owned API shutdown.
+
+On Linux, launching the AppImage registers a per-user application-menu entry
+and icon under `$XDG_DATA_HOME` (normally `~/.local/share`) so Wayland can match
+the running window to its icon. The entry points to the same writable AppImage
+and is updated if it moves. An unrelated `luncosim.desktop` is never replaced.
+To remove this integration after deleting the AppImage, remove
+`applications/luncosim.desktop` and
+`icons/hicolor/256x256/apps/io.github.luncosim.AppImage.png` under that data
+directory.
+
 Verify the artifact itself, its desktop/icon contract, launch path, scene load,
 API readiness, and one relevant user workflow. Linux AppImages remain writable
 and must be relaunched from that same path for updater testing. The updater
