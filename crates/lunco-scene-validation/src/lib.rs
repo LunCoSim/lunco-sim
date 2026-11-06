@@ -10,6 +10,7 @@
 //! the same validation plugin and CLI entry point.
 
 pub mod lint_command;
+mod physics_lint;
 mod preparation;
 pub use preparation::QueryPreparationLimits;
 /// Typed, policy-neutral semantic SysML snapshot for authored Rhai tools.
@@ -35,5 +36,6 @@ impl bevy::prelude::Plugin for SceneValidationPlugin {
         }
         lint_command::register_all_commands(app);
         lint_command::register(app);
+        physics_lint::install(app);
     }
 }

@@ -173,6 +173,12 @@ entry = "initialize"
 deterministic = true
 
 [[policies]]
+hook = "lint.physics"
+source = "lint_physics.rhai"
+entry = "lint_physics"
+deterministic = true
+
+[[policies]]
 hook = "lint.usd"
 source = "lint_usd.rhai"
 entry = "lint_usd"

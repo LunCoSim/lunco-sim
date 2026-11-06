@@ -93,28 +93,31 @@ pub(crate) fn peer_simulates(world: &World, target: Entity) -> bool {
             .is_none()
 }
 
-/// One compiled wire: source endpoint + affine gain + the *index* of its target
-/// in [`CompiledWiring::targets`]. Connector names are owned here (cloned once at
-/// compile time); resolved backends avoid repeating name scans in the tick loop.
+/// One distinct source in the compiled communication-point snapshot. Names and
+/// resolved locators are retained only here, independently of fan-out.
 ///
-/// `src_resolved` caches the FMI-style [`ResolvedPort`] handle when the owning
+/// `src_resolved` retains the FMI-style [`ResolvedPort`] handle when the owning
 /// backend exposes slots, so the accumulate phase reads without re-resolving the
 /// name. Input-side sources use their readable-input resolver; `None` is reserved
 /// for a backend whose canonical access operation is name-based.
-struct CompiledWire {
+struct CompiledSource {
     src_entity: Entity,
     src_port: String,
     /// Read the source's input side — see [`SimConnection::start_is_input`].
     src_is_input: bool,
     src_resolved: Option<ResolvedPort>,
-    /// Index into [`CompiledWiring::targets`] — the accumulator slot.
+}
+
+/// One authored affine contribution, preserving the admitted summation order.
+struct CompiledWire {
+    source_index: usize,
     dst_index: usize,
     scale: f64,
     offset: f64,
 }
 
 /// One compiled target: the input endpoint every wire into it accumulates onto,
-/// with its resolved write handle (see [`CompiledWire::src_resolved`]).
+/// with its resolved write handle (see [`CompiledSource::src_resolved`]).
 struct CompiledTarget {
     entity: Entity,
     name: Arc<str>,
@@ -145,6 +148,7 @@ struct DetectedLoop {
 /// hot loop exchanges by slot, not by name-scan across backends.
 #[derive(Default)]
 pub struct CompiledWiring {
+    sources: Vec<CompiledSource>,
     wires: Vec<CompiledWire>,
     /// Distinct targets, one accumulator slot each.
     targets: Vec<CompiledTarget>,
@@ -171,6 +175,7 @@ pub struct PropagationCache {
 
 #[derive(Default)]
 struct PropagationScratch {
+    source_samples: Vec<Option<f64>>,
     accumulator: Vec<f64>,
     unavailable: Vec<bool>,
     held_values: Vec<Option<f64>>,
@@ -183,6 +188,15 @@ struct PropagationScratch {
     /// Acknowledgements of successful ledger publication in this compiled fabric.
     /// These never admit a write or decide whether a failure is already landed.
     landing_published: Vec<bool>,
+}
+
+enum ExchangeFailure {
+    RequiredSource(usize),
+    Input {
+        index: usize,
+        value: f64,
+        reason: String,
+    },
 }
 
 impl CompiledWiring {
@@ -226,6 +240,7 @@ impl CompiledWiring {
     /// here, so the per-tick loop does not repeat name resolution.
     fn rebuild(&mut self, world: &mut World) {
         self.contract_rejected = false;
+        self.sources.clear();
         self.wires.clear();
         self.targets.clear();
         self.target_indices.clear();
@@ -289,6 +304,7 @@ impl CompiledWiring {
             .collect();
         conns.sort_by(|a, b| a.1.compare_authoritative(&b.1, world));
 
+        let mut sources = HashMap::new();
         for (edge, c) in &conns {
             if c.start_element == Entity::PLACEHOLDER || c.end_element == Entity::PLACEHOLDER {
                 continue;
@@ -307,16 +323,25 @@ impl CompiledWiring {
             // Resolve against the correct causality side once. Input writes and
             // readable input sources have distinct resolver semantics because a
             // writable input may intentionally have no readable value.
-            let src_resolved = if c.start_is_input {
-                registry.resolve_input_read(world, c.start_element, &c.start_connector)
-            } else {
-                registry.resolve_output(world, c.start_element, &c.start_connector)
-            };
+            let source_index = *sources
+                .entry((c.start_element, c.start_connector.clone(), c.start_is_input))
+                .or_insert_with(|| {
+                    let index = self.sources.len();
+                    let src_resolved = if c.start_is_input {
+                        registry.resolve_input_read(world, c.start_element, &c.start_connector)
+                    } else {
+                        registry.resolve_output(world, c.start_element, &c.start_connector)
+                    };
+                    self.sources.push(CompiledSource {
+                        src_entity: c.start_element,
+                        src_port: c.start_connector.clone(),
+                        src_is_input: c.start_is_input,
+                        src_resolved,
+                    });
+                    index
+                });
             self.wires.push(CompiledWire {
-                src_entity: c.start_element,
-                src_port: c.start_connector.clone(),
-                src_is_input: c.start_is_input,
-                src_resolved,
+                source_index,
                 dst_index,
                 scale,
                 offset,
@@ -369,18 +394,19 @@ impl CompiledWiring {
         let mut nodes: Vec<Entity> = Vec::new();
         let mut edges: Vec<Vec<usize>> = Vec::new();
         for w in &self.wires {
+            let source = &self.sources[w.source_index];
             let dst = self.targets[w.dst_index].entity;
-            if w.src_entity == dst {
+            if source.src_entity == dst {
                 continue;
             }
-            for e in [w.src_entity, dst] {
+            for e in [source.src_entity, dst] {
                 node_ix.entry(e).or_insert_with(|| {
                     nodes.push(e);
                     edges.push(Vec::new());
                     nodes.len() - 1
                 });
             }
-            let (s, d) = (node_ix[&w.src_entity], node_ix[&dst]);
+            let (s, d) = (node_ix[&source.src_entity], node_ix[&dst]);
             if !edges[s].contains(&d) {
                 edges[s].push(d);
             }
@@ -448,6 +474,7 @@ impl CompiledWiring {
             let mut force_producing = false;
             let mut requires_realtime_safe = false;
             for w in &self.wires {
+                let source = &self.sources[w.source_index];
                 let dst = &self.targets[w.dst_index];
                 // A participant can feed a body-force port on itself (the
                 // common Modelica-to-Avian projection), so the force edge is
@@ -457,8 +484,8 @@ impl CompiledWiring {
                 // client-predicted dynamic body; authoritative host/standalone
                 // co-simulation is already fixed-step and must not be rejected
                 // as though it were a prediction loop.
-                if members.contains(&w.src_entity)
-                    && (w.src_entity == dst.entity || members.contains(&dst.entity))
+                if members.contains(&source.src_entity)
+                    && (source.src_entity == dst.entity || members.contains(&dst.entity))
                     && is_physics_force_port(&dst.name)
                 {
                     force_producing = true;
@@ -476,13 +503,13 @@ impl CompiledWiring {
                             .is_none();
                     requires_realtime_safe |= client_predicts && predicted_dynamic;
                 }
-                if w.src_entity != dst.entity
-                    && members.contains(&w.src_entity)
+                if source.src_entity != dst.entity
+                    && members.contains(&source.src_entity)
                     && members.contains(&dst.entity)
                 {
                     parts.push(format!(
                         "{:?}:{} -> {:?}:{}",
-                        w.src_entity, w.src_port, dst.entity, dst.name
+                        source.src_entity, source.src_port, dst.entity, dst.name
                     ));
                 }
             }
@@ -729,57 +756,6 @@ fn propagate_connections_with_cache(
         return;
     }
 
-    // Phase 2: seed accumulator slots.
-    let accumulate_span = bevy::log::info_span!("cosim_exchange_accumulate").entered();
-    scratch.accumulator.clear();
-    scratch.accumulator.resize(compiled.targets.len(), 0.0);
-    scratch.unavailable.clear();
-    scratch.unavailable.extend(
-        compiled
-            .targets
-            .iter()
-            .map(|target| target.waiting_for_binding),
-    );
-
-    // Phase 3: accumulate. Use a resolved handle whenever the winning backend
-    // supports slots. Port-surface revisions recompile the handles before this
-    // transaction, so a stale locator is never silently rerouted by name.
-    for w in &compiled.wires {
-        let read_src = |w: &CompiledWire| {
-            lunco_cosim_core::initialization::read_causal_sample(
-                &registry,
-                world,
-                w.src_entity,
-                &w.src_port,
-                w.src_is_input,
-            )
-        };
-        let src = match &w.src_resolved {
-            Some(resolved) => registry.read_resolved(world, w.src_entity, resolved),
-            None => read_src(w),
-        };
-        let Some(src) = src else {
-            scratch.unavailable[w.dst_index] = true;
-            if !w.src_is_input
-                && world
-                    .get::<lunco_cosim_core::RequiredOutputSamples>(w.src_entity)
-                    .is_some_and(|required| required.0.iter().any(|name| name == &w.src_port))
-            {
-                crate::failure::stop(
-                    world,
-                    "cosim-required-sample-unavailable",
-                    Some(w.src_entity),
-                    "co-simulation exchange",
-                    format!("required output '{}' has no physical sample", w.src_port),
-                );
-                return;
-            }
-            continue;
-        };
-        scratch.accumulator[w.dst_index] += src * w.scale + w.offset;
-    }
-    drop(accumulate_span);
-
     // Phase 4: preflight every eligible target before applying the input batch.
     // Gated per target (see `peer_simulates`), never by process role.
     // Terminal failures, rebuilt every tick so `GET /api/diagnostics` polls the
@@ -813,9 +789,53 @@ fn propagate_connections_with_cache(
         scratch.held_revision = Some(hold_revision);
     }
     drop(holds_span);
-    let write_span = bevy::log::info_span!("cosim_exchange_write").entered();
+    let mut write_span = None;
     scratch.write_targets.clear();
     let committed = registry.input_transaction(world, &mut scratch.writes, |transaction| {
+        let accumulate_span = bevy::log::info_span!("cosim_exchange_accumulate").entered();
+        scratch.accumulator.clear();
+        scratch.accumulator.resize(compiled.targets.len(), 0.0);
+        scratch.unavailable.clear();
+        scratch.unavailable.extend(
+            compiled
+                .targets
+                .iter()
+                .map(|target| target.waiting_for_binding),
+        );
+        scratch.source_samples.clear();
+        for (index, source) in compiled.sources.iter().enumerate() {
+            let sample = match &source.src_resolved {
+                Some(resolved) => transaction.read_resolved(source.src_entity, resolved),
+                None => lunco_cosim_core::initialization::read_causal_sample(
+                    &registry,
+                    transaction.world(),
+                    source.src_entity,
+                    &source.src_port,
+                    source.src_is_input,
+                ),
+            };
+            if sample.is_none()
+                && !source.src_is_input
+                && transaction
+                    .world()
+                    .get::<lunco_cosim_core::RequiredOutputSamples>(source.src_entity)
+                    .is_some_and(|required| required.0.iter().any(|name| name == &source.src_port))
+            {
+                return Err(ExchangeFailure::RequiredSource(index));
+            }
+            scratch.source_samples.push(sample);
+        }
+        // Read all source slots before committing any input. Fan-out reuses a
+        // fresh communication-point sample; authored affine sums keep their order.
+        for wire in &compiled.wires {
+            if let Some(value) = scratch.source_samples[wire.source_index] {
+                scratch.accumulator[wire.dst_index] += value * wire.scale + wire.offset;
+            } else {
+                scratch.unavailable[wire.dst_index] = true;
+            }
+        }
+        drop(accumulate_span);
+        write_span = Some(bevy::log::info_span!("cosim_exchange_write").entered());
         for (i, t) in compiled.targets.iter().enumerate() {
             if !peer_simulates(transaction.world(), t.entity) {
                 continue;
@@ -880,7 +900,11 @@ fn propagate_connections_with_cache(
                 continue;
             }
 
-            return Err((i, value, failure.to_string()));
+            return Err(ExchangeFailure::Input {
+                index: i,
+                value,
+                reason: failure.to_string(),
+            });
         }
         Ok(())
     });
@@ -892,7 +916,25 @@ fn propagate_connections_with_cache(
                 }
             }
         }
-        Err((index, value, failure)) => {
+        Err(ExchangeFailure::RequiredSource(index)) => {
+            let source = &compiled.sources[index];
+            crate::failure::stop(
+                world,
+                "cosim-required-sample-unavailable",
+                Some(source.src_entity),
+                "co-simulation exchange",
+                format!(
+                    "required output '{}' has no physical sample",
+                    source.src_port
+                ),
+            );
+            return;
+        }
+        Err(ExchangeFailure::Input {
+            index,
+            value,
+            reason: failure,
+        }) => {
             let target = &compiled.targets[index];
             scratch.landing_published[index] = false;
             scratch.broken.push(crate::failure::reject_input(
@@ -926,6 +968,76 @@ mod wire_order_tests {
     use super::*;
     use SimComponent;
     use lunco_core::GlobalEntityId;
+
+    #[test]
+    fn fanout_samples_one_fresh_source_per_communication_point() {
+        use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        #[derive(Component)]
+        struct Source(f64);
+        #[derive(Resource, Default)]
+        struct Reads(AtomicUsize);
+        let (mut world, endpoints) = diagnostic_publication_world(1, 8);
+        let source = world
+            .query::<&SimConnection>()
+            .iter(&world)
+            .next()
+            .unwrap()
+            .start_element;
+        world.entity_mut(source).insert(Source(2.0));
+        world.init_resource::<Reads>();
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |world, entity| u64::from(world.get::<Source>(entity).is_some()),
+            declare_ports: |world, entity, ports| {
+                if world.get::<Source>(entity).is_some() {
+                    ports.declare("signal", PortDirection::Out, Some(0));
+                }
+            },
+            metadata: |_, _, _, direction, _| {
+                PortMetadata::scalar(
+                    direction,
+                    None,
+                    None,
+                    None,
+                    "test source",
+                    "test source",
+                    false,
+                    None,
+                )
+            },
+            read_output: |_, _, _| None,
+            read_input: |_, _, _| None,
+            initial_expression: None,
+            read_slot: Some(|world, entity, _| {
+                world.resource::<Reads>().0.fetch_add(1, Ordering::Relaxed);
+                world.get::<Source>(entity).map(|source| source.0)
+            }),
+            read_input_slot: None,
+            write_slot: None,
+        });
+        crate::ports::register_builtin_port_backends(&mut registry);
+        world.insert_resource(registry);
+        for (point, value) in [2.0_f64, 3.5].into_iter().enumerate() {
+            world.get_mut::<Source>(source).unwrap().0 = value;
+            propagate_connections(&mut world);
+            assert_eq!(
+                world.resource::<Reads>().0.load(Ordering::Relaxed),
+                point + 1
+            );
+            for &endpoint in &endpoints {
+                assert_eq!(
+                    world
+                        .get::<lunco_port_core::Port>(endpoint)
+                        .unwrap()
+                        .value
+                        .to_bits(),
+                    value.to_bits()
+                );
+            }
+        }
+    }
 
     fn diagnostic_publication_world(source_count: usize, fanout: usize) -> (World, Vec<Entity>) {
         use lunco_port_core::ports::PortDirection;
@@ -1108,8 +1220,10 @@ mod wire_order_tests {
                 .iter()
                 .map(|w| {
                     (
-                        world.get::<GlobalEntityId>(w.src_entity).map(|id| id.get()),
-                        w.src_port.clone(),
+                        world
+                            .get::<GlobalEntityId>(compiled.sources[w.source_index].src_entity)
+                            .map(|id| id.get()),
+                        compiled.sources[w.source_index].src_port.clone(),
                     )
                 })
                 .collect()

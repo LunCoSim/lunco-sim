@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_pbr::render::{
     forward_io::VertexOutput,
     pbr_types,
@@ -8,7 +9,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::terrain_apply_sun_response;
+import super::terrain_surface::terrain_set_sun_response;
 
 //! Explicit non-authored terrain material with ray-marched heightfield sun shadows.
 //!
@@ -104,7 +105,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Powder reflection is supplied by the lunar scattering response.
     pbr_input.material.reflectance = vec3(0.0);
 
-    var color = pbr_functions::apply_pbr_lighting(pbr_input);
     var sun_vis = 1.0;
     var march_blend = 0.0;
 
@@ -118,8 +118,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
     }
 
-    color = terrain_apply_sun_response(
-        pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+    terrain_set_sun_response(
+        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+    var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;

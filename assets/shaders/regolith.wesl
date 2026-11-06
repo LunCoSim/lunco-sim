@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_pbr::render::{
     forward_io::VertexOutput,
     pbr_types,
@@ -8,7 +9,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position};
+import super::terrain_surface::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position};
 
 //! Lunar regolith material for the general `ShaderMaterial`.
 //!
@@ -238,7 +239,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Powder reflection is supplied by the lunar scattering response.
     pbr_input.material.reflectance = vec3(0.0);
 
-    var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     // Ray-marched heightfield sun shadow (the mesh gains planar UVs once
     // the horizon bake lands; before that this branch compiles out). The
@@ -257,8 +257,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     @if((!(VERTEX_UVS_A))) let sun_vis = 1.0;
     @if((!(VERTEX_UVS_A))) let march_blend = 0.0;
 
-    color = terrain_apply_sun_response(
-        pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+    terrain_set_sun_response(
+        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+    var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;

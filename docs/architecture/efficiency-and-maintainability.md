@@ -410,7 +410,16 @@ per-backend duplication" endgame, applied where it pays.
 
 `lunco-cosim/systems/propagate.rs` — `CompiledWiring::rebuild` resolves every wire
 source and every distinct target once; the accumulate/write phases exchange by
-handle. One-shot name callers (API `Get`/`SetPorts`, scripting, the inspector) are
+handle. Distinct source endpoints are sampled once per communication point,
+then wires accumulate in their original deterministic order. A sample never
+survives into another point. Source reads and target preflight share one
+`PortRegistry::input_transaction` immutable World borrow: each entity's exact
+owner-precedence prefix is evaluated once in that scope. Every locator still
+validates registry, World, entity, topology revision and its complete captured
+prefix. Proofs reset before and after the transaction, including rejection.
+Resolved writes borrow admitted metadata and stage only numeric commit data;
+retained `PreparedPortWrite` batches still revalidate against their later World.
+One-shot name callers (API `Get`/`SetPorts`, scripting, the inspector) are
 unchanged — they don't need resolution and pay no migration cost.
 
 Private port-name indexes and transaction duplicate sets use Bevy's

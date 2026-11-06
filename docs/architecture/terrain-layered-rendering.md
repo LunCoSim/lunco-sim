@@ -393,7 +393,12 @@ clipper preserves fresh f64 endpoints for both cache preparation and the outer
 breadth-first traversal. A reusable scratch queue and two child slots avoid
 per-cut allocation. The complete surface key fences every certificate. Whole
 raster cells use their two integer indices as their cache identity; refined
-rectangles additionally retain their exact coordinate bits. Nearby rays can share
+rectangles additionally retain their exact coordinate bits. The bounded certificate
+store packs coarse cells into 4-by-4 pages with stable process-local slots. A
+DDA traversal can reuse its current page without hashing adjacent cells; FIFO
+eviction retires empty pages and invalidates the hot slot before reuse. Exact
+rectangle certificates use their own keyed map and the same shared capacity.
+Nearby rays can share
 these spatial bounds while retaining their full f64 coordinates. The
 `SurfaceOcclusionBudget.max_ray_cache_depth` bound limits this preparation
 (eight cuts by default; zero skips preparatory cuts);
@@ -476,9 +481,13 @@ before loading `terrain_solar_visibility_invalid`, then requires the terminal
 
 The canonical fragment applies lunar photometry and heightfield visibility
 only to the selected Sun's direct contribution, using Bevy's directional BRDF
-and native shadow for that term. It does not multiply `base_color` or the
-completed PBR result. Ambient light and authored earthshine remain independent
-when a terrain horizon blocks direct Sun.
+and native shadow for that term. The shared `terrain_set_sun_response` selects
+the native light indices using the engine-supplied Sun direction and configures
+`PbrInput.directional_light_scale_mask` and `directional_light_scale` before
+lighting. Native PBR evaluates, shadows and accumulates each contribution once;
+the material does not multiply `base_color` or the completed PBR result.
+Ambient light and authored earthshine remain independent when a terrain horizon
+blocks direct Sun. See [the native response contract](render-decoupling.md#selected-directional-light-response).
 
 ### Distance and evidence contract
 
@@ -932,3 +941,12 @@ DEM prim with `RunScenarioAsset.target` set to that prim's entity. A scene-owned
 host supplies simulation query authorization. The scenario pages the complete
 native perimeter and compares it to the existing `TerrainHeights` mission
 query; visualization data does not become a second elevation oracle.
+
+
+Directional receiver raster bounds are a generic render-owner mechanism,
+[documented in render-decoupling](render-decoupling.md#directional-shadow-receiver-raster-bounds).
+The terrain fragment sources declare the surface receiver capability because
+their native directional lookups use the rasterized surface and its view depth.
+Their far-field heightfield/horizon-cache sampling is a separate owner and does
+not sample native directional maps at displaced positions. The capability does
+not alter either shadow source, DEM coverage, procedural detail or LOD policy.

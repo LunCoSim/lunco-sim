@@ -28,6 +28,7 @@ mod scene_depth;
 mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
+mod shadow_receiver_crop;
 mod shadow_view_schedule;
 
 mod world_label;
@@ -148,6 +149,7 @@ impl Plugin for LuncoRenderPlugin {
             // adapter — anything that wants to know what a surface looks like asks the
             // component the loader already filled, rather than re-deriving it.
             .register_type::<PbrLook>()
+            .register_type::<bevy::camera::visibility::RenderLayers>()
             .add_observer(bind_pbr_look)
             .add_systems(
                 Update,
@@ -178,6 +180,7 @@ impl Plugin for LuncoRenderPlugin {
         light_transform_safety::build(app);
         local_light_shadow_relevance::build(app);
         shadow_view_schedule::build(app);
+        shadow_receiver_crop::build(app);
         // Shadow filtering is a render policy, not a workbench concern. Attach it
         // when a camera enters the render graph so windowed and offscreen captures
         // use the same lunar terminator without either binary having a second

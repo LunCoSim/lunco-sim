@@ -50,6 +50,7 @@ domain "rhai"     → hook `lint.rhai`     → assets/scripting/policy/lint_rhai
 domain "modelica" → hook `lint.modelica` → assets/scripting/policy/lint_modelica.rhai
 domain "sysml"    → hook `lint.sysml`    → assets/scripting/policy/lint_sysml.rhai
 domain "twin"     → hook `lint.twin`     → assets/scripting/policy/lint_twin.rhai
+domain "physics"  → hook `lint.physics`  → assets/scripting/policy/lint_physics.rhai
 ```
 
 The authored `lint.rhai` policy rejects behavior that branches on the Rust
@@ -315,16 +316,16 @@ query("GetDiagnostics", #{doc_id: 7}); // includes per-producer generation and s
 …and the same verb over HTTP/MCP (`{"type":"ExecuteCommand","command":"RunLint"}`).
 After an authored change, the editor or launcher may issue the command again for
 that selected stage; it is still an explicit lint run. There is no cadence,
-background watcher, per-tick physics monitor, or emergency clamp. `ValidateAsset`
+background stage watcher, per-tick physics lint, or emergency clamp. `ValidateAsset`
 applies the file-derived rules to one composed file; it cannot observe projected
 runtime port owners. Automatic discovery may call loader-only preflight to hide
-assets that cannot load, but it must not invoke authored lint policies. Policies
+assets that cannot load, but it must not invoke authored lint policies. Stage/file policies
 run only when a user explicitly invokes `RunLint`, `ValidateAsset`,
 `ValidateSysml`, `ValidateTwin`, or the CLI validation command.
 `GetDiagnostics` reports `complete:false` while its composed and live evidence
 pass is pending; only a completed `ok:true` report is a clean acceptance
 result. Status and revision are tracked independently for `loaded_stages` and
-`twin`.
+`twin`. The small native solver-profile producer uses its own `physics` scope.
 The runtime connection facts are produced in Rust, while direction, pending
 versus missing severity, and message text remain in the Rhai policy. Emergent contact/topology failures still require
 the relevant behavioral test; a static lint must report "conditionally stable"
@@ -336,6 +337,42 @@ Rules are hot-swappable at that same level:
 bind_policy("lint.usd", "lint_usd", my_rules_source);    // next RunLint obeys
 unbind_policy("lint.usd");                                // remove the active implementation
 ```
+
+## Change-driven solver-profile lint
+
+`lunco-physics` owns the live native `SubstepCount`, the default of eight and the
+supported diagnostic range 1–64. More than eight remains allowed. The owner
+publishes `PhysicsSolverConfigurationChanged` after an actual configuration
+change; writing the same value does not publish again.
+
+`lunco-scene-validation::physics_lint` consumes that event and invokes
+`lint.physics` with typed integer facts `{substeps, standard_substeps}`. The
+startup-installed application policy chooses the threshold, severity and wording.
+The execution context is Application / Lifecycle / Event; it does not inherit a
+Twin simulation clock. Explicit `RunLint` preserves the command caller's typed
+execution context through the same consumer; document-scoped physics requests
+reject instead of inspecting an unrelated live solver. The hook is optional in hosts without scripting; hook
+failures and malformed decisions use the shared lint error semantics.
+
+The shipped rule `physics-substeps-above-standard` emits an **error-level
+advisory** describing a potential performance issue. This finding changes no
+solver state and raises no runtime fault. The same result is stored in
+`LintReport` and emitted as `physics.solver-profile` status telemetry. The native
+StatusBus consumes its severity/message into Recent Events. An unchanged finding
+does not emit again. Restoring eight clears the current diagnostic; Recent
+Events retains the historical report.
+
+The producer wakes on owner changes, policy-generation changes, and scene-cache
+reset. It never traverses the stage or runs on every simulation tick. Its cache
+uses the shared scene lifecycle so a retired Twin cannot retain current findings.
+`RunLint {domain: "physics"}` invokes this same consumer explicitly;
+`GetDiagnostics {scope: "physics"}` reads its current report. A host without the
+native physics owner reports a failed scope with an explicit availability reason;
+it cannot report a clean physics lint. Full stage lint remains explicit.
+Production verification is
+`scripts/api/test_physics_solver_profile.py`: authored Rhai checks 16/64 remain
+enabled and non-faulting, eight clears findings, repeated writes do not spam,
+and out-of-range inputs are rejected without changing the admitted setting.
 
 ## Two entry points, one rule set
 

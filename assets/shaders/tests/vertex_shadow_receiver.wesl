@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_pbr::render::{forward_io::VertexOutput, mesh_functions, shadows, mesh_view_bindings::{view, lights}};
 
 // Green: the vacated position is lit. Cyan: the displaced caster casts here.

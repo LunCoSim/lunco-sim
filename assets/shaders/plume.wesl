@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_pbr::render::{mesh_functions, forward_io::VertexOutput, mesh_view_bindings::view};
 @if((DEPTH_PREPASS))
 import bevy_pbr::prepass::utils::prepass_depth;

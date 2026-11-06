@@ -772,10 +772,10 @@ dependencies = [
 [[package]]
 name = "avian3d"
 version = "0.8.0"
-source = "git+https://github.com/LunCoSim/avian?rev=288b3e81034e334cab07046d680537ceede31102#288b3e81034e334cab07046d680537ceede31102"
+source = "git+https://github.com/LunCoSim/avian?rev=b8d1f5a3d5aeeb61220813e82607ca6a74e7057a#b8d1f5a3d5aeeb61220813e82607ca6a74e7057a"
 dependencies = [
  "approx 0.5.1",
- "avian_derive 0.2.3 (git+https://github.com/LunCoSim/avian?rev=288b3e81034e334cab07046d680537ceede31102)",
+ "avian_derive 0.2.3 (git+https://github.com/LunCoSim/avian?rev=b8d1f5a3d5aeeb61220813e82607ca6a74e7057a)",
  "bevy",
  "bevy_curve",
  "bevy_heavy",
@@ -812,7 +812,7 @@ dependencies = [
 [[package]]
 name = "avian_derive"
 version = "0.2.3"
-source = "git+https://github.com/LunCoSim/avian?rev=288b3e81034e334cab07046d680537ceede31102#288b3e81034e334cab07046d680537ceede31102"
+source = "git+https://github.com/LunCoSim/avian?rev=b8d1f5a3d5aeeb61220813e82607ca6a74e7057a#b8d1f5a3d5aeeb61220813e82607ca6a74e7057a"
 dependencies = [
  "proc-macro-error3",
  "proc-macro2",
@@ -2092,7 +2092,6 @@ checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 [[package]]
 name = "bevy_pbr"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=eabfa346c153337a287c0de0b3513efe6b820e04#eabfa346c153337a287c0de0b3513efe6b820e04"
 dependencies = [
  "arrayvec",
  "bevy_app",
@@ -10373,10 +10372,12 @@ dependencies = [
  "lunco-lint",
  "lunco-materials",
  "lunco-modelica-ast",
+ "lunco-physics",
  "lunco-port-core",
  "lunco-storage",
  "lunco-sysml",
  "lunco-sysml-ast",
+ "lunco-telemetry-core",
  "lunco-terrain-surface",
  "lunco-tools",
  "lunco-twin",

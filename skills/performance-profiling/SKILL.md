@@ -14,7 +14,10 @@ For name-processing hotspots, distinguish named admission from numerical executi
 `publish_outputs` binds source indices to declared destination slots. Its private
 storage and `ReflectReadOnly` contract must remain intact. `ResolvedPort` validates
 its complete lease without named declaration/metadata callbacks; owner contract-key
-callbacks remain part of liveness cost and must be profiled. `DeclaredOutputPorts`
+callbacks remain part of liveness cost and must be profiled. A scalar exchange
+shares their exact per-entity precedence proofs only inside one immutable input
+transaction. Distinct sources are freshly sampled once at each communication
+point; wire accumulation order remains authoritative. `DeclaredOutputPorts`
 admits its immutable names and structural key together; numerical readers consume
 that key without rehashing the declaration inventory. Never remove those
 checks or weaken duplicate-alias, non-finite, stale-session or atomic-write gates
@@ -22,10 +25,13 @@ to improve a timing.
 
 ## Required separation
 
-- Use the root manifest's shared Bevy patches for ordinary measurements. Shader,
-  render, light and PBR owners share one pinned revision; record that exact source
-  with the executable. A historical local path override is a different dependency
-  cohort, even when the application and Twin names match.
+- Use the root manifest's Bevy patches for ordinary measurements. Record each
+  selected owner's revision and local diff with the executable, including a
+  maintained path dependency when the manifest selects one. A command-line path
+  override is a different dependency cohort, even when application and Twin
+  names match. Qualify native PBR input changes together with their application
+  shader consumers; use the directional-response GPU gate documented in
+  [render decoupling](../../docs/architecture/render-decoupling.md#selected-directional-light-response).
 - A faster worker can expose a clock-boundary defect. Compare
   `clock_snapshot().transport_rate` with `virtual_rate` after a pacing-clock
   update, through pause and
@@ -1084,8 +1090,8 @@ Avian resolution and named declarations use immutable name candidates derived
 from `AVIAN`; metadata consumes the selected live slot. Preserve candidate order and live group
 membership on removal, re-admission and mobility edits; full inspection retains
 table order. The index does not authorize a write or cache world membership.
-`write_resolved` shares its locator's `Arc<str>` with canonical input-write
-preparation, compares the live owner with its locator, then commits within
+`write_resolved` borrows its locator's name and metadata for canonical input-write
+preflight, compares the live owner with its locator, then commits within
 the same exclusive World boundary without a name or single-element batch allocation.
 Registry clones share the immutable backend table; registration detaches it
 without changing existing snapshots or their precedence. Verify snapshot
@@ -1589,6 +1595,9 @@ buffer flush order. Keep custom roots, cameras and directional cascades on
 their selected schedules. Verify the same early/late shared and camera shadow
 pass inventory before and after, plus visible shadow maps and normal frame
 timings. Fewer schedule systems alone does not establish faster frames.
+
+Read the selected quality profile before proposing a filter optimization:
+High uses Hardware 2×2, while Balanced uses Gaussian filtering.
 
 Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free
 events: a no-match query can still inspect candidate entities, and separate
@@ -2217,3 +2226,45 @@ long after visual projection when its admission rate is lower than the producer.
 `PendingInputConnections` records sources awaiting port-surface projection;
 initialization consumes that owner fact rather than treating omitted edges as
 unconnected inputs.
+
+For solver-resolution diagnostics, eight remains the production default and the
+native 1–64 diagnostic range stays available. `lint.physics` reports settings
+above eight as an advisory error in `GetDiagnostics {scope: "physics"}` and
+Recent Events through `physics.solver-profile`. It must not clamp resolution,
+fault physics, or repeat the event while the finding is unchanged. Qualify the
+shared change-driven consumer with `scripts/api/test_physics_solver_profile.py`;
+retain actual substeps and native relaxation iterations with every timing cohort.
+
+Terrain occlusion certificate storage preserves exact cell/rectangle identities,
+f64 bounds, traversal order, quotas and surface invalidation. Coarse cells share
+bounded 4-by-4 pages; a hot page slot is valid only while its exact key remains
+admitted. Compare both warm and miss-heavy cases of
+`certified_cache_moving_ray_diagnostic`; cache lookup gains are not whole solar
+visibility or FPS gains. The production solar visibility, night and invalid-input
+Rhai gates qualify the shared physical consumer.
+
+Native joint relaxation binds its solver body indices once during the same
+immutable mapping/component borrow used by all passes. Retain ascending entity
+order, disabled-body filtering, static-body semantics, row/factor preparation,
+substeps and iteration count. A setup optimization does not justify reducing
+numerical resolution. Qualify native joint and contact fixtures and compare any
+failed gate with the before executable; preserve failure details.
+
+Directional receiver raster culling preserves the native atlas and texel density;
+its capability and lifetime contract is in
+[render-decoupling](../../docs/architecture/render-decoupling.md#directional-shadow-receiver-raster-bounds).
+A shader reload conservatively retires its crop admission for that asset's
+lifetime. Restart an owned process before clean FPS acceptance after shader
+editing, and inspect its camera's `DirectionalShadowRaster` projection facts.
+Require native GPU timing and image equality as well as projected texel counts.
+
+For a same-process raster A/B control, use the authored
+`scenarios/tests/shadow_receiver_crop.rhai::set_shadow_test_control` helper on
+the actual active window camera. It adds/removes the native `TemporalJitter`
+with explicit `[0, 0]` offset; conservative temporal-camera admission requests
+full native raster without changing projection or quality. First require
+paused viewport pixel equality across full/cropped/full, then resume physics
+and alternate settled windows in that process. Record ticks, readiness, camera,
+frame history and GPU clocks; zero source edits or shader reloads belong in
+that comparison. Offscreen mirror-camera admission is a separate projection;
+do not treat a source-camera fact as proof of its mirror's GPU state.

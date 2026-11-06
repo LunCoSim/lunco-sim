@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_pbr::render::{mesh_functions, view_transformations::position_world_to_clip, mesh_view_bindings::view};
 @if((PREPASS_PIPELINE))
 import bevy_pbr::prepass::io::{Vertex, VertexOutput};

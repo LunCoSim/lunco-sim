@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_pbr::render::{
     forward_io::VertexOutput,
     mesh_functions,

@@ -85,6 +85,20 @@ pub use support::{
 ///
 pub const DEFAULT_SUBSTEP_COUNT: u32 = 8;
 
+/// Diagnostic consumers refresh from the native owner after its configuration changes.
+#[derive(Event)]
+pub struct PhysicsSolverConfigurationChanged;
+
+/// Configuration notifications precede consumers without changing solver admission.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PhysicsConfigurationSet {
+    Publish,
+}
+
+fn publish_solver_configuration_change(mut commands: Commands) {
+    commands.trigger(PhysicsSolverConfigurationChanged);
+}
+
 /// Native CCD configuration for an explicitly admitted continuous body.
 /// Speculative contacts expand moving broad-phase bounds before solving;
 /// nonlinear sweeps additionally catch motion past thin or rotating geometry.
@@ -182,7 +196,9 @@ pub fn set_solver_substeps(world: &mut World, count: u32) -> Result<(), String> 
     {
         return Err("Avian SubstepCount resource is not installed".to_string());
     };
-    world.resource_mut::<avian3d::prelude::SubstepCount>().0 = count;
+    if solver_substeps(world) != Some(count) {
+        world.resource_mut::<avian3d::prelude::SubstepCount>().0 = count;
+    }
     Ok(())
 }
 
@@ -1230,6 +1246,9 @@ impl Plugin for PhysicsGatePlugin {
             // target; no app-level duplicate or target-specific selection is
             // permitted.
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
+            .add_systems(Update, publish_solver_configuration_change
+                .in_set(PhysicsConfigurationSet::Publish)
+                .run_if(resource_changed::<avian3d::prelude::SubstepCount>))
             .init_resource::<PhysicsComputeProfile>()
             .init_scene_resource::<PhysicsHolds>()
             .init_scene_resource_with::<ContactGraph>(ContactGraph::clear)

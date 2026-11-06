@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_pbr::render::{
     forward_io::VertexOutput,
     pbr_types,
@@ -9,7 +10,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
+import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_surface_occlusion, surface_annotation_color};
 
 //!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
@@ -515,7 +516,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // smooth dielectric GGX lobe washes out raster contrast at grazing angles.
     pbr_input.material.reflectance = vec3(0.0);
 
-    var color = pbr_functions::apply_pbr_lighting(pbr_input);
     var sun_vis = 1.0;
     var march_blend = 0.0;
 
@@ -528,8 +528,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
     }
 
-    color = terrain_apply_sun_response(
-        pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+    terrain_set_sun_response(
+        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+    var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     // ── Overlay plane (UNLIT, doc 18 §4): the mineral/classification drape
     // composites over the LIT result — after PBR, after the sun march, after

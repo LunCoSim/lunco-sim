@@ -30,6 +30,8 @@ lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-hash = { path = "../lunco-hash" }
 lunco-lint = { path = "../lunco-lint" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }

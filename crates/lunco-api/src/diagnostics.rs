@@ -39,8 +39,8 @@ impl ApiQueryProvider for GetDiagnosticsProvider {
                     name: "scope".to_owned(),
                     type_name: "string".to_owned(),
                     required: false,
-                    description: "Scene lint scope: loaded_stages or twin".to_owned(),
-                    allowed_values: Some(vec!["loaded_stages".to_owned(), "twin".to_owned()]),
+                    description: "Lint scope: loaded_stages, twin, or physics".to_owned(),
+                    allowed_values: Some(vec!["loaded_stages".to_owned(), "twin".to_owned(), "physics".to_owned()]),
                 },
             ]),
             exactly_one_of: vec![vec!["doc_id".to_owned(), "scope".to_owned()]],
@@ -198,10 +198,10 @@ fn document_diagnostics(world: &World, doc_id: DocumentId) -> ApiQueryResult {
 }
 
 fn scene_diagnostics(world: &World, scope: &str) -> ApiQueryResult {
-    if !matches!(scope, "loaded_stages" | "twin") {
+    if !matches!(scope, "loaded_stages" | "twin" | "physics") {
         return Err(ApiQueryError::new(
             ApiErrorCode::DeserializationError,
-            "GetDiagnostics `scope` must be `loaded_stages` or `twin`",
+            "GetDiagnostics `scope` must be `loaded_stages`, `twin`, or `physics`",
         ));
     }
     let report = world.get_resource::<lunco_lint::LintReport>();
@@ -210,7 +210,11 @@ fn scene_diagnostics(world: &World, scope: &str) -> ApiQueryResult {
             report
                 .findings
                 .iter()
-                .filter(|finding| (scope == "twin") == (finding.domain.as_deref() == Some("twin")))
+                .filter(|finding| match scope {
+                    "physics" => finding.domain.as_deref() == Some("physics"),
+                    "twin" => finding.domain.as_deref() == Some("twin"),
+                    _ => !matches!(finding.domain.as_deref(), Some("physics" | "twin")),
+                })
                 .map(|finding| diagnostic_api_value(finding, None, None))
                 .collect::<Vec<_>>()
         })
@@ -240,9 +244,13 @@ fn scene_diagnostics(world: &World, scope: &str) -> ApiQueryResult {
     } else {
         "ready"
     };
-    let domain = if scope == "twin" { "twin" } else { "usd" };
+    let domain = match scope {
+        "twin" => "twin",
+        "physics" => "physics",
+        _ => "usd",
+    };
     let channel = api_value!({
-        "id": if scope == "twin" { "lint.twin" } else { "lint.loaded-stages" },
+        "id": match scope { "twin" => "lint.twin", "physics" => "lint.physics", _ => "lint.loaded-stages" },
         "domain": domain,
         "generation": (),
         "revision": scope_report.map(|report| report.revision),

@@ -1,3 +1,4 @@
+//!@capability lunco.shadow-receiver.surface.v1
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 import bevy_pbr::render::utils::coords_to_viewport_uv;
 import bevy_render::view::View;

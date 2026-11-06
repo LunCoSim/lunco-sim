@@ -15,9 +15,9 @@
 //     shadow-hiding term (<~20°) plus a narrow coherent-backscatter spike
 //     (<~3°). Lambert/GGX has no term that brightens toward the *light*.
 //
-// The shared terrain lighting helper applies this factor to the reconstructed
-// canonical Sun contribution after `apply_pbr_lighting`. Bevy's Lambert term
-// has already supplied μ₀, so the result is albedo · μ₀/(μ₀+μ) · B(α) — the
+// The shared terrain lighting helper configures this factor for the selected
+// Sun before native PBR accumulation. Bevy's Lambert term supplies μ₀, so the
+// result is albedo · μ₀/(μ₀+μ) · B(α) — the
 // Lommel-Seeliger response with opposition surge. Applying it to `base_color`
 // would also change earthshine, environment fill, and other authored lights.
 // The factor is geometry-only and clamped; the direct response remains bounded

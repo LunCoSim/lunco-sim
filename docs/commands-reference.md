@@ -3214,7 +3214,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `domain` | `String` |  Restrict to one lint domain (`"usd"`). Empty = every domain this scene  can produce facts for. Named rather than enumerated so a domain added  later needs no change to this verb. |
+| `domain` | `String` |  Restrict to one lint domain (`"usd"` or `"physics"`). Empty = every domain this scene  can produce facts for. Named rather than enumerated so a domain added  later needs no change to this verb. |
 | `scope` | `String` |  Inspection scope. Empty or `"loaded_stages"` keeps the existing live  stage behavior; `"twin"` inspects the active Twin's resolver namespaces. |
 | `policy` | `String` |  Twin namespace severity policy: `"warn"` (default) or `"error"`.  The policy is passed to authored Rhai; facts and collision ownership stay  in the generic Rust inspection path. |
 | `doc_id` | `Option < u64 >` |  When present, lint exactly this open Editor document after its projected  stage reaches the document generation. Omitted keeps the loaded-scene  behavior for live simulation callers. |
@@ -4705,7 +4705,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 316 commands from the runtime schema; scanned 1085 .rs files for docs (0 parse failure(s) skipped).
+<!-- 316 commands from the runtime schema; scanned 1086 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetVisualLead, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

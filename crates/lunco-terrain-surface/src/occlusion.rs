@@ -54,12 +54,124 @@ impl CellBoundsKey {
 }
 type RayCoverEntry = ([f64; 4], [f64; 2], usize);
 
+// Adjacent raster cells share a small page. The DDA visits a page without
+// hashing each cell; exact subrectangle certificates retain their own keys.
+const CELL_PAGE_SIDE: usize = 4;
+const CELL_PAGE_LEN: usize = CELL_PAGE_SIDE * CELL_PAGE_SIDE;
+
+#[derive(Default)]
+struct CellPage {
+    values: [Option<[f64; 2]>; CELL_PAGE_LEN],
+    used: usize,
+}
+
+/// One bounded certificate store. Coarse cell pages have stable slots, so an
+/// adjacent DDA cell can reuse its page without hashing or moving stored bounds.
+/// Empty pages retire immediately; the exact page key fences the hot slot.
+#[derive(Default)]
+struct BoundsStore {
+    rectangles: HashMap<CellBoundsKey, [f64; 2]>,
+    page_slots: HashMap<[usize; 2], usize>,
+    pages: Vec<Option<CellPage>>,
+    free: Vec<usize>,
+    hot: Option<([usize; 2], usize)>,
+    cells: usize,
+}
+
+impl BoundsStore {
+    fn location(x: usize, z: usize) -> ([usize; 2], usize) {
+        (
+            [x / CELL_PAGE_SIDE, z / CELL_PAGE_SIDE],
+            (z % CELL_PAGE_SIDE) * CELL_PAGE_SIDE + x % CELL_PAGE_SIDE,
+        )
+    }
+
+    fn page_slot(&mut self, key: [usize; 2]) -> Option<usize> {
+        if let Some((current, index)) = self.hot
+            && current == key
+        {
+            return Some(index);
+        }
+        let index = *self.page_slots.get(&key)?;
+        self.hot = Some((key, index));
+        Some(index)
+    }
+
+    fn get(&mut self, key: &CellBoundsKey) -> Option<[f64; 2]> {
+        match *key {
+            CellBoundsKey::Cell { x, z } => {
+                let (key, index) = Self::location(x, z);
+                let page = self.page_slot(key)?;
+                self.pages[page].as_ref()?.values[index]
+            }
+            CellBoundsKey::Rectangle { .. } => self.rectangles.get(key).copied(),
+        }
+    }
+
+    fn insert(&mut self, key: CellBoundsKey, value: [f64; 2]) {
+        match key {
+            CellBoundsKey::Cell { x, z } => {
+                let (key, index) = Self::location(x, z);
+                let slot = self.page_slot(key).unwrap_or_else(|| {
+                    let slot = self.free.pop().unwrap_or_else(|| {
+                        self.pages.push(None);
+                        self.pages.len() - 1
+                    });
+                    self.pages[slot] = Some(CellPage::default());
+                    self.page_slots.insert(key, slot);
+                    self.hot = Some((key, slot));
+                    slot
+                });
+                let page = self.pages[slot].as_mut().expect("admitted bounds page");
+                if page.values[index].replace(value).is_none() {
+                    page.used += 1;
+                    self.cells += 1;
+                }
+            }
+            CellBoundsKey::Rectangle { .. } => {
+                self.rectangles.insert(key, value);
+            }
+        }
+    }
+
+    fn remove(&mut self, key: &CellBoundsKey) {
+        match *key {
+            CellBoundsKey::Cell { x, z } => {
+                let (key, index) = Self::location(x, z);
+                if let Some(slot) = self.page_slot(key) {
+                    let page = self.pages[slot].as_mut().expect("admitted bounds page");
+                    if page.values[index].take().is_some() {
+                        page.used -= 1;
+                        self.cells -= 1;
+                    }
+                    if page.used == 0 {
+                        self.pages[slot] = None;
+                        self.page_slots.remove(&key);
+                        self.free.push(slot);
+                        self.hot = None;
+                    }
+                }
+            }
+            CellBoundsKey::Rectangle { .. } => {
+                self.rectangles.remove(key);
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.cells + self.rectangles.len()
+    }
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Reusable conservative spatial enclosures, invalidated by the complete surface key.
 /// FIFO admission bounds memory without making cache residency authoritative.
 #[derive(Default)]
 pub struct SurfaceOcclusionCache {
     surface: Option<u64>,
-    cells: HashMap<CellBoundsKey, [f64; 2]>,
+    cells: BoundsStore,
     order: std::collections::VecDeque<CellBoundsKey>,
     ray_cover: std::collections::VecDeque<RayCoverEntry>,
 }
@@ -87,7 +199,7 @@ impl SurfaceOcclusionCache {
         capacity: usize,
     ) -> Result<[f64; 2], String> {
         if let Some(bounds) = self.cells.get(&key) {
-            return Ok(*bounds);
+            return Ok(bounds);
         }
         let bounds = {
             let _span = bevy::log::debug_span!("terrain_occlusion_bounds_miss").entered();

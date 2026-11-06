@@ -35,6 +35,17 @@ through `SceneCameraAudit` before comparing screenshots or FPS. Read the settled
 active camera pose through `QueryEntity` before and after an FPS window; startup
 view restoration can replace an early camera command.
 
+Directional shadow raster bounds are owned by `lunco-render-bevy`; see
+[the receiver contract](../../docs/architecture/render-decoupling.md#directional-shadow-receiver-raster-bounds).
+Only sources satisfying that complete contract declare
+`//!@capability lunco.shadow-receiver.surface.v1`. Unknown consumers keep native
+full-map rendering. Source reload retires the proof for the Shader asset's
+lifetime, so restart the owned app for performance acceptance after shader
+editing. Inspect camera `DirectionalShadowRaster` facts through typed reflection;
+these describe projected admission, not GPU acceptance. Run
+`scripts/api/test_shadow_receiver_crop.py --port <free-port> --output <dir>`
+for Rhai admission, negative source, pixel and retirement checks.
+
 Editor inspection uses a neutral studio rig, camera-local ambient fill and one
 view-sized shadow cascade. Verify those cameras separately from physical scene
 lighting; the mission sky and Sun calibration must not replace the CAD preview

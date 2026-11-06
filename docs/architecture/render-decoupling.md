@@ -322,6 +322,36 @@ without relying on optional debug names.
 Production pass inventory, visible shadows and a normal artifact comparison
 are required to establish correctness and a performance gain.
 
+### Selected directional-light response
+
+The maintained Bevy PBR owner exposes two numerical `PbrInput` fields:
+`directional_light_scale_mask` selects native directional-light indices by bit,
+and `directional_light_scale` multiplies their front-surface radiance after
+native shadows, before exposure. The constructor initializes mask zero and
+scale one. The native buffer admits at most ten directional lights, fitting
+the 32-bit mask. Unselected lights, indirect lighting, emissive light and
+transmission retain their native accumulation. Clearcoat remains part of the
+native front-surface BRDF. No material policy or scene identity enters Bevy.
+
+Application shaders configure the response through the shared
+`terrain_set_sun_response` before calling `apply_pbr_lighting`. The material
+owner bounds photometry and visibility and matches the engine-selected Sun
+direction, including all matching native indices. Cascade-debug rendering
+retains native visualization. The response is fragment-local numerical data;
+it has no scene cache or teardown state. The root workspace manifest selects
+the maintained native source required by these shader consumers.
+
+The `directional_light_response.rhai` graphics observer sets up two lights
+through typed transient USD operations. Its GPU shader checks native default
+identity, linear accumulation, independent fill lighting, missing-Sun identity
+and bounded negative/visibility controls. Run
+`scripts/api/test_directional_light_response.py` with `LUNCOSIM_BIN`, an explicit
+free `--port`, and `--output`. It checks the authored setup verdict, both positive
+pixel colors, no failure pixels, diagnostics, unchanged fixture source and owned
+API shutdown. `LuncoRenderPlugin` registers native `RenderLayers` for the existing
+Rhai component API: adding its default value scopes a preview light out of
+structural Sun selection while retaining visibility on layer zero.
+
 ### Shadow GPU diagnostics
 
 When Bevy's `RenderDiagnosticsPlugin` is enabled, `LuncoRenderPlugin::finish`
@@ -754,3 +784,70 @@ gate is `python3 scripts/api/test_camera_views.py --port <free-port>`; it runs
 the authored camera contract and inspects depth, repeatable noise, live reset
 and a stationary Sun in one view while another camera tilts. The explicit
 balanced preset bounds concurrent GPU allocations for this gate.
+
+
+## Directional shadow receiver raster bounds
+
+`lunco-render-bevy::shadow_receiver_crop` owns conservative raster culling for
+native directional cascades. It projects the native camera-frustum slice into
+the unchanged native cascade, then applies an outward scissor rectangle around
+all possible receiver reads. Casters, projection matrices, texel density, depth
+bias, cascade overlap, material shading and shadow filtering remain native.
+The error envelope includes f32 matrix cancellation, normal/depth bias and the
+entire Hardware2x2 or Gaussian footprint. Perspective coverage includes the
+apex; orthographic coverage starts at the actual near plane.
+
+A native StandardMaterial is eligible when unlit or without diffuse
+transmission. A custom material's current reflected layout must match its loaded source and
+carry the receiver capability. Its fragment source explicitly declares
+`//!@capability lunco.shadow-receiver.surface.v1` through the existing shader
+reflection owner. This contract covers every conditional entry point and its
+imports: directional shadow reads use the rasterized surface world position,
+its matching view-space depth, normals of length at most one, and the native
+configured `fetch_directional_shadow` filtering path, or perform no directional
+shadow reads. Direct texture reads and independent filtering footprints require
+full native rasterization. Arbitrary displaced lookup positions, custom cascade
+selection and transmitted back-surface reads do not satisfy the contract.
+Fragment sources without the capability remain fully supported with native
+full-map rasterization. The owner caches admission by material and Shader
+asset identity, updates on asset/schema changes, and uses typed asset IDs in
+the render loop. It does not parse sources or hash shader paths per frame.
+
+A Shader source modification retires all current custom-source proofs before
+extraction, including consumers of imported or embedded libraries without a
+second import resolver. A retired proof cannot be readmitted during its Shader
+asset's lifetime: an earlier compiled pipeline
+can remain in use while a replacement compiles. Asset removal retires the
+source record. This application asset lifetime differs from the scene lifetime
+of projected rectangles. `ReceiverCropInputs` is a registered SceneResource;
+every main/render frame clears its projected maps, and camera-owned reflected
+`DirectionalShadowRaster` facts retire with the camera. These facts report
+main-world projected work, not proof that the GPU accepted a rectangle.
+
+Temporal filtering, camera jitter, sub-camera/custom projections and unknown
+material consumers retain the native raster. At the render consumer, PCSS or a
+native shadow viewport with a different allocation size also declines the crop.
+Every point/spot shadow phase explicitly restores the complete native scissor.
+The public native Shadow draw registry retains its IDs and type indices;
+each append-only draw delegate is wrapped once, including after GPU recovery.
+Registration uses typed render resources, preserving parallel preparation.
+Native `BinnedRenderPhase::render` prepares every delegate before encoding its
+pass. Preparation resets the applied-view cache; the first draw selects its
+scissor and subsequent draws for that view reuse it. The cache never spans
+phase preparation, including a new frame or an early/late/shared pass. No
+additional frame clock or duplicate native pass is introduced.
+
+The native `TemporalJitter` component is registered for ordinary typed
+reflection. The authored `shadow_receiver_crop.rhai::set_shadow_test_control`
+helper uses explicit zero jitter to exercise full/cropped raster admission in
+one process. This changes no projection or quality setting. Pixel equality must
+be established while paused; normal FPS acceptance resumes authoritative
+physics before alternating the control. Shader-source editing is a different
+operation and still retires source proofs.
+No dependency Rust implementation or second shadow pass is copied.
+
+Run `scripts/api/test_shadow_receiver_crop.py --port <free-port> --output
+<evidence-dir>` against the production `LUNCOSIM_BIN`. It exercises the authored
+Rhai admission verdict, an unbounded shader source and source restoration,
+displaced shadow/lit probes, exact GPU image equality and camera retirement through `ClearScene`.
+Use a separate matched, uninstrumented lunar-base-model run for FPS acceptance.

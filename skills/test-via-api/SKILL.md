@@ -156,6 +156,14 @@ Rust core for a script-only change. The observer must verify public `cmd:*`
 events plus the resulting live state and emit a real verdict. Parsing or
 `--validate` is only preflight evidence.
 
+For native selected-light response, run
+`python3 scripts/api/test_directional_light_response.py --port <free-port> --output <artifact-dir>`
+with the matching production `LUNCOSIM_BIN`. The Rhai observer configures the
+existing Sun precision fixture through transient USD operations and scopes its
+fill through reflected native `RenderLayers`. The GPU control checks both
+lights, Sun-only scaling, default/missing selection and bounded negative inputs;
+the host checks pixel verdicts, diagnostics, source preservation and owned Exit.
+
 For experiments on USD-generated Modelica networks, query
 `GeneratedModelicaSource { network_root, include_source: false }` to read
 bounded metadata. Require `document_source_matches == true` and retain its
@@ -774,3 +782,14 @@ Its six authored checks require clear readiness, an advancing model, complete
 native body admission, real wheel-support probes, and current support samples.
 Require the footprint count appropriate to the authored raycast vehicle; model
 startup alone does not prove the native facet was projected.
+
+### Native solver-profile advisory
+
+Use `scripts/api/test_physics_solver_profile.py --port <free-port> --log <path>`
+with `LUNCOSIM_BIN` pointing to the production executable. Its authored Rhai
+observer uses `GetDiagnostics {scope: "physics"}` and the native status event to
+verify high substeps remain enabled, error severity reaches the Recent Events
+feed once, restoration clears current findings, and invalid values preserve the
+admitted setting. The driver owns its window/session and captures the high
+profile before restoring eight. `RunLint {domain: "physics"}` refreshes the same
+owner report; it does not change the solver setting.

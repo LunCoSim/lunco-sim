@@ -9,8 +9,9 @@
 //! drove, still steered, still made top speed. Nothing logged, nothing failed —
 //! the only evidence was hardware lying on the regolith in a screenshot.
 //!
-//! A linter is the answer to that class: a check over what was AUTHORED, run at
-//! load, that says the thing the simulation itself will never say.
+//! Lint evaluates owner facts through authored rules. Stage/file checks are
+//! explicit; the native solver-profile producer also consumes configuration
+//! changes. Findings are diagnostic and do not change simulation admission.
 //!
 //! # The split, and why it is this way round
 //!
@@ -61,6 +62,17 @@ use lunco_hooks::HookValue as H;
 /// change here — the crate that owns the subject picks the name.
 pub fn hook_id(domain: &str) -> String {
     format!("lint.{domain}")
+}
+
+lunco_hooks::declare_hook! {
+    id: "lint.physics",
+    owner: "lunco-lint",
+    description: "Diagnose the live native solver configuration without changing admission.",
+    signature: [facts: Map],
+    output: ArrayOfMap,
+    deterministic: true,
+    required: false,
+    installable: true,
 }
 
 lunco_hooks::declare_hook! {
@@ -344,7 +356,7 @@ fn policy_failure(domain: &str, rule: &str, hook: &str, message: String) -> Diag
 /// Bevy wiring: the report resource, cleared when a scene is torn down.
 ///
 /// Deliberately NOT a scene-lifecycle dependency — this crate stays substrate, so
-/// the app (or the domain plugin) clears it. [`clear_on_scene_teardown`] is the
+/// the app (or the domain plugin) clears it. [`clear_report`] is the
 /// system to add wherever that lifecycle lives.
 pub struct LunCoLintPlugin;
 

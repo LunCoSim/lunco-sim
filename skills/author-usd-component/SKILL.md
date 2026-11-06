@@ -400,7 +400,12 @@ Custom WESL is bindable through a standard composed `UsdShade.Material` and
 @lunco://shaders/x.wesl@` and typed `inputs:*` parameters on the Shader. The
 same material-binding resolution handles inherited and collection bindings.
 Binding a library shader with no `@fragment` entry (e.g. `pbr_lit.wesl`) is an
-authored render error; bind a complete material shader instead.
+authored render error; bind a complete material shader instead. A fragment
+that satisfies the complete
+[directional receiver contract](../../docs/architecture/render-decoupling.md#directional-shadow-receiver-raster-bounds)
+may declare `//!@capability lunco.shadow-receiver.surface.v1`. This is an explicit
+bound on every directional lookup, not an automatic property of a PBR import;
+unknown sources retain native full-map rasterization.
 
 ## Physics
 

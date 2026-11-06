@@ -1,5 +1,70 @@
 # High-quality realtime performance handover
 
+## Directional receiver raster — 2026-11-06
+
+The current normal build improves High/2560×1440 Griffin from 51.5620 to
+55.3419 FPS (+7.33%) in one live process alternating full/cropped/full/cropped/full.
+Pooled p50/p95 improve from 19.3899/20.2382 to 18.0432/18.9924 ms. Full/cropped/full
+paused scene images are byte-identical. Physics then advances at 60 Hz with
+eight substeps, valid 1.0-rate clocks, clear diagnostics and all 548 admitted
+source hashes retained. Paired neighboring-window gains are 7.10% and 7.53%;
+occasional long frames and the 150 FPS target remain unresolved.
+
+`lunco-render-bevy` bounds native directional raster by proven receiver reads,
+preserving casters, texel density, shaders and quality. Native phase preparation
+coalesces scissor commands, and typed registration preserves parallel rendering.
+Four Twin finish sources declare the existing reflection capability without
+changing equations. Unknown consumers keep full native raster. Twenty-four
+production directional checks, four point/spot checks and the focused numeric
+proof pass; source/scene lifetime and negative cases are included.
+
+See the [qualification](directional-receiver-raster-2026-11-06.md) for current
+executable provenance, GPU evidence, exact gates, source scope and excluded
+cross-process comparisons. The current executable is uninstrumented. All owned
+sessions/collectors exit. The reviewed changes are committed locally for main
+integration; no remote push is performed.
+
+
+## Selected directional response — 2026-11-05
+
+Terrain configures selected-light response at native PBR accumulation, through
+one shared material helper. The manifest selects the maintained local Bevy PBR
+checkout; its patch remains local. The normal production build and authored
+Rhai/GPU isolation/default/negative controls pass. The deferred articulated CCD
+island work is recorded as a native-owner TODO; physics behavior is unchanged.
+
+No graphics speedup is established: frozen GPU opaque/shadow means remain
+9.60/7.64 ms. The running before/candidate/after windows measure
+45.86/30.62/20.74 FPS, with the identical baseline degrading sharply between
+runs, so they cannot establish a causal FPS change. All 548 model-source hashes
+match, runtime diagnostics pass, and owned sessions close. See the
+[qualification review](selected-directional-response-2026-11-05.md) for source
+cohorts, image controls, rejected trials, workload limitations and next evidence
+requirements. A stable product FPS comparison remains outstanding.
+
+## Fixed exchange and solver-profile qualification — 2026-11-05
+
+Co-simulation shares exact owner proofs inside one immutable communication-point
+transaction and samples distinct sources once. Five alternating release trials
+reduce existing exchange fixture medians by 6.51–46.80% and resolved surface
+writes by 21.73%, retaining exact values and atomic admission. Warm terrain
+certificate traversal improves 5.17%; miss-heavy cases are flat to 1.61% slower.
+Avian `b8d1f5a` reuses native body bindings across joint passes and is published,
+remote-verified and pinned by the shared manifest/lock.
+
+Eight remains the default. Settings up to 64 remain usable; values above eight
+produce an advisory error through `lint.physics`, GetDiagnostics and Recent
+Events, without a clamp or runtime fault. Fifteen production Rhai profile/scope
+checks, sixteen input checks and the daylight/night/negative solar gates pass.
+The inherited articulated CCD failure remains unchanged and is not a passing
+gate. The clean High/2560×1440 Griffin window measures 47.726 FPS, coupled-tick
+median/p95 3.673/5.056 ms and aggregate Modelica service median 3.531 ms/step.
+No paired FPS gain or 1 ms/150 FPS target is established. All 548 guarded source
+hashes remain unchanged and owned sessions close. See the
+[current review](fixed-exchange-and-solver-profile-2026-11-05.md) for owners,
+scopes, known failures, exact gates and artifact provenance. LunCoSim remains
+local; only the Avian branch was pushed.
+
 ## Current telemetry/surface qualification — 2026-11-05
 
 Modelica recording uses checked source/recorder pairs and revision-gated

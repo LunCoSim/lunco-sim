@@ -1,20 +1,14 @@
 //! `RunLint` — lint the LOADED scene, on demand.
 //!
-//! # Why this is a command and not a load-time pass
-//!
-//! Linting is something you RUN, not something that runs at you. A check that
-//! fires on every scene load trains its reader to scroll past it, costs a stage
-//! walk nobody asked for, and turns an opinion about authoring into a tax on
-//! playing. So nothing lints automatically: `RunLint` is a verb, reachable
-//! everywhere a verb is —
+//! Composed-stage lint is an explicit command, reachable through scripts and API:
 //!
 //! ```text
 //!   cmd("RunLint", #{})                       // explicit authoring/preflight check
 //!   {"type":"ExecuteCommand","command":"RunLint","params":{}} // HTTP / MCP
 //! ```
 //!
-//! There is no cadence, background watcher or per-tick lint monitor. An editor,
-//! launcher or caller explicitly invokes the command again after an authored edit.
+//! Composed-stage lint has no background scan. The separate physics-profile
+//! producer refreshes its small owner-fact report on configuration changes.
 //!
 //! # What it lints
 //!
@@ -588,7 +582,7 @@ fn lint_stage_with_runtime(
 /// and are logged — errors at `error!`, warnings at `warn!`.
 #[Command(default)]
 pub struct RunLint {
-    /// Restrict to one lint domain (`"usd"`). Empty = every domain this scene
+    /// Restrict to one lint domain (`"usd"` or `"physics"`). Empty = every domain this scene
     /// can produce facts for. Named rather than enumerated so a domain added
     /// later needs no change to this verb.
     pub domain: String,
@@ -763,6 +757,26 @@ fn poll_pending_twin_lint(world: &mut World) {
     }
 }
 
+fn lint_execution_context(
+    active_command: Option<&lunco_core::ActiveCommandId>,
+) -> lunco_core::RuntimeExecutionContext {
+    match active_command.and_then(|command| command.origin()) {
+        Some(lunco_core::CommandOrigin::Rhai { context, .. }) => context,
+        _ => lunco_core::RuntimeExecutionContext {
+            target_twin_id: None,
+            route: Some(lunco_core::RuntimeRoute::application(
+                lunco_core::RuntimeCycle::Command,
+            )),
+            phase: lunco_core::RuntimePhase::Command,
+            clock: lunco_core::RuntimeClock::None,
+            time_seconds: None,
+            delta_seconds: None,
+            sequence: None,
+            producer: None,
+        },
+    }
+}
+
 /// Observer for [`RunLint`].
 #[on_command(RunLint)]
 pub fn on_run_lint(
@@ -921,24 +935,7 @@ pub fn on_run_lint(
             );
             return Err(message);
         }
-        let context = match active_command
-            .as_deref()
-            .and_then(|command| command.origin())
-        {
-            Some(lunco_core::CommandOrigin::Rhai { context, .. }) => context,
-            _ => lunco_core::RuntimeExecutionContext {
-                target_twin_id: None,
-                route: Some(lunco_core::RuntimeRoute::application(
-                    lunco_core::RuntimeCycle::Command,
-                )),
-                phase: lunco_core::RuntimePhase::Command,
-                clock: lunco_core::RuntimeClock::None,
-                time_seconds: None,
-                delta_seconds: None,
-                sequence: None,
-                producer: None,
-            },
-        };
+        let context = lint_execution_context(active_command.as_deref());
         if let Err(error) = context.validate() {
             let message = fail_lint_scope(
                 &mut report,
@@ -1053,6 +1050,17 @@ pub fn on_run_lint(
         return Err(message);
     }
     let domain = trigger.event().domain.trim().to_string();
+    if domain == "physics" && trigger.event().doc_id.is_some() {
+        return Err("RunLint domain `physics` inspects the live solver; omit doc_id".to_owned());
+    }
+    if trigger.event().doc_id.is_none() && (domain.is_empty() || domain == "physics") {
+        let context = lint_execution_context(active_command.as_deref());
+        commands
+            .queue(move |world: &mut World| crate::physics_lint::run_with_context(world, context));
+        if domain == "physics" {
+            return Ok(Ack::default());
+        }
+    }
     if !domain.is_empty() && domain != lunco_usd_avian_lint::USD_LINT_DOMAIN {
         let revision = report.begin_scope("loaded_stages");
         report.clear_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN);

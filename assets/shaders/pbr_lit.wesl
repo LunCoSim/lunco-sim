@@ -1,4 +1,4 @@
-import super::terrain_surface::terrain_apply_sun_response;
+import super::terrain_surface::terrain_set_sun_response;
 import bevy_pbr::render::{
     forward_io::VertexOutput,
     pbr_types,
@@ -109,9 +109,7 @@ fn lit_n_occluded_sun_response(
     pbr_input.material.emissive = vec4(emissive, 1.0);
     pbr_input.material.reflectance = vec3(reflectance);
     pbr_input.diffuse_occlusion = diffuse_occlusion;
-    var color = pbr_functions::apply_pbr_lighting(pbr_input);
-    if (sun_factor != 1.0) {
-        color = terrain_apply_sun_response(pbr_input, color, sun_dir_world, sun_factor, 1.0, 0.0);
-    }
+    terrain_set_sun_response(&pbr_input, sun_dir_world, sun_factor, 1.0, 0.0);
+    let color = pbr_functions::apply_pbr_lighting(pbr_input);
     return pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
 }

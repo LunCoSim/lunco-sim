@@ -1,12 +1,7 @@
 import bevy_pbr::render::{
-    pbr_lighting as lighting,
     mesh_functions,
-    mesh_view_bindings::{lights, view},
-    mesh_view_types,
-    mesh_types,
-    pbr_functions,
+    mesh_view_bindings::lights,
     pbr_types,
-    shadows,
 };
 @if((LUNCO_NOISE_2D || VERTEX_UVS_A))
 import super::lunco_noise::{fbm2d, fbm2d_gradient};
@@ -176,124 +171,32 @@ fn terrain_surface_occlusion(
     return clamp(occlusion, 0.0, 1.0);
 }
 
-/// Apply lunar photometry and heightfield visibility to the engine-selected
-/// Sun contribution only.
-///
-/// Bevy's `apply_pbr_lighting` returns the sum of direct and indirect light.
-/// Applying the lunar response to `base_color` would also scale earthshine,
-/// environment fill, and every other light. Rebuild the canonical Sun term,
-/// including Bevy's native CSM shadow, and replace only that term. Ambient,
-/// environment, and other authored lights remain untouched.
-///
-/// The CPU writes `sun_dir_world` from the structural Sun selection used by the
-/// rest of the renderer. Matching that direction in Bevy's flat light buffer
-/// keeps the fill light out of the terrain self-shadow term without assuming a
-/// directional-light array index.
-fn terrain_apply_sun_response(
-    pbr_input: pbr_types::PbrInput,
-    color: vec4<f32>,
+/// Configure lunar photometry and heightfield visibility for the selected Sun.
+/// Native PBR owns its one BRDF/shadow evaluation, exposure and accumulation;
+/// every unmatched directional light, transmission and indirect light keep
+/// their native response. Direction matching follows the engine's Sun owner.
+fn terrain_set_sun_response(
+    input: ptr<function, pbr_types::PbrInput>,
     sun_dir_world: vec3<f32>,
     lunar_factor: f32,
     visibility: f32,
     blend: f32,
-) -> vec4<f32> {
-    let sun_length_sq = dot(sun_dir_world, sun_dir_world);
-    if (sun_length_sq < 0.25) {
-        return color;
+) {
+    // Cascade-debug colours remain owned by the native visualization.
+    @if((DIRECTIONAL_LIGHT_SHADOW_MAP_DEBUG_CASCADES)) return;
+    if (dot(sun_dir_world, sun_dir_world) < 0.25) {
+        return;
     }
-
     let sun_dir = normalize(sun_dir_world);
-    let output_color = pbr_input.material.base_color;
-    let metallic = pbr_input.material.metallic;
-    let perceptual_roughness = pbr_input.material.perceptual_roughness;
-    let roughness = lighting::perceptualRoughnessToRoughness(perceptual_roughness);
-    let NdotV = max(dot(pbr_input.N, pbr_input.V), 0.0001);
-    let R = reflect(-pbr_input.V, pbr_input.N);
-    let diffuse_color = pbr_functions::calculate_diffuse_color(
-        output_color.rgb,
-        metallic,
-        pbr_input.material.specular_transmission,
-        pbr_input.material.diffuse_transmission,
-    );
-
-    var lighting_input: lighting::LightingInput;
-    lighting_input.layers[lighting::LAYER_BASE].NdotV = NdotV;
-    lighting_input.layers[lighting::LAYER_BASE].N = pbr_input.N;
-    lighting_input.layers[lighting::LAYER_BASE].R = R;
-    lighting_input.layers[lighting::LAYER_BASE].perceptual_roughness = perceptual_roughness;
-    lighting_input.layers[lighting::LAYER_BASE].roughness = roughness;
-    lighting_input.P = pbr_input.world_position.xyz;
-    lighting_input.V = pbr_input.V;
-    lighting_input.diffuse_color = diffuse_color;
-    lighting_input.metallic = metallic;
-    lighting_input.F0_dielectric = pbr_functions::calculate_F0_dielectric(
-        pbr_input.material.reflectance);
-    lighting_input.F0_metallic = output_color.rgb;
-    lighting_input.F_ab = lighting::F_AB(perceptual_roughness, NdotV);
-
-    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat = pbr_input.material.clearcoat;
-    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat_perceptual_roughness =
-        pbr_input.material.clearcoat_perceptual_roughness;
-    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat_roughness =
-        lighting::perceptualRoughnessToRoughness(clearcoat_perceptual_roughness);
-    @if((STANDARD_MATERIAL_CLEARCOAT)) let clearcoat_N = pbr_input.clearcoat_N;
-    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].NdotV =
-        max(dot(clearcoat_N, pbr_input.V), 0.0001);
-    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].N = clearcoat_N;
-    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].R =
-        reflect(-pbr_input.V, clearcoat_N);
-    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].perceptual_roughness =
-        clearcoat_perceptual_roughness;
-    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.layers[lighting::LAYER_CLEARCOAT].roughness = clearcoat_roughness;
-    @if((STANDARD_MATERIAL_CLEARCOAT)) lighting_input.clearcoat_strength = clearcoat;
-
-    @if((STANDARD_MATERIAL_ANISOTROPY)) lighting_input.anisotropy = pbr_input.anisotropy_strength;
-    @if((STANDARD_MATERIAL_ANISOTROPY)) lighting_input.Ta = pbr_input.anisotropy_T;
-    @if((STANDARD_MATERIAL_ANISOTROPY)) lighting_input.Ba = pbr_input.anisotropy_B;
-
-    let view_z = dot(vec4<f32>(
-        view.view_from_world[0].z,
-        view.view_from_world[1].z,
-        view.view_from_world[2].z,
-        view.view_from_world[3].z,
-    ), pbr_input.world_position);
-    var sun_direct = vec3<f32>(0.0);
-    for (var i: u32 = 0u; i < lights.n_directional_lights; i = i + 1u) {
-        let light = &lights.directional_lights[i];
-        if (dot(normalize(light.direction_to_light), sun_dir) < 0.9995) {
-            continue;
-        }
-
-        var native_shadow = 1.0;
-        if ((pbr_input.flags & mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-                && (light.flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
-            native_shadow = shadows::fetch_directional_shadow(
-                i,
-                pbr_input.world_position,
-                pbr_input.world_normal,
-                view_z,
-                pbr_input.frag_coord.xy,
-            );
-        }
-        sun_direct += lighting::directional_light(i, &lighting_input, true)
-            * native_shadow;
-    }
-
-    // `directional_light` is a radiance contribution and must be non-negative.
-    // Keep that invariant explicit at this extension boundary: a malformed or
-    // transient material value must not turn reducing the Sun term into a bright
-    // pixel. The native PBR result remains the source of ambient/earthshine.
-    // Bevy applies view exposure to the complete direct-light accumulator in
-    // `apply_pbr_lighting`. Apply the same factor before subtracting the
-    // heightfield-occluded portion; otherwise a deep shadow subtracts a term
-    // larger than the native PBR contribution and clamps the terrain to black.
-    let sun_radiance = max(sun_direct * view.exposure, vec3<f32>(0.0));
     let terrain_visibility = mix(1.0, clamp(visibility, 0.0, 1.0), clamp(blend, 0.0, 1.0));
-    let sun_response = clamp(lunar_factor, 0.0, 8.0) * terrain_visibility;
-    return vec4(max(
-        color.rgb + sun_radiance * (sun_response - 1.0),
-        vec3<f32>(0.0),
-    ), color.a);
+    let response = clamp(lunar_factor, 0.0, 8.0) * terrain_visibility;
+    (*input).directional_light_scale = response;
+    (*input).directional_light_scale_mask = 0u;
+    for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
+        if (dot(normalize(lights.directional_lights[i].direction_to_light), sun_dir) >= 0.9995) {
+            (*input).directional_light_scale_mask |= 1u << i;
+        }
+    }
 }
 
 /// Decode the normal-map convention shared by the DEM baker and terrain
