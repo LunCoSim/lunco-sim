@@ -2,7 +2,7 @@
 
 ## Scope and ownership
 
-The maintained local Bevy PBR owner consumes a fragment-local selected-light
+The maintained Bevy PBR owner consumes a fragment-local selected-light
 response. Application terrain shaders configure it through their shared Sun
 owner. The [canonical contract](../architecture/render-decoupling.md#selected-directional-light-response)
 describes its API, defaults, lifecycle and production gate. Four application
@@ -10,17 +10,15 @@ shader consumers use that contract; their duplicate native lighting reconstructi
 is removed. No Modelica equations, physics solver settings, terrain quality,
 shadow-map resolution or authored lunar-base-model source is changed.
 
-The workspace selects `../bevy/crates/bevy_pbr` explicitly. Its base is
-`eabfa346c153337a287c0de0b3513efe6b820e04` on
-`fix/gpu-shader-buffer-stride`; the local shader patch is not published. The
-shader/render/light owners remain at the manifest's published revision. Ordinary
-builds use this manifest directly, without a command-line patch override. The
-local dependency source is required when reproducing this checkout.
+The workspace pins the shader, render, light and PBR owners to published Bevy
+revision `65dd8f4e86383c19128a33618a6a8bfc3427fd3a` on
+`fix/gpu-shader-buffer-stride`. Ordinary builds resolve that revision from GitHub
+without a sibling Bevy checkout or command-line patch override.
 
 The deferred CCD island/constrained-inertia work is recorded beside native
-motion clipping in `../avian-inertia/src/dynamics/ccd/mod.rs`. That local edit
-is comment-only. It does not change the published Avian pin or qualify the
-inherited articulated CCD failure.
+motion clipping in the published Avian branch `fix/checked-inertia-numerics`
+at `0a669ddfc366723af19c7903c240b10cf3bbc3ad`. That comment-only commit does
+not change the Avian pin or qualify the inherited articulated CCD failure.
 
 ## GPU evidence
 
@@ -61,8 +59,8 @@ measurement.
 
 ## Production validation
 
-`cargo build --release --locked --offline -p lunco-luncosim -j4` passes using
-the manifest-selected local PBR owner. The retained normal executable is
+The qualification build passed `cargo build --release --locked --offline -p
+lunco-luncosim -j4` using the then-local PBR owner. The retained executable is
 `target/perf/graphics-20261105/luncosim-normal-masked`, SHA256
 `0406f0c7b512a3b1547ea2b64430bebdfbd7abb3eb18d54a1048747d3c7bb0b4`.
 This retained executable is the qualification artifact for this review.

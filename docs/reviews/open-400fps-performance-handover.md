@@ -65,8 +65,8 @@ integration; no remote push is performed.
 ## Selected directional response — 2026-11-05
 
 Terrain configures selected-light response at native PBR accumulation, through
-one shared material helper. The manifest selects the maintained local Bevy PBR
-checkout; its patch remains local. The normal production build and authored
+one shared material helper. The manifest pins the maintained Bevy PBR revision
+on GitHub. The normal production build and authored
 Rhai/GPU isolation/default/negative controls pass. The deferred articulated CCD
 island work is recorded as a native-owner TODO; physics behavior is unchanged.
 

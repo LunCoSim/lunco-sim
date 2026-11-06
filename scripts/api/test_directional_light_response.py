@@ -34,8 +34,10 @@ def main():
         wait_for_scene(session, str(scene), 30)
         wait_for_scene_time_selection(session, log, 30)
         execute(session, "SetTimeTransport", playing=True)
-        twin = execute(session, "ReadActiveTwinContract")["twin_id"]
-        execute(session, "RunScenarioAsset", owner_twin_id=twin,
+        scope = execute(session, "ReadActiveWorkspace")
+        if not scope.get("open"):
+            raise RuntimeError("directional response fixture has no active workspace")
+        execute(session, "RunScenarioAsset", owner_twin_id=scope["scope_id"],
                 source_asset="lunco://scenarios/tests/directional_light_response.rhai")
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
