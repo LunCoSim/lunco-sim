@@ -390,14 +390,13 @@ package checks after changing skill metadata or packaging.
 
 - For installed-package testing, use exactly one dated installer from
   `https://github.com/LunCoSim/lunco-sim/releases`:
-  `LunCoSim-Windows-x86_64-Setup.exe`,
+  `LunCoSim-Windows-x86_64.msi`,
   `LunCoSim-macOS-Apple-Silicon.pkg`, `LunCoSim-macOS-Intel.pkg`, or
   `LunCoSim-Linux-x86_64.AppImage`. Do not use source archives, Actions
   artifacts, raw archives, or debug binaries for packaged acceptance.
 - `https://github.com/LunCoSim/lunco-sim-updates` is the machine-only Velopack
-  feed, not the human installer source. Windows installs under
-  `%LOCALAPPDATA%\LunCoSim-win-x64\` (`current\` is the live payload; Setup.exe
-  accepts `--installto <dir>`). macOS installs `LunCoSim.app` where Installer
+  feed, not the human installer source. Windows uses an MSI with a selected
+  installation directory (`current\` is the live payload). macOS installs `LunCoSim.app` where Installer
   selects, normally `/Applications` or `~/Applications`. Linux AppImage has no
   system install: keep it writable and relaunch it from its placed path.
 - The user asset cache is separate from the app: Linux `~/.cache/lunco/`, macOS

@@ -1,6 +1,6 @@
 ---
 name: packaged-builds
-description: Build, inspect, install, or acceptance-test a packaged LunCoSim desktop release, AppImage, macOS package, Windows Setup.exe, or Velopack update. Use when source builds are not sufficient or an installed GitHub release must be verified.
+description: Build, inspect, install, or acceptance-test a packaged LunCoSim desktop release, AppImage, macOS package, Windows MSI, or Velopack update. Use when source builds are not sufficient or an installed GitHub release must be verified.
 ---
 
 # Packaged desktop builds and updates
@@ -18,10 +18,26 @@ build machine, not on machines that only run the packaged application.
 
 Use the repository's native build script and the requested runtime target. A
 packaged acceptance run must use exactly one dated installer from the official
-GitHub releases: Windows `LunCoSim-Windows-x86_64-Setup.exe`, macOS Apple
+GitHub releases: Windows `LunCoSim-Windows-x86_64.msi`, macOS Apple
 Silicon or Intel `.pkg`, or Linux `LunCoSim-Linux-x86_64.AppImage`. Do not use
 source archives, Actions artifacts, raw archives, or a debug binary as a
 packaged-release claim.
+
+Windows MSI packaging requires an ordered three-part `--msi-version` (or
+`LUNCO_MSI_VERSION`) in addition to the app's SemVer `--version`. Nightly CI
+derives that MSI version from the workflow run and attempt with
+`scripts/msi_version.py` and rejects publication if either the MSI sequence or
+the app version would move backward relative to published Windows packages.
+Local test builds must use an isolated identity or a version allocated from the
+same release sequence; do not invent a production sequence.
+
+Windows packaging uses the LunCoSim Velopack fork at the revision pinned in
+`.github/workflows/nightly.yml`. Build its native Windows helpers in release
+mode, place them in the fork's `target/debug` helper lookup directory, and
+build the fork's `Velopack.Vpk` project for `net8.0` in Debug mode. Put its
+`build/Debug/net8.0` directory on `PATH` before invoking the native builder.
+The workflow contains the exact commands. Linux and macOS use the pinned
+published Velopack CLI.
 
 Verify the artifact itself, its desktop/icon contract, launch path, scene load,
 API readiness, and one relevant user workflow. Linux AppImages remain writable

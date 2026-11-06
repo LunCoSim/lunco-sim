@@ -114,7 +114,7 @@ The official installers are platform-specific:
 
 | Platform | Download | Launch after installation |
 |---|---|---|
-| Windows x86_64 | `LunCoSim-Windows-x86_64-Setup.exe` | The installed Start-menu or desktop shortcut |
+| Windows x86_64 | `LunCoSim-Windows-x86_64.msi` | The installed Start-menu or desktop shortcut |
 | macOS Apple Silicon | `LunCoSim-macOS-Apple-Silicon.pkg` | The installed `LunCoSim.app` |
 | macOS Intel | `LunCoSim-macOS-Intel.pkg` | The installed `LunCoSim.app` |
 | Linux x86_64 | `LunCoSim-Linux-x86_64.AppImage` | The same AppImage from a writable location |
@@ -135,12 +135,17 @@ connection state rather than a misleading frozen 0%.
 Windows updates replace the installed application managed by Velopack. macOS
 updates replace the installed `.app` bundle. Linux updates replace the same
 writable AppImage. Always launch the installed package or same AppImage rather
-than `Setup.exe`, a copied `.app` binary, `target/debug/luncosim`, a source
+than the installer, a copied `.app` binary, `target/debug/luncosim`, a source
 build, or an ordinary archive; those development/portable forms are not
 update-managed.
 
 The application reads the machine-only `LunCoSim/lunco-sim-updates` GitHub feed;
 human-facing installers remain in the dated LunCoSim release.
+
+The Windows installer has an internal, ordered MSI version distinct from the
+displayed application version. Nightly releases derive it from the build run
+and attempt; publication rejects older application or MSI sequences. Windows
+Installer compares only the three MSI version fields.
 
 The native package build enables the updater explicitly. Ordinary source and
 headless builds omit the updater closure and are not update-managed.

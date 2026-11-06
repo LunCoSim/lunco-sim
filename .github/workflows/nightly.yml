@@ -59,6 +59,7 @@ jobs:
       timestamp: ${{ steps.metadata.outputs.timestamp }}
       release_tag: ${{ steps.metadata.outputs.release_tag }}
       version: ${{ steps.version.outputs.version }}
+      msi_version: ${{ steps.version.outputs.msi_version }}
     steps:
       - uses: actions/checkout@v4
       - name: Verify nightly version generation
@@ -97,7 +98,9 @@ jobs:
           base_version=$(jq -er '.packages[] | select(.name == "lunco-luncosim") | .version' <<< "$metadata")
           base_version="${base_version%-dev}"
           version="${base_version}-nightly.${RUN_NUMBER}.${RUN_ATTEMPT}"
+          msi_version=$(python3 scripts/msi_version.py "$RUN_NUMBER" "$RUN_ATTEMPT")
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "msi_version=$msi_version" >> "$GITHUB_OUTPUT"
 
   # ── Build LunCoSim per OS ────────────────────────────────────────────────
   build:
@@ -147,6 +150,7 @@ jobs:
       run:
         shell: bash
     env:
+      LUNCO_MSI_VERSION: ${{ needs.meta.outputs.msi_version }}
       # Point the asset pipeline at a project-local .cache/ so the build
       # script can find the packaged fonts. Without this,
       # cache_dir() falls back to an OS-specific path that varies per
@@ -165,7 +169,14 @@ jobs:
         with:
           dotnet-version: '8.x'
 
+      - name: Setup .NET SDK for the Windows fork
+        if: matrix.platform == 'windows'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
       - name: Install Velopack CLI
+        if: matrix.platform != 'windows'
         run: |
           dotnet tool install --global vpk --version "$VELOPACK_CLI_VERSION"
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
@@ -176,6 +187,28 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rust-src
+
+      - name: Check out Windows Velopack fork
+        if: matrix.platform == 'windows'
+        uses: actions/checkout@v4
+        with:
+          repository: LunCoSim/velopack
+          ref: a968b15b422a3de0722e08992e83dda5d3d71a91
+          path: .ci-velopack
+          fetch-depth: 0
+
+      - name: Build Windows Velopack CLI
+        if: matrix.platform == 'windows'
+        working-directory: .ci-velopack
+        run: |
+          cargo build --locked --release -j 4 -p velopack_bins --features windows --bin setup --bin stub --bin update
+          cargo build --locked --release -j 4 -p velopack_wix
+          # The source-built packaging CLI resolves helpers from target/debug;
+          # ship the optimized native helpers through that lookup path.
+          mkdir -p target/debug
+          cp target/release/{setup.exe,stub.exe,update.exe,velopack_wix.dll} target/debug/
+          dotnet build src/vpk/Velopack.Vpk/Velopack.Vpk.csproj -c Debug -f net8.0
+          echo "$GITHUB_WORKSPACE/.ci-velopack/build/Debug/net8.0" >> "$GITHUB_PATH"
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'linux' && matrix.apt_pkgs != ''
@@ -424,6 +457,7 @@ jobs:
         env:
           RELEASE_DATE: ${{ needs.meta.outputs.date }}
           RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.meta.outputs.version }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           MAIN_GH_TOKEN: ${{ github.token }}
           UPDATES_GH_TOKEN: ${{ secrets.LUNCOSIM_UPDATES_TOKEN }}
@@ -441,6 +475,12 @@ jobs:
             echo "Invalid release tag '$RELEASE_TAG'; refusing to publish an untagged release." >&2
             exit 1
           fi
+          # Run numbers can be retried after later releases. Never publish a
+          # feed whose app or MSI sequence would move backward.
+          GH_TOKEN="$UPDATES_GH_TOKEN" gh api --paginate \
+            "repos/$UPDATES_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.draft == false) | .assets[] | .name' |
+            python3 scripts/msi_version.py --check-published "$RELEASE_VERSION"
           # Tag validation is fail-closed: do not let a transient fetch error
           # turn an existing-tag check into an unverified release creation.
           git fetch origin "+refs/tags/*:refs/tags/*"

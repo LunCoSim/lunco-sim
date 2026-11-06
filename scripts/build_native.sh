@@ -26,6 +26,7 @@
 #     --package          Create a .tar.gz (unix) or .zip (windows) archive
 #     --velopack         Create a Velopack release from the staged directory
 #     --version <semver>  SemVer2 version used by Velopack (or env override)
+#     --msi-version <version>  Ordered Windows Installer version (or LUNCO_MSI_VERSION)
 #     --target <triple>  Cross-compile target (default: host triple)
 #     --no-cache         Skip bundling assets/.cache/ subdirs (binary + assets only)
 #     --skip-download    Skip the cache asset download step (use existing global cache)
@@ -397,7 +398,7 @@ Official Velopack releases check for updates once when the GUI starts. When a
 new version is available, the red status-bar notice offers **Download update**
 and reports its percentage. When ready, click **Install and restart**. The same
 actions are available in Settings ▸ Updates. Use the official installer
-for your platform: Windows uses \`LunCoSim-Windows-x86_64-Setup.exe\`, macOS uses
+for your platform: Windows uses \`LunCoSim-Windows-x86_64.msi\`, macOS uses
 the matching Apple Silicon or Intel \`.pkg\`, and Linux uses the
 \`LunCoSim-Linux-x86_64.AppImage\`. On Linux, make the AppImage executable,
 keep it in a writable location, and keep launching that same AppImage so Velopack
@@ -493,6 +494,7 @@ RELEASE=0
 PACKAGE=0
 VELOPACK=0
 RELEASE_VERSION="${LUNCO_RELEASE_VERSION:-}"
+MSI_VERSION="${LUNCO_MSI_VERSION:-}"
 TARGET=""
 NO_CACHE=0
 SKIP_DOWNLOAD=0
@@ -508,6 +510,8 @@ while [ $# -gt 0 ]; do
         --velopack)      VELOPACK=1; shift ;;
         --version)       RELEASE_VERSION="$2"; shift 2 ;;
         --version=*)     RELEASE_VERSION="${1#--version=}"; shift ;;
+        --msi-version)   MSI_VERSION="$2"; shift 2 ;;
+        --msi-version=*) MSI_VERSION="${1#--msi-version=}"; shift ;;
         --target)        TARGET="$2"; shift 2 ;;
         --target=*)      TARGET="${1#--target=}"; shift ;;
         --no-cache)      NO_CACHE=1; shift ;;
@@ -540,6 +544,14 @@ HOST_TRIPLE="$(detect_host_triple)"
 TRIPLE="${TARGET:-$HOST_TRIPLE}"
 PLATFORM="$(platform_short "$TRIPLE")"
 ARCH="$(arch_short "$TRIPLE")"
+
+if [ "$VELOPACK" -eq 1 ] && [ "$PLATFORM" = "windows" ]; then
+    if [[ ! "$MSI_VERSION" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})$ ]] ||
+        (( 10#${BASH_REMATCH[1]} > 255 || 10#${BASH_REMATCH[2]} > 255 || 10#${BASH_REMATCH[3]} > 65535 )); then
+        error "Windows MSI packaging requires a valid ordered --msi-version (major.minor.build) or LUNCO_MSI_VERSION"
+        exit 2
+    fi
+fi
 
 # Keep one application identity across local windows, desktop entries, and
 # Velopack packages. Runtime-specific channels and package filenames still
@@ -743,7 +755,11 @@ if [ "$VELOPACK" -eq 1 ]; then
     fi
     if ! command -v vpk >/dev/null 2>&1; then
         error "Velopack packaging requested but 'vpk' is not installed"
-        error "Install the pinned Velopack CLI with: dotnet tool install -g vpk --version 1.2.110-ge826545"
+        if [ "$PLATFORM" = "windows" ]; then
+            error "Build the pinned LunCoSim Velopack fork as described in skills/packaged-builds/SKILL.md"
+        else
+            error "Install the pinned Velopack CLI with: dotnet tool install -g vpk --version 1.2.110-ge826545"
+        fi
         exit 1
     fi
     if [ -z "$VELOPACK_OUT" ]; then
@@ -756,6 +772,10 @@ if [ "$VELOPACK" -eq 1 ]; then
     # architecture's full package. Velopack channels accept this slug format.
     VPK_CHANNEL="$VPK_RUNTIME"
     VPK_ICON_ARGS=()
+    VPK_INSTALLER_ARGS=()
+    if [ "$PLATFORM" = "windows" ]; then
+        VPK_INSTALLER_ARGS=(--msi --instLocation Either --msiVersion "$MSI_VERSION")
+    fi
     if [ -n "$PACKAGE_ICON" ]; then
         VPK_ICON_ARGS=(--icon "$PACKAGE_ICON")
     fi
@@ -769,6 +789,7 @@ if [ "$VELOPACK" -eq 1 ]; then
         --packDir "$OUT_DIR" \
         --mainExe "$BIN_NAME" \
         "${VPK_ICON_ARGS[@]}" \
+        "${VPK_INSTALLER_ARGS[@]}" \
         --outputDir "$VELOPACK_OUT"
     if ! find "$VELOPACK_OUT" -maxdepth 1 -type f -name "releases.$VPK_CHANNEL.json" -print -quit | grep -q .; then
         error "Velopack did not create releases.$VPK_CHANNEL.json in $VELOPACK_OUT"

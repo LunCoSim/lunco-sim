@@ -22,7 +22,7 @@ class GenerateChangelogTests(unittest.TestCase):
         )
 
         for installer in (
-            "LunCoSim-Windows-x86_64-Setup.exe",
+            "LunCoSim-Windows-x86_64.msi",
             "LunCoSim-macOS-Apple-Silicon.pkg",
             "LunCoSim-macOS-Intel.pkg",
             "LunCoSim-Linux-x86_64.AppImage",

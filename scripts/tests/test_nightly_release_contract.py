@@ -48,7 +48,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode == 0, succeeds, result.stderr)
                     if succeeds:
-                        self.assertEqual(output.read_text(), "version=0.1.0-nightly.139.1\n")
+                        self.assertEqual(output.read_text(), "version=0.1.0-nightly.139.1\nmsi_version=1.0.13901\n")
                     else:
                         self.assertFalse(output.exists())
 
@@ -142,7 +142,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
             self.assertIn("Install and restart", text)
 
         self.assertIn("LunCoSim/lunco-sim-updates", app_guide)
-        self.assertIn("LunCoSim-Windows-x86_64-Setup.exe", app_guide)
+        self.assertIn("LunCoSim-Windows-x86_64.msi", app_guide)
         self.assertIn("LunCoSim-macOS-Apple-Silicon.pkg", app_guide)
         self.assertIn("LunCoSim-macOS-Intel.pkg", app_guide)
 

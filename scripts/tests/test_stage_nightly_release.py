@@ -62,6 +62,7 @@ class StageNightlyReleaseTests(unittest.TestCase):
     def test_stages_four_human_downloads_and_runtime_update_feeds(self) -> None:
         stage_nightly_release.stage_release(self.raw, self.public, self.updates)
 
+        self.assertTrue((self.public / "LunCoSim-Windows-x86_64.msi").is_file())
         self.assertEqual(
             {path.name for path in self.public.iterdir()},
             {runtime.public_name for runtime in stage_nightly_release.RUNTIMES},
@@ -83,7 +84,7 @@ class StageNightlyReleaseTests(unittest.TestCase):
             stage_nightly_release.stage_release(self.raw, self.public, self.updates)
 
     def test_rejects_missing_platform_installer(self) -> None:
-        (self.raw / "win-x64" / "generated-Setup.exe").unlink()
+        (self.raw / "win-x64" / "generated.msi").unlink()
 
         with self.assertRaisesRegex(stage_nightly_release.StagingError, "win-x64 installer"):
             stage_nightly_release.stage_release(self.raw, self.public, self.updates)

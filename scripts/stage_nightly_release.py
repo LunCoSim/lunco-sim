@@ -22,7 +22,7 @@ RUNTIMES = (
     RuntimeRelease("linux-x64", ".AppImage", "LunCoSim-Linux-x86_64.AppImage"),
     RuntimeRelease("osx-arm64", "-Setup.pkg", "LunCoSim-macOS-Apple-Silicon.pkg"),
     RuntimeRelease("osx-x64", "-Setup.pkg", "LunCoSim-macOS-Intel.pkg"),
-    RuntimeRelease("win-x64", "-Setup.exe", "LunCoSim-Windows-x86_64-Setup.exe"),
+    RuntimeRelease("win-x64", ".msi", "LunCoSim-Windows-x86_64.msi"),
 )
 
 

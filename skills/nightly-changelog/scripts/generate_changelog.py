@@ -121,7 +121,7 @@ def render_release_notes(
         "",
         "Download and install the file for your computer:",
         "",
-        "- **Windows x86_64:** `LunCoSim-Windows-x86_64-Setup.exe`",
+        "- **Windows x86_64:** `LunCoSim-Windows-x86_64.msi`",
         "- **macOS Apple Silicon:** `LunCoSim-macOS-Apple-Silicon.pkg`",
         "- **macOS Intel:** `LunCoSim-macOS-Intel.pkg`",
         "- **Linux x86_64:** `LunCoSim-Linux-x86_64.AppImage` — make it executable, then open it.",
