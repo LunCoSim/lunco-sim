@@ -2,9 +2,9 @@
 
 > Status: Active · Audience: engineers on vehicle, cosim, and USD-physics subsystems
 >
-> All Avian joint-building is consolidated in `lunco-usd-avian`. Goals G1–G11
-> are built (G5 on an isolated differential rig); G8 (determinism/FMI) is a
-> separate track.
+> All Avian joint-building is consolidated in `lunco-usd-avian`. Goals G1–G7
+> and G9–G11 are built (G5 on an isolated differential rig); G8
+> (determinism/FMI) is partially implemented.
 
 ## Goal
 
@@ -383,17 +383,20 @@ rake. **Remaining for full fidelity** (deferred): gyroscopic precession — bala
 itself is a *controller* (already expressible via the torque + attitude/rate
 ports), not a substrate gap.
 
-### G8 — Determinism / FMI interop  **[TODO — separate track, not started]**
-The one remaining G-series item, deliberately orthogonal to "author assets in
-USD". Live cosim is non-deterministic and there is no FMU import/export. Scope when
-picked up:
-- **Deterministic stepping** — fixed-seed, fixed-order cosim so a lander descent
-  or a rover run is bit-reproducible (today wall-clock stepping + float-order vary
-  run-to-run). Prereq for regression-testing dynamics and for networked replay.
-- **FMI/FMU + SSP** — export a Modelica subsystem as an FMU; import a third-party
-  FMU as a cosim component. The `PortRegistry` was built FMI-shaped (one scalar
-  port surface, see `project_port_registry_substrate`), so the substrate is ready —
-  the work is the FMU package/solver bindings + the determinism above.
+### G8 — Determinism / FMI interop  **[PARTIAL — FMI 3 CS import implemented; determinism/replay and export remain open]**
+This G-series track is deliberately orthogonal to "author assets in USD".
+- **Deterministic ordering** — [doc 62](62-deterministic-runtime-and-async-boundaries.md)
+  defines the fixed-tick ordering and admission contract. Whole-simulation
+  bitwise reproducibility, cross-platform numerical profiles, and durable replay
+  remain open. The runtime has same-host evidence and deterministic scene gates,
+  but it does not promise identical floating-point results across architectures
+  or compiler versions.
+- **FMI import** — native FMI 3 Co-Simulation import is implemented in
+  [`lunco-fmi`](../../crates/lunco-fmi/README.md) through `LoadFmu`: unclocked
+  scalar Float64 ports, explicit input hold over each communication interval,
+  and no implicit coupling. Browser hosts cannot load native FMU binaries.
+- **FMI export / SSP** — exporting a Modelica subsystem or an assembled system
+  as an FMU/SSP package is not implemented.
 Matters for reproducibility and standards interop, not for modeling more assets.
 
 ---

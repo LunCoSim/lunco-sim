@@ -35,23 +35,23 @@ this maths.
 **Scope:** small. One solver behind one function; the clamp+warning becomes a
 regression test against the library.
 
-## 2. Model exchange — FMI 3.0 FMU import
+## 2. Model exchange — FMI 3.0 FMU export and SSP packaging
 
-**What:** An FMU import backend via the [`fmi` crate](https://crates.io/crates/fmi),
-registered in `BackendRegistry`.
+**What:** Export a Modelica subsystem or an assembled system as an FMU and/or
+an SSP package. Native FMI 3 Co-Simulation import already exists in
+[`lunco-fmi`](../../crates/lunco-fmi/README.md); this entry covers the reverse
+direction.
 
-**Why:** `BackendRegistry` ([`14-simulation-layers.md`](14-simulation-layers.md))
-was designed for pluggable backends precisely so rumoca would not be the only
-way to get equations into a run. FMI 3.0 is the industry model-exchange
-standard (Dymola, OpenModelica, Ansys export it), so an FMU backend both opens
-the door to external models and **hedges rumoca regressions** — when the
-compiler misbehaves, a reference FMU of the same model isolates whether the
-bug is ours.
+**Why:** Import covers external models. Export lets a LunCoSim model or a wired
+system run in another tool, which is needed for independent comparison,
+delivery to a partner, and reuse outside the simulator. SSP packaging would
+carry the assembled system and its connections rather than only one component.
 
-**Scope:** medium. New backend crate implementing `Backend`/`Participant`
-against the co-sim master loop in [`22-domain-cosim.md`](22-domain-cosim.md)
-(the macro-step contract already speaks FMI-CS vocabulary); no changes to the
-registry itself.
+**Scope:** medium to large. Reuse [`lunco-port-core`](../../crates/lunco-port-core/)
+contracts and the existing USD wiring; do not introduce a second topology or a
+second unit model. The exporter must state its supported FMI profile explicitly;
+implicit coupling, broad conformance, and cross-tool equivalence remain separate
+qualification work.
 
 ## 3. Robotics interop
 

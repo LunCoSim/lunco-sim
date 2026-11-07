@@ -19,9 +19,11 @@ A Modelica model is attached to an entity. The fixed master clock advances the
 world; at each participant's declared communication point, model outputs
 propagate through `SimConnection`s, Avian applies the resulting forces, and the
 new state becomes the next model input sample. Outputs are held between points.
-The causal ordering is shaped like the [FMI master algorithm](https://fmi-standard.org/),
-but this runtime is not itself an FMI implementation and not every participant
-is forced to communicate at the physics tick rate.
+The causal ordering is shaped like the [FMI master algorithm](https://fmi-standard.org/).
+The internal Modelica participant is not packaged as an FMU; native FMI 3
+Co-Simulation import is available separately through `LoadFmu`
+([`lunco-fmi`](../../crates/lunco-fmi/README.md)), and not every participant is
+forced to communicate at the physics tick rate.
 
 ## Read it off the vessel
 

@@ -31,7 +31,7 @@ Live cosim drives 3D viz, possession, and twin coupling at wall-clock pace. That
 Dymola and OMEdit treat results as `.mat` files keyed by model name; comparison happens by opening multiple files. Wolfram SystemModeler and Simulink-SDI treat each run as a named entity with its own parameters. The latter scales better for iterative engineering work because (a) the user doesn't manage filenames, (b) parameter overrides live next to results, (c) the comparison UI is the default view rather than a side door.
 
 ### Why backend-agnostic
-Today the only execution backend is rumoca + diffsol. The crate boundary should not assume that. FMU import, codegen, hardware-in-the-loop, and remote workers are all plausible v2+ extensions. Putting `Experiment` and `RunResult` in a backend-agnostic crate keeps the door open without committing to any of those.
+Today the only experiment execution backend is rumoca + diffsol. The crate boundary should not assume that. An FMU-backed experiment, codegen, hardware-in-the-loop, and remote workers are all plausible v2+ extensions. Runtime FMI 3 Co-Simulation import is separate from this batch backend. Putting `Experiment` and `RunResult` in a backend-agnostic crate keeps the door open without committing to any of those.
 
 ### Immutable compilation and run values
 The runner admits scalar parameters and inputs through Rumoca simulation options

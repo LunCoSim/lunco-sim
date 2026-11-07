@@ -9,16 +9,17 @@ description: >
   plot and compare runs — without asking the user to click. Covers the
   `--api` launch, the `POST /api/commands` envelope, the command + query
   catalog, run bounds/solver semantics, and reading experiment results.
-  Prefer curl over the MCP `mcp__lunco__*` tools — the MCP bridge is often
-  unavailable; every MCP tool has a curl equivalent shown here.
+  Prefer curl for reproducibility and exact wire responses; every MCP tool has
+  a curl equivalent shown here.
 ---
 
 # Run Modelica models & build experiments
 
 lunica exposes a reflect-registered command API and structured query
 providers over `POST /api/commands`. **Drive everything with curl.** The
-`mcp__lunco__*` tools mirror this API but are frequently down — use curl as
-the primary surface; only fall back to MCP if a human explicitly asks.
+`mcp__lunco__*` tools mirror this API when the MCP bridge is configured; curl
+is the primary surface because it is available in every build and exposes the
+exact wire response.
 
 ## 0. Launch an app in API mode
 
@@ -1190,10 +1191,11 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   (§0). In `lunica` it's already the whole app. Commands/results don't need it —
   only the visible panels do.
 - **Don't restart to "start clean"** — drive the API to add the state you need.
-- **MCP fallback**: if the user insists on MCP, every command above maps to an
-  `mcp__lunco__*` tool (`compile_model`, `run_scenario`→rhai only, `set_input`,
-  `snapshot_variables`, `read_ports`, `describe_model`, `find_model`,
-  `open_uri`, `list_bundled`, `list_open_documents`). Batch experiment verbs
+- **MCP parity**: when the MCP bridge is available or the user asks for it,
+  every command above maps to an `mcp__lunco__*` tool (`compile_model`,
+  `run_scenario`→rhai only, `set_input`, `snapshot_variables`, `read_ports`,
+  `describe_model`, `find_model`, `open_uri`, `list_bundled`,
+  `list_open_documents`). Batch experiment verbs
   (`RunExperiment`/`ListRuns`/`GetExperimentResult`) have **no dedicated MCP
   tool** — use curl (or the generic `mcp__lunco__execute_command`).
 
