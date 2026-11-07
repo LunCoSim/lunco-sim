@@ -121,6 +121,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `ReadActiveWorkspace` | `{}` | Read the active scope (`kind` is `twin` or `ephemeral`), its `scope_id` and root, or `open: false`. An ephemeral scope is not an authored Twin. |
 | `ReadActiveTwinContract` | `{}` | Read the active authored Twin contract, or `open: false` when no authored Twin is open. |
 | `GetSceneLoadingSettings` | `{}` | Read global, project, Twin and CLI scene-loading values, the effective and admitted source, the session scene override, and project-write status. |
+| `GetPhysicsEscapeGuardSettings` | `{}` | Read system, project, and Twin finite-world escape settings and the effective value and source. |
 | `ListSpawnCatalog` | `{}` | List authored spawnable USD entries, including their standard `doc` description, provenance, and spawn source. |
 | `ListUsdAssetMetadata` | `{}` | List the scanned USD metadata projection used by the Scenarios menu and scripts; `ready` distinguishes an incomplete asynchronous scan from an empty result, while each settled entry reports `read_ok`, `parse_ok`, and any corresponding error. |
 | `ListLibrary` | `{"cursor": u64, "limit": u64, "filter": {...}}` | Search and list classes from admitted Modelica source libraries. |

@@ -424,6 +424,35 @@ current workspace. `SetProjectSceneLoading` writes or removes the project
 override; `GetSceneLoadingSettings` reports the scopes, the next-open decision,
 the admitted decision, and the runtime scene override.
 
+#### Finite-world physics escape containment
+
+Finite-world escape containment defaults to `false`, so dynamic objects can
+fly beyond bounds inferred from resident static colliders. Non-finite physics
+state remains contained regardless of this preference. The system setting is
+stored under `physics.finite_world_escape_guard` in the user's
+`lunco/settings.json`; project settings use the same key in
+`<project>/.lunco/settings.json`; a shared Twin can set
+`"physics.finite_world_escape_guard" = true` under `[settings]` in `twin.toml`.
+
+Precedence is Twin, project, then system. Missing project or Twin values
+inherit; explicit `false` disables containment even when a lower scope enables
+it. **Settings -> General** controls the system default, **Settings -> Project**
+controls the local project override, and **Twin settings** controls the shared
+value. Project selection reports when the Twin value takes precedence.
+`SetProjectPhysicsEscapeGuard` writes or removes the project value, and
+`GetPhysicsEscapeGuardSettings` reports all scopes and the effective source.
+Opening a Twin with a malformed project value or a non-boolean Twin value is
+rejected with a visible error.
+
+```json
+{ "physics": { "finite_world_escape_guard": true } }
+```
+
+```toml
+[settings]
+"physics.finite_world_escape_guard" = true
+```
+
 An explicit scene selected while opening a Twin, including `--scene PATH`,
 overrides automatic selection even when default loading is disabled. It is
 scoped to that Twin session; it does not modify `[usd].default_scene` or

@@ -35,6 +35,19 @@ fn capture_project_settings_reply(
     }
 }
 
+fn capture_project_physics_settings_reply(
+    _: On<lunco_workspace::SetProjectPhysicsEscapeGuard>,
+    active: Res<lunco_core::ActiveCommandId>,
+    request: Res<PendingApiRequest>,
+    mut pending: ResMut<PendingProjectSettingsReplies>,
+) {
+    if let Some(id) = active.get() {
+        if request.correlation_id != 0 {
+            pending.0.push((id, request.correlation_id));
+        }
+    }
+}
+
 fn finish_project_settings_replies(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<PendingProjectSettingsReplies>().0);
     let mut waiting = Vec::new();
@@ -59,14 +72,14 @@ fn finish_project_settings_replies(world: &mut World) {
             }
         };
         let admitted = world
-            .get_resource::<lunco_workspace::scene_settings::PendingProjectSceneWrites>()
+            .get_resource::<lunco_workspace::scene_settings::PendingProjectSettingsWrites>()
             .is_some_and(|pending| pending.was_admitted(id));
         if !admitted {
             // The dispatcher has already answered an admission failure.
             continue;
         }
         world
-            .resource_mut::<lunco_workspace::scene_settings::PendingProjectSceneWrites>()
+            .resource_mut::<lunco_workspace::scene_settings::PendingProjectSettingsWrites>()
             .forget_admitted(id);
         finish_command_result(world, Some(id), Some(correlation), result, code);
     }
@@ -79,8 +92,10 @@ pub struct WorkspaceApiQueriesPlugin;
 impl Plugin for WorkspaceApiQueriesPlugin {
     fn build(&self, app: &mut App) {
         app.register_deferred_command::<lunco_workspace::SetProjectSceneLoading>()
+            .register_deferred_command::<lunco_workspace::SetProjectPhysicsEscapeGuard>()
             .init_resource::<PendingProjectSettingsReplies>()
             .add_observer(capture_project_settings_reply)
+            .add_observer(capture_project_physics_settings_reply)
             .add_systems(
                 Update,
                 finish_project_settings_replies.run_if(has_project_settings_replies),
@@ -93,6 +108,55 @@ impl Plugin for WorkspaceApiQueriesPlugin {
         registry.register(ReadActiveTwinContractProvider);
         registry.register(ReadActiveWorkspaceProvider);
         registry.register(SceneLoadingSettingsProvider);
+        registry.register(PhysicsEscapeGuardSettingsProvider);
+    }
+}
+
+struct PhysicsEscapeGuardSettingsProvider;
+
+impl ApiQueryProvider for PhysicsEscapeGuardSettingsProvider {
+    fn name(&self) -> &'static str {
+        "GetPhysicsEscapeGuardSettings"
+    }
+
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let workspace = world.get_resource::<WorkspaceResource>().ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "WorkspacePlugin is not installed",
+            )
+        })?;
+        let global = world
+            .get_resource::<lunco_workspace::PhysicsEscapeGuardSettings>()
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "Physics escape guard settings are not installed",
+                )
+            })?;
+        let id = workspace.active_twin;
+        let twin = id.and_then(|id| workspace.twin(id));
+        let project = id
+            .and_then(|id| workspace.project_physics_escape_settings(id))
+            .and_then(|value| value.finite_world_escape_guard);
+        let twin_value = lunco_workspace::twin_physics_escape_guard_setting(
+            twin.and_then(|twin| twin.manifest.as_ref()),
+        )
+        .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?;
+        let effective = lunco_workspace::resolve_physics_escape_guard(
+            global.finite_world_escape_guard,
+            project,
+            twin_value,
+        );
+        Ok(Some(api_value!({
+            "global": global.finite_world_escape_guard,
+            "project": project,
+            "twin": twin_value,
+            "effective": effective.enabled,
+            "source": effective.source.as_str(),
+            "project_pending": id.is_some_and(|id| workspace.project_settings_pending(id)),
+            "project_error": id.and_then(|id| workspace.project_settings_error(id)),
+        })))
     }
 }
 

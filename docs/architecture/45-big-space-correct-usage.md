@@ -382,9 +382,14 @@ atomic grid migration path. Do not create a new physics world for every cell.
 A projected `SiteAnchor` marks its active site grid with
 `lunco_physics::UnboundedPhysicsDomain`. `WorldBounds` must not turn the union
 of currently resident static terrain into a flight ceiling or a horizontal
-flight fence. Ordinary bounded scenes retain finite-world escape checks;
-non-finite state and the shared backend admission contract apply in both
-domains. Removing the site anchor withdraws its domain declaration.
+flight fence. Finite-world escape containment is disabled by default because
+static collider coverage does not always define a vehicle's valid flight
+volume. It can be enabled at system, project, or Twin scope; Twin overrides
+project, and project overrides system. When enabled, ordinary bounded scenes
+pause a dynamic articulated object after it leaves bounds derived from static
+colliders. Non-finite state and the shared backend admission contract remain
+active at every scope and in both bounded and unbounded domains. Removing the
+site anchor withdraws its domain declaration.
 
 `lunco-celestial-spatial::globe_collision` owns planetary contact residency.
 Seeded dynamic bodies demand a closed, balanced cube-sphere cover through

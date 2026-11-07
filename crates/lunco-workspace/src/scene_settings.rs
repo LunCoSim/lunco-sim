@@ -1,4 +1,4 @@
-//! Scene-loading settings shared by workspace opens and the settings UI.
+//! Scoped settings shared by workspace opens and the settings UI.
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
@@ -149,9 +149,43 @@ pub struct SetProjectSceneLoading {
     pub value: Option<bool>,
 }
 
+/// Request a local finite-world escape override; `None` restores inheritance.
+#[lunco_core::Command(default)]
+pub struct SetProjectPhysicsEscapeGuard {
+    /// Twin whose project settings are being edited.
+    pub twin: u64,
+    /// Explicit override or inheritance.
+    pub value: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+enum ProjectSettingField {
+    SceneLoadDefault,
+    FiniteWorldEscapeGuard,
+}
+
+impl ProjectSettingField {
+    fn section(self) -> &'static str {
+        match self {
+            Self::SceneLoadDefault => SCENE_SECTION,
+            Self::FiniteWorldEscapeGuard => crate::physics_escape_settings::PHYSICS_SECTION,
+        }
+    }
+
+    fn field(self) -> &'static str {
+        match self {
+            Self::SceneLoadDefault => LOAD_DEFAULT_FIELD,
+            Self::FiniteWorldEscapeGuard => {
+                crate::physics_escape_settings::FINITE_WORLD_ESCAPE_GUARD_FIELD
+            }
+        }
+    }
+}
+
 struct ProjectWrite {
     twin: crate::TwinId,
     root: PathBuf,
+    field: ProjectSettingField,
     value: Option<bool>,
     task: Task<Result<(), String>>,
     revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -160,12 +194,12 @@ struct ProjectWrite {
 
 /// Outstanding project settings writes. Each root permits one write at a time.
 #[derive(Resource, Default)]
-pub struct PendingProjectSceneWrites {
+pub struct PendingProjectSettingsWrites {
     writes: Vec<ProjectWrite>,
     admitted_commands: std::collections::BTreeSet<u64>,
 }
 
-impl PendingProjectSceneWrites {
+impl PendingProjectSettingsWrites {
     pub(crate) fn has_pending(&self) -> bool {
         !self.writes.is_empty()
     }
@@ -185,11 +219,50 @@ impl PendingProjectSceneWrites {
 fn set_project_scene_loading(
     trigger: On<SetProjectSceneLoading>,
     mut workspace: ResMut<crate::WorkspaceResource>,
-    mut pending: ResMut<PendingProjectSceneWrites>,
+    mut pending: ResMut<PendingProjectSettingsWrites>,
     opens: Res<crate::open::PendingTwinOpens>,
     active: Res<lunco_core::ActiveCommandId>,
 ) -> lunco_core::CommandOutcome {
-    let id = crate::TwinId::new(trigger.event().twin);
+    start_project_bool_write(
+        trigger.event().twin,
+        ProjectSettingField::SceneLoadDefault,
+        trigger.event().value,
+        &mut workspace,
+        &mut pending,
+        opens.settings_revision.clone(),
+        active.get(),
+    )
+}
+
+#[lunco_core::on_command(SetProjectPhysicsEscapeGuard)]
+fn set_project_physics_escape_guard(
+    trigger: On<SetProjectPhysicsEscapeGuard>,
+    mut workspace: ResMut<crate::WorkspaceResource>,
+    mut pending: ResMut<PendingProjectSettingsWrites>,
+    opens: Res<crate::open::PendingTwinOpens>,
+    active: Res<lunco_core::ActiveCommandId>,
+) -> lunco_core::CommandOutcome {
+    start_project_bool_write(
+        trigger.event().twin,
+        ProjectSettingField::FiniteWorldEscapeGuard,
+        trigger.event().value,
+        &mut workspace,
+        &mut pending,
+        opens.settings_revision.clone(),
+        active.get(),
+    )
+}
+
+fn start_project_bool_write(
+    twin_raw: u64,
+    field: ProjectSettingField,
+    value: Option<bool>,
+    workspace: &mut crate::WorkspaceResource,
+    pending: &mut PendingProjectSettingsWrites,
+    revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    command_id: Option<u64>,
+) -> lunco_core::CommandOutcome {
+    let id = crate::TwinId::new(twin_raw);
     let Some(twin) = workspace.twin(id) else {
         let error = format!(
             "Cannot update project settings: Twin {} is no longer open",
@@ -224,22 +297,23 @@ fn set_project_scene_loading(
             ),
         ));
     }
-    let value = trigger.event().value;
     let path = project_settings_path(&root);
-    let revision = opens.settings_revision.clone();
     revision.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     let task = AsyncComputeTaskPool::get().spawn(async move {
-        lunco_settings::read_optional_section::<ProjectSceneSettings>(&path)?;
-        lunco_settings::write_optional_field(
-            &path,
-            SCENE_SECTION,
-            LOAD_DEFAULT_FIELD,
-            value.as_ref(),
-        )
+        match field {
+            ProjectSettingField::SceneLoadDefault => {
+                lunco_settings::read_optional_section::<ProjectSceneSettings>(&path)?;
+            }
+            ProjectSettingField::FiniteWorldEscapeGuard => {
+                lunco_settings::read_optional_section::<crate::ProjectPhysicsEscapeSettings>(
+                    &path,
+                )?;
+            }
+        }
+        lunco_settings::write_optional_field(&path, field.section(), field.field(), value.as_ref())
     });
     workspace.project_settings_errors.remove(&id);
     workspace.project_settings_pending.insert(id);
-    let command_id = active.get();
     if let Some(command_id) = command_id {
         pending.admitted_commands.insert(command_id);
         while pending.admitted_commands.len() > 1024 {
@@ -249,6 +323,7 @@ fn set_project_scene_loading(
     pending.writes.push(ProjectWrite {
         twin: id,
         root,
+        field,
         value,
         task,
         revision,
@@ -257,8 +332,8 @@ fn set_project_scene_loading(
     lunco_core::CommandOutcome::Pending
 }
 
-fn poll_project_scene_writes(
-    mut pending: ResMut<PendingProjectSceneWrites>,
+fn poll_project_settings_writes(
+    mut pending: ResMut<PendingProjectSettingsWrites>,
     mut workspace: ResMut<crate::WorkspaceResource>,
     mut results: ResMut<lunco_core::CommandResults>,
 ) {
@@ -286,8 +361,19 @@ fn poll_project_scene_writes(
                 .map(|(id, _)| id)
                 .collect();
             for id in ids {
-                if let Some(project) = workspace.project_scene_settings.get_mut(&id) {
-                    project.load_default = write.value;
+                match write.field {
+                    ProjectSettingField::SceneLoadDefault => {
+                        if let Some(project) = workspace.project_scene_settings.get_mut(&id) {
+                            project.load_default = write.value;
+                        }
+                    }
+                    ProjectSettingField::FiniteWorldEscapeGuard => {
+                        if let Some(project) =
+                            workspace.project_physics_escape_settings.get_mut(&id)
+                        {
+                            project.finite_world_escape_guard = write.value;
+                        }
+                    }
                 }
             }
         }
@@ -319,7 +405,7 @@ fn finish_project_writes_before_exit(world: &mut World) {
     if !exiting {
         return;
     }
-    let writes = std::mem::take(&mut world.resource_mut::<PendingProjectSceneWrites>().writes);
+    let writes = std::mem::take(&mut world.resource_mut::<PendingProjectSettingsWrites>().writes);
     for write in writes {
         if let Err(error) = bevy::tasks::block_on(write.task) {
             warn!("Project settings write failed during exit: {error}");
@@ -330,21 +416,21 @@ fn finish_project_writes_before_exit(world: &mut World) {
     }
 }
 
-fn project_scene_writes_pending(pending: Res<PendingProjectSceneWrites>) -> bool {
+fn project_settings_writes_pending(pending: Res<PendingProjectSettingsWrites>) -> bool {
     pending.has_pending()
 }
 
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<PendingProjectSceneWrites>()
+    app.init_resource::<PendingProjectSettingsWrites>()
         .add_systems(
             Update,
-            poll_project_scene_writes.run_if(project_scene_writes_pending),
+            poll_project_settings_writes.run_if(project_settings_writes_pending),
         )
         .add_systems(Last, finish_project_writes_before_exit);
     register_all_commands(app);
 }
 
-lunco_core::register_commands!(set_project_scene_loading);
+lunco_core::register_commands!(set_project_scene_loading, set_project_physics_escape_guard);
 
 #[cfg(test)]
 mod tests {

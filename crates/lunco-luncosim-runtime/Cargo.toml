@@ -23,6 +23,7 @@ lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = fals
 lunco-luncosim-simulation = { path = "../lunco-luncosim-simulation", default-features = false }
 lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false, features = ["session-input-archive-export"] }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-physics = { workspace = true }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-scripting-rhai = { path = "../lunco-scripting-rhai" }

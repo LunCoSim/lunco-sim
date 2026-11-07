@@ -427,7 +427,7 @@ separate scenes.
 | Supported multi-rover stress cardinalities and shared-command motion | `multi_rover_stress_4`, `multi_rover_stress_8`, `multi_rover_stress_20` | `multi_rover_stress_negative` (three-rover unsupported cardinality) | discovered roster, authored Rhai route/control policy, world poses, and terminal Rhai verdict |
 | Possession and handoff authority | `tutorial_authority_handoff`, `descent_lander_runtime` | authority-conflict cases in those scenarios | semantic commands, events, and final owner |
 | Terrain stream readiness and terrain-progress completion | no repository-owned deterministic DEM fixture | external DEM scenes are not accepted as this branch's authored gate | `TerrainLodStatus` and `ReadExposures` exist; a test-owned DEM/Twin is still required |
-| Rigid bodies escaping scene bounds | `escape_containment` | deliberate out-of-bounds body plus a grounded control body | required Rhai `physics.body_escape` policy pauses the escaped dynamic joint island; the control body settles under the continuing solver |
+| Rigid bodies escaping scene bounds | `escape_containment` | deliberate out-of-bounds body plus a grounded control body | the out-of-bounds body continues falling with the default-off system guard, while the control body settles under the continuing solver |
 
 The two new authored contract fixtures deliberately do not assert terrain
 stream completion: a flat `Plane` is not a streamed DEM, and treating it as one

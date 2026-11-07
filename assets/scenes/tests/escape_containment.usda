@@ -2,23 +2,17 @@
 (
     defaultPrim = "EscapeContainmentTest"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Production fixture for per-object physics escape containment.
-#
-# Escapee begins outside the only static collider's footprint. The default
-# application Rhai policy must disable its physics object while ControlBody
-# continues falling and settling under the same production solver.
 def Xform "EscapeContainmentTest" (
     kind = "assembly"
-    doc = "An escaped dynamic object pauses while the rest of physics continues."
+    doc = "Finite-world escape containment is disabled by default. Enable the system, project, or Twin physics setting to pause escaped dynamic objects. Non-finite physics state remains contained unconditionally."
 )
 {
     def Scope "Scenario"
     {
         custom string lunco:scenario = "escape-containment"
-
         def Scope "EscapeContainment" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
@@ -27,35 +21,32 @@ def Xform "EscapeContainmentTest" (
             uniform asset info:sourceAsset = @lunco://scenarios/tests/escape_containment.rhai@
         }
     }
-
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         bool physics:collisionEnabled = true
     }
-
     def Cube "Escapee" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (1510.0, 0, 0)
+        double3 xformOp:translate = (1510.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 1.0
         bool physics:collisionEnabled = true
     }
-
     def Cube "ControlBody" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, 10, 0)
+        double3 xformOp:translate = (0.0, 10.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 1.0
         bool physics:collisionEnabled = true

@@ -9133,6 +9133,7 @@ dependencies = [
  "lunco-luncosim-services",
  "lunco-luncosim-simulation",
  "lunco-networking-sync",
+ "lunco-physics",
  "lunco-scripting",
  "lunco-scripting-bridge-core",
  "lunco-scripting-rhai",

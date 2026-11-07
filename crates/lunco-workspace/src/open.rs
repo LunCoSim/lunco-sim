@@ -102,6 +102,15 @@ fn on_set_twin_setting(
             lunco_command_contracts::Reject::InvalidOp(error.into()),
         ));
     }
+    if event.key == crate::FINITE_WORLD_ESCAPE_GUARD_KEY
+        && !matches!(&event.value, TwinSettingInput::Bool(_))
+    {
+        let error = format!("{} must be a boolean", crate::FINITE_WORLD_ESCAPE_GUARD_KEY);
+        warn!("SetTwinSetting rejected: {error}");
+        return Ok(lunco_core::CommandOutcome::Rejected(
+            lunco_command_contracts::Reject::InvalidOp(error),
+        ));
+    }
     let twin_id = workspace.active_twin;
     let Some(twin_id) = twin_id else {
         warn!("SetTwinSetting requires an active Twin");
@@ -596,7 +605,13 @@ struct TwinOpenTask {
 
 struct PreparedTwinOpen {
     twin: TwinMode,
-    settings: Result<(crate::ProjectSceneSettings, Option<bool>), TwinError>,
+    settings: Result<PreparedTwinSettings, TwinError>,
+}
+
+struct PreparedTwinSettings {
+    project_scene: crate::ProjectSceneSettings,
+    twin_load_default: Option<bool>,
+    project_physics_escape: crate::ProjectPhysicsEscapeSettings,
 }
 
 fn prepare_twin_open(twin: TwinMode) -> PreparedTwinOpen {
@@ -613,12 +628,16 @@ fn refresh_twin_open(twin: TwinMode) -> Result<PreparedTwinOpen, TwinError> {
     }
 }
 
-fn prepare_twin_settings(
-    twin: &TwinMode,
-) -> Result<(crate::ProjectSceneSettings, Option<bool>), TwinError> {
+fn prepare_twin_settings(twin: &TwinMode) -> Result<PreparedTwinSettings, TwinError> {
     let twin = match twin {
         TwinMode::Twin(twin) => twin,
-        TwinMode::Folder(_) | TwinMode::Orphan(_) => return Ok((Default::default(), None)),
+        TwinMode::Folder(_) | TwinMode::Orphan(_) => {
+            return Ok(PreparedTwinSettings {
+                project_scene: Default::default(),
+                twin_load_default: None,
+                project_physics_escape: Default::default(),
+            });
+        }
     };
     let root = &twin.root;
     let project = crate::scene_settings::read_project_scene_settings(root).map_err(|error| {
@@ -634,7 +653,22 @@ fn prepare_twin_settings(
         path: root.join(lunco_twin::MANIFEST_FILENAME),
         source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
     })?;
-    Ok((project, twin_load_default))
+    let project_physics_escape =
+        crate::read_project_physics_escape_settings(root).map_err(|error| TwinError::Io {
+            path: crate::scene_settings::project_settings_path(root),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+        })?;
+    crate::twin_physics_escape_guard_setting(twin.manifest.as_ref()).map_err(|error| {
+        TwinError::Io {
+            path: root.join(lunco_twin::MANIFEST_FILENAME),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+        }
+    })?;
+    Ok(PreparedTwinSettings {
+        project_scene: project,
+        twin_load_default,
+        project_physics_escape,
+    })
 }
 
 /// Shared helper for Open Folder / Open Twin / Add Folder / Add Twin.
@@ -715,7 +749,7 @@ pub fn enqueue_twin_scan(
 /// and fire [`TwinAdded`]; in-flight ones are kept for the next frame.
 pub fn drain_pending_twin_opens(
     mut pending: ResMut<PendingTwinOpens>,
-    writes: Option<Res<crate::scene_settings::PendingProjectSceneWrites>>,
+    writes: Option<Res<crate::scene_settings::PendingProjectSettingsWrites>>,
     mut commands: Commands,
 ) {
     use bevy::tasks::futures_lite::future;
@@ -758,7 +792,7 @@ pub fn drain_pending_twin_opens(
                 read_revision,
                 Ok(PreparedTwinOpen {
                     twin: twin_mode @ (TwinMode::Twin(_) | TwinMode::Folder(_)),
-                    settings: Ok((project, twin_load_default)),
+                    settings: Ok(settings),
                 }),
             )) => {
                 let revision = settings_revision.clone();
@@ -769,7 +803,7 @@ pub fn drain_pending_twin_opens(
                         return;
                     }
                     let writing = world
-                        .get_resource::<crate::scene_settings::PendingProjectSceneWrites>()
+                        .get_resource::<crate::scene_settings::PendingProjectSettingsWrites>()
                         .is_some_and(|writes| writes.has_pending());
                     if writing
                         || read_revision != revision.load(std::sync::atomic::Ordering::Acquire)
@@ -816,13 +850,18 @@ pub fn drain_pending_twin_opens(
                     }
                     let decision = crate::scene_settings::resolve_scene_loading(
                         global,
-                        project.load_default,
-                        twin_load_default,
+                        settings.project_scene.load_default,
+                        settings.twin_load_default,
                         cli,
                     );
                     let mut workspace = world.resource_mut::<WorkspaceResource>();
                     let twin_id = workspace.add_twin(twin);
-                    workspace.project_scene_settings.insert(twin_id, project);
+                    workspace
+                        .project_scene_settings
+                        .insert(twin_id, settings.project_scene);
+                    workspace
+                        .project_physics_escape_settings
+                        .insert(twin_id, settings.project_physics_escape);
                     workspace.scene_loading_decisions.insert(twin_id, decision);
                     if let Some(rel) = &entry.scene {
                         workspace.scene_overrides.insert(twin_id, rel.clone());

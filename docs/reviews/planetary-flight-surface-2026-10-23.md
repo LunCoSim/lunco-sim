@@ -12,8 +12,8 @@ preserves the f64 physics pose through that representation change.
 `lunco-physics` owns the generic unbounded-domain declaration and escape facts.
 Celestial placement applies it to a valid projected site grid and withdraws it
 with the site anchor. The existing Rhai escape policy still owns containment
-choices for actual finite-world exits and non-finite state. Backend numeric
-admission remains independent and required.
+choices for finite-world exits when the guard is enabled and for non-finite
+state. Backend numeric admission remains independent and required.
 
 `lunco-terrain-globe` owns one f64 surface geometry producer and balanced
 cube-sphere selection. `lunco-celestial-spatial` consumes it for native contact
@@ -56,7 +56,8 @@ would obstruct negative-elevation terrain.
   geometry raises RuntimeFaults. No timeout fallback admits unsupported flight.
 - Production test: `planetary_flight_surface` observes attached flight across
   cells, off-crop swept contact, below-datum local contact and collar contact.
-  `escape_containment` retains ordinary bounded-scene policy coverage.
+  `escape_containment` verifies that ordinary bounded-scene flight is allowed
+  with the default-off finite-world guard.
 
 ## Verification boundary
 

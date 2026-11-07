@@ -52,6 +52,32 @@ ship its own task presets; follow [Twin perspectives](../../tutorials/05-twin-pe
 The [workbench architecture](../../architecture/11-workbench.md#4-perspectives)
 defines composition, validation and personal layout persistence.
 
+### Finite-world escape containment
+
+Dynamic bodies can fly beyond bounds inferred from static colliders by
+default. To pause an object when it leaves those finite bounds, enable
+**Contain bodies outside finite physics worlds** under **Settings -> General**.
+Use **Settings -> Project** to set a local override, or **Twin settings** to
+save a value shared with everyone using that Twin. Twin overrides project;
+project overrides the system default. Non-finite physics state is always
+contained, regardless of these settings.
+
+The local project file is `<project>/.lunco/settings.json`:
+
+```json
+{ "physics": { "finite_world_escape_guard": true } }
+```
+
+The shared Twin setting is authored in `twin.toml`:
+
+```toml
+[settings]
+"physics.finite_world_escape_guard" = true
+```
+
+The `GetPhysicsEscapeGuardSettings` query reports the effective value and its
+source. See the [Twin workflow guide](../../architecture/13-twin-and-workflow.md#finite-world-physics-escape-containment).
+
 ### Open a Twin without its default scene
 
 LunCoSim normally loads the default scene declared by a Twin. To change the

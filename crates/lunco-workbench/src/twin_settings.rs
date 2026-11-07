@@ -5,8 +5,9 @@ use bevy_egui::egui;
 use lunco_twin::TwinSettingValue;
 use lunco_workbench_widgets::{UiIcon, icon_button, text_editor};
 use lunco_workspace::{
-    ResetTwinSetting, SceneLoadingCli, SceneLoadingSettings, SetProjectSceneLoading,
-    SetTwinSetting, TwinClosed, TwinId, TwinSettingInput, WorkspaceResource,
+    PhysicsEscapeGuardSettings, ResetTwinSetting, SceneLoadingCli, SceneLoadingSettings,
+    SetProjectPhysicsEscapeGuard, SetProjectSceneLoading, SetTwinSetting, TwinClosed, TwinId,
+    TwinSettingInput, WorkspaceResource,
 };
 
 use crate::{MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot, WorkbenchMenuRegistry};
@@ -41,6 +42,7 @@ pub(crate) fn refresh_view(workspace: Res<WorkspaceResource>, mut view: ResMut<T
                 .iter()
                 .filter(|(key, _)| {
                     key.as_str() != lunco_workspace::scene_settings::SCENE_LOAD_DEFAULT_KEY
+                        && key.as_str() != lunco_workspace::FINITE_WORLD_ESCAPE_GUARD_KEY
                 })
                 .map(|(key, value)| TwinSettingRow {
                     key: key.clone(),
@@ -112,6 +114,7 @@ impl Panel for TwinSettingsPanel {
                     .small(),
             );
             render_shared_scene_setting(ui, ctx, active_twin);
+            render_shared_physics_escape_setting(ui, ctx, active_twin);
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Find").strong());
@@ -161,15 +164,15 @@ impl Panel for TwinSettingsPanel {
     }
 }
 
-/// Register the app-wide opening preference under Settings → General.
-pub(crate) fn register_scene_loading_settings_menu(world: &mut World) {
+/// Register system-wide and project settings under their settings submenus.
+pub(crate) fn register_workspace_settings_menu(world: &mut World) {
     if let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() {
-        menus.register_settings_submenu("General", render_global_scene_setting);
-        menus.register_settings_submenu("Project", render_project_scene_setting);
+        menus.register_settings_submenu("General", render_global_settings);
+        menus.register_settings_submenu("Project", render_project_settings);
     }
 }
 
-fn render_global_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+fn render_global_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     let Some(mut settings) = ctx.resource::<SceneLoadingSettings>().cloned() else {
         return;
     };
@@ -182,9 +185,24 @@ fn render_global_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     {
         ctx.set_resource(settings);
     }
+    let Some(mut physics) = ctx.resource::<PhysicsEscapeGuardSettings>().cloned() else {
+        return;
+    };
+    if ui
+        .checkbox(
+            &mut physics.finite_world_escape_guard,
+            "Contain bodies outside finite physics worlds",
+        )
+        .on_hover_text(
+            "By default, dynamic bodies may fly beyond bounds inferred from static colliders. Non-finite physics state is always contained.",
+        )
+        .changed()
+    {
+        ctx.set_resource(physics);
+    }
 }
 
-fn render_project_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+fn render_project_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     let Some(workspace) = ctx.resource::<WorkspaceResource>() else {
         return;
     };
@@ -212,6 +230,11 @@ fn render_project_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
         ui.label("Project settings are unavailable.");
         return;
     };
+    let Some(project_physics) = workspace.project_physics_escape_settings(id).cloned() else {
+        ui.label("Project physics settings are unavailable.");
+        return;
+    };
+    let twin_physics = lunco_workspace::twin_physics_escape_guard_setting(twin.manifest.as_ref());
     let pending = workspace.project_settings_pending(id);
     let error = workspace.project_settings_error(id).map(str::to_owned);
     let Some(global) = ctx.resource::<SceneLoadingSettings>().cloned() else {
@@ -253,12 +276,6 @@ fn render_project_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
             local_user(),
         );
     }
-    if pending {
-        ui.label("Saving…");
-    }
-    if let Some(error) = error {
-        ui.label(format!("Could not save project setting: {error}"));
-    }
     match shared {
         Ok(Some(value)) => {
             ui.label(format!(
@@ -278,7 +295,68 @@ fn render_project_scene_setting(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
         }
     }
     if let Some(value) = cli.0 {
-        ui.label(format!("A command-line flag controls this run: {}. The saved project setting applies when higher-priority overrides are absent.", scene_choice_label(value)));
+        ui.label(format!("A command-line flag controls scene loading for this run: {}. The saved project scene setting applies when higher-priority overrides are absent.", scene_choice_label(value)));
+    }
+    if pending {
+        ui.label("Saving…");
+    }
+    if let Some(error) = error.as_deref() {
+        ui.label(format!("Could not save project setting: {error}"));
+    }
+    ui.separator();
+    ui.label("Finite world escape containment");
+    let Some(system_physics) = ctx.resource::<PhysicsEscapeGuardSettings>() else {
+        return;
+    };
+    let inherited_physics = format!(
+        "Use system setting ({})",
+        physics_escape_choice_label(system_physics.finite_world_escape_guard)
+    );
+    let selected_physics = match project_physics.finite_world_escape_guard {
+        None => inherited_physics.as_str(),
+        Some(value) => physics_escape_choice_label(value),
+    };
+    let mut physics_value = project_physics.finite_world_escape_guard;
+    let physics_changed = ui
+        .add_enabled_ui(!pending, |ui| {
+            crate::render::settings_choice_menu(
+                ui,
+                format!("Contain escaped bodies: {selected_physics}"),
+                &mut physics_value,
+                [
+                    (None, inherited_physics.clone()),
+                    (Some(true), "Pause escaped objects".into()),
+                    (Some(false), "Allow flight beyond finite bounds".into()),
+                ],
+            )
+        })
+        .inner;
+    if physics_changed {
+        ctx.trigger_command(
+            SetProjectPhysicsEscapeGuard {
+                twin: id.raw(),
+                value: physics_value,
+            },
+            local_user(),
+        );
+    }
+    match twin_physics {
+        Ok(Some(value)) => {
+            ui.label(format!(
+                "The shared Twin setting overrides this project: {}.",
+                physics_escape_choice_label(value)
+            ));
+            if ui.button("Edit Twin physics setting...").clicked() {
+                ctx.trigger(lunco_workbench_core::commands::FocusPanel {
+                    id: TWIN_SETTINGS_PANEL_ID.as_str().into(),
+                });
+                ui.close();
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            ui.label(error);
+        }
     }
 }
 
@@ -287,6 +365,14 @@ fn scene_choice_label(value: bool) -> &'static str {
         "Load default scene"
     } else {
         "Start empty"
+    }
+}
+
+fn physics_escape_choice_label(value: bool) -> &'static str {
+    if value {
+        "Pause escaped objects"
+    } else {
+        "Allow flight beyond finite bounds"
     }
 }
 
@@ -362,6 +448,66 @@ fn render_shared_scene_setting(ui: &mut egui::Ui, ctx: &mut PanelCtx, id: TwinId
         }
     }
     ui.label("This setting is saved with the Twin and takes precedence over project settings.");
+}
+
+fn render_shared_physics_escape_setting(ui: &mut egui::Ui, ctx: &mut PanelCtx, id: TwinId) {
+    let Some(workspace) = ctx.resource::<WorkspaceResource>() else {
+        return;
+    };
+    let Some(twin) = workspace.twin(id) else {
+        return;
+    };
+    let Some(manifest) = twin.manifest.as_ref() else {
+        ui.label("No Twin is open.");
+        return;
+    };
+    let current = match lunco_workspace::twin_physics_escape_guard_setting(Some(manifest)) {
+        Ok(value) => value,
+        Err(error) => {
+            ui.label(error);
+            return;
+        }
+    };
+    let project = workspace
+        .project_physics_escape_settings(id)
+        .and_then(|settings| settings.finite_world_escape_guard);
+    let Some(system) = ctx.resource::<PhysicsEscapeGuardSettings>() else {
+        return;
+    };
+    let inherited = project.unwrap_or(system.finite_world_escape_guard);
+    ui.separator();
+    ui.label(egui::RichText::new("Shared with this Twin").strong());
+    ui.label("Finite world escape containment");
+    let mut selected = current;
+    scene_choice(
+        ui,
+        "twin_physics_escape_guard",
+        &mut selected,
+        format!(
+            "Use project/system setting ({})",
+            physics_escape_choice_label(inherited)
+        ),
+    );
+    if selected != current {
+        match selected {
+            Some(value) => ctx.trigger_command(
+                SetTwinSetting {
+                    key: lunco_workspace::FINITE_WORLD_ESCAPE_GUARD_KEY.into(),
+                    value: TwinSettingInput::Bool(value),
+                },
+                local_user(),
+            ),
+            None => ctx.trigger_command(
+                ResetTwinSetting {
+                    key: lunco_workspace::FINITE_WORLD_ESCAPE_GUARD_KEY.into(),
+                },
+                local_user(),
+            ),
+        }
+    }
+    ui.label(
+        "Off by default. When enabled, dynamic objects that leave finite static-world bounds are paused; non-finite physics state is always contained.",
+    );
 }
 
 fn matches_query(key: &str, query: &str) -> bool {

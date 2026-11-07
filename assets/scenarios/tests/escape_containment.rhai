@@ -1,6 +1,6 @@
-// Production acceptance for the application-authored physics escape policy.
-// One body begins outside the static world; a second body proves that physics
-// continues while the escaped object's articulated island is disabled.
+// Production acceptance for the default finite-world escape setting.
+// One body begins outside the static world; both it and a control body must
+// continue through the bounded-scene region while physics remains admitted.
 
 fn fail(message) {
     report_verdict([message], "ESCAPE CONTAINMENT", "ESCAPE_CONTAINMENT");
@@ -39,8 +39,8 @@ fn on_tick(me, ctx) {
     ];
     if escapee_end != () && this.escapee_start != () {
         checks.push(t_true(
-            (escapee_end[1] - this.escapee_start[1]).abs() < 0.1,
-            "default Rhai policy did not pause the escaped object"));
+            this.escapee_start[1] - escapee_end[1] > 5.0,
+            "finite-world escape containment was active despite default-off settings"));
     }
     if control_end != () && this.control_start != () {
         checks.push(t_true(

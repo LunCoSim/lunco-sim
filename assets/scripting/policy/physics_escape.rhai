@@ -1,6 +1,6 @@
-// The default containment response for bodies that leave the authored static-
-// world bounds or develop a non-finite position or velocity. Rust applies this
-// typed action to the live physics graph.
+// The containment response when finite-world escape containment is enabled or
+// a body develops a non-finite position or velocity. Rust applies this typed
+// action to the live physics graph.
 fn escaped_body_policy(ctx) {
     if runtime_context.scope != "core"
         || runtime_context.cycle != "simulation"

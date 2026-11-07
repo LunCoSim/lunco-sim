@@ -48,6 +48,31 @@ impl Plugin for LunCoSimRuntimePlugin {
 
         app.add_systems(
             PreUpdate,
+            sync_physics_escape_guard
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::resource_exists::<
+                        lunco_physics::FiniteWorldEscapeGuard,
+                    >,
+                )
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::resource_changed::<
+                        lunco_workspace::WorkspaceResource,
+                    >
+                        .or_else(
+                            bevy::ecs::schedule::common_conditions::resource_changed::<
+                                lunco_workspace::PhysicsEscapeGuardSettings,
+                            >,
+                        )
+                        .or_else(
+                            bevy::ecs::schedule::common_conditions::resource_changed::<
+                                lunco_physics::FiniteWorldEscapeGuard,
+                            >,
+                        ),
+                ),
+        );
+
+        app.add_systems(
+            PreUpdate,
             sync_twin_globe_lod_mesh_budget.run_if(
                 bevy::ecs::schedule::common_conditions::resource_exists::<
                     lunco_workspace::WorkspaceResource,
@@ -92,6 +117,68 @@ impl Plugin for LunCoSimRuntimePlugin {
                 replay_scenario_journal_timeline,
             ),
         );
+    }
+}
+
+/// Resolve the one active physics guard from system, project and Twin scopes.
+/// Scene teardown resets its scene resource, so that change also wakes this
+/// synchronization before the next solver boundary.
+fn sync_physics_escape_guard(
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    settings: Option<Res<lunco_workspace::PhysicsEscapeGuardSettings>>,
+    guard: Option<ResMut<lunco_physics::FiniteWorldEscapeGuard>>,
+    mut last_invalid: Local<Option<String>>,
+) {
+    let Some(mut guard) = guard else {
+        return;
+    };
+    let system = settings
+        .as_deref()
+        .is_some_and(|settings| settings.finite_world_escape_guard);
+    let Some(workspace) = workspace else {
+        if guard.enabled != system {
+            guard.enabled = system;
+        }
+        *last_invalid = None;
+        return;
+    };
+    let active_id = workspace.active_twin;
+    let project = active_id
+        .and_then(|id| workspace.project_physics_escape_settings(id))
+        .and_then(|settings| settings.finite_world_escape_guard);
+    let twin = active_id
+        .and_then(|id| workspace.twin(id))
+        .and_then(|twin| {
+            lunco_workspace::twin_physics_escape_guard_setting(twin.manifest.as_ref()).map_err(
+                |error| {
+                    format!(
+                        "Twin '{}' has invalid `{}`: {error}",
+                        twin.manifest
+                            .as_ref()
+                            .map_or("<unnamed>", |manifest| manifest.name.as_str()),
+                        lunco_workspace::FINITE_WORLD_ESCAPE_GUARD_KEY
+                    )
+                },
+            )
+        });
+    let twin = match twin {
+        None => None,
+        Some(Ok(value)) => value,
+        Some(Err(message)) => {
+            if last_invalid.as_deref() != Some(message.as_str()) {
+                bevy::log::error!("{message}; finite-world escape containment is enabled");
+                *last_invalid = Some(message);
+            }
+            if !guard.enabled {
+                guard.enabled = true;
+            }
+            return;
+        }
+    };
+    *last_invalid = None;
+    let decision = lunco_workspace::resolve_physics_escape_guard(system, project, twin);
+    if guard.enabled != decision.enabled {
+        guard.enabled = decision.enabled;
     }
 }
 

@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**318 commands** across **61** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**319 commands** across **61** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -131,7 +131,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
-- [`lunco-workspace`](#lunco-workspace) (9 commands)
+- [`lunco-workspace`](#lunco-workspace) (10 commands)
 
 ---
 
@@ -4721,6 +4721,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | `twin` | `u64` |  Twin whose project settings are being edited. |
 | `value` | `Option < bool >` |  Explicit override or inheritance. |
 
+#### `SetProjectPhysicsEscapeGuard`
+
+ Request a local finite-world escape containment override; `None` restores the system setting.
+
+- *defined in:* `crates/lunco-workspace/src/scene_settings.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `twin` | `u64` |  Twin whose project settings are being edited. |
+| `value` | `Option < bool >` |  Whether finite-world escape containment is enabled, or inherit. |
+
 #### `SetTwinSetting`
 
  Persist one generic project-owned setting on the active Twin.
@@ -4734,7 +4745,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 318 commands from the runtime schema; scanned 1088 .rs files for docs (0 parse failure(s) skipped).
+<!-- 319 commands from the runtime schema; scanned 1088 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

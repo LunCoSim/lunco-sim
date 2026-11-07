@@ -43,16 +43,22 @@
 
 pub mod journal_persistence;
 pub mod open;
+pub mod physics_escape_settings;
 pub mod recents;
 pub mod rename;
 pub mod scene_settings;
 pub mod session;
 
 pub use open::{ResetTwinSetting, SetTwinSetting, TwinSettingInput};
+pub use physics_escape_settings::{
+    FINITE_WORLD_ESCAPE_GUARD_KEY, PhysicsEscapeGuardDecision, PhysicsEscapeGuardSettings,
+    PhysicsEscapeGuardSource, ProjectPhysicsEscapeSettings, read_project_physics_escape_settings,
+    resolve_physics_escape_guard, twin_physics_escape_guard_setting,
+};
 pub use recents::Recents;
 pub use scene_settings::{
     ProjectSceneSettings, SceneLoadingCli, SceneLoadingDecision, SceneLoadingSettings,
-    SceneLoadingSource, SetProjectSceneLoading,
+    SceneLoadingSource, SetProjectPhysicsEscapeGuard, SetProjectSceneLoading,
 };
 pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded, TwinClosed,
@@ -468,6 +474,9 @@ pub struct Workspace {
 
     /// Project settings and the decision captured for each admitted open.
     project_scene_settings: std::collections::BTreeMap<TwinId, ProjectSceneSettings>,
+    /// Local finite-world escape settings captured for each admitted open.
+    project_physics_escape_settings:
+        std::collections::BTreeMap<TwinId, ProjectPhysicsEscapeSettings>,
     scene_loading_decisions: std::collections::BTreeMap<TwinId, SceneLoadingDecision>,
     project_settings_pending: std::collections::BTreeSet<TwinId>,
     project_settings_errors: std::collections::BTreeMap<TwinId, String>,
@@ -531,6 +540,7 @@ impl Workspace {
     pub fn close_twin(&mut self, id: TwinId) {
         self.scene_overrides.remove(&id);
         self.project_scene_settings.remove(&id);
+        self.project_physics_escape_settings.remove(&id);
         self.scene_loading_decisions.remove(&id);
         self.project_settings_pending.remove(&id);
         self.project_settings_errors.remove(&id);
@@ -561,6 +571,14 @@ impl Workspace {
     /// Local project overrides loaded for this Twin session.
     pub fn project_scene_settings(&self, id: TwinId) -> Option<&ProjectSceneSettings> {
         self.project_scene_settings.get(&id)
+    }
+
+    /// Local finite-world escape override loaded for this Twin session.
+    pub fn project_physics_escape_settings(
+        &self,
+        id: TwinId,
+    ) -> Option<&ProjectPhysicsEscapeSettings> {
+        self.project_physics_escape_settings.get(&id)
     }
 
     /// Automatic-loading decision captured when this Twin was opened.

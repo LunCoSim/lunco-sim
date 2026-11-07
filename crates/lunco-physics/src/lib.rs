@@ -54,8 +54,8 @@ pub use avian_backend::{
     native_force_receiver_can_integrate, prepare_force_batch,
 };
 pub use escape::{
-    EscapeDiagnosticPlugin, PhysicsObjectPaused, UnboundedPhysicsDomain, WorldBounds,
-    pause_physics_members,
+    EscapeDiagnosticPlugin, FiniteWorldEscapeGuard, PhysicsObjectPaused, UnboundedPhysicsDomain,
+    WorldBounds, pause_physics_members,
 };
 pub use order::{
     PhysicsOrderError, PhysicsOrderKey, ordered_physics_entities, report_invalid_physics_order,

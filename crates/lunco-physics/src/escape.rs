@@ -7,11 +7,14 @@
 //! geometry also has no finite bound. Positions use the solver's active f64
 //! frame, independently of camera and BigSpace cell representation.
 //!
-//! Non-finite position or velocity is invalid in every domain. The required
+//! Finite world-bound containment is opt-in and disabled by default because
+//! static collider residency is not necessarily a motion domain. Non-finite
+//! position or velocity remains invalid in every domain. The required
 //! `physics.body_escape` Rhai hook receives typed escape facts and chooses
-//! containment. The application default pauses the dynamic joint-connected
-//! object, including its joints and colliders, while independent physics
-//! continues. Missing/invalid policy results hold physics closed.
+//! containment. When finite-world containment is enabled, the application
+//! default pauses the dynamic joint-connected object, including its joints and
+//! colliders, while independent physics continues. Missing/invalid policy
+//! results hold physics closed.
 //!
 //! Each body's first report publishes `physics-body-escaped` telemetry for the
 //! logger and Recent Events. Bounds rebuild only when static geometry or the
@@ -58,6 +61,17 @@ pub const ESCAPE_MARGIN_MIN: f64 = 100.0;
 /// Additional local-world height, in multiples of the static world's largest
 /// extent. This catches runaway integration without rewriting physics state.
 pub const ESCAPE_VERTICAL_FACTOR: f64 = 10.0;
+
+/// Whether finite static-world bounds contain dynamic bodies.
+///
+/// The application resolves this from system, project, and Twin settings.
+/// Invalid native state remains guarded independently of this setting.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq, Reflect)]
+#[reflect(Resource)]
+pub struct FiniteWorldEscapeGuard {
+    /// Enable finite position checks against the derived static-world bounds.
+    pub enabled: bool,
+}
 
 /// Marks a disabled body, collider, or joint that a physics policy has paused.
 /// Readiness release leaves Avian's disable in place while this marker remains.
@@ -324,6 +338,7 @@ pub struct ReportedEscapes(EntityHashSet);
 /// does fire, which is correct under REMOVAL as well (a shrinking world must
 /// shrink its bounds, and an incremental union cannot).
 fn update_world_bounds(
+    guard: Res<FiniteWorldEscapeGuard>,
     q_changed: Query<&ColliderOf, Changed<ColliderAabb>>,
     mut q_removed: RemovedComponents<ColliderAabb>,
     q_static: Query<(&ColliderAabb, &ColliderOf)>,
@@ -332,6 +347,7 @@ fn update_world_bounds(
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     unbounded_frames: Query<(), With<UnboundedPhysicsDomain>>,
     mut previous_domain: Local<Option<bool>>,
+    mut previous_guard: Local<Option<bool>>,
 ) {
     // DRAIN, don't peek: `is_empty()` leaves the events queued for their whole
     // retention window, so every removal re-fired this full static union for
@@ -344,7 +360,9 @@ fn update_world_bounds(
         .is_some_and(|frame| unbounded_frames.contains(frame.0));
     let domain_changed = *previous_domain != Some(unbounded);
     *previous_domain = Some(unbounded);
-    if unbounded {
+    let guard_changed = *previous_guard != Some(guard.enabled);
+    *previous_guard = Some(guard.enabled);
+    if unbounded || !guard.enabled {
         if *bounds != WorldBounds::None {
             *bounds = WorldBounds::None;
         }
@@ -357,7 +375,7 @@ fn update_world_bounds(
     let static_changed = q_changed
         .iter()
         .any(|collider_of| matches!(q_bodies.get(collider_of.body), Ok(RigidBody::Static)));
-    if !static_changed && !removed_any && !domain_changed {
+    if !static_changed && !removed_any && !domain_changed && !guard_changed {
         return;
     }
 
@@ -415,6 +433,7 @@ fn update_world_bounds(
 /// in practice, the prim path itself.
 fn report_escaped_bodies(
     bounds: Res<WorldBounds>,
+    guard: Res<FiniteWorldEscapeGuard>,
     mut reported: ResMut<ReportedEscapes>,
     mut holds: ResMut<crate::PhysicsHolds>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -456,7 +475,7 @@ fn report_escaped_bodies(
             continue;
         }
         let non_finite_state = !pos.0.is_finite() || !vel.0.is_finite();
-        if !non_finite_state && !bounds.escaped(pos.0) {
+        if !non_finite_state && (!guard.enabled || !bounds.escaped(pos.0)) {
             continue;
         }
         // `insert` returns false if already present: the whole anti-spam rule.
@@ -625,6 +644,8 @@ impl Plugin for EscapeDiagnosticPlugin {
     fn build(&self, app: &mut App) {
         app.init_scene_resource::<WorldBounds>()
             .init_scene_resource::<ReportedEscapes>()
+            .init_scene_resource::<FiniteWorldEscapeGuard>()
+            .register_type::<FiniteWorldEscapeGuard>()
             // The diagnostic raises the safety hold at the owning physics
             // boundary. Keep the plugin self-contained for headless apps and
             // focused integration tests that install it without the broader
@@ -720,6 +741,7 @@ mod tests {
     fn unbounded_frame_does_not_turn_resident_contacts_into_a_flight_ceiling() {
         let mut app = App::new();
         app.init_resource::<WorldBounds>()
+            .insert_resource(FiniteWorldEscapeGuard { enabled: true })
             .add_systems(Update, update_world_bounds);
         let frame = app.world_mut().spawn_empty().id();
         app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
@@ -810,6 +832,7 @@ mod tests {
         )));
         app.finish();
         app.cleanup();
+        app.insert_resource(FiniteWorldEscapeGuard { enabled: true });
 
         // A 1 km square of static ground at the origin.
         app.world_mut().spawn((
@@ -876,6 +899,7 @@ mod tests {
         )));
         app.finish();
         app.cleanup();
+        app.insert_resource(FiniteWorldEscapeGuard { enabled: true });
 
         app.world_mut().spawn((
             RigidBody::Static,
@@ -933,6 +957,7 @@ mod tests {
             min: DVec3::splat(-100.0),
             max: DVec3::splat(100.0),
         });
+        world.insert_resource(FiniteWorldEscapeGuard { enabled: true });
         world.insert_resource(ReportedEscapes::default());
         world.insert_resource(PhysicsHolds::default());
         world.insert_resource(lunco_core::RuntimeFaults::default());
@@ -997,6 +1022,7 @@ mod tests {
             min: DVec3::splat(-100.0),
             max: DVec3::splat(100.0),
         });
+        app.insert_resource(FiniteWorldEscapeGuard { enabled: true });
         app.init_scene_resource::<ReportedEscapes>();
         app.insert_resource(PhysicsHolds::default());
         app.insert_resource(lunco_core::RuntimeFaults::default());
@@ -1091,3 +1117,5 @@ mod tests {
 impl lunco_core::SceneResource for WorldBounds {}
 
 impl lunco_core::SceneResource for ReportedEscapes {}
+
+impl lunco_core::SceneResource for FiniteWorldEscapeGuard {}

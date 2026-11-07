@@ -213,7 +213,9 @@ impl Plugin for WorkspacePlugin {
     fn build(&self, app: &mut App) {
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<crate::SceneLoadingSettings>();
+        app.register_settings_section::<crate::PhysicsEscapeGuardSettings>();
         app.register_type::<crate::SceneLoadingSettings>();
+        app.register_type::<crate::PhysicsEscapeGuardSettings>();
         app.init_resource::<crate::SceneLoadingCli>();
         app.init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_core::CommandResults>();
