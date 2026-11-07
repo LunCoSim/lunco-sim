@@ -119,6 +119,9 @@ def render_release_notes(
     lines = [
         f"# LunCoSim nightly — {release_date}",
         "",
+        "**Windows x86_64 build is unsigned.** If SmartScreen says “Windows protected your PC,” "
+        "click **More info**, then **Run anyway** to continue installing.",
+        "",
         "Download and install the file for your computer:",
         "",
         "- **Windows x86_64:** `LunCoSim-Windows-x86_64.msi`",
@@ -136,7 +139,7 @@ def render_release_notes(
         "",
         f"View the [changelog]({changelog_url}).",
         "",
-        "These unsigned nightly builds are intended for testing.",
+        "These nightly builds are development builds intended for testing.",
         "",
     ]
     return "\n".join(lines)

@@ -33,7 +33,7 @@ Create short, human-facing notes for the exact commit being built. Keep the comm
 
    The default format emits the standalone changelog with all non-merge changes since the previous nightly. The `release-notes` format emits only platform download/install instructions, a brief autoupdater availability note, a prompt for an AI agent to use the installed documentation, skills, and examples to build a mission, and a changelog link. It does not inspect or modify source files.
 
-4. Review the standalone changelog for the complete previous-nightly change range. Review release notes separately for correct installer names, concise wording, the brief autoupdater note, and a working changelog link. Do not add updater mechanics or claim runtime validation to the GitHub release body.
+4. Review the standalone changelog for the complete previous-nightly change range. Review release notes separately for correct installer names, a prominent Windows unsigned-build warning with the **More info → Run anyway** SmartScreen steps, concise wording, the brief autoupdater note, and a working changelog link. Do not add updater mechanics or claim runtime validation to the GitHub release body.
 
 5. Add or update the release workflow only in `.github/workflows/nightly.yml`. The release job must fetch timestamped tags, generate the GitHub body with `--format release-notes` from the exact `github.sha`, and publish those notes with the artifacts. Keep the detailed changelog output in its separate `docs/releases/` snapshot; never pass that output as the GitHub release body. A local Markdown file is GitHub-visible only after the containing commit is pushed; a release body is the immediate GitHub-facing copy.
 
@@ -59,6 +59,8 @@ Create short, human-facing notes for the exact commit being built. Keep the comm
 - Store committed snapshots at `docs/releases/nightly-YYYYMMDD.md`.
 - Generate changelog snapshots with the default format; generate GitHub release bodies with `--format release-notes`.
 - Include exactly the four supported human installer names.
+- Start the release body with a clear notice that the Windows build is unsigned and tell users to click **More info**, then **Run anyway**, if SmartScreen shows “Windows protected your PC.”
+- State that nightly builds are development builds intended for testing.
 - Mention that the built-in autoupdater can download the latest nightly build.
 - Include the short mission-building prompt for the user's favorite AI agent.
 - Include all non-merge changes since the previous timestamped nightly in the standalone changelog.
