@@ -57,8 +57,10 @@ pub struct SetCameraInput {
     pub look_radians_per_pointer_unit: Option<f32>,
     /// Lower bound for orbital rotation at the body's surface, in `[0, 1]`.
     pub orbit_surface_min_scale: Option<f64>,
-    /// Positive exponent shaping the apparent-horizon distance response.
-    pub orbit_distance_curve_exponent: Option<f64>,
+    /// Positive altitude-curve exponent for orbital rotation response.
+    pub orbit_look_altitude_curve_exponent: Option<f64>,
+    /// Positive clearance above the body's reference radius where orbital rotation reaches full speed, in metres.
+    pub orbit_look_full_speed_altitude_m: Option<f64>,
     /// Non-negative clearance in metres above covered DEM terrain (or the body's reference radius) where surface mode engages;
     /// must be less than `surface_mode_disengage_altitude_m`.
     pub surface_mode_engage_altitude_m: Option<f64>,
@@ -67,6 +69,8 @@ pub struct SetCameraInput {
     pub surface_mode_disengage_altitude_m: Option<f64>,
     /// Positive finite default duration for authored orbit-direction animations, in seconds.
     pub orbit_direction_animation_duration_s: Option<f64>,
+    /// Positive duration for returning from orbit to the saved local camera view, in seconds.
+    pub orbit_return_transition_duration_s: Option<f64>,
 }
 
 /// Aim a camera from one point at another in the active presentation frame.

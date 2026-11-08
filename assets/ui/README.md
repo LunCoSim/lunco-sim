@@ -139,6 +139,9 @@ The persisted `CameraInputSettings.surface_mode_engage_altitude_m` property
 sets the surface-mode engage altitude and orbital zoom floor (1,000 m by
 default). `surface_mode_disengage_altitude_m` defaults to 2,000 m to preserve
 hysteresis. Rhai can change both with `set_camera_surface_mode_altitudes(...)`.
+Returning from Moon/Earth orbit to Surface view eases to the saved local camera
+pose over 1.2 seconds by default. Rhai can tune
+`CameraInputSettings.orbit_return_transition_duration_s` with `set_camera_input(...)`.
 
 The body-mode selector and optional mission-site card stay in the root's
 normal vertical flow. The map is absolutely positioned below whichever controls

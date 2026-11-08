@@ -101,13 +101,12 @@ state; moving scene objects use the USD animation path above.
 ## Orbital camera poses
 
 `OrbitCamera` is an avatar-owned presentation mode. `OrbitViewHistory` stores
-the last user-controlled pose per stable celestial ephemeris id, so switching
-between Moon, Earth, or another body—and re-entering orbit from that body's
-surface—restores that body's own yaw, pitch, distance, damping, and vertical
-offset. The first surface-to-orbit entry has no saved pose and derives its arm
-from the live radial position for continuity. The history is transient and is
-cleared when the active Twin closes or when the avatar is demoted; it is not a
-scene-wide celestial fact and is never persisted as USD.
+the last user-controlled pose per stable celestial ephemeris id for explicit
+focus changes between bodies. A surface-to-orbit scroll handoff always derives
+its arm from the live camera position in the target's inertial frame; saved
+orbit history must not move the camera during scroll transit. The history is
+transient and is cleared when the active Twin closes or when the avatar is
+demoted; it is not a scene-wide celestial fact and is never persisted as USD.
 
 When a body has no saved user pose, `FocusTarget` seeds the orbit direction
 from the camera's current region in the target's explicit inertial BigSpace
@@ -130,10 +129,28 @@ normal per-body orbit history.
 
 `CameraInputSettings.surface_mode_engage_altitude_m` controls where the camera
 enters surface mode and sets the matching orbital zoom floor. It defaults to
-1,000 m above the body's reference radius. The configurable
-`surface_mode_disengage_altitude_m` defaults to 2,000 m and preserves hysteresis
-while returning from surface mode. Change both through `SetCameraInput` or the
-Rhai `set_camera_surface_mode_altitudes(...)` helper.
+1,000 m above sampled local DEM terrain where the active terrain covers the
+camera, and uses the body's reference radius outside terrain coverage. The
+configurable `surface_mode_disengage_altitude_m` defaults to 2,000 m and
+preserves hysteresis under the same clearance rule while returning from
+surface mode. Change both through `SetCameraInput` or the Rhai
+`set_camera_surface_mode_altitudes(...)` helper.
+
+Orbital look response uses clearance above the body's reference radius. It
+starts at `orbit_surface_min_scale` (0.00002 by default), follows the configured
+`orbit_look_altitude_curve_exponent` (2.5 by default), and reaches full
+response at `orbit_look_full_speed_altitude_m` (1,000,000 m by default). The low
+surface response keeps the camera's large body-centred orbit radius from
+turning a small angular input into a large ground displacement. These persisted
+settings are user camera preferences shared by orbital views; `SetCameraInput`
+and Rhai's `set_camera_input(...)` helper can tune them without a Moon-specific
+policy.
+
+The `Surface` view action returns to the captured local camera pose over a
+1.2 s smooth transition by default. The camera changes into the saved local
+grid while preserving its current world pose, then follows a smooth arc around
+the body and eases into the saved position and orientation. Its duration is
+configurable with `orbit_return_transition_duration_s` in `CameraInputSettings`.
 
 ## Coordinate and physics boundary
 

@@ -68,6 +68,13 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase = 0;
     this.done = false;
+    this.return_transition_seen = false;
+    this.original_return_transition_duration =
+        get_setting("CameraInputSettings.orbit_return_transition_duration_s");
+    let duration_update = cmd("SetCameraInput", #{ orbit_return_transition_duration_s: 1.2 });
+    this.return_transition_configured = this.original_return_transition_duration != ()
+        && duration_update.ok
+        && near(get_setting("CameraInputSettings.orbit_return_transition_duration_s"), 1.2);
     this.lander = find_path(ROOT + "/Lander");
     this.avatar = find_path(ROOT + "/Avatar");
     this.environment = find_path(ROOT + "/Lander/Environment");
@@ -146,6 +153,13 @@ fn on_tick(me, ctx) {
         let returned = cmd("ReturnFromOrbit", #{ camera: this.avatar });
         this.return_requested = returned.ok;
         this.phase = 5;
+    } else if this.phase == 5 {
+        this.return_transition_seen = component_present(this.avatar, "CameraPoseLock")
+            && !component_present(this.avatar, "SpringArmCamera");
+        this.phase = 6;
+    } else if this.phase == 6 {
+        if component_present(this.avatar, "CameraPoseLock") { return; }
+        this.phase = 7;
     } else {
         let released_pitch = input_port(this.lander, "pitch");
         let released_roll = input_port(this.lander, "roll");
@@ -181,6 +195,10 @@ fn on_tick(me, ctx) {
                 "IMU validity telemetry disappeared while OrbitCamera was active"),
             t_true(this.returned_to_follow,
                 "ReturnFromOrbit did not restore the possessed follow camera"),
+            t_true(this.return_transition_configured,
+                "orbit return transition duration could not be set for the production check"),
+            t_true(this.return_transition_seen,
+                "ReturnFromOrbit did not hold the camera in its animated transition"),
             t_true(pose != () && pose.position_frame == "active_physics",
                 "camera mode transition removed the lander from the active physics frame"),
             t_true(gravity_y != () && (gravity_y - GRAVITY_Y).abs() <= GRAVITY_TOLERANCE,
@@ -188,6 +206,9 @@ fn on_tick(me, ctx) {
             t_true(acceleration_valid != () && acceleration_valid >= 1.0,
                 "IMU validity telemetry was not live after returning from orbit"),
         ];
+        cmd("SetCameraInput", #{
+            orbit_return_transition_duration_s: this.original_return_transition_duration
+        });
         this.done = true;
         report_verdict(checks, "LANDER CONTROLS", "LANDER_CONTROLS");
     }
@@ -195,6 +216,11 @@ fn on_tick(me, ctx) {
 
 fn on_stop(me, ctx) {
     if !this.done {
+        if this.original_return_transition_duration != () {
+            cmd("SetCameraInput", #{
+                orbit_return_transition_duration_s: this.original_return_transition_duration
+            });
+        }
         this.done = true;
         report_verdict(["lander control regression stopped before command ports were observed"],
                        "LANDER CONTROLS", "LANDER_CONTROLS");

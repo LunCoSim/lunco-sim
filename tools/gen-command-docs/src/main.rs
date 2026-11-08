@@ -366,7 +366,7 @@ fn main() {
         };
         files_scanned += 1;
         let mut col = Collector {
-            rel_file: rel.to_string_lossy().to_string(),
+            rel_file: rel.to_string_lossy().replace('\\', "/"),
             crate_name: crate_of(&rel),
             out: Vec::new(),
         };
@@ -413,7 +413,9 @@ fn main() {
         "     Source of truth: the running app's `DiscoverSchema` (GET /api/commands/schema),\n",
     );
     md.push_str("     decorated with the `///` docs on each `#[Command]` struct.\n");
-    md.push_str("     Regenerate: cargo run -p gen-command-docs -- --schema <schema.json> -->\n\n");
+    md.push_str(
+        "     Regenerate: cargo run -p gen-command-docs -- --schema <schema.json> [--schema <schema.json> ...] -->\n\n",
+    );
     md.push_str("# Command Reference\n\n");
     md.push_str(
         "Every externally callable mutation in LunCoSim is a reflected typed command — an event dispatched through one\n\
@@ -439,8 +441,8 @@ fn main() {
         ));
     }
     md.push_str(
-        "> **Regenerate:** dump the schema from a running app, then\n\
-         > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).\n\n",
+        "> **Regenerate:** dump schemas from the running app(s), then\n\
+         > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).\n\n",
     );
 
     // Quick-jump index.

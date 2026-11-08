@@ -92,7 +92,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, smoothing defaults, pose-transition state, adaptive clip-plane math, camera input accumulators, deterministic authored-camera display labels, and the `camera.default_presentation` and `camera.scene_avatar` policy-hook contracts. Device translation, rendering, and UI adapters consume these contracts. |
-| **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, the one-writer interaction-easing rule, frame-handoff rebasing, free-flight/surface pose writers, persisted camera-input settings (including configurable surface/orbit altitude and orbit-direction animation duration), and the typed `SetCameraInput` command over the camera-core contracts. Rhai authors presentation policy through the generic command surface. |
+| **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, the one-writer interaction-easing rule, frame-handoff rebasing, free-flight/surface pose writers, persisted camera-input settings (including clearance-based orbital look response, configurable surface/orbit altitude, orbit-direction animation, and orbital-return transition duration), and the typed `SetCameraInput` command over the camera-core contracts. Rhai authors presentation policy through the generic command surface. |
 | **`lunco-embodiment-core`** | Backend-neutral embodiment contracts: ECS role markers and the derived local-embodiment index. Camera, control, notification, spatial-handoff, input, and presentation adapters are supplied by focused packages. |
 | **`lunco-notifications-core`** | Backend-neutral transient notification command and queue contracts. The application runtime consumes the command; optional UI adapters render the resulting toasts. |
 | **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state, transient orbit history, arrival/input markers, and camera-direction transition state. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
@@ -646,7 +646,7 @@ Avatar-specific camera realization package. Its `AvatarCelestialCameraPlugin`
 owns typed subject-binding and release restoration, `FollowTarget`, BigSpace
 orbital placement, pending-focus realization, focus/return transactions,
 interactive-camera initialization, vessel spring-arm follow, collision-aware
-free-flight/surface locomotion, and the surface/orbit lifecycle handoff for
+free-flight/surface locomotion, and live-pose surface/orbit scroll handoffs for
 avatar entities. Generic celestial surface-frame publication remains in
 `lunco-camera-celestial`, while control authority and scene interaction remain
 in `lunco-avatar`.
@@ -670,7 +670,10 @@ embodiment, a camera source, or an authored behavior policy.
 Generic interactive camera realization package. Owns the exclusive camera-mode
 hooks, the one-writer interaction-easing rule, frame-handoff rebasing,
 free-flight/surface pose writers, persisted `CameraInputSettings`, and the
-`SetCameraInput` command over `lunco-camera-core`. It is reusable by avatar,
+`SetCameraInput` command over `lunco-camera-core`, including persisted
+clearance-based orbital look response settings and the orbital-return
+transition duration, with a one-time migration from the legacy surface
+sensitivity defaults. It is reusable by avatar,
 inspection, and other authored operators; source-specific frame production
 remains with the calling runtime, while Rhai can author presentation policy
 through the command surface.

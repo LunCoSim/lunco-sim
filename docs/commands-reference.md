@@ -1,7 +1,7 @@
 <!-- AUTO-GENERATED. Do not edit by hand.
      Source of truth: the running app's `DiscoverSchema` (GET /api/commands/schema),
      decorated with the `///` docs on each `#[Command]` struct.
-     Regenerate: cargo run -p gen-command-docs -- --schema <schema.json> -->
+     Regenerate: cargo run -p gen-command-docs -- --schema <schema.json> [--schema <schema.json> ...] -->
 
 # Command Reference
 
@@ -15,8 +15,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **319 commands** across **61** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
-> **Regenerate:** dump the schema from a running app, then
-> `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
+> **Regenerate:** dump schemas from the running app(s), then
+> `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
 
 ## Index
 
@@ -2090,10 +2090,12 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `look_radians_per_pointer_unit` | `Option < f32 >` |  Camera radians per pointer-motion unit. |
 | `orbit_surface_min_scale` | `Option < f64 >` |  Lower bound for orbital rotation at the body's surface, in `[0, 1]`. |
-| `orbit_distance_curve_exponent` | `Option < f64 >` |  Positive exponent shaping the apparent-horizon distance response. |
+| `orbit_look_altitude_curve_exponent` | `Option < f64 >` |  Positive altitude-curve exponent for orbital rotation response. |
+| `orbit_look_full_speed_altitude_m` | `Option < f64 >` |  Positive clearance above the body's reference radius where orbital rotation reaches full speed, in metres. |
 | `surface_mode_engage_altitude_m` | `Option < f64 >` |  Non-negative clearance in metres above covered DEM terrain (or the body's reference radius) where surface mode engages;  must be less than `surface_mode_disengage_altitude_m`. |
 | `surface_mode_disengage_altitude_m` | `Option < f64 >` |  Clearance in metres above covered DEM terrain (or the body's reference radius) where surface mode disengages; must be  greater than `surface_mode_engage_altitude_m`. |
 | `orbit_direction_animation_duration_s` | `Option < f64 >` |  Positive finite default duration for authored orbit-direction animations, in seconds. |
+| `orbit_return_transition_duration_s` | `Option < f64 >` |  Positive duration for returning from orbit to the saved local camera view, in seconds. |
 
 #### `SetCameraLookAt`
 
@@ -4710,6 +4712,17 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `key` | `String` |  Namespaced setting key to remove. |
 
+#### `SetProjectPhysicsEscapeGuard`
+
+ Request a local finite-world escape override; `None` restores inheritance.
+
+- *defined in:* `crates/lunco-workspace/src/scene_settings.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `twin` | `u64` |  Twin whose project settings are being edited. |
+| `value` | `Option < bool >` |  Explicit override or inheritance. |
+
 #### `SetProjectSceneLoading`
 
  Request a local project override; `None` restores inheritance.
@@ -4720,17 +4733,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `twin` | `u64` |  Twin whose project settings are being edited. |
 | `value` | `Option < bool >` |  Explicit override or inheritance. |
-
-#### `SetProjectPhysicsEscapeGuard`
-
- Request a local finite-world escape containment override; `None` restores the system setting.
-
-- *defined in:* `crates/lunco-workspace/src/scene_settings.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `twin` | `u64` |  Twin whose project settings are being edited. |
-| `value` | `Option < bool >` |  Whether finite-world escape containment is enabled, or inherit. |
 
 #### `SetTwinSetting`
 
@@ -4745,7 +4747,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 319 commands from the runtime schema; scanned 1088 .rs files for docs (0 parse failure(s) skipped).
+<!-- 319 commands from the runtime schema; scanned 1091 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

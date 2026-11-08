@@ -20,44 +20,135 @@ use lunco_camera_core::{
 use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 
+const CAMERA_INPUT_SETTINGS_SCHEMA_VERSION: u8 = 3;
+const LEGACY_ORBIT_SURFACE_MIN_SCALE: f64 = 0.04;
+const PREVIOUS_ORBIT_SURFACE_MIN_SCALE: f64 = 0.00001;
+const LEGACY_ORBIT_LOOK_ALTITUDE_CURVE_EXPONENT: f64 = 0.75;
+const LEGACY_ORBIT_LOOK_FULL_SPEED_ALTITUDE_M: f64 = 100_000.0;
+
+fn missing_camera_input_settings_schema_version() -> u8 {
+    0
+}
+
 /// Persisted pointer response shared by every interactive camera rig.
 ///
 /// The input layer supplies semantic look deltas; this resource only defines
-/// how much camera motion one accepted delta produces. Orbit scaling remains a
-/// pure camera policy and is independent of avatar or celestial ownership.
+/// how much camera motion one accepted delta produces. Orbital response uses
+/// clearance above the target body's reference radius and remains independent
+/// of avatar or celestial ownership.
 #[derive(Resource, Reflect, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 #[reflect(Resource)]
 #[serde(default)]
 pub struct CameraInputSettings {
     /// Camera radians per pointer-motion unit before behavior-specific scaling.
     pub look_radians_per_pointer_unit: f32,
-    /// Lower bound for orbital rotation at the body's surface.
+    /// Minimum fraction of normal orbital angular response at the reference surface.
     pub orbit_surface_min_scale: f64,
-    /// Shapes the geometric visible-horizon response.
-    pub orbit_distance_curve_exponent: f64,
+    /// Shapes how orbital rotation response increases with body-surface clearance.
+    pub orbit_look_altitude_curve_exponent: f64,
+    /// Clearance above a body's reference radius where orbital rotation reaches full speed, in metres.
+    pub orbit_look_full_speed_altitude_m: f64,
     /// Clearance below which surface mode engages, in metres above covered DEM terrain or the body's reference radius.
     pub surface_mode_engage_altitude_m: f64,
     /// Clearance above which surface mode disengages, in metres above covered DEM terrain or the body's reference radius.
     pub surface_mode_disengage_altitude_m: f64,
     /// Default duration for authored orbit-direction animations, in seconds.
     pub orbit_direction_animation_duration_s: f64,
+    /// Duration for animated returns from orbital to local camera view, in seconds.
+    pub orbit_return_transition_duration_s: f64,
+    /// Persisted settings schema; hidden from the reflected user settings surface.
+    #[serde(default = "missing_camera_input_settings_schema_version")]
+    #[reflect(ignore)]
+    schema_version: u8,
 }
 
 impl Default for CameraInputSettings {
     fn default() -> Self {
         Self {
             look_radians_per_pointer_unit: 0.001125,
-            orbit_surface_min_scale: 0.04,
-            orbit_distance_curve_exponent: 0.75,
+            orbit_surface_min_scale: 0.00002,
+            orbit_look_altitude_curve_exponent: 2.5,
+            orbit_look_full_speed_altitude_m: 1_000_000.0,
             surface_mode_engage_altitude_m: 1_000.0,
             surface_mode_disengage_altitude_m: 2_000.0,
             orbit_direction_animation_duration_s: 0.6,
+            orbit_return_transition_duration_s: 1.2,
+            schema_version: CAMERA_INPUT_SETTINGS_SCHEMA_VERSION,
         }
     }
 }
 
 impl SettingsSection for CameraInputSettings {
     const KEY: &'static str = "camera_input";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if !self.look_radians_per_pointer_unit.is_finite()
+            || self.look_radians_per_pointer_unit < 0.0
+        {
+            return Err("look sensitivity must be finite and non-negative".into());
+        }
+        if !self.orbit_surface_min_scale.is_finite()
+            || !(0.0..=1.0).contains(&self.orbit_surface_min_scale)
+        {
+            return Err("orbital surface response must be finite and within [0, 1]".into());
+        }
+        if !self.orbit_look_altitude_curve_exponent.is_finite()
+            || self.orbit_look_altitude_curve_exponent <= 0.0
+        {
+            return Err("orbital altitude-curve exponent must be finite and positive".into());
+        }
+        if !self.orbit_look_full_speed_altitude_m.is_finite()
+            || self.orbit_look_full_speed_altitude_m <= 0.0
+        {
+            return Err("orbital full-speed altitude must be finite and positive".into());
+        }
+        if !self.surface_mode_engage_altitude_m.is_finite()
+            || self.surface_mode_engage_altitude_m < 0.0
+            || !self.surface_mode_disengage_altitude_m.is_finite()
+            || self.surface_mode_disengage_altitude_m <= self.surface_mode_engage_altitude_m
+        {
+            return Err(
+                "surface-mode altitudes must satisfy finite 0 <= engage < disengage".into(),
+            );
+        }
+        if !self.orbit_direction_animation_duration_s.is_finite()
+            || self.orbit_direction_animation_duration_s <= 0.0
+        {
+            return Err("orbit-direction duration must be finite and positive".into());
+        }
+        if !self.orbit_return_transition_duration_s.is_finite()
+            || self.orbit_return_transition_duration_s <= 0.0
+        {
+            return Err("orbit-return transition duration must be finite and positive".into());
+        }
+        if self.schema_version > CAMERA_INPUT_SETTINGS_SCHEMA_VERSION {
+            return Err(format!(
+                "camera-input settings version {} is newer than supported version {}",
+                self.schema_version, CAMERA_INPUT_SETTINGS_SCHEMA_VERSION
+            ));
+        }
+        Ok(())
+    }
+
+    fn migrate_persisted(&mut self) {
+        if self.schema_version >= CAMERA_INPUT_SETTINGS_SCHEMA_VERSION {
+            return;
+        }
+        if self.orbit_surface_min_scale == LEGACY_ORBIT_SURFACE_MIN_SCALE
+            || self.orbit_surface_min_scale == PREVIOUS_ORBIT_SURFACE_MIN_SCALE
+        {
+            self.orbit_surface_min_scale = CameraInputSettings::default().orbit_surface_min_scale;
+        }
+        if self.orbit_look_altitude_curve_exponent == LEGACY_ORBIT_LOOK_ALTITUDE_CURVE_EXPONENT {
+            self.orbit_look_altitude_curve_exponent =
+                CameraInputSettings::default().orbit_look_altitude_curve_exponent;
+        }
+        if self.orbit_look_full_speed_altitude_m == LEGACY_ORBIT_LOOK_FULL_SPEED_ALTITUDE_M {
+            self.orbit_look_full_speed_altitude_m =
+                CameraInputSettings::default().orbit_look_full_speed_altitude_m;
+        }
+        self.schema_version = CAMERA_INPUT_SETTINGS_SCHEMA_VERSION;
+    }
 }
 
 #[on_command(SetCameraInput)]
@@ -77,11 +168,18 @@ fn on_set_camera_input(trigger: On<SetCameraInput>, mut settings: ResMut<CameraI
             warn!("SetCameraInput rejected surface scale outside [0, 1]: {value}");
         }
     }
-    if let Some(value) = command.orbit_distance_curve_exponent {
+    if let Some(value) = command.orbit_look_altitude_curve_exponent {
         if value.is_finite() && value > 0.0 {
-            settings.orbit_distance_curve_exponent = value;
+            settings.orbit_look_altitude_curve_exponent = value;
         } else {
-            warn!("SetCameraInput rejected non-positive distance exponent: {value}");
+            warn!("SetCameraInput rejected non-positive altitude-curve exponent: {value}");
+        }
+    }
+    if let Some(value) = command.orbit_look_full_speed_altitude_m {
+        if value.is_finite() && value > 0.0 {
+            settings.orbit_look_full_speed_altitude_m = value;
+        } else {
+            warn!("SetCameraInput rejected non-positive full-speed altitude: {value}");
         }
     }
     if command.surface_mode_engage_altitude_m.is_some()
@@ -115,22 +213,32 @@ fn on_set_camera_input(trigger: On<SetCameraInput>, mut settings: ResMut<CameraI
             );
         }
     }
+    if let Some(value) = command.orbit_return_transition_duration_s {
+        if value.is_finite() && value > 0.0 {
+            settings.orbit_return_transition_duration_s = value;
+        } else {
+            warn!("SetCameraInput rejected non-positive orbit-return transition duration: {value}");
+        }
+    }
 }
 
-/// Scale an orbit gesture from the target body's apparent geometry.
+/// Scale an orbit gesture from clearance above the target body's reference radius.
 pub fn body_orbit_look_scale(
     distance_m: f64,
     radius_m: f64,
     settings: &CameraInputSettings,
 ) -> f64 {
     let min_scale = settings.orbit_surface_min_scale.clamp(0.0, 1.0);
-    let exponent = settings.orbit_distance_curve_exponent.max(f64::EPSILON);
+    let exponent = settings
+        .orbit_look_altitude_curve_exponent
+        .max(f64::EPSILON);
     if !distance_m.is_finite() || !radius_m.is_finite() || radius_m <= 0.0 {
         return 1.0;
     }
-    let ratio = (radius_m / distance_m.max(radius_m)).clamp(0.0, 1.0);
-    let visible_horizon = (1.0 - ratio * ratio).max(0.0).sqrt();
-    min_scale + (1.0 - min_scale) * visible_horizon.powf(exponent)
+    let clearance_m = (distance_m - radius_m).max(0.0);
+    let altitude_fraction =
+        (clearance_m / settings.orbit_look_full_speed_altitude_m).clamp(0.0, 1.0);
+    min_scale + (1.0 - min_scale) * altitude_fraction.powf(exponent)
 }
 
 fn freeflight_camera_added(mut world: DeferredWorld, context: HookContext) {
@@ -290,24 +398,32 @@ mod camera_input_tests {
     use super::*;
 
     #[test]
-    fn orbit_look_scale_is_continuous_monotonic_and_body_size_independent() {
+    fn orbit_look_scale_keeps_close_lunar_motion_below_half_a_metre_per_mouse_unit() {
         let settings = CameraInputSettings::default();
         let moon = 1_737_400.0;
         let surface = body_orbit_look_scale(moon, moon, &settings);
         let low = body_orbit_look_scale(moon + 100.0, moon, &settings);
-        let high = body_orbit_look_scale(moon + 100_000.0, moon, &settings);
-        let far = body_orbit_look_scale(moon * 100.0, moon, &settings);
+        let lunar_site_surface = body_orbit_look_scale(moon + 5_200.0, moon, &settings);
+        let full_speed = body_orbit_look_scale(
+            moon + settings.orbit_look_full_speed_altitude_m,
+            moon,
+            &settings,
+        );
 
         assert_eq!(surface, settings.orbit_surface_min_scale);
         assert!(
-            surface < low && low < high && high < far,
-            "{surface} {low} {high} {far}"
+            surface < low && low < lunar_site_surface,
+            "{surface} {low} {lunar_site_surface}"
         );
-        assert!(far < 1.0);
-
-        let same_ratio_on_earth = body_orbit_look_scale(6_378_137.0 * 2.0, 6_378_137.0, &settings);
-        let same_ratio_on_moon = body_orbit_look_scale(moon * 2.0, moon, &settings);
-        assert!((same_ratio_on_earth - same_ratio_on_moon).abs() < 1.0e-12);
+        let lunar_orbit_radius_m = moon + 5_200.0;
+        // `capture_avatar_intent` multiplies raw MouseMove input by 10 before
+        // applying this configured angular response.
+        let travel_m_per_mouse_unit = lunar_orbit_radius_m
+            * f64::from(settings.look_radians_per_pointer_unit)
+            * 10.0
+            * lunar_site_surface;
+        assert!(travel_m_per_mouse_unit < 0.5, "{travel_m_per_mouse_unit}");
+        assert_eq!(full_speed, 1.0);
     }
 
     #[test]
@@ -317,6 +433,49 @@ mod camera_input_tests {
             ..default()
         };
         assert_eq!(body_orbit_look_scale(10.0, 10.0, &settings), 0.125);
+    }
+
+    #[test]
+    fn camera_input_settings_migrate_legacy_defaults_and_preserve_custom_values() {
+        let mut legacy: CameraInputSettings = serde_json::from_value(serde_json::json!({
+            "orbit_surface_min_scale": 0.04,
+            "orbit_look_altitude_curve_exponent": 0.75,
+            "orbit_look_full_speed_altitude_m": 100000.0
+        }))
+        .expect("legacy camera settings deserialize");
+        assert_eq!(legacy.schema_version, 0);
+        legacy.migrate_persisted();
+        assert_eq!(legacy.orbit_surface_min_scale, 0.00002);
+        assert_eq!(legacy.orbit_look_altitude_curve_exponent, 2.5);
+        assert_eq!(legacy.orbit_look_full_speed_altitude_m, 1_000_000.0);
+        assert_eq!(legacy.schema_version, CAMERA_INPUT_SETTINGS_SCHEMA_VERSION);
+
+        let mut previous: CameraInputSettings = serde_json::from_value(serde_json::json!({
+            "schema_version": 2,
+            "orbit_surface_min_scale": 0.00001,
+            "orbit_look_altitude_curve_exponent": 2.5,
+            "orbit_look_full_speed_altitude_m": 100000.0
+        }))
+        .expect("previous camera settings deserialize");
+        previous.migrate_persisted();
+        assert_eq!(previous.orbit_surface_min_scale, 0.00002);
+        assert_eq!(previous.orbit_look_full_speed_altitude_m, 1_000_000.0);
+        assert_eq!(
+            previous.schema_version,
+            CAMERA_INPUT_SETTINGS_SCHEMA_VERSION
+        );
+
+        let mut custom: CameraInputSettings = serde_json::from_value(serde_json::json!({
+            "orbit_surface_min_scale": 0.02,
+            "orbit_look_altitude_curve_exponent": 1.25,
+            "orbit_return_transition_duration_s": 1.75
+        }))
+        .expect("custom camera settings deserialize");
+        custom.migrate_persisted();
+        assert_eq!(custom.orbit_surface_min_scale, 0.02);
+        assert_eq!(custom.orbit_look_altitude_curve_exponent, 1.25);
+        assert_eq!(custom.orbit_return_transition_duration_s, 1.75);
+        assert_eq!(custom.schema_version, CAMERA_INPUT_SETTINGS_SCHEMA_VERSION);
     }
 }
 

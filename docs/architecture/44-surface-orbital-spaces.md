@@ -76,6 +76,13 @@ Every explicit camera frame change is owned by the camera subsystem and uses
 the shared atomic migration operation; site placement must not reclaim an
 orbital camera from its body-centered inertial grid.
 
+Returning from a celestial orbit view keeps the camera in the saved local grid
+and animates its position and orientation to the captured local pose. The
+render-clock transition uses a smooth easing curve and follows a body-centred
+arc when a gravity body is present, so the camera does not cut through the
+body. `CameraInputSettings.orbit_return_transition_duration_s` controls the
+duration and defaults to 1.2 seconds.
+
 Surface orientation is derived from the local gravity/up direction and the
 selected frame. Orbital orientation is derived from the inertial frame. This
 keeps the ground below the view while preserving the Moon/Earth orientation
@@ -83,10 +90,10 @@ when the camera changes mode.
 
 An avatar keeps transient `OrbitViewHistory` keyed by stable celestial
 ephemeris id. A user-controlled orbital pose is captured before a target
-switch or orbit exit and restored only when returning to that same body,
-including a later surface-to-orbit scroll entry. A body without history is
-initialized from the camera's current radial region in the resolved inertial
-grid; no fixed or Sun-facing arrival is authored or computed. Active-Twin
+switch or orbit exit and restored only for an explicit focus change to that
+same body. Every surface-to-orbit scroll entry derives its pose from the live
+camera position in the resolved inertial grid, so scroll transit remains
+continuous. No fixed or Sun-facing arrival is authored or computed. Active-Twin
 teardown and avatar demotion retire this presentation state with the owning
 avatar.
 

@@ -14,5 +14,8 @@ lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-time = { path = "../lunco-time" }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

@@ -172,13 +172,23 @@ collision authority. This path preserves the fixed solver/substep contract.
 
 For orbital camera views, keep presentation state on the avatar in
 `OrbitViewHistory`, keyed by the stable celestial ephemeris id. Capture a
-user-controlled `OrbitCamera` pose before switching targets or leaving orbit,
-and restore it only for that same body, including a later surface-to-orbit
-scroll entry. When no saved pose exists, derive the arrival direction from the
-camera's current radial region after resolving the target's inertial BigSpace
-grid. Do not use a fixed world-axis/Sun-facing arrival, a scene-wide pose
-cache, or a second transform writer. Clear this transient history with
-active-Twin teardown and avatar demotion.
+user-controlled `OrbitCamera` pose before switching focus targets and restore
+it only for an explicit focus change to that same body. Every surface-to-orbit
+scroll entry derives its arrival from the live camera position after resolving
+the target's inertial BigSpace grid. Do not use saved history for scroll transit,
+a fixed world-axis/Sun-facing arrival, a scene-wide pose cache, or a second
+transform writer. Clear this transient history with active-Twin teardown and
+avatar demotion.
+
+Orbital pointer response is a generic camera setting. The camera runtime scales
+angular input from clearance above `CelestialBody.radius_m`, using the persisted
+`orbit_surface_min_scale`, `orbit_look_altitude_curve_exponent`, and
+`orbit_look_full_speed_altitude_m` values. Tune them through `SetCameraInput`
+or Rhai's `set_camera_input(...)`; keep the continuous height curve in the
+camera runtime rather than adding body-specific policy. Returning to the saved
+local camera view uses `orbit_return_transition_duration_s` and a smooth
+render-clock arc through the saved grid; the transition owns the pose until it
+restores the saved camera behavior at the destination.
 
 When an orbital view must frame a mission site, publish the scene's valid
 `SiteAnchor` position transformed into the body's inertial grid as a typed f64

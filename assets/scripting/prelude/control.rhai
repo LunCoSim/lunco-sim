@@ -135,11 +135,13 @@ fn follow(target)              { cmd("FollowTarget", #{ target: target }) }
 /// Tune the generic interactive camera response from an authored scenario.
 /// Camera modes remain engine mechanisms, while their presentation policy can
 /// be changed live without rebuilding the Rust camera/runtime packages.
-fn set_camera_input(look_radians_per_pointer_unit, orbit_surface_min_scale, orbit_distance_curve_exponent) {
+fn set_camera_input(look_radians_per_pointer_unit, orbit_surface_min_scale, orbit_look_full_speed_altitude_m, orbit_look_altitude_curve_exponent, orbit_return_transition_duration_s) {
     cmd("SetCameraInput", #{
         look_radians_per_pointer_unit: look_radians_per_pointer_unit,
         orbit_surface_min_scale: orbit_surface_min_scale,
-        orbit_distance_curve_exponent: orbit_distance_curve_exponent
+        orbit_look_full_speed_altitude_m: orbit_look_full_speed_altitude_m,
+        orbit_look_altitude_curve_exponent: orbit_look_altitude_curve_exponent,
+        orbit_return_transition_duration_s: orbit_return_transition_duration_s
     })
 }
 /// Set the user-global surface-mode engage and release clearances above covered DEM terrain.

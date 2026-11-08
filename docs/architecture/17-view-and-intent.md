@@ -422,13 +422,23 @@ commit the claim, installs the local `ControlLink`, and optionally performs the
 camera transaction. `FocusTarget` and `FollowTarget` are likewise reachable
 high-level avatar camera commands; Rhai selects when and which target to request,
 while Rust enforces the local-avatar boundary and the BigSpace-safe pose update.
-Rhai can call `set_camera_input(...)` to tune pointer response, and the
+Rhai can call `set_camera_input(...)` to tune pointer response, including the
+orbital near-surface scale, full-speed clearance, and altitude-curve exponent.
+Orbital rotation starts at 0.00002 of normal angular response at the body's
+reference surface, uses a 2.5 altitude-curve exponent, and reaches full response
+at 1,000,000 m by default. The low surface response accounts for the large
+body-centred camera radius when translating angular input into ground travel.
+These values live in the persisted `CameraInputSettings` section and can also
+be updated through `SetCameraInput`. The
 `set_camera_surface_mode_altitudes(...)` and
 `set_orbit_direction_animation_duration(...)` helpers update the persisted
 `CameraInputSettings` properties. The default surface/orbit handoff is 1,000 m
 above sampled local DEM terrain where the active terrain covers the camera, and
 uses the body's reference radius outside terrain coverage. Surface mode releases
 at 2,000 m by default under the same clearance rule.
+Returning from orbit to the local view uses a 1.2 s smooth transition by
+default; tune it with `CameraInputSettings.orbit_return_transition_duration_s`
+or `SetCameraInput`.
 Mission-site direction animation defaults to 0.6 s. Rust validates these
 generic settings and consumes the engage altitude for both surface-mode entry
 and the orbital zoom floor; Rhai reads the animation duration when dispatching

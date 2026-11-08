@@ -4,21 +4,100 @@
 //! history. Control authority and scene interaction remain in lunco-avatar.
 
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use big_space::prelude::CellCoord;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{
     CurrentRegionArrival, OrbitCameraTransition, OrbitReturnBehavior, OrbitUserInput,
     OrbitViewHistory, OrbitViewReturn, RadialArrival,
 };
 use lunco_camera_core::{
-    AdaptiveNearPlane, AnimateOrbitCameraDirection, CameraZoomInput, FocusTarget, FreeFlightCamera,
-    OrbitCamera, ReturnFromOrbit, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+    AdaptiveNearPlane, AnimateOrbitCameraDirection, CameraPoseLock, CameraZoomInput, FocusTarget,
+    FreeFlightCamera, OrbitCamera, ReturnFromOrbit, SpringArmCamera, SurfaceCamera,
+    SurfaceRelativeMode,
 };
+use lunco_camera_runtime::CameraInputSettings;
 use lunco_celestial::CelestialBody;
 use lunco_core::on_command;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
-use lunco_spatial::attach::migrate_to_grid;
+use lunco_spatial::attach::migrate_to_grid_local_pose;
+use lunco_spatial::coords::pose_in_grid_seeded;
+
+/// Render-clock interpolation from an orbit pose to the saved local camera pose.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct OrbitReturnTransition {
+    start_position: DVec3,
+    start_rotation: DQuat,
+    body_center: Option<DVec3>,
+    duration_s: f64,
+    elapsed_s: f64,
+}
+
+fn smooth_transition_fraction(progress: f64) -> f64 {
+    let t = progress.clamp(0.0, 1.0);
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+fn orbit_return_transition_pose(
+    transition: &OrbitReturnTransition,
+    target_position: DVec3,
+    target_rotation: DQuat,
+    progress: f64,
+) -> Option<(DVec3, DQuat)> {
+    if !transition.start_position.is_finite()
+        || !target_position.is_finite()
+        || !transition.start_rotation.is_finite()
+        || !target_rotation.is_finite()
+    {
+        return None;
+    }
+
+    let fraction = smooth_transition_fraction(progress);
+    let position = if let Some(center) = transition.body_center {
+        let start_offset = transition.start_position - center;
+        let target_offset = target_position - center;
+        let start_radius = start_offset.length();
+        let target_radius = target_offset.length();
+        if !center.is_finite()
+            || !start_radius.is_finite()
+            || !target_radius.is_finite()
+            || start_radius <= f64::EPSILON
+            || target_radius <= f64::EPSILON
+        {
+            return None;
+        }
+        let start_direction = start_offset / start_radius;
+        let target_direction = target_offset / target_radius;
+        let arc = DQuat::from_rotation_arc(start_direction, target_direction);
+        let direction = DQuat::IDENTITY.slerp(arc, fraction) * start_direction;
+        let radius = start_radius + (target_radius - start_radius) * fraction;
+        center + direction * radius
+    } else {
+        transition.start_position.lerp(target_position, fraction)
+    };
+    let rotation = transition
+        .start_rotation
+        .normalize()
+        .slerp(target_rotation.normalize(), fraction)
+        .normalize();
+    (position.is_finite() && rotation.is_finite()).then_some((position, rotation))
+}
+
+fn report_orbit_return_failure(
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    camera: Entity,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    warn!(target: "avatar-camera", ?camera, "[orbit return] held: {message}");
+    lunco_camera_core::replace_camera_diagnostic(
+        diagnostics,
+        "avatar-camera",
+        "OrbitViewReturn",
+        Some(message),
+    );
+}
 
 fn local_avatar_state_error(requested: Option<Entity>) -> String {
     match requested {
@@ -200,7 +279,14 @@ pub(crate) fn register_orbit_history_hook(app: &mut App) {
 pub(crate) fn clear_orbit_view_history_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     mut commands: Commands,
-    q_avatar: Query<Entity, Or<(With<OrbitViewHistory>, With<OrbitCameraTransition>)>>,
+    q_avatar: Query<
+        Entity,
+        Or<(
+            With<OrbitViewHistory>,
+            With<OrbitCameraTransition>,
+            With<OrbitReturnTransition>,
+        )>,
+    >,
 ) {
     if !trigger.event().was_active {
         return;
@@ -211,6 +297,8 @@ pub(crate) fn clear_orbit_view_history_on_twin_closed(
             OrbitUserInput,
             CurrentRegionArrival,
             OrbitCameraTransition,
+            OrbitReturnTransition,
+            CameraPoseLock,
         )>();
     }
 }
@@ -229,7 +317,9 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
         .remove::<RadialArrival>()
         .remove::<CurrentRegionArrival>()
         .remove::<OrbitCameraTransition>()
-        .remove::<OrbitUserInput>();
+        .remove::<OrbitReturnTransition>()
+        .remove::<OrbitUserInput>()
+        .remove::<CameraPoseLock>();
 
     match state.behavior() {
         OrbitReturnBehavior::SpringArm(spring_arm) => {
@@ -256,78 +346,299 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
 
 /// Return from an orbital presentation view without changing possession.
 ///
-/// The pre-orbit parent grid, cell and local pose are authoritative. Restoring
-/// those values directly avoids a root-frame round trip and therefore cannot
-/// lose precision or infer the wrong body-fixed orientation.
+/// The camera first moves to the captured return grid without changing its
+/// world pose, then follows a smooth render-clock path to the saved local pose.
 #[on_command(ReturnFromOrbit)]
 pub(crate) fn on_return_from_orbit(
     trigger: On<ReturnFromOrbit>,
     mut commands: Commands,
     mut q_avatar: Query<
         (
-            &mut Transform,
-            &mut CellCoord,
+            &Transform,
+            &CellCoord,
             &mut CameraZoomInput,
-            &ChildOf,
             &OrbitViewReturn,
             Option<&OrbitCamera>,
             Option<&mut OrbitViewHistory>,
             Has<OrbitUserInput>,
-            Has<lunco_camera_core::CameraPoseLock>,
+            Has<CameraPoseLock>,
+            Option<&OrbitReturnTransition>,
         ),
         (With<Embodiment>, With<LocalEmbodiment>),
     >,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_bodies: Query<&CelestialBody>,
+    settings: Res<CameraInputSettings>,
     mut orbital_pin: Option<ResMut<lunco_celestial_spatial_core::OrbitalViewPin>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let camera = trigger.event().camera;
     let Ok((
-        mut transform,
-        mut cell,
+        transform,
+        cell,
         mut zoom,
-        child_of,
         return_state,
         current_orbit,
         mut orbit_history,
         orbit_user_input,
         cinematic_lock,
+        existing_transition,
     )) = q_avatar.get_mut(camera)
     else {
         return;
     };
-    if cinematic_lock {
+    if existing_transition.is_some() {
         return;
     }
-    // Returning is a camera-mode handoff even when initiated by a typed
-    // command rather than the wheel. Keep the restored mode from inheriting
-    // any input that was already in flight at the handoff boundary.
-    zoom.begin_mode_transition(None);
-    if orbit_user_input {
-        if let (Some(camera), Some(history)) = (current_orbit, orbit_history.as_deref_mut()) {
-            remember_user_orbit_pose(history, camera, &q_bodies);
+    if cinematic_lock {
+        report_orbit_return_failure(
+            &mut diagnostics,
+            camera,
+            "the camera pose is owned by another presentation mode",
+        );
+        return;
+    }
+    if current_orbit.is_none() {
+        report_orbit_return_failure(
+            &mut diagnostics,
+            camera,
+            "the requested local camera is not in orbital mode",
+        );
+        return;
+    }
+
+    let return_state = return_state.clone();
+    let target_grid = return_state.parent_grid();
+    let Ok(grid) = q_grids.get(target_grid) else {
+        report_orbit_return_failure(
+            &mut diagnostics,
+            camera,
+            "the saved local camera grid is no longer available",
+        );
+        return;
+    };
+    let Some((start_position, start_rotation)) = pose_in_grid_seeded(
+        camera,
+        target_grid,
+        Some(cell),
+        &transform,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        report_orbit_return_failure(
+            &mut diagnostics,
+            camera,
+            "the current orbital camera pose cannot be resolved in the saved local frame",
+        );
+        return;
+    };
+    let target_position =
+        grid.grid_position_double(&return_state.cell(), &return_state.transform());
+    let target_rotation = return_state.transform().rotation.as_dquat();
+    if !start_position.is_finite()
+        || !start_rotation.is_finite()
+        || !target_position.is_finite()
+        || !target_rotation.is_finite()
+        || !settings.orbit_return_transition_duration_s.is_finite()
+        || settings.orbit_return_transition_duration_s <= 0.0
+    {
+        report_orbit_return_failure(
+            &mut diagnostics,
+            camera,
+            "the saved camera pose or transition duration is invalid",
+        );
+        return;
+    }
+
+    let body_center = if let Some(gravity_body) = return_state.gravity_body() {
+        if q_bodies.get(gravity_body.body_entity).is_err() {
+            report_orbit_return_failure(
+                &mut diagnostics,
+                camera,
+                "the saved local view body is no longer available",
+            );
+            return;
+        }
+        let Some((center, _)) = lunco_spatial::coords::pose_in_grid(
+            gravity_body.body_entity,
+            target_grid,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            report_orbit_return_failure(
+                &mut diagnostics,
+                camera,
+                "the saved local view body cannot be resolved in its grid",
+            );
+            return;
+        };
+        Some(center)
+    } else {
+        None
+    };
+
+    if let Some(camera_pose) = current_orbit {
+        if orbit_user_input {
+            if let Some(history) = orbit_history.as_deref_mut() {
+                remember_user_orbit_pose(history, camera_pose, &q_bodies);
+            }
         }
     }
-    let return_state = return_state.clone();
-
-    if child_of.parent() == return_state.parent_grid() {
-        cell.set_if_neq(return_state.cell());
-        transform.set_if_neq(return_state.transform());
-    } else {
-        migrate_to_grid(
-            &mut commands,
-            camera,
-            return_state.parent_grid(),
-            return_state.cell(),
-            return_state.transform(),
-        );
-    }
-    apply_orbit_return(&mut commands, camera, &return_state);
+    zoom.begin_mode_transition(None);
+    migrate_to_grid_local_pose(
+        &mut commands,
+        camera,
+        target_grid,
+        grid,
+        start_position,
+        start_rotation,
+    );
+    commands
+        .entity(camera)
+        .remove::<(
+            OrbitCamera,
+            OrbitCameraTransition,
+            OrbitUserInput,
+            RadialArrival,
+            CurrentRegionArrival,
+        )>()
+        .try_insert((
+            CameraPoseLock,
+            OrbitReturnTransition {
+                start_position,
+                start_rotation,
+                body_center,
+                duration_s: settings.orbit_return_transition_duration_s,
+                elapsed_s: 0.0,
+            },
+        ));
 
     if let Some(pin) = orbital_pin.as_mut() {
         pin.active = false;
     }
     commands.trigger(lunco_camera_core::RequestLocalEmbodimentView);
-    info!("ORBITAL EXIT: restored exact pre-orbit camera transaction");
+    lunco_camera_core::replace_camera_diagnostic(
+        &mut diagnostics,
+        "avatar-camera",
+        "OrbitViewReturn",
+        None,
+    );
+    info!(
+        duration_s = settings.orbit_return_transition_duration_s,
+        "ORBITAL EXIT: animating to the saved local camera pose"
+    );
+}
+
+/// Move a locked camera through its saved local grid, then restore its prior
+/// interactive behavior at the exact destination pose.
+pub(crate) fn orbit_return_transition_system(
+    time: Res<Time<Real>>,
+    mut commands: Commands,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &ChildOf,
+            &mut OrbitReturnTransition,
+            &OrbitViewReturn,
+            Option<&mut lunco_control_core::IntentAnalogState>,
+        ),
+        (
+            With<Embodiment>,
+            With<LocalEmbodiment>,
+            With<CameraPoseLock>,
+        ),
+    >,
+    q_grids: Query<&Grid>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    let dt = time.delta_secs_f64();
+    if !dt.is_finite() || dt < 0.0 {
+        return;
+    }
+    for (camera, mut transform, mut cell, child_of, mut transition, return_state, analog_input) in
+        &mut q_avatar
+    {
+        if let Some(mut analog_input) = analog_input {
+            analog_input.look_delta = bevy::math::Vec2::ZERO;
+        }
+        let Ok(grid) = q_grids.get(child_of.parent()) else {
+            report_orbit_return_failure(
+                &mut diagnostics,
+                camera,
+                "the active transition grid is no longer available",
+            );
+            continue;
+        };
+        transition.elapsed_s = (transition.elapsed_s + dt).min(transition.duration_s);
+        let progress = transition.elapsed_s / transition.duration_s;
+        let target_position =
+            grid.grid_position_double(&return_state.cell(), &return_state.transform());
+        let target_rotation = return_state.transform().rotation.as_dquat();
+        let Some((position, rotation)) =
+            orbit_return_transition_pose(&transition, target_position, target_rotation, progress)
+        else {
+            report_orbit_return_failure(
+                &mut diagnostics,
+                camera,
+                "the camera return path cannot produce a finite pose",
+            );
+            continue;
+        };
+
+        if progress >= 1.0 {
+            cell.set_if_neq(return_state.cell());
+            transform.set_if_neq(return_state.transform());
+            apply_orbit_return(&mut commands, camera, return_state);
+            lunco_camera_core::replace_camera_diagnostic(
+                &mut diagnostics,
+                "avatar-camera",
+                "OrbitViewReturn",
+                None,
+            );
+        } else {
+            let (next_cell, next_transform) =
+                lunco_spatial::attach::local_pose_to_grid_storage(grid, position, rotation);
+            cell.set_if_neq(next_cell);
+            transform.set_if_neq(next_transform);
+        }
+    }
+}
+
+#[cfg(test)]
+mod orbit_return_transition_tests {
+    use super::*;
+
+    #[test]
+    fn orbital_return_uses_a_smooth_arc_outside_the_body() {
+        let transition = OrbitReturnTransition {
+            start_position: DVec3::new(0.0, 0.0, 100.0),
+            start_rotation: DQuat::IDENTITY,
+            body_center: Some(DVec3::ZERO),
+            duration_s: 1.2,
+            elapsed_s: 0.0,
+        };
+        let target_position = DVec3::new(100.0, 0.0, 0.0);
+        let at_start =
+            orbit_return_transition_pose(&transition, target_position, DQuat::IDENTITY, 0.0)
+                .unwrap();
+        let midway =
+            orbit_return_transition_pose(&transition, target_position, DQuat::IDENTITY, 0.5)
+                .unwrap();
+        let at_end =
+            orbit_return_transition_pose(&transition, target_position, DQuat::IDENTITY, 1.0)
+                .unwrap();
+
+        assert_eq!(at_start.0, transition.start_position);
+        assert!((at_end.0 - target_position).length() < 1.0e-9);
+        assert!((midway.0.length() - 100.0).abs() < 1.0e-9);
+        assert!((midway.0 - DVec3::new(100.0, 0.0, 0.0)).length() > 1.0);
+    }
 }
 /// Focuses on a target with an instant transition to OrbitCamera mode.
 ///
@@ -722,8 +1033,11 @@ mod tests {
         app.init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<LocalGravityField>()
             .init_resource::<lunco_celestial_spatial_core::OrbitalViewPin>()
+            .init_resource::<CameraInputSettings>()
+            .init_resource::<Time<Real>>()
             .add_observer(on_focus_command)
-            .add_observer(on_return_from_orbit);
+            .add_observer(on_return_from_orbit)
+            .add_systems(Update, orbit_return_transition_system);
 
         let surface_grid = app
             .world_mut()
@@ -734,21 +1048,31 @@ mod tests {
             .id();
         let moon = app
             .world_mut()
-            .spawn(CelestialBody {
-                name: "Moon".into(),
-                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
-                radius_m: 1_737_400.0,
-            })
+            .spawn((
+                CelestialBody {
+                    name: "Moon".into(),
+                    ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                    radius_m: 1_737_400.0,
+                },
+                ChildOf(surface_grid),
+                CellCoord::ZERO,
+                Transform::default(),
+            ))
             .id();
         let earth = app
             .world_mut()
-            .spawn(CelestialBody {
-                name: "Earth".into(),
-                ephemeris_id: lunco_celestial::ephemeris_id::EARTH,
-                radius_m: 6_371_000.0,
-            })
+            .spawn((
+                CelestialBody {
+                    name: "Earth".into(),
+                    ephemeris_id: lunco_celestial::ephemeris_id::EARTH,
+                    radius_m: 6_371_000.0,
+                },
+                ChildOf(surface_grid),
+                CellCoord::ZERO,
+                Transform::default(),
+            ))
             .id();
-        let original_cell = CellCoord::new(41, -7, 13);
+        let original_cell = CellCoord::new(1_737, -7, 13);
         let original_transform = Transform::from_xyz(175.0, 23.0, -440.0)
             .with_rotation(Quat::from_euler(EulerRot::YXZ, 0.3, -0.4, 0.0));
         let original_surface = SurfaceCamera {
@@ -815,6 +1139,12 @@ mod tests {
 
         app.world_mut().trigger(ReturnFromOrbit { camera: avatar });
         app.world_mut().flush();
+        assert!(app.world().get::<CameraPoseLock>(avatar).is_some());
+        assert!(app.world().get::<OrbitViewReturn>(avatar).is_some());
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs_f64(1.2));
+        app.update();
         let world = app.world();
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), original_cell);
@@ -1020,14 +1350,28 @@ mod tests {
         app.init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<LocalGravityField>()
             .init_resource::<lunco_celestial_spatial_core::OrbitalViewPin>()
+            .init_resource::<CameraInputSettings>()
+            .init_resource::<Time<Real>>()
             .add_observer(on_focus_command)
-            .add_observer(on_return_from_orbit);
+            .add_observer(on_return_from_orbit)
+            .add_systems(Update, orbit_return_transition_system);
+
+        let root_grid = app
+            .world_mut()
+            .spawn((
+                lunco_spatial::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+            ))
+            .id();
 
         let surface_grid = app
             .world_mut()
             .spawn((
                 lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(root_grid),
             ))
             .id();
         let orbit_grid = app
@@ -1035,18 +1379,25 @@ mod tests {
             .spawn((
                 lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(root_grid),
             ))
             .id();
         let moon = app
             .world_mut()
-            .spawn(CelestialBody {
-                name: "Moon".into(),
-                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
-                radius_m: 1_737_400.0,
-            })
+            .spawn((
+                CelestialBody {
+                    name: "Moon".into(),
+                    ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                    radius_m: 1_737_400.0,
+                },
+                ChildOf(surface_grid),
+                CellCoord::ZERO,
+                Transform::default(),
+            ))
             .id();
         let rover = app.world_mut().spawn_empty().id();
-        let original_cell = CellCoord::new(8, -2, 5);
+        let original_cell = CellCoord::new(1_737, -2, 5);
         let original_transform = Transform::from_xyz(31.0, 12.0, -17.0)
             .with_rotation(Quat::from_euler(EulerRot::YXZ, 0.6, -0.2, 0.0));
         let original_spring = SpringArmCamera {
@@ -1103,6 +1454,19 @@ mod tests {
         ));
         app.world_mut().trigger(ReturnFromOrbit { camera: avatar });
         app.world_mut().flush();
+
+        assert!(app.world().get::<CameraPoseLock>(avatar).is_some());
+        assert!(app.world().get::<OrbitViewReturn>(avatar).is_some());
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs_f64(0.6));
+        app.update();
+        assert!(app.world().get::<CameraPoseLock>(avatar).is_some());
+        assert!(app.world().get::<SpringArmCamera>(avatar).is_none());
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs_f64(0.6));
+        app.update();
 
         let world = app.world();
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);

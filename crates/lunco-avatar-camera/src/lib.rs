@@ -71,7 +71,11 @@ impl Plugin for AvatarCelestialCameraPlugin {
             .register_type::<lunco_avatar_policy::AvatarCollisionSettings>()
             .add_systems(
                 PostUpdate,
-                (spring_arm::spring_arm_system, orbit_system)
+                (
+                    spring_arm::spring_arm_system,
+                    orbit_system,
+                    transactions::orbit_return_transition_system,
+                )
                     .chain()
                     .after(lunco_time::InteractionRenderSet)
                     .before(TransformSystems::Propagate),
