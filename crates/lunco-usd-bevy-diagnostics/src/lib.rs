@@ -25,10 +25,10 @@ impl Plugin for UsdDiagnosticsPlugin {
         lunco_settings::ensure_download_settings(app);
         app.init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
-            .add_systems(Startup, load_diagnostic_label_font)
             .add_systems(
                 Update,
                 (
+                    load_diagnostic_label_font,
                     hide_glb_placeholder_meshes,
                     poll_diagnostic_label_font,
                     reveal_placeholder_on_failure,
@@ -104,15 +104,15 @@ impl Default for DiagnosticLabelConfig {
 
 /// Caches the DejaVu Sans face used to bake filename labels into textures, so
 /// the `.ttf` is loaded at most once (not per failed asset). `None` until the
-/// font is loaded (native: read from storage at startup; web: fetched over
-/// HTTP). If it never loads, stubs still show the red box, just without text.
+/// font is loaded (native: read after the engine asset is installed; web:
+/// fetched over HTTP). If it never loads, stubs still show the red box, just
+/// without text.
 #[derive(Resource, Default)]
 pub struct DiagnosticLabelFont(pub Option<std::sync::Arc<ab_glyph::FontVec>>);
 
 /// Holds the receiver from [`lunco_assets_runtime::font::load_dejavu_sans_bytes`]
-/// until the bytes land. The same channel mechanism works on native (bytes
-/// ready immediately) and web (bytes fetched async), so the plugin has no
-/// platform branches. Removed once the font installs.
+/// until the bytes land. Native starts after the engine asset is installed;
+/// web loads the bundled file asynchronously. Removed once the font installs.
 #[derive(Resource)]
 struct DiagnosticFontLoad(std::sync::Mutex<std::sync::mpsc::Receiver<Vec<u8>>>);
 
@@ -124,20 +124,36 @@ fn install_diagnostic_font(font: &mut DiagnosticLabelFont, bytes: Vec<u8>) {
     }
 }
 
-/// Startup: kick off the DejaVu Sans load via `lunco-assets` (which owns the
-/// native-read / web-fetch procedure) and stash the receiver for
-/// [`poll_diagnostic_label_font`] to drain.
+/// Load the font once its manifest-declared artifact is available, then stash
+/// the receiver for [`poll_diagnostic_label_font`] to drain.
 fn load_diagnostic_label_font(
     mut commands: Commands,
     settings: Res<lunco_settings::DownloadSettings>,
+    registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    mut started: Local<bool>,
 ) {
+    if *started {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(registry) = registry {
+        if !registry.is_scope_scanned(&lunco_assets_datasets::DatasetScope::Engine)
+            || !registry
+                .state(lunco_assets_runtime::font::DEJAVU_ASSET_ID)
+                .is_some_and(lunco_assets_datasets::DatasetState::is_installed)
+        {
+            return;
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = registry;
+    *started = true;
     let rx = lunco_assets_runtime::font::load_dejavu_sans_bytes(&settings);
     commands.insert_resource(DiagnosticFontLoad(std::sync::Mutex::new(rx)));
 }
 
-/// Drains the font-load channel and installs the face once the bytes arrive
-/// (frame 1 on native, whenever the fetch lands on web). Uniform across
-/// platforms; removes the loader resource when done.
+/// Drains the font-load channel and installs the face once the bytes arrive.
+/// Removes the loader resource when done.
 fn poll_diagnostic_label_font(
     load: Option<Res<DiagnosticFontLoad>>,
     mut font: ResMut<DiagnosticLabelFont>,

@@ -1,8 +1,7 @@
 # lunco-theme Assets
 #
-# Package inputs required by the theme / icon-paint pipeline so Modelica
-# icons render math / Greek / arrow / logic-operator glyphs without
-# tofu boxes. See `src/fonts.rs` for why DejaVu Sans in particular —
+# Font used by the theme and icon-paint pipeline so Modelica icons render math,
+# Greek, and arrow glyphs without tofu boxes. See `src/fonts.rs` for why DejaVu Sans —
 # the Noto Sans + Noto Sans Symbols 2 pair originally considered both
 # leave holes in the Mathematical Operators block (U+2200-22FF),
 # which Modelica Blocks.MathBoolean's `∧` and `∨` sit inside.
@@ -25,7 +24,8 @@ url = "https://downloads.sourceforge.net/project/dejavu/dejavu/2.37/dejavu-fonts
 extract = "ttf/DejaVuSans.ttf"
 dest = "fonts/DejaVuSans.ttf"
 # Required by both desktop and browser bundles. The packager stages the
-# delivered file, never the upstream archive.
+# delivered file, never the upstream archive. Native app startup requests it
+# only when no bundled or cached copy is available.
 bundle = ["lunica-native", "luncosim-native", "lunica-web", "luncosim-web"]
-package_only = true
+download_on_start = true
 sha256 = "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7"

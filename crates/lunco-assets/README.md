@@ -12,8 +12,8 @@ identity, URI, storage, discovery, and embedded-source APIs remain in
 
 ## What This Crate Does
 
-- **Composes the explicit dataset lifecycle** — user-authorised download,
-  processing, cancellation, and installed status
+- **Composes the dataset lifecycle** — manifest-selected startup downloads,
+  user-requested download and processing, cancellation, and installed status
 - **Provides the Bevy worker boundary** used by the GUI application
 - **Provides the `lunco-assets` CLI**, which composes the download and processing
   crates without making ordinary runtime asset readers link them
@@ -113,6 +113,12 @@ version = "4.1.0"
 url = "https://github.com/modelica/ModelicaStandardLibrary/archive/refs/tags/v4.1.0.tar.gz"
 dest = "library"
 ```
+
+Engine-owned assets may opt into `download_on_start = true`. Native startup
+queues one normal download request after the engine manifests are fully scanned
+when the delivered file is missing. A failed or cancelled request is left for
+the Settings menu's explicit retry or the next application launch. This field
+is rejected in Twin manifests and on `package_only` assets.
 
 ## Cache Directory
 

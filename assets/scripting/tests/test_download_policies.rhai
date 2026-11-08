@@ -31,6 +31,7 @@ let provisioning = invoke_hook("assets.provision", [#{
         id: "twin/test/texture",
         key: "texture",
         name: "Texture",
+        download_on_start: false,
         required_for_scene: true, recommended: false,
         processed: false,
         inputs_ready: false,inputs:[#{id:"source",name:"Texture",url:"https://example.invalid/texture.png",state:"missing",error:()}],
@@ -57,7 +58,7 @@ for state in [
     #{kind: "failed", detail: "checksum mismatch"},
     #{kind: "cancelled", detail: ()},
 ] {
-    facts.datasets = [#{id: "twin/test/data", key: "data", name: "Terrain",
+    facts.datasets = [#{id: "twin/test/data", key: "data", name: "Terrain", download_on_start: false,
         required_for_scene: true, recommended: false, processed: true, inputs_ready:false,inputs:[#{id:"source",name:"Terrain",url:"https://example.invalid/terrain.tif",state:"missing",error:()}], state: state}];
     let view = provisioned_view(facts);
     checks.push(t_true(view.visible && view.rows.len() == 1,
@@ -113,6 +114,13 @@ checks.push(t_true(!provisioned_view(facts).visible && provisioned_view(facts).r
 facts.include_optional=true;
 let optional=provisioned_view(facts);
 checks.push(t_true(optional.rows.len()==1 && optional.rows[0].label.starts_with("Recommended"), "optional Twin data remains available in Settings"));
+facts.datasets[0].name="DejaVu Sans Regular";
+facts.datasets[0].recommended=false;
+facts.datasets[0].download_on_start=true;
+facts.datasets[0].state=#{kind:"installed",detail:()};
+let startup_font=provisioned_view(facts);
+checks.push(t_eq(startup_font.rows[0].label,"DejaVu Sans Regular",
+    "a startup-installed application font is not presented as optional"));
 facts.include_optional=false;
 facts.datasets[0].required_for_scene=true;
 facts.datasets[0].state = #{kind: "downloading", detail: (), bytes_done: 1048576, bytes_total: 0};

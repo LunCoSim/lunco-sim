@@ -383,17 +383,18 @@ finishes. Open Twin manifests use the same worker boundary. Independent scans
 can overlap; their typed registry results commit in discovery order, and
 `TwinClosed` discards any pending result owned by that root.
 
-**The app never reaches the network on its own.** Launch, scene load and twin
-open must not open a connection. `DatasetRegistry::request(key)` is the only
-call in the engine that authorises traffic. For an interactive Twin, a missing
-declared dataset is presented at Twin open in a consent window with an explicit
-selection; the same request remains available in Settings ▸ Data & libraries,
-the Twin inspector, and the Files section's Twin assets rows. Those rows are a
-read-only projection of the registry: Download, Retry, and Cancel emit the
-typed dataset commands, while progress, processing, integrity failure, and
-installed state continue to come from `DatasetRegistry`. This is a rule about
-trust, not bandwidth: a simulator that phones home when you open a file has to
-be *explained* rather than *read*.
+**The app requests only declared network assets.** A native engine manifest may
+opt one runtime dependency into a single startup request when its file is
+missing; all other downloads require an explicit request. Opening a Twin never
+requests its declared assets automatically. A missing Twin dataset is
+presented at Twin open in a consent window with an explicit selection; the same
+request remains available in Settings ▸ Data & libraries, the Twin inspector,
+and the Files section's Twin assets rows. Those rows are a read-only projection
+of the registry: Download, Retry, and Cancel emit the typed dataset commands,
+while progress, processing, integrity failure, and installed state continue to
+come from `DatasetRegistry`. This is a rule about trust, not bandwidth: a
+simulator that phones home when you open a file has to be *explained* rather
+than *read*.
 
 Fetching lives in the explicit provisioning package family. Domain crates
 consume artifacts delivered by the shared asset runtime and do not choose
@@ -651,8 +652,13 @@ never enter a release by accident.
 Package-only manifest inputs (`package_only = true`) are fetched and integrity-
 checked by the existing CI bundle download/staging commands. They require a
 bundle target and cannot be recommended downloads. The runtime registry does
-not admit them. UI fonts are package inputs; Earth/Moon imagery and source
-libraries are user downloads. The same rule applies to native and web staging.
+not admit them. DejaVu Sans is both bundled for offline use and admitted to the
+runtime catalog with `download_on_start = true`, so a missing copy is requested
+once at native startup and remains available for manual retry in Settings.
+The egui theme and USD diagnostic labels wait until the registry reports the
+font installed, then load it through `lunco-assets-runtime`.
+Earth/Moon imagery and source libraries remain user-requested downloads. The
+same bundle rule applies to native and web staging.
 
 Target names distinguish delivery profiles where the same binary has different
 packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and

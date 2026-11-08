@@ -1523,14 +1523,120 @@ fn install_window_icon(
     });
 }
 
-/// Settings ▸ Data & libraries — the generic view over
-/// [`lunco_assets_core::datasets`].
-///
-/// The app never reaches the network on its own: every fetchable dataset is
-/// DECLARED in an `Assets.toml` (a crate's, or an open Twin's) and downloaded
-/// only from a click here. This panel knows nothing about ephemerides, terrain
-/// or source library — it renders whatever the registry reports, so a new dataset needs a
-/// manifest entry and no UI change at all.
+/// Render one dataset as a compact card with its available action inline.
+fn render_download_asset_row(
+    ui: &mut bevy_egui::egui::Ui,
+    row: &dataset_provisioning::ProvisioningRow,
+    theme: Option<&lunco_theme::Theme>,
+    actions: &mut Vec<(String, String, String, String)>,
+) {
+    use bevy_egui::egui;
+
+    let status_color = theme.map_or_else(
+        || ui.visuals().text_color(),
+        |theme| {
+            if row.ready {
+                theme.tokens.success
+            } else if !row.detail.is_empty() {
+                theme.tokens.error
+            } else if row.action == "cancel" {
+                theme.tokens.accent
+            } else {
+                theme.tokens.text_subdued
+            }
+        },
+    );
+    let frame = match theme {
+        Some(theme) => egui::Frame::group(ui.style())
+            .corner_radius(egui::CornerRadius::same(theme.rounding.panel as u8))
+            .inner_margin(egui::Margin::same(theme.spacing.window_padding as i8)),
+        None => egui::Frame::group(ui.style()),
+    };
+
+    frame.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(&row.label).strong());
+                ui.colored_label(status_color, &row.status);
+            });
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if row.action_display != "none"
+                        && row.action != "dismiss"
+                        && ui.button(&row.action_label).clicked()
+                    {
+                        actions.push((
+                            row.action.clone(),
+                            row.id.clone(),
+                            row.scope.clone(),
+                            String::new(),
+                        ));
+                    }
+                    if !row.rebuild_action.is_empty()
+                        && ui
+                            .small_button(&row.rebuild_label)
+                            .on_hover_text(
+                                "Rerun every declared processing stage, even when cached output is current.",
+                            )
+                            .clicked()
+                    {
+                        actions.push((
+                            row.rebuild_action.clone(),
+                            row.id.clone(),
+                            row.scope.clone(),
+                            String::new(),
+                        ));
+                    }
+                },
+            );
+        });
+
+        if !row.ready {
+            ui.horizontal_wrapped(|ui| {
+                let metadata_style = lunco_theme::TypographyRole::Caption.text_style();
+                ui.label(
+                    egui::RichText::new(&row.download_status)
+                        .text_style(metadata_style.clone())
+                        .weak(),
+                );
+                if !row.preparation_status.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&row.preparation_status)
+                            .text_style(metadata_style)
+                            .weak(),
+                    );
+                }
+            });
+        }
+
+        ui.collapsing(&row.details_label, |ui| {
+            if !row.detail.is_empty() {
+                let error_color = theme.map_or_else(
+                    || ui.visuals().error_fg_color,
+                    |theme| theme.tokens.error,
+                );
+                ui.colored_label(error_color, &row.detail);
+            }
+            ui.label(egui::RichText::new("Source files").strong());
+            ui.label(&row.source_files);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(&row.source_url).weak());
+                if ui.link("Open source ↗").clicked() {
+                    actions.push((
+                        "open_web_url".to_owned(),
+                        row.id.clone(),
+                        row.scope.clone(),
+                        row.source_url.clone(),
+                    ));
+                }
+            });
+        });
+    });
+}
+
+/// Settings ▸ Data & libraries — the registry-backed view of downloadable
+/// engine and Twin assets. Manifest additions appear here without UI changes.
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
     use lunco_assets_datasets::DatasetRegistry;
@@ -1538,169 +1644,276 @@ fn register_downloadable_assets_settings(world: &mut World) {
         return;
     };
     menus.register_settings_submenu("Data & libraries", |ui, ctx| {
-        ui.set_min_width(520.0);
-        ui.set_max_width(620.0);
+        ui.set_min_width(560.0);
+        ui.set_max_width(740.0);
+
+        let theme = ctx.resource::<lunco_theme::Theme>().cloned();
         ui.label(
-            egui::RichText::new("Downloadable data")
-                .text_style(lunco_theme::TypographyRole::Label.text_style())
-                .weak(),
+            egui::RichText::new("Downloads & libraries")
+                .text_style(lunco_theme::TypographyRole::Section.text_style()),
         );
+        ui.label(
+            egui::RichText::new(
+                "Scene assets download when needed. DejaVu Sans downloads on first start if missing.",
+            )
+            .weak(),
+        );
+
         let Some(mut settings) = ctx.resource::<lunco_settings::DownloadSettings>().cloned() else {
             return;
         };
         let original_settings = settings.clone();
-        egui::CollapsingHeader::new("Transfer settings").show(ui,|ui| {
-            ui.horizontal(|ui| {
-                ui.label("Max parallel downloads:");
-                ui.add(egui::Slider::new(
-                    &mut settings.max_parallel_downloads,
-                    lunco_settings::DownloadSettings::MAX_PARALLEL_DOWNLOADS_RANGE,
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Max attempts per download:");
-                ui.add(egui::Slider::new(
-                    &mut settings.max_attempts,
-                    lunco_settings::DownloadSettings::MAX_ATTEMPTS_RANGE,
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Initial retry delay (seconds):");
-                ui.add(egui::Slider::new(
-                    &mut settings.retry_initial_delay_secs,
-                    lunco_settings::DownloadSettings::RETRY_INITIAL_DELAY_SECS_RANGE,
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Retry backoff multiplier:");
-                ui.add(egui::Slider::new(
-                    &mut settings.retry_backoff_multiplier,
-                    lunco_settings::DownloadSettings::RETRY_BACKOFF_MULTIPLIER_RANGE,
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Maximum retry delay (seconds):");
-                ui.add(egui::Slider::new(
-                    &mut settings.retry_max_delay_secs,
-                    lunco_settings::DownloadSettings::RETRY_MAX_DELAY_SECS_RANGE,
-                ));
-            });
-            settings.retry_max_delay_secs = settings
-                .retry_max_delay_secs
-                .max(settings.retry_initial_delay_secs);
-            ui.label(
-                egui::RichText::new(
-                    "The same bounded policy is used for assets, source library, scenario HTTP, and app updates. Attempts include the first request; delays grow exponentially and stop at the configured maximum.",
-                )
-                .weak(),
-            );
-            ui.add_space(8.0);
-        });
-        if let Some(mut processing) = ctx.resource::<lunco_settings::AssetProcessingSettings>().cloned() {
-            let original = processing.clone();
-            egui::CollapsingHeader::new("Texture preparation").show(ui, |ui| {
-                let mut mib = processing.texture_decode_max_bytes as f64 / 1048576.0;
-                ui.horizontal(|ui| {
-                    ui.label("Decoder memory limit:");
-                    if ui.add(egui::DragValue::new(&mut mib).speed(64.0).range(1.0..=8796093022207.0).suffix(" MiB")).changed() {
-                        processing.texture_decode_max_bytes = (mib * 1048576.0).round() as u64;
+        let mut actions = Vec::new();
+        let item_spacing = theme
+            .as_ref()
+            .map_or(ui.spacing().item_spacing.y, |theme| theme.spacing.item_spacing);
+
+        let registry = ctx.resource::<DatasetRegistry>();
+        if let Some(registry) = registry {
+            if !registry.is_scope_scanned(&lunco_assets_datasets::DatasetScope::Engine) {
+                ui.add_space(item_spacing);
+                ui.label(egui::RichText::new("Loading asset catalog…").weak());
+            } else if registry.entries().is_empty() {
+                ui.add_space(item_spacing);
+                ui.label(egui::RichText::new("No downloadable assets are declared.").weak());
+            } else if let Some(projection) =
+                ctx.resource::<dataset_provisioning::DatasetProvisioningState>()
+            {
+                let groups = projection.settings_groups.clone();
+                let rows: Vec<_> = groups
+                    .iter()
+                    .filter_map(|group| group.rows.as_ref().ok())
+                    .flat_map(|rows| rows.iter())
+                    .collect();
+                let ready = rows.iter().filter(|row| row.ready).count();
+                let in_progress = rows.iter().filter(|row| row.action == "cancel").count();
+                let has_scene = ctx
+                    .resource::<lunco_assets_datasets::SceneDatasetRequirements>()
+                    .is_some_and(|requirements| requirements.scene.is_some());
+
+                ui.add_space(item_spacing);
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(theme) = theme.as_ref() {
+                        ui.colored_label(theme.tokens.success, format!("{ready} ready"));
+                        ui.separator();
+                        ui.colored_label(
+                            theme.tokens.accent,
+                            format!("{in_progress} in progress"),
+                        );
+                        ui.separator();
+                        ui.label(format!("{} assets", rows.len()));
+                    } else {
+                        ui.label(format!("{ready} ready"));
+                        ui.separator();
+                        ui.label(format!("{in_progress} in progress"));
+                        ui.separator();
+                        ui.label(format!("{} assets", rows.len()));
                     }
-                    if ui.small_button("1 GiB").clicked() { processing.texture_decode_max_bytes = 1 << 30; }
-                    if ui.small_button("2 GiB").clicked() { processing.texture_decode_max_bytes = 2 << 30; }
+                    if has_scene
+                        && ui
+                            .small_button("Reload scene")
+                            .on_hover_text("Use rebuilt assets in the current scene.")
+                            .clicked()
+                    {
+                        actions.push((
+                            "reload_asset_scene".to_owned(),
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                        ));
+                    }
                 });
-                ui.label("Default: 1 GiB per decoder. Applies to new preparation jobs; resampling uses additional memory.");
-                ui.label("Twin override: assets.texture_decode_max_bytes in Twin settings (bytes). An asset's max_decode_bytes takes precedence.");
-            });
-            if processing != original { ctx.set_resource(processing); }
+
+                let filter_id = egui::Id::new("downloadable-data-filter");
+                let mut filter = ui.data_mut(|data| {
+                    data.get_persisted::<String>(filter_id).unwrap_or_default()
+                });
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut filter)
+                            .hint_text("Search assets or source files")
+                            .desired_width(f32::INFINITY),
+                    );
+                    if !filter.is_empty() && ui.small_button("Clear").clicked() {
+                        filter.clear();
+                    }
+                });
+                ui.data_mut(|data| data.insert_persisted(filter_id, filter.clone()));
+                let filter = filter.to_lowercase();
+                let mut visible_groups = false;
+
+                for group in groups {
+                    let rows = match group.rows {
+                        Ok(rows) => rows,
+                        Err(error) => {
+                            visible_groups = true;
+                            let color = theme.as_ref().map_or_else(
+                                || ui.visuals().error_fg_color,
+                                |theme| theme.tokens.error,
+                            );
+                            ui.colored_label(color, error);
+                            continue;
+                        }
+                    };
+                    let rows: Vec<_> = rows
+                        .iter()
+                        .filter(|row| {
+                            filter.is_empty()
+                                || format!("{} {} {}", group.owner, row.label, row.source_files)
+                                    .to_lowercase()
+                                    .contains(&filter)
+                        })
+                        .collect();
+                    if rows.is_empty() {
+                        continue;
+                    }
+                    visible_groups = true;
+                    let ready = rows.iter().filter(|row| row.ready).count();
+                    egui::CollapsingHeader::new(format!(
+                        "{}  ·  {ready}/{} ready",
+                        group.owner,
+                        rows.len()
+                    ))
+                    .id_salt(("asset-scope", group.scope.clone(), group.owner.clone()))
+                    .default_open(
+                        group.owner == "fonts"
+                            || group.scope.starts_with("twin:")
+                            || !filter.is_empty(),
+                    )
+                    .show(ui, |ui| {
+                        for row in rows {
+                            render_download_asset_row(ui, row, theme.as_ref(), &mut actions);
+                            if let Some(theme) = theme.as_ref() {
+                                ui.add_space(theme.spacing.item_spacing);
+                            }
+                        }
+                    });
+                }
+                if !visible_groups {
+                    ui.label(egui::RichText::new("No assets match this search.").weak());
+                }
+            } else {
+                ui.label("Asset presentation is unavailable.");
+            }
+        } else {
+            ui.label(
+                egui::RichText::new("Dataset registry is not installed.")
+                    .weak()
+                    .italics(),
+            );
         }
-        ui.label("Data required by the active scene must be ready before simulation can run. Other Twin data can be downloaded later.");
-        ui.add_space(8.0);
+
+        ui.separator();
+        egui::CollapsingHeader::new("Advanced settings").show(ui, |ui| {
+            egui::CollapsingHeader::new("Transfer settings").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Max parallel downloads:");
+                    ui.add(egui::Slider::new(
+                        &mut settings.max_parallel_downloads,
+                        lunco_settings::DownloadSettings::MAX_PARALLEL_DOWNLOADS_RANGE,
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Max attempts per download:");
+                    ui.add(egui::Slider::new(
+                        &mut settings.max_attempts,
+                        lunco_settings::DownloadSettings::MAX_ATTEMPTS_RANGE,
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Initial retry delay (seconds):");
+                    ui.add(egui::Slider::new(
+                        &mut settings.retry_initial_delay_secs,
+                        lunco_settings::DownloadSettings::RETRY_INITIAL_DELAY_SECS_RANGE,
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Retry backoff multiplier:");
+                    ui.add(egui::Slider::new(
+                        &mut settings.retry_backoff_multiplier,
+                        lunco_settings::DownloadSettings::RETRY_BACKOFF_MULTIPLIER_RANGE,
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Maximum retry delay (seconds):");
+                    ui.add(egui::Slider::new(
+                        &mut settings.retry_max_delay_secs,
+                        lunco_settings::DownloadSettings::RETRY_MAX_DELAY_SECS_RANGE,
+                    ));
+                });
+                settings.retry_max_delay_secs = settings
+                    .retry_max_delay_secs
+                    .max(settings.retry_initial_delay_secs);
+                ui.label(
+                    egui::RichText::new(
+                        "These shared limits apply to asset, source-library, scenario, and app-update requests. Attempts include the first request; delays grow exponentially up to the configured cap.",
+                    )
+                    .weak(),
+                );
+            });
+
+            if let Some(mut processing) =
+                ctx.resource::<lunco_settings::AssetProcessingSettings>().cloned()
+            {
+                let original = processing.clone();
+                egui::CollapsingHeader::new("Texture preparation").show(ui, |ui| {
+                    let mut mib = processing.texture_decode_max_bytes as f64 / 1048576.0;
+                    ui.horizontal(|ui| {
+                        ui.label("Decoder memory limit:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut mib)
+                                    .speed(64.0)
+                                    .range(1.0..=8796093022207.0)
+                                    .suffix(" MiB"),
+                            )
+                            .changed()
+                        {
+                            processing.texture_decode_max_bytes = (mib * 1048576.0).round() as u64;
+                        }
+                        if ui.small_button("1 GiB").clicked() {
+                            processing.texture_decode_max_bytes = 1 << 30;
+                        }
+                        if ui.small_button("2 GiB").clicked() {
+                            processing.texture_decode_max_bytes = 2 << 30;
+                        }
+                    });
+                    ui.label(
+                        "Default: 1 GiB per decoder. Applies to new preparation jobs; resampling uses additional memory.",
+                    );
+                    ui.label(
+                        "Twin override: assets.texture_decode_max_bytes in Twin settings (bytes). An asset's max_decode_bytes takes precedence.",
+                    );
+                });
+                if processing != original {
+                    ctx.set_resource(processing);
+                }
+            }
+        });
+
         if settings != original_settings {
             ctx.set_resource(settings);
         }
-        let Some(registry) = ctx.resource::<DatasetRegistry>() else {
-            ui.label(
-                egui::RichText::new("(dataset registry not installed)")
-                    .weak()
-                    .italics(),
-            );
-            return;
-        };
-        if registry.entries().is_empty() {
-            ui.label(
-                egui::RichText::new("(nothing declared — no Assets.toml registered)")
-                    .weak()
-                    .italics(),
-            );
-            return;
-        }
-        let Some(projection)=ctx.resource::<dataset_provisioning::DatasetProvisioningState>() else {
-            ui.label("Asset presentation is unavailable.");return;
-        };
-        let groups=projection.settings_groups.clone();
-        let mut actions=Vec::new();
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Assets").strong());
-            if ui.button("Reload scene").on_hover_text("Reload the current scene to consume rebuilt artifacts. The shared scene lifecycle prepares physics before simulation resumes.").clicked() {
-                actions.push(("reload_asset_scene".to_owned(),String::new(),String::new(),String::new()));
-            }
-        });
-        ui.label(egui::RichText::new("Prepare reuses valid work. Rebuild reruns the pipeline and keeps the last good output if it fails. Reload the scene to apply rebuilt terrain.").weak());
-        let filter_id=egui::Id::new("downloadable-data-filter");
-        let mut filter=ui.data_mut(|data|data.get_persisted::<String>(filter_id).unwrap_or_default());
-        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search assets or source files").desired_width(f32::INFINITY));
-        ui.data_mut(|data|data.insert_persisted(filter_id,filter.clone()));
-        let filter=filter.to_lowercase();
-        egui::ScrollArea::vertical().max_height(440.0).auto_shrink([false,true]).show(ui,|ui| {
-            for group in groups {
-                let rows=match group.rows {
-                    Ok(rows)=>rows,
-                    Err(error)=>{ui.colored_label(ui.visuals().error_fg_color,error);continue;}
-                };
-                let rows:Vec<_>=rows.iter().filter(|row|filter.is_empty() || format!("{} {} {}",group.owner,row.label,row.source_files).to_lowercase().contains(&filter)).collect();
-                if rows.is_empty() {continue;}
-                let ready=rows.iter().filter(|row|row.ready).count();
-                egui::CollapsingHeader::new(format!("{} · {ready}/{} ready",group.owner,rows.len()))
-                    .id_salt(("asset-scope",group.scope.clone(),group.owner.clone()))
-                    .default_open(group.scope.starts_with("twin:") || !filter.is_empty())
-                    .show(ui,|ui| {
-                        for row in rows {
-                            egui::CollapsingHeader::new(format!("{} — {}",row.label,row.status))
-                                .id_salt(("asset-entry",row.id.clone()))
-                                .default_open(!row.detail.is_empty() || row.action=="cancel")
-                                .show(ui,|ui| {
-                                    ui.label(&row.download_status);
-                                    ui.label(&row.preparation_status);
-                                    if !row.detail.is_empty() {ui.colored_label(ui.visuals().error_fg_color,&row.detail);}
-                                    ui.horizontal_wrapped(|ui| {
-                                        if row.action_display!="none" && row.action!="dismiss" && ui.button(&row.action_label).clicked() {
-                                            actions.push((row.action.clone(),row.id.clone(),row.scope.clone(),String::new()));
-                                        }
-                                        if !row.rebuild_action.is_empty() && ui.button(&row.rebuild_label).on_hover_text("Rerun every declared processing stage, even when cached output is current.").clicked() {
-                                            actions.push((row.rebuild_action.clone(),row.id.clone(),row.scope.clone(),String::new()));
-                                        }
-                                        if ui.link("View source ↗").clicked() {actions.push(("open_web_url".into(),row.id.clone(),row.scope.clone(),row.source_url.clone()));}
-                                    });
-                                    ui.collapsing("Source files",|ui| {ui.label(&row.source_files);ui.label(egui::RichText::new(&row.source_url).weak());});
-                                });
-                        }
-                    });
-            }
-        });
-        for (action,id,scope,url) in actions {
+        for (action, id, scope, url) in actions {
             use lunco_telemetry_core::TelemetryValue;
             ctx.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-                tool:"runtime_ui".to_owned(),hook:"on_action".to_owned(),binding:None,owner_twin_id:None,
-                args:TelemetryValue::Map(std::collections::BTreeMap::from([
-                    ("action".into(),TelemetryValue::String(action)),
-                    ("parameters".into(),TelemetryValue::Map(std::collections::BTreeMap::from([
-                        ("id".into(),TelemetryValue::String(id)),("scope".into(),TelemetryValue::String(scope)),("url".into(),TelemetryValue::String(url)),
-                    ]))),
+                tool: "runtime_ui".to_owned(),
+                hook: "on_action".to_owned(),
+                binding: None,
+                owner_twin_id: None,
+                args: TelemetryValue::Map(std::collections::BTreeMap::from([
+                    ("action".into(), TelemetryValue::String(action)),
+                    (
+                        "parameters".into(),
+                        TelemetryValue::Map(std::collections::BTreeMap::from([
+                            ("id".into(), TelemetryValue::String(id)),
+                            ("scope".into(), TelemetryValue::String(scope)),
+                            ("url".into(), TelemetryValue::String(url)),
+                        ])),
+                    ),
                 ])),
             });
         }
-
     });
 }
 

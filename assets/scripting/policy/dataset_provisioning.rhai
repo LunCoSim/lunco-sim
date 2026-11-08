@@ -21,6 +21,11 @@ fn source_file_label(state) {
     "Not downloaded"
 }
 fn provision_choice(condition,yes,no) {if condition {return yes;} no}
+fn dataset_settings_label(dataset) {
+    if dataset.required_for_scene==true {return "Required by scene · "+dataset.name;}
+    if dataset.download_on_start==true {return dataset.name;}
+    provision_choice(dataset.recommended,"Recommended · ","Optional · ")+dataset.name
+}
 fn preparation_title(complete,failed,busy,downloads_needed) {
     if complete {return "Data ready";}
     if failed>0 {return "Data preparation needs attention";}
@@ -133,7 +138,7 @@ fn dataset_provisioning(ctx) {
         let row=dataset_preparation_row(dataset,ctx.scope_id);
         if state=="failed" || row.status=="Source validation failed" {failed+=1;}
         if ctx.include_optional==true {
-            row.label=provision_choice(dataset.required_for_scene==true,"Required by scene · ",provision_choice(dataset.recommended,"Recommended · ","Optional · "))+row.label;
+            row.label=dataset_settings_label(dataset);
         }
         if row.ready {ready_count+=1;}
         if ctx.include_optional==true && dataset.required_for_scene!=true {optional.push(row);}

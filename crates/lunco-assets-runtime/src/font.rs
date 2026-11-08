@@ -3,12 +3,14 @@
 //! The workspace ships **DejaVu Sans** as its proportional fallback (math /
 //! Greek / arrow coverage — see [`lunco_assets_core::dejavu_sans_path`]). Different crates
 //! need its raw `.ttf` bytes at runtime: `lunco-theme` installs them into egui,
-//! `lunco-usd-bevy` rasterises diagnostic labels from them, etc. The *loading
-//! procedure* differs by platform — native reads the cache file synchronously,
-//! web has no filesystem and must `fetch()` the bundled copy over HTTP — so it
-//! lives here once instead of being re-implemented per consumer.
+//! `lunco-usd-bevy` rasterises diagnostic labels from them, etc. Native reads
+//! the cache file synchronously; web fetches the bundled copy over HTTP. This
+//! shared loader keeps platform I/O out of each consumer.
 
 use std::sync::mpsc::{Receiver, Sender};
+
+/// Dataset registry identity for the shared application fallback font.
+pub const DEJAVU_ASSET_ID: &str = "engine/fonts/dejavu_sans";
 
 /// URL the web bundle serves the DejaVu Sans TTF at. `scripts/build_web.sh`
 /// copies `<cache>/fonts/DejaVuSans.ttf` to `dist/<bin>/fonts/DejaVuSans.ttf`,
@@ -36,8 +38,8 @@ pub fn load_dejavu_sans_bytes(settings: &lunco_settings::DownloadSettings) -> Re
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_methods)]
 fn load_into(tx: Sender<Vec<u8>>, _settings: &lunco_settings::DownloadSettings) {
-    // One-shot startup font read — a direct `std::fs::read` is correct here
-    // (this crate is the I/O boundary; the wasm path below replaces it).
+    // This crate owns native font-file reads; consumers start loading after
+    // the engine asset registry reports the font installed.
     let path = match lunco_assets_core::dejavu_sans_path() {
         Ok(path) => path,
         Err(error) => {

@@ -501,6 +501,13 @@ impl DatasetRegistry {
         };
         let mut added = 0;
         for (key, spec) in manifest.assets {
+            if spec.download_on_start && !matches!(&scope, DatasetScope::Engine) {
+                self.record_failure(format!(
+                    "dataset '{key}' in scope '{}' cannot use download_on_start; this policy is for engine manifests",
+                    scope.label()
+                ));
+                continue;
+            }
             if spec.package_only {
                 continue;
             }
@@ -1170,6 +1177,30 @@ dest = "data/demo.csv"
             registry
                 .declared_artifact(&scope, Path::new("data/demo.csv"))
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn startup_download_policy_is_rejected_for_twin_manifests() {
+        let manifest = r#"
+[font]
+name = "Font"
+url = "https://example.invalid/font.ttf"
+download_on_start = true
+"#;
+        let scope = DatasetScope::Twin {
+            name: "fixture".into(),
+            root: PathBuf::from("/fixture"),
+        };
+        let mut registry = DatasetRegistry::default();
+
+        assert_eq!(registry.register_scoped(manifest, "fixture", scope), 0);
+        assert!(registry.entries().is_empty());
+        assert!(
+            registry
+                .take_pending_failures()
+                .iter()
+                .any(|failure| failure.contains("download_on_start"))
         );
     }
 

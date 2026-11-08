@@ -10887,11 +10887,10 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-assets-runtime",
  "lunco-settings",
  "serde",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -11227,6 +11226,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "bevy",
+ "lunco-assets-datasets",
  "lunco-assets-runtime",
  "lunco-render",
  "lunco-settings",

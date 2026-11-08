@@ -44,7 +44,7 @@ pub(super) struct ProvisioningRow {
     pub(super) source_url: String,
     pub(super) source_files: String,
     details_display: String,
-    details_label: String,
+    pub(super) details_label: String,
     min_height: String,
     stages_display: String,
     pub(super) action_display: String,
@@ -397,6 +397,10 @@ fn invoke_policy(
                 ("key", HookValue::str(entry.key.clone())),
                 ("name", HookValue::str(entry.name.clone())),
                 ("recommended", HookValue::Bool(entry.recommended)),
+                (
+                    "download_on_start",
+                    HookValue::Bool(entry.spec.download_on_start),
+                ),
                 (
                     "required_for_scene",
                     HookValue::Bool(requirements.is_some_and(|r| r.ids.contains(&entry.id))),

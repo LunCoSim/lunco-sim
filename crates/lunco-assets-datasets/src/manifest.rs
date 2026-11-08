@@ -30,6 +30,9 @@ pub struct AssetEntry {
     /// Offer this dataset during onboarding when it is missing.
     #[serde(default)]
     pub recommended: bool,
+    /// Request this engine asset once at native application startup when missing.
+    #[serde(default)]
+    pub download_on_start: bool,
     /// Binary names for which the delivered artifact belongs in the package.
     #[serde(default)]
     pub bundle: Vec<String>,
@@ -172,6 +175,12 @@ impl std::str::FromStr for AssetManifest {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "package-only assets need a bundle target and cannot be recommended downloads",
+                ));
+            }
+            if entry.download_on_start && entry.package_only {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "startup downloads must be runtime assets, not package-only inputs",
                 ));
             }
             if let Some(process) = &entry.process {
@@ -563,6 +572,17 @@ mod tests {
                 .parse::<AssetManifest>()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn startup_download_policy_is_typed_and_cannot_be_package_only() {
+        let input =
+            "[font]\nname='Font'\nurl='https://example.invalid/font.ttf'\ndownload_on_start=true\n";
+        let manifest = input.parse::<AssetManifest>().unwrap();
+        assert!(manifest.assets["font"].download_on_start);
+
+        let package_only = format!("{input}package_only=true\nbundle=['desktop']\n");
+        assert!(package_only.parse::<AssetManifest>().is_err());
     }
 
     #[test]

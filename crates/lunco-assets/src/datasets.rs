@@ -231,6 +231,32 @@ fn on_request_dataset(
     Ok(lunco_command_contracts::Ack::new(OpId::new()))
 }
 
+/// Queue native engine assets that opt into one startup download attempt.
+/// Wait for the complete manifest scan and remember each attempted identity so
+/// a failed or cancelled transfer waits for an explicit retry or next launch.
+#[cfg(not(target_arch = "wasm32"))]
+fn queue_startup_downloads(
+    registry: Res<DatasetRegistry>,
+    mut requested: Local<std::collections::HashSet<String>>,
+    mut commands: Commands,
+) {
+    if !registry.is_scope_scanned(&DatasetScope::Engine) {
+        return;
+    }
+    for entry in registry.entries() {
+        if !matches!(&entry.scope, DatasetScope::Engine)
+            || !entry.spec.download_on_start
+            || !matches!(entry.state, DatasetState::Missing)
+            || !requested.insert(entry.id.clone())
+        {
+            continue;
+        }
+        commands.trigger(RequestDataset {
+            id: entry.id.clone(),
+        });
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[on_command(ProcessDataset)]
 fn on_process_dataset(
@@ -815,6 +841,17 @@ impl Plugin for DatasetProvisioningPlugin {
         register_all_commands(app);
         app.add_observer(on_twin_closed);
         app.add_observer(on_retire_dataset_scope);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
+            Update,
+            (
+                drain_dataset_status,
+                admit_dataset_operations,
+                queue_startup_downloads,
+            )
+                .chain(),
+        );
+        #[cfg(target_arch = "wasm32")]
         app.add_systems(
             Update,
             (drain_dataset_status, admit_dataset_operations).chain(),

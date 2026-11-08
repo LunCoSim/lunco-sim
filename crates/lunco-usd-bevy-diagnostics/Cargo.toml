@@ -8,6 +8,7 @@ description = "USD asset failure and visual placeholder diagnostics"
 [dependencies]
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_gltf", "bevy_image", "bevy_mesh"] }
 ab_glyph = "0.2"
 lunco-render = { path = "../lunco-render" }

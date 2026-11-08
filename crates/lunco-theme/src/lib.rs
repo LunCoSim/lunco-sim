@@ -1390,21 +1390,23 @@ fn publish_active_theme(
     }
 }
 
-/// Install the bundled DejaVu fallback font the first time the egui context is
-/// available, then mark the resource as installed so subsequent
-/// frames short-circuit. Lives here (not in an `on_startup` system)
-/// because the egui context is created on the first render pass —
-/// calling `set_fonts` earlier would be a no-op.
+/// Install the DejaVu fallback once the egui context and font bytes are
+/// available, then short-circuit subsequent frames. Lives here (not in an
+/// `on_startup` system) because the egui context is created on the first
+/// render pass — calling `set_fonts` earlier would be a no-op.
 ///
 /// Calling `set_fonts` from inside `EguiPrimaryContextPass` (i.e.
 /// between `ctx.begin_pass` and `ctx.end_pass`) is harmless — egui
 /// queues the FontDefinitions change and applies it on the next
-/// frame's atlas build. By the time the Icon view renders the
-/// `∧` glyph two frames after startup, the fallback is active.
+/// frame's atlas build. While a cold-start download is pending, egui keeps its
+/// default font and installs this fallback when the asset arrives.
 fn install_fallback_fonts_once(
     mut contexts: bevy_egui::EguiContexts,
     mut done: ResMut<fonts::FontsInstalled>,
+    mut initial_attempted: Local<bool>,
+    mut font_load: Local<Option<std::sync::mpsc::Receiver<Vec<u8>>>>,
     settings: Res<lunco_settings::DownloadSettings>,
+    registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
 ) {
     if done.0 {
         return;
@@ -1416,25 +1418,44 @@ fn install_fallback_fonts_once(
         );
         return;
     };
-    bevy::log::info!("[lunco-theme] installing fallback fonts (Greek/math/arrow coverage)…");
     #[cfg(target_arch = "wasm32")]
     {
-        // Wasm has no filesystem — fetch the font over HTTP from the
-        // page bundle. Fire-and-forget; the install happens on the
-        // next frame after the bytes land. Until then egui uses the
-        // default font and math/arrow glyphs tofu briefly.
-        fonts::spawn_wasm_font_fetch(
-            ctx.clone(),
-            "./fonts/DejaVuSans.ttf".to_string(),
-            settings.clone(),
-        );
+        let _ = &registry;
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = settings;
-        fonts::install_fallback_fonts(ctx);
+        if let Some(registry) = registry {
+            if !registry.is_scope_scanned(&lunco_assets_datasets::DatasetScope::Engine)
+                || !registry
+                    .state(lunco_assets_runtime::font::DEJAVU_ASSET_ID)
+                    .is_some_and(lunco_assets_datasets::DatasetState::is_installed)
+            {
+                return;
+            }
+        }
     }
-    done.0 = true;
+    if !*initial_attempted {
+        *initial_attempted = true;
+        bevy::log::info!("[lunco-theme] loading fallback fonts (Greek/math/arrow coverage)…");
+        *font_load = Some(lunco_assets_runtime::font::load_dejavu_sans_bytes(
+            &settings,
+        ));
+    }
+    let Some(receiver) = font_load.as_ref() else {
+        return;
+    };
+    match receiver.try_recv() {
+        Ok(bytes) => {
+            fonts::install_fallback_fonts_with_bytes(ctx, bytes);
+            done.0 = true;
+            *font_load = None;
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            bevy::log::warn!("[lunco-theme] fallback font loader ended without font bytes");
+            *font_load = None;
+        }
+    }
 }
 
 #[cfg(test)]

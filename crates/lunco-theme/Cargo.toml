@@ -7,20 +7,13 @@ description = "Core design tokens and theming system for LunCoSim"
 
 [dependencies]
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 bevy = { workspace = true }
 # Theme installs the application fallback font against egui's built-in font
 # set; it does not own the workbench's picking, clipboard, or URL policy.
 bevy_egui = { workspace = true, features = ["render", "default_fonts"] }
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
 serde = { workspace = true }
-
-# Wasm-only: fetch DejaVu Sans TTF over HTTP at runtime (the font is
-# served at `/fonts/DejaVuSans.ttf` by the page bundle — see the copy
-# step in `scripts/build_web.sh`). Native loads from the workspace
-# cache via `std::fs` instead.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = { workspace = true }
 
 [lints]
 workspace = true

@@ -9,14 +9,17 @@ fn pipeline_dataset(scope, key) {
 
 fn verify_runtime_download_catalog() {
     let checks=[];
-    let earth=false;let moon=false;
+    let earth=false;let moon=false;let font=false;
+    let font_state="missing";
     for dataset in query("ListDatasets",#{}).datasets {
         if dataset.scope!="engine" {continue;}
-        checks.push(t_true(dataset.key!="dejavu_sans","package fonts are not user downloads"));
         if dataset.key=="earth" {earth=true;}
         if dataset.key=="moon" {moon=true;}
+        if dataset.key=="dejavu_sans" {font=true;font_state=dataset.state.kind;}
     }
     checks.push(t_true(earth && moon,"planetary imagery remains in the downloadable catalog"));
+    checks.push(t_true(font,"the application fallback font is listed in the downloadable catalog"));
+    checks.push(t_true(font_state!="missing","the fallback font's startup download has been admitted"));
     t_report(checks);
 }
 
