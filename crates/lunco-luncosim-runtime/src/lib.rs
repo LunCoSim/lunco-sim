@@ -146,21 +146,19 @@ fn sync_physics_escape_guard(
     let project = active_id
         .and_then(|id| workspace.project_physics_escape_settings(id))
         .and_then(|settings| settings.finite_world_escape_guard);
-    let twin = active_id
-        .and_then(|id| workspace.twin(id))
-        .and_then(|twin| {
-            lunco_workspace::twin_physics_escape_guard_setting(twin.manifest.as_ref()).map_err(
-                |error| {
-                    format!(
-                        "Twin '{}' has invalid `{}`: {error}",
-                        twin.manifest
-                            .as_ref()
-                            .map_or("<unnamed>", |manifest| manifest.name.as_str()),
-                        lunco_workspace::FINITE_WORLD_ESCAPE_GUARD_KEY
-                    )
-                },
-            )
-        });
+    let twin = active_id.and_then(|id| workspace.twin(id)).map(|twin| {
+        lunco_workspace::twin_physics_escape_guard_setting(twin.manifest.as_ref()).map_err(
+            |error| {
+                format!(
+                    "Twin '{}' has invalid `{}`: {error}",
+                    twin.manifest
+                        .as_ref()
+                        .map_or("<unnamed>", |manifest| manifest.name.as_str()),
+                    lunco_workspace::FINITE_WORLD_ESCAPE_GUARD_KEY
+                )
+            },
+        )
+    });
     let twin = match twin {
         None => None,
         Some(Ok(value)) => value,
