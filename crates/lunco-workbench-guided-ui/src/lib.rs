@@ -35,7 +35,7 @@ use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
 
 /// Shared UI layer for guided rings, coach cards, and recovery surfaces: above
-/// the HUD tiers and below workbench menus and popups. The lesson HUD itself is
+/// the HUD tiers and below workbench menus and popups. The guided HUD itself is
 /// a specific-HUD readout. The guided systems are chained so surfaces in this
 /// layer have stable order.
 pub const GUIDED_OVERLAY_ORDER: egui::Order = lunco_theme::UI_ORDER;
@@ -66,8 +66,8 @@ pub struct GuidedOverlay {
     /// Last named anchor reported as unavailable. Prevents one render pass
     /// from publishing the same authored UI contract failure every frame.
     pub reported_missing_anchor: Option<String>,
-    /// Recoverable presentation error shown above the lesson instead of
-    /// tearing down its host or the loaded world.
+    /// Recoverable presentation error shown above the guided presentation
+    /// instead of tearing down its host or the loaded world.
     pub recovery: Option<GuidedRecovery>,
 }
 
@@ -243,8 +243,9 @@ pub struct ClearGuidedOverlay {}
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct GuidedStopRequested;
 
-/// Continue the current lesson after dismissing a recoverable presentation
-/// problem. The guided launcher advances a guided step when one is active.
+/// Continue the current guided activity after dismissing a recoverable
+/// presentation problem. The guided launcher advances a guided step when one
+/// is active.
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct GuidedRecoveryContinueRequested;
 
@@ -389,7 +390,7 @@ fn register_guided_navigation(app: &mut App) {
 
 /// Draw a blocking but non-terminal recovery surface for an unavailable
 /// authored guided target. It owns input until the learner chooses an action,
-/// while leaving the lesson host, simulation, and loaded scene alive.
+/// while leaving the guided host, simulation, and loaded scene alive.
 fn draw_guided_recovery(
     mut egui_ctx: EguiContexts,
     hud: Res<GuidedOverlay>,
@@ -426,7 +427,7 @@ fn draw_guided_recovery(
                 .rect_filled(rect, 0.0, theme.tokens.scrim.linear_multiply(0.84));
         });
 
-    let mut continue_lesson = false;
+    let mut continue_guidance = false;
     let mut retry = false;
     let mut stop = false;
     egui::Area::new(egui::Id::new("lunco_guided_recovery_card"))
@@ -460,7 +461,7 @@ fn draw_guided_recovery(
                             );
                             ui.label(
                                 egui::RichText::new(
-                                    "The lesson is still running; only this presentation target is missing.",
+                                    "The guided activity is still running; only this presentation target is missing.",
                                 )
                                 .color(theme.tokens.text_subdued)
                             );
@@ -479,11 +480,11 @@ fn draw_guided_recovery(
                             ui,
                             UiIcon::Forward,
                             "Continue",
-                            "Continue the lesson without this view",
+                            "Continue the guided activity without this view",
                         )
                         .clicked()
                         {
-                            continue_lesson = true;
+                            continue_guidance = true;
                         }
                         if icon_text_button(
                             ui,
@@ -499,7 +500,7 @@ fn draw_guided_recovery(
                             ui,
                             UiIcon::Stop,
                             "Stop",
-                            "Stop this guided lesson and keep the current scene open",
+                            "Stop this guided activity and keep the current scene open",
                         )
                         .clicked()
                         {
@@ -509,7 +510,7 @@ fn draw_guided_recovery(
                 });
         });
 
-    if continue_lesson {
+    if continue_guidance {
         commands.trigger(GuidedRecoveryContinueRequested);
     }
     if retry {
@@ -819,7 +820,7 @@ fn draw_tour(
         return;
     }
 
-    // A UI-only lesson must retain the ordinary empty-workbench presentation.
+    // A UI-only guided tour must retain the ordinary empty-workbench presentation.
     // There is no scene to spotlight in this state, so a full scrim would turn
     // the readable empty-viewport message into an apparent black screen.
     let empty_viewport = placeholder
@@ -1105,7 +1106,7 @@ fn draw_tour(
                                 if ui
                                     .button(egui::RichText::new("Stop").color(muted))
                                     .on_hover_text(
-                                        "Stop this guided lesson and keep the current scene open",
+                                        "Stop this guided activity and keep the current scene open",
                                     )
                                     .clicked()
                                 {
@@ -1292,7 +1293,7 @@ mod tests {
             index: 0,
             total: 1,
             anchor: String::new(),
-            title: "Lesson".into(),
+            title: "Authored scenario".into(),
             body: "Step".into(),
         });
 

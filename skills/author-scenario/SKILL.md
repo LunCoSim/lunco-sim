@@ -421,8 +421,10 @@ remember:
 | `assets/scenarios/tests/<name>.rhai` | its scenario |
 
 `scripts/run_scene_tests.sh` runs the engine fixtures in `scenes/tests/`.
-The Scenarios menu exposes Twin tests through **Test Scenarios**, alongside
-**Scenario**; **Library tests** follows `AssetVisibilitySettings`.
+The Rhai-authored Scenarios menu exposes each Twin's regular scenes directly,
+then its tests in a **Test Scenes** submenu. **Library tests** follows
+`AssetVisibilitySettings`, controlled by **Settings → Sim Core**; hiding
+library tests does not hide Twin tests.
 The asset gate
 `every_test_scene_carries_a_scenario` fails on any of them that asserts nothing.
 A rig written into `scenes/luncosim/` instead gates nothing however carefully it

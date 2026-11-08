@@ -37,10 +37,16 @@ Project** edits the local override, and Twin settings owns the shared
 override. Show the inherited value and report higher-priority overrides when
 present. Route project and Twin edits through typed commands. Verify the menu
 and panels with native input and `GetSceneLoadingSettings` in an owned session.
-When a Twin has no live scene, the viewport offers its configured scene
-choices and Editor; retain the generic welcome actions only with no open Twin.
-Use `SceneMountState` so an Editor preview cannot hide that empty live state.
-Verify its buttons with `scripts/api/test_scene_loading_ui.py --port <free-port>`.
+The Scenarios menu always starts with **Restart Scenario**, disabled when no
+live scene is loaded. Each Twin submenu offers **Load Default Scene**, regular
+scenes, and a separate **Test Scenes** submenu. The empty-viewport welcome card
+is shown only while no live scene is mounted; a Twin with no live scene offers
+its configured default and every regular indexed scene in a scrollable list.
+Test scenes remain available from the Twin's Scenarios submenu and never appear
+in that card. Application welcome actions such as featured tutorials are
+visible only when no Twin is active. Use `SceneMountState` so an Editor preview
+cannot hide the empty live state. Verify its buttons with
+`scripts/api/test_scene_loading_ui.py --port <free-port>`.
 
 ## Graph readability
 
@@ -146,15 +152,30 @@ Events through the existing StatusBus and RuntimeDiagnostics owners. Keep them
 out of floating viewport banners; presentation-stop decisions stay at the
 render recovery owner.
 
-The Scenarios menu offers **Scenario** and **Test Scenarios** as peer submenus.
-Scene rows use a single-selection marker from `CurrentScenePath`; dispatch the
-existing typed `LoadScene` command when another row is chosen. With multiple
-Twins, disambiguate lists by their stable logical names from `TwinRoots`, never
-transport mount authorities. Twin tests remain accessible regardless of the
-asset-browser visibility preference; that preference controls **Library tests**.
-Twin `[usd].scenes` globs curate loadable scenes, and `discovery::is_test_asset`
-classifies test directories. Keep explanatory text and numeric counts out of
-this compact navigation menu. Render dividers only between populated sections.
+The required `application.scenarios.menu` Rhai policy owns the full Scenarios
+tree, including scene grouping and dividers, current-scene radio selection,
+restart, downloaded Twins, and the test-content checkbox. It orders Twin
+content before Tutorials and keeps Tutorials and Library together. Its typed facts come from the
+admitted scene inventory, committed `CurrentScenePath`, workspace Twin
+identities, download registry, and persisted `AssetVisibilitySettings`; the
+policy is reevaluated when those inputs change. The preference hides or shows
+Library tests. The checkbox is under **Settings → Sim Core**. Twin tests remain
+in each Twin's **Test Scenes** submenu. Rhai changes the persisted preference through the typed
+`SetShowTestAssets` command. Keep scene labels, grouping, and menu/tool
+arguments in policy; do not add a native Scenarios menu or a parallel scene
+selection path.
+The application asset-lifecycle policy contributes authored tutorial catalogs
+to the same top-level menu through provider merging; tutorial labels and
+catalog rules also stay in Rhai.
+
+The generic `ScriptUiRequest::WorkbenchMenus` host renders policy-contributed
+trees, divider rows, policy-ordered same-label contributions, replaceable Settings submenus, and viewport actions. It supplies radio/checkbox controls,
+provider/Twin lifetime validation, and tool-hook routing; it does not choose
+which scenes or groups to show. Rhai supplies the same admitted scene list to
+quick-open. `lunco-assets-runtime` owns inventory discovery, not menu policy.
+Twin-owned provider trees and quick-open actions are shown only for the active
+workspace Twin; application-owned contributions remain available when the
+active Twin changes.
 
 For retained runtime UI capture, `runtime.ui.recording` receives only surfaces
 allowed by their exposure, perspective, gate and active Twin setting. Switching
@@ -484,13 +505,15 @@ fix that width before laying out wrapped rows, and let short lists shrink
 vertically instead of reserving an empty scroll region. Completion state uses
 the shared vector `UiIcon::Check` and `UiIcon::Pending` with accessible status
 text; do not render status words or font-dependent glyphs as a second status
-system. Menu contributions bind endpoints under a provider-owned ECS root;
-replace the root and widget scope together. Provider bindings survive scene
-reset, while each selection acquires an owner-bound invocation child pinned
-to its exact provider and target Twin. Retire
-that child on every admission failure or completion, and retire the provider
-root on replacement or its Twin's close. See `runtime-ui` for the full callback
-lifecycle and production gate.
+system. Menu contributions retain typed action descriptions under a
+provider-owned ECS root; replace the root and widget scope together. Menu rows
+stay disabled until the current Rhai endpoint is registered. Empty-viewport
+actions use the same live readiness check, and quick-open destinations come
+from current provider state. On selection the shell resolves the endpoint
+again, then pins the owner-bound invocation child to its exact provider and
+target Twin. Retire that child on every admission failure or completion, and
+retire the provider root on replacement or its Twin's close. See `runtime-ui`
+for the full callback lifecycle and production gate.
 
 The workbench scopes only its private mutable layout out of the `World` while
 painting. The authoritative `WorkbenchMenuRegistry` remains installed and is

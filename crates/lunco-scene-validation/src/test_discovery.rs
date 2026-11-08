@@ -119,7 +119,7 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
 /// Only `.rhai` programs below an asset `tests/` directory are test observers
 /// (`scenarios/tests/` in the shipped library). USD assets without such an
 /// observer are not test roots; this permits referenced support layers under
-/// the same asset tree. A scene may also carry a production/tutorial Rhai
+/// the same asset tree. A scene may also carry a production scenario Rhai
 /// program, which is intentionally ignored here. Multiple test observers must
 /// agree on their domain so the runner never has to guess which half of a scene
 /// it should execute.

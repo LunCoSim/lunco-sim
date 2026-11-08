@@ -2646,7 +2646,7 @@ mod tests {
         L.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// A stand-in for the Summer Space School's `sim/tutorials/teleop_policy.rhai`
+    /// A stand-in for an authored `sim/scenarios/teleop_policy.rhai`
     /// (authored in that TWIN, not this repo): refuse `SetPorts` to a vessel whose
     /// control path is down, exempt autonomy, allow everything else.
     struct TeleopPolicy;
@@ -2791,7 +2791,7 @@ mod tests {
         down.set(R1, true);
         let drive_down = authorize(&reg, &rbac, &pol, &down, A, "SetPorts", Some(R1));
         // …but only DRIVING is refused — a blackout must not lock a student out of
-        // possessing, looking around, or the tutorial's own commands.
+        // possessing, looking around, or the scenario's own commands.
         let possess_down = authorize(&reg, &rbac, &pol, &down, A, "AcquireControl", Some(R1));
         // And a DIFFERENT vessel is unaffected: the fact is per-target.
         let other_down = authorize(&reg, &rbac, &pol, &down, A, "SetPorts", Some(R2));

@@ -1037,9 +1037,9 @@ pub fn compile_prelude_set_for_runtime(
 /// call re-runs them and the global namespace is seeded.
 ///
 /// [`compile_with_script_consts`] is the other half: it folds bare `X`. Neither
-/// subsumes the other, and both apply to EVERY script — scenario, lesson, inline
+/// subsumes the other, and both apply to EVERY script — scenario, inline
 /// `info:sourceCode` — because they sit on the single compile path in
-/// [`ScriptRuntime::compile`]. Authored lessons are not special: the application
+/// [`ScriptRuntime::compile`]. Authored scenarios are not special: the application
 /// menu submits `RunScenarioAsset`, which lands here like any other scenario.
 ///
 /// ⚠ COST: a hoisted `const` re-evaluates on every hook call. That is free for the
@@ -2366,9 +2366,8 @@ fn build_world_engine_base(
     );
 
     // input_binding("forward") -> "W" (or () when the intent is unbound).
-    // Tutorials read the shared resolved settings resource directly, so
-    // authored copy and action policy follow user rebinding without a second
-    // tutorial-owned key table.
+    // Authored scenarios read the shared resolved settings resource directly,
+    // so copy and action policy follow user rebinding without another key table.
     engine.register_fn("input_binding", |binding: ImmutableString| -> Dynamic {
         bridge_core::with_world(|world| {
             world
@@ -2803,11 +2802,11 @@ fn build_world_engine_base(
     // is_unattended() -> bool — is there NOBODY at the controls? A scenario
     // branches on it to decide whether to drive ITSELF:
     // `if !is_unattended() { return; }` at the top of an authored driver leaves the
-    // lesson to the student and plays it automatically in CI.
+    // scenario to the user and runs it automatically in CI.
     //
     // The fact behind it is a window (see `ScenarioAudience`), NOT the build
     // profile. It used to be `is_debug()`/`cfg!(debug_assertions)`, which is a
-    // different question: every `cargo run` is a debug build, so every tutorial
+    // different question: every `cargo run` is a debug build, so every scenario
     // auto-played itself and chained to its successor while the student watched.
     // Callable from any function; verbs are global, while launch parameters are
     // passed explicitly as the `ctx` hook argument.
@@ -3249,7 +3248,7 @@ pub struct RhaiScenarioRuntime {
     /// Content-addressed memo of compile outcomes, keyed by source and asset
     /// identity. The compile step (parse + prelude-merge + mask derive) is pure structure,
     /// so identical sources — every rover with the same controller, every replay
-    /// of a tutorial — reuse one `Arc` instead of re-parsing. Failures are cached
+    /// of a scenario — reuse one `Arc` instead of re-parsing. Failures are cached
     /// too, so a fleet sharing a broken source parses + logs once, not per entity.
     /// A source edit bumps the doc generation → new source → new key → a fresh
     /// entry. Tool-library changes affect runtime module resolution, not the AST;
@@ -7626,7 +7625,7 @@ mod tests {
     #[test]
     fn retiring_a_source_asset_releases_only_its_prepared_module() {
         let mut runtime = super::RhaiScenarioRuntime::default();
-        let twin_id = "twin://17/lesson/helper.rhai";
+        let twin_id = "twin://17/scenario/helper.rhai";
         let app_id = "lunco://scripts/application_helper.rhai";
         let twin_source = "fn value() { 17 }";
         let app_source = "fn value() { 23 }";
@@ -8227,7 +8226,7 @@ mod tests {
 
     /// Two closures over one outer local SHARE it when either mutates it.
     ///
-    /// Lessons depend on this. Objective callbacks (`on_complete`, `done`) are
+    /// Authored scenarios depend on this. Objective callbacks (`on_complete`, `done`) are
     /// closures, and a closure is not a hook — `this` is unbound inside one — so
     /// per-objective state has nowhere to live EXCEPT a captured local. If rhai's
     /// `closure` feature were off, capture would be by-value: the writer would
@@ -8254,13 +8253,13 @@ mod tests {
             got.as_int().ok(),
             Some(42),
             "a closure's write was not visible to a sibling closure — captured by \
-             value, so a lesson objective holding state in a captured local would \
+             value, so a scenario objective holding state in a captured local would \
              never complete"
         );
     }
 
     /// The end-to-end contract: a top-level `const` read as `global::X` inside a
-    /// `fn` resolves. This is what every Space School lesson depends on, and it is
+    /// `fn` resolves. Authored scenarios use this behavior, and it is
     /// the SAME path scenarios use — `RunScenarioAsset` attaches the source.
     #[test]
     fn a_fn_can_read_a_top_level_const_via_global() {

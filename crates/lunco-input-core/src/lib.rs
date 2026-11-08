@@ -2,8 +2,8 @@
 //!
 //! This package owns the user-editable keymap and its projection into Bevy's
 //! semantic [`leafwing_input_manager`] map. Vessel actuation remains in
-//! `lunco-controller`; UI/help/tutorial consumers depend on this small input
-//! contract instead of pulling the controller's simulation adapter. The
+//! `lunco-controller`; UI, help, and authored scenario consumers depend on this
+//! small input contract instead of pulling the controller's simulation adapter. The
 //! application supplies the authored defaults at runtime; this crate contains
 //! no repository-relative asset path or compiled product keymap.
 
@@ -77,8 +77,8 @@ struct InputBindingsDocument {
     key_chords: BTreeMap<String, Vec<Vec<KeyCode>>>,
 }
 
-/// Resolved user input settings shared by avatar control, UI help, tutorials,
-/// input injection, and authored pointer tools.
+/// Resolved user input settings shared by avatar control, UI help, authored
+/// scenarios, input injection, and authored pointer tools.
 ///
 /// The application supplies defaults from its authored input document through
 /// [`Self::overridden_by`]. An omitted look button uses the documented
@@ -254,7 +254,8 @@ impl InputBindingsSettings {
         }
     }
 
-    /// Return resolved key bindings for help, tutorials, and input injection.
+    /// Return resolved key bindings for help, authored scenarios, and input
+    /// injection.
     pub fn key_bindings(&self) -> Result<Vec<(UserIntent, Vec<KeyCode>)>, String> {
         self.bindings
             .iter()

@@ -8,18 +8,18 @@
 use lunco_scripting::scenario::scenario_audience;
 use lunco_scripting_bridge_core::ScenarioAudience;
 
-/// The load-bearing case: a windowed session has a student in it, so a lesson
+/// The load-bearing case: a windowed session has a person in it, so a scenario
 /// must wait for them.
 #[test]
 fn a_window_means_a_human_is_watching() {
     assert_eq!(
         scenario_audience(true, None),
         ScenarioAudience::Attended,
-        "with a window open a person can click Next, so lessons must NOT self-play"
+        "with a window open a person can click Next, so scenarios must NOT self-play"
     );
 }
 
-/// The CI case: nothing can click, so an authored driver has to carry the lesson or it
+/// The CI case: nothing can click, so an authored driver has to carry the scenario or it
 /// tests nothing.
 #[test]
 fn no_window_means_nobody_is_watching() {
@@ -40,7 +40,7 @@ fn explicit_override_wins_over_window_presence() {
 
 /// A world that never resolves the audience (a unit test, a plugin-less `World`)
 /// has no window by construction — so the fail-safe is `Unattended`. An authored driver
-/// that runs when it should not is visible; a lesson that silently refuses to run
+/// that runs when it should not is visible; a scenario that silently refuses to run
 /// in CI is a green test that tested nothing.
 #[test]
 fn the_default_is_unattended() {

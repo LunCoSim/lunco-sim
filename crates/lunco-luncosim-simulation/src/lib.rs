@@ -2,7 +2,7 @@
 //!
 //! This package owns the simulation composition shared by the GUI shell,
 //! headless server, and authored scene-test runner. It has no renderer, egui,
-//! workbench, picking, or tutorial policy. Those capabilities are layered by
+//! workbench, picking, or scenario policy. Those capabilities are layered by
 //! the application/UI packages.
 
 mod physics_presentation;

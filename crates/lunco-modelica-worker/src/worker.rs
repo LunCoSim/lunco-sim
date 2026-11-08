@@ -5521,7 +5521,7 @@ mod macro_step_tests {
 
         let unload = panic_result_for_command(
             &ModelicaCommand::UnloadSourceRoot {
-                id: "twin:17:lesson:modelica:0".into(),
+                id: "twin:17:scenario:modelica:0".into(),
                 operation_id: 2,
             },
             "panic",
@@ -5531,7 +5531,7 @@ mod macro_step_tests {
         };
         assert_eq!(
             unload.unloaded_source_root_id.as_deref(),
-            Some("twin:17:lesson:modelica:0")
+            Some("twin:17:scenario:modelica:0")
         );
         assert_eq!(unload.source_root_operation_id, Some(2));
         assert!(unload.error.is_some());
@@ -5586,22 +5586,22 @@ mod macro_step_tests {
         let mut latest = HashMap::new();
         assert!(record_source_root_operation(
             &mut latest,
-            "twin:17:lesson",
+            "twin:17:scenario",
             4
         ));
         assert!(!record_source_root_operation(
             &mut latest,
-            "twin:17:lesson",
+            "twin:17:scenario",
             4
         ));
         assert!(!record_source_root_operation(
             &mut latest,
-            "twin:17:lesson",
+            "twin:17:scenario",
             3
         ));
         assert!(record_source_root_operation(
             &mut latest,
-            "twin:17:lesson",
+            "twin:17:scenario",
             5
         ));
         assert!(record_source_root_operation(
@@ -5609,19 +5609,19 @@ mod macro_step_tests {
             "application:controls",
             1
         ));
-        assert_eq!(latest.get("twin:17:lesson"), Some(&5));
+        assert_eq!(latest.get("twin:17:scenario"), Some(&5));
         assert!(!retire_source_root_operation(
             &mut latest,
-            "twin:17:lesson",
+            "twin:17:scenario",
             4
         ));
-        assert_eq!(latest.get("twin:17:lesson"), Some(&5));
+        assert_eq!(latest.get("twin:17:scenario"), Some(&5));
         assert!(retire_source_root_operation(
             &mut latest,
-            "twin:17:lesson",
+            "twin:17:scenario",
             5
         ));
-        assert!(!latest.contains_key("twin:17:lesson"));
+        assert!(!latest.contains_key("twin:17:scenario"));
         assert!(latest.contains_key("application:controls"));
     }
 

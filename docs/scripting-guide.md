@@ -259,9 +259,9 @@ A committed Clear can carry a lifecycle generation with no mounted payload;
 use `InspectWorkbench.scene_mounted` when that distinction matters to UI policy.
 Launching a Twin tutorial creates an isolated host, so it cannot replace an
 application-owned scenario on `WorldRoot`.
-The Tutorials menu binds each launch to the Twin active when the item is
-selected; its application tool module remains application-scoped. Tutorial
-launch clears the full guided overlay before a replacement starts.
+The Scenarios menu binds each launch to the Twin active when the item is
+selected; its application tool module remains application-scoped. A guided
+scenario launch clears the full guided overlay before a replacement starts.
 
 Static tool-module rebinding refreshes the shared Rhai engine without advancing
 the scenario compile revision. A Twin tool-scope change therefore does not

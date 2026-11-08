@@ -12,14 +12,14 @@
 //! is added, then honours [`SubsystemToggles::enabled`] in its systems. An
 //! unset registered toggle defaults to `true`, so adding the substrate changes
 //! nothing until a subsystem opts in. Both the resource and its command live in
-//! this owner so the command is available to every host without a tutorial
-//! dependency.
+//! this owner so the command is available to every host without an authored
+//! scenario dependency.
 
 use bevy::prelude::*;
 use std::collections::{BTreeSet, HashMap};
 
 /// Runtime enable/disable state per subsystem. Missing key ⇒ enabled (`true`),
-/// so the toggle only ever *removes* fidelity a tutorial hasn't introduced yet.
+/// so an unset toggle always preserves full fidelity.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct SubsystemToggles {
     enabled: HashMap<String, bool>,

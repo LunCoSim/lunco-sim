@@ -430,12 +430,16 @@ use `Surface` retention. Scene transitions retire scene-bound queued work even
 while the interpreter is preparing; owner-bound application tools stay available. Never leave a selected popup endpoint unowned.
 Run `python3 scripts/api/test_guided_ui_callbacks.py --port PORT` for the
 production popup/menu input, replacement, dismissal, reset, and Twin-replacement
-gate. Installed workbench menus bind provider-lifetime endpoints beneath a fresh
-installation root and exact target Twin, independently of scene readiness.
-Selection creates an owner-bound invocation child. Menus remain usable during
-preparation and scene reset; provider or Twin replacement revokes old input
-and selected work. Every terminal admission/queue path releases the
-exact invocation lease, including overload with an omitted request owner.
+gate. Installed workbench menus retain typed action descriptions beneath a
+fresh installation root, independently of tool registration and scene
+readiness. Rows stay disabled until the current tool endpoint is registered;
+the visible popup refreshes readiness as registration changes, and selection
+resolves the endpoint again. Twin-owned menu trees and quick-open entries are
+visible only for their exact active Twin. Selection validates the provider and
+Twin, then creates an owner-bound invocation child. Menus remain available
+during scene reset; provider or Twin replacement revokes old input and selected
+work. Every terminal admission/queue path releases the exact invocation lease,
+including overload with an omitted request owner.
 
 Nested deferred calls retain their typed caller context and capabilities through
 `CommandOrigin::Rhai`/`WorldScriptExecution`, including `target_twin_id` independently

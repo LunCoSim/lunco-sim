@@ -148,7 +148,7 @@ impl Tool for NativeRhaiTool {
 /// invoked by an engine action through `world.trigger`, and never had a rhai
 /// module to build. Reporting that as an error logged
 /// `[rhai] tool 'science::take_photo' failed to bind` at ERROR on every twin open
-/// — a permanent false alarm in a codebase whose lesson smoke test is "zero
+/// — a permanent false alarm in a codebase whose Rhai scenario smoke test is "zero
 /// `[rhai]` lines", i.e. exactly the noise that trains people to ignore the log.
 fn build_module(tool: &Arc<dyn Tool>, engine: &Engine) -> Result<Option<Module>, String> {
     if let Some(native) = tool.as_any().downcast_ref::<NativeRhaiTool>() {

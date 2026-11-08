@@ -53,7 +53,7 @@ fn application_path(source) {
 fn finish(ctx, message) {
     hud_perspectives([]);
     if ctx.lesson_path == () || ctx.lesson_path.len() == 0 {
-        hint(message + "\n\nChoose another lesson from Tutorials when ready.");
+        hint(message + "\n\nChoose another lesson from Scenarios when ready.");
         return;
     }
     hint(message);
@@ -109,7 +109,7 @@ fn tour_event(state, evt, steps, ctx) {
     if evt.name == "cmd:GuidedSkip" {
         state.tour_closed = true;
         end_tour();
-        hint("Tour skipped. Choose an exercise from Tutorials when ready.");
+        hint("Tour skipped. Choose an exercise from Scenarios when ready.");
         emit("TUTORIAL_SKIPPED", 0);
         return state;
     }

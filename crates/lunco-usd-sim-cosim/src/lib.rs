@@ -562,7 +562,7 @@ pub(crate) fn process_usd_cosim_prims(
         let (reader, generation) = canonical.reader_for(id, stage_asset);
         // `try_insert` (not `.insert`): a `LoadScene` cleanup may despawn this
         // prim between this system's iterate and ApplyDeferred — the canonical
-        // race is the moonbase autoload vs a first-run tutorial on web. `.insert`
+        // race is the moonbase autoload vs a first-run scene on web. `.insert`
         // routes through Bevy's panic error handler, which aborts wasm; `try_insert`
         // silently drops the write on a despawned entity. Every entity-tied insert
         // queued by this pipeline uses the same despawn-safe form for the same

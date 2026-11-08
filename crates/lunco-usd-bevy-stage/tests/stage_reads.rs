@@ -173,7 +173,7 @@ mod stage_view_tests {
     /// This is the exact composition shape the video campaign's episode scenes use:
     /// an episode scene `references` a base scene and then re-authors the look of one
     /// of its prims with a sibling `over`, so the base stays usable on its own (it
-    /// doubles as the interactive driving tutorial) while the episode gets film
+    /// doubles as the interactive driving scene) while the episode gets film
     /// lighting out of the same source.
     ///
     /// Asserted because it silently was NOT happening. MEASURED: episode 01 rendered

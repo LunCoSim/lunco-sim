@@ -26,7 +26,7 @@
 //! **optional and behind their existing `ui` feature** — which is already how
 //! `lunco-networking` gates egui
 //! (`ui = ["networking", "dep:bevy_egui", "layout-sync"]`, CQ-601).
-//! The application lesson menu keeps this dependency on its UI path, so
+//! The application scenario catalog menu keeps this dependency on its UI path, so
 //! headless scenario execution does not pull the render stack.
 //!
 //! ## The split, when it is worth doing
@@ -350,7 +350,7 @@ pub struct DesignTokens {
     /// less wash to read as the same separation.
     pub scrim: egui::Color32,
     /// Background for a translucent surface drawn OVER the 3D viewport
-    /// (workbench panel, input overlay, tutorial card, telemetry readout).
+    /// (workbench panel, input overlay, guidance card, telemetry readout).
     ///
     /// Distinct from [`Self::surface_raised`], which is opaque and sits on a
     /// panel: this is translucent so the scene stays partly legible through it,
@@ -958,7 +958,7 @@ impl Default for TypographyScale {
 /// 1. menus and 2. popups use egui's `Foreground` order;
 /// 3. UI — floating windows, dialogs, guided cards, notices — uses [`UI_ORDER`];
 /// 4. the general HUD (clocks, toasts, global notices) and
-/// 5. the specific HUD (scene-, lesson- or vehicle-specific readouts) share
+/// 5. the specific HUD (scene- or vehicle-specific readouts) share
 ///    egui's `Background` order above the docked panels and are stacked by
 ///    [`stack_hud_layers`]. Authored runtime HUI is painted before the egui
 ///    pass and therefore stays below every egui tier.
@@ -972,7 +972,7 @@ pub const UI_ORDER: egui::Order = egui::Order::Middle;
 pub enum HudTier {
     /// Global readouts such as the sky clock, toasts and render notices.
     General,
-    /// Readouts owned by one scene, lesson or vehicle.
+    /// Readouts owned by one scene or vehicle.
     Specific,
 }
 

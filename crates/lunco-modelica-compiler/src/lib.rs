@@ -2068,11 +2068,11 @@ end Controls;"
             Vec::new(),
         );
         let twin = PreparedSourceRoot::prepare(
-            "twin:17:lesson:modelica:0",
+            "twin:17:scenario:modelica:0",
             "inline Twin source",
             vec![(
-                "LessonModelica/Rate.mo".into(),
-                "within LessonModelica;\nmodel Rate\n  input Real retired = 7.0;\n  output Real y;\nequation\n  y = retired;\nend Rate;\n".into(),
+                "ScenarioModelica/Rate.mo".into(),
+                "within ScenarioModelica;\nmodel Rate\n  input Real retired = 7.0;\n  output Real y;\nequation\n  y = retired;\nend Rate;\n".into(),
             )],
             Vec::new(),
         );
@@ -2085,25 +2085,25 @@ end Controls;"
         );
         assert!(compiler.install_source_root(twin).diagnostics.is_empty());
         assert!(compiler.installed_roots.contains("ApplicationControls"));
-        assert!(compiler.installed_roots.contains("LessonModelica"));
+        assert!(compiler.installed_roots.contains("ScenarioModelica"));
         assert_eq!(
-            compiler.source_root_namespaces("twin:17:lesson:modelica:0"),
-            vec!["LessonModelica"]
+            compiler.source_root_namespaces("twin:17:scenario:modelica:0"),
+            vec!["ScenarioModelica"]
         );
         let revision_before = compiler.library_revision();
 
-        assert!(compiler.remove_source_root("twin:17:lesson:modelica:0"));
+        assert!(compiler.remove_source_root("twin:17:scenario:modelica:0"));
 
-        assert!(!compiler.installed_roots.contains("LessonModelica"));
+        assert!(!compiler.installed_roots.contains("ScenarioModelica"));
         assert!(
             compiler
-                .source_root_namespaces("twin:17:lesson:modelica:0")
+                .source_root_namespaces("twin:17:scenario:modelica:0")
                 .is_empty()
         );
         assert!(compiler.installed_roots.contains("ApplicationControls"));
         assert!(
             compiler
-                .source_root_content_closure("twin:17:lesson:modelica:0")
+                .source_root_content_closure("twin:17:scenario:modelica:0")
                 .is_none()
         );
         assert_ne!(compiler.library_revision(), revision_before);

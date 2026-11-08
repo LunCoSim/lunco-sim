@@ -186,7 +186,7 @@ pub(crate) fn copy_modelica_input_values(
     // SetPorts therefore writes the command there; mirror that authoritative
     // value into the solver buffer instead of leaving Modelica on its bind-time
     // default. This is the generic bridge for a shared endpoint, not a vehicle
-    // or tutorial-specific path.
+    // or scenario-specific path.
     for (name, value) in component.inputs.iter().chain(
         command_surface
             .into_iter()

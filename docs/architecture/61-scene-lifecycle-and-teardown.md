@@ -209,8 +209,8 @@ documents explicitly marked as scene-owned, and removal of any retiring host
 stops its execution. Twin teardown closes programs explicitly marked with that
 Twin ID. A shared source or a
 currently active Twin does not make an unmarked application script Twin-owned.
-The application Tutorials menu captures the active Twin at selection time and
-starts that tutorial instance under that Twin's lifecycle owner; this does not
+The application Scenarios menu captures the active Twin at selection time and
+starts that scenario instance under that Twin's lifecycle owner; this does not
 change the scope or lifetime of the application tool module.
 
 Deferred snippet and tool-call admission, ownership validation, and terminal

@@ -727,7 +727,7 @@ pub(crate) fn execute_admitted_clear_scene(
 }
 
 /// Route dependency-light scene requests to the typed command that owns each
-/// transition. Every caller, including tutorials, enters the same transaction
+/// transition. Every caller enters the same transaction
 /// coordinator as the public command/API surface.
 pub(crate) fn on_scene_transition_intent(
     trigger: On<SceneTransitionIntent>,

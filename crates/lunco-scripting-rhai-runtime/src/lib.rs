@@ -70,6 +70,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         .add_observer(lunco_scripting_rhai_world::policy::handle_application_json_scope_loading)
         .add_observer(lunco_scripting_rhai_world::policy::handle_application_json_scope_changed)
         .add_observer(lunco_scripting_rhai_world::policy::handle_application_scene_asset_lifecycle)
+        .add_observer(lunco_scripting_rhai_world::policy::handle_application_scene_catalog_facts)
         .add_observer(lunco_scripting_rhai_world::policy::sync_policies_on_twin_added)
         .add_observer(lunco_scripting_rhai_world::policy::plan_twin_asset_loading)
         .add_observer(lunco_scripting_rhai_world::policy::wind_down_policies_on_twin_closed)

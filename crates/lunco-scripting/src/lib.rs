@@ -58,7 +58,7 @@ pub struct TwinOwnedScript {
     /// Workspace identity that admitted this scenario.
     pub twin: lunco_workspace::TwinId,
     /// Whether teardown also closes the source document. Asset-backed
-    /// tutorials and generated timelines are owned; inline user/API documents
+    /// authored scenarios and generated timelines are owned; inline user/API documents
     /// remain open as loose documents.
     pub close_document: bool,
 }
@@ -219,7 +219,7 @@ impl Plugin for LunCoScriptingPlugin {
         }
         app.init_resource::<ScriptRegistry>();
         // Attended (a person is watching) or not — read by the `is_unattended()`
-        // verb so a lesson knows whether to drive itself. Windowed application
+        // verb so a scenario knows whether to drive itself. Windowed application
         // hosts opt into resolving this in Startup; the default remains
         // `Unattended` for headless hosts.
         #[cfg(any(feature = "rhai", feature = "python"))]

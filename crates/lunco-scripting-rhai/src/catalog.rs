@@ -183,7 +183,7 @@ const VERB_DOCS: &[(&str, &str, &str)] = &[
     (
         "input_binding",
         "string | ()",
-        "READ. Resolve a semantic input binding from the active user settings. Tutorials use this for current labels; () means the intent is unbound.",
+        "READ. Resolve a semantic input binding from the active user settings. Authored scenarios use this for current labels; () means the intent is unbound.",
     ),
     (
         "set_setting",

@@ -1592,12 +1592,12 @@ mod tests {
             },
         );
         registry.roots.insert(
-            "twin:17:lesson:modelica:0".into(),
-            twin_root("twin:17:lesson:modelica:0", first, 1),
+            "twin:17:scenario:modelica:0".into(),
+            twin_root("twin:17:scenario:modelica:0", first, 1),
         );
         registry.roots.insert(
-            "twin:23:lesson:modelica:0".into(),
-            twin_root("twin:23:lesson:modelica:0", second, 2),
+            "twin:23:scenario:modelica:0".into(),
+            twin_root("twin:23:scenario:modelica:0", second, 2),
         );
 
         let retired = registry
@@ -1605,18 +1605,18 @@ mod tests {
             .expect("Twin root unload operations should be allocated");
 
         assert_eq!(retired.len(), 1);
-        assert_eq!(retired[0].0, "twin:17:lesson:modelica:0");
+        assert_eq!(retired[0].0, "twin:17:scenario:modelica:0");
         assert!(retired[0].1 > 1);
         assert!(registry.roots.contains_key("application:control"));
-        assert!(registry.roots.contains_key("twin:23:lesson:modelica:0"));
-        assert!(!registry.roots.contains_key("twin:17:lesson:modelica:0"));
+        assert!(registry.roots.contains_key("twin:23:scenario:modelica:0"));
+        assert!(!registry.roots.contains_key("twin:17:scenario:modelica:0"));
     }
 
     #[test]
     fn parsed_namespaces_follow_exact_source_set_admission_and_retirement() {
         let twin = lunco_workspace::TwinId::new(17);
-        let first = "twin:17:lesson:modelica:first";
-        let second = "twin:17:lesson:modelica:second";
+        let first = "twin:17:scenario:modelica:first";
+        let second = "twin:17:scenario:modelica:second";
         let mut registry = SourceRootRegistry::default();
         registry.next_operation_id = 3;
         registry
@@ -1646,7 +1646,7 @@ mod tests {
 
     #[test]
     fn missing_namespace_identity_cannot_publish_ready() {
-        let id = "twin:17:lesson:modelica:first";
+        let id = "twin:17:scenario:modelica:first";
         let mut registry = SourceRootRegistry::default();
         registry.roots.insert(
             id.into(),
@@ -1662,10 +1662,10 @@ mod tests {
         let mut pending = PendingSourceRootUnloads::default();
         pending
             .queued
-            .push_back(("twin:17:lesson:modelica:0".into(), 8));
+            .push_back(("twin:17:scenario:modelica:0".into(), 8));
         pending
             .queued
-            .push_back(("twin:17:lesson:modelica:1".into(), 9));
+            .push_back(("twin:17:scenario:modelica:1".into(), 9));
 
         let mut sent = Vec::new();
         flush_source_root_unloads(&mut pending, |command| {
@@ -1680,8 +1680,8 @@ mod tests {
         assert_eq!(
             sent,
             vec![
-                ("twin:17:lesson:modelica:0".into(), 8),
-                ("twin:17:lesson:modelica:1".into(), 9),
+                ("twin:17:scenario:modelica:0".into(), 8),
+                ("twin:17:scenario:modelica:1".into(), 9),
             ]
         );
     }
@@ -1691,7 +1691,7 @@ mod tests {
         let mut pending = PendingSourceRootUnloads::default();
         pending
             .queued
-            .push_back(("twin:17:lesson:modelica:0".into(), 8));
+            .push_back(("twin:17:scenario:modelica:0".into(), 8));
         let attempts = std::cell::Cell::new(0);
 
         let first = flush_source_root_unloads(&mut pending, |_| {

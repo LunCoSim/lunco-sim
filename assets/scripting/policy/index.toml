@@ -143,6 +143,12 @@ entry = "application_asset_lifecycle"
 required = true
 
 [[policies]]
+hook = "application.scenarios.menu"
+source = "application_scenarios_menu.rhai"
+entry = "application_scenarios_menu"
+required = true
+
+[[policies]]
 hook = "scripting.source.classify"
 source = "source_classification.rhai"
 entry = "classify_source"

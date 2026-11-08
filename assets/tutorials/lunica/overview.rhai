@@ -3,9 +3,9 @@
 //! An ordinary tutorial scenario: `coach_step(steps, i)` renders each step's
 //! spotlight + card, and `on_event` moves the `this.i` cursor on the card's
 //! Back/Next/Skip/dot events — the SAME shared engine every tutorial uses.
-//! Because a tutorial is just a script, you can edit this file and re-run it live
-//! from the Tutorials menu (native reads it fresh; `RunScenario` hot-reloads).
-//! The application starts this through the authored lesson catalog.
+//! Because a tutorial is just a script, you can edit this file and start it from
+//! Scenarios → Tutorials. The application asset policy projects the authored
+//! lesson catalog into that menu.
 //!
 //! `steps()` is a FUNCTION (rhai named fns can't see script-level consts); `this`
 //! is bound only in the hook the engine calls, not in helpers it calls.
@@ -20,7 +20,7 @@ fn steps() {
         #{ anchor: "panel.modelica_plot",           focus: (),          title: "Read a graph",                body: "Select a signal in Graphs. Snapshot the run, change the setup, and overlay the next run to compare results." },
         #{ anchor: "panel.modelica_experiments",    focus: "modelica_experiments",   title: "Test a parameter",           body: "Open Experiments. Override a parameter, run once, then define several values for a reproducible sweep." },
         #{ anchor: "",                              focus: (),                       title: "Automate the work",           body: "Open Help for command guidance. Rhai scripts, the HTTP API, and MCP clients can send the same typed commands as the UI." },
-        #{ anchor: "",                              focus: (),                       title: "Choose your next lesson",            body: "Reopen this tour from Tutorials, or choose a focused lesson to practise one part of the workflow." },
+        #{ anchor: "",                              focus: (),                       title: "Choose your next lesson",            body: "Reopen this tour from Scenarios → Tutorials, or choose a focused lesson to practise one part of the workflow." },
     ]
 }
 

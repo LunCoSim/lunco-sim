@@ -945,7 +945,7 @@ pub fn release_requested_source(
 
 /// Retire the current program on a persistent host as soon as a replacement
 /// asset request is admitted. Waiting for the new import graph to finish would
-/// let the previous tutorial restart on a newly composed scene.
+/// let the previous scenario restart on a newly composed scene.
 #[cfg(feature = "rhai")]
 pub fn retire_replaced_scenario_assets(
     world: &mut World,
@@ -2262,8 +2262,8 @@ mod tests {
             .get_with_short_type_path("RunScenarioAsset")
             .expect("RunScenarioAsset is reflected");
         let params = api_value!({
-            "source_asset": "lunco://tutorials/sandbox/first_drive.rhai",
-            "scene_asset": "lunco://tutorials/sandbox/first_drive.usda",
+            "source_asset": "lunco://scenarios/probe.rhai",
+            "scene_asset": "lunco://scenes/probe.usda",
             "reload_policy": "restart"
         });
 
@@ -2274,7 +2274,7 @@ mod tests {
             &registry,
             &lunco_api::ApiEntityRegistry::default(),
         )
-        .expect("tutorial launch may omit its default WorldRoot host");
+        .expect("scenario launch may omit its default WorldRoot host");
     }
 
     #[test]

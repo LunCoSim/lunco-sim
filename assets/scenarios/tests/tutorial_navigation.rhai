@@ -18,7 +18,7 @@ fn on_start(me, ctx) {
             persisted_result: false, text: ctx.catalog, error: ()}]
     }]);
     if !contribution.ok { throw contribution.error; }
-    for track in contribution.value.menus[0].items[0].children {
+    for track in contribution.value.menus[0].items[0].children[0].children {
         for lesson in track.children {
             if lesson.args.source_asset == "lunco://tutorials/perspectives/overview.rhai" {
                 this.launch = lesson.args;

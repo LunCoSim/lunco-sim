@@ -250,6 +250,8 @@ pub struct WorkbenchMenuRegistry {
     pub custom_menus: Vec<CustomMenu>,
     /// Script-authored top-level menus keyed by their source provider and Twin scope.
     pub scripted_menus: Vec<ScriptedMenu>,
+    /// Replaceable script-authored Settings submenus keyed by provider and Twin scope.
+    pub scripted_settings_submenus: Vec<ScriptedSettingsSubmenu>,
 }
 
 /// One callback owned by a replaceable script menu contribution.
@@ -257,12 +259,49 @@ pub struct WorkbenchMenuRegistry {
 pub struct ScriptedMenu {
     /// Stable provider key that owns this contribution.
     pub provider: String,
-    /// Twin identity for lifecycle cleanup, or `None` for application content.
+    /// Twin identity for lifecycle cleanup and active-owner visibility, or `None` for application content.
     pub twin_id: Option<u64>,
+    /// Policy-defined position among contributions sharing this top-level label.
+    pub order: i64,
+    /// Draw a divider before this contribution when an earlier one is present.
+    pub separator_before: bool,
     /// Top-level menu label.
     pub label: String,
     /// Generic renderer callback for this menu's current tree.
     pub callback: MenuCallback,
+}
+
+impl ScriptedMenu {
+    /// Application menus are global; Twin menus follow their exact active owner.
+    pub fn is_visible_for_active_twin(&self, active_twin_id: Option<u64>) -> bool {
+        self.twin_id
+            .is_none_or(|owner| Some(owner) == active_twin_id)
+    }
+}
+
+/// One replaceable Settings submenu contributed by a script provider.
+#[derive(Clone)]
+pub struct ScriptedSettingsSubmenu {
+    /// Stable provider key that owns this contribution.
+    pub provider: String,
+    /// Twin identity for lifecycle cleanup and active-owner visibility, or `None` for application content.
+    pub twin_id: Option<u64>,
+    /// Policy-defined position among contributions sharing this submenu label.
+    pub order: i64,
+    /// Draw a divider before this contribution when an earlier one is present.
+    pub separator_before: bool,
+    /// Settings submenu label.
+    pub label: String,
+    /// Generic renderer callback for this submenu's current tree.
+    pub callback: MenuCallback,
+}
+
+impl ScriptedSettingsSubmenu {
+    /// Application settings are global; Twin settings follow their exact active owner.
+    pub fn is_visible_for_active_twin(&self, active_twin_id: Option<u64>) -> bool {
+        self.twin_id
+            .is_none_or(|owner| Some(owner) == active_twin_id)
+    }
 }
 
 impl WorkbenchMenuRegistry {
@@ -271,29 +310,67 @@ impl WorkbenchMenuRegistry {
         &mut self,
         provider: impl Into<String>,
         twin_id: Option<u64>,
-        menus: Vec<(String, MenuCallback)>,
+        menus: Vec<(i64, bool, String, MenuCallback)>,
     ) {
         let provider = provider.into();
         self.scripted_menus
             .retain(|existing| existing.provider != provider);
-        self.scripted_menus
-            .extend(menus.into_iter().map(|(label, callback)| ScriptedMenu {
+        self.scripted_menus.extend(menus.into_iter().map(
+            |(order, separator_before, label, callback)| ScriptedMenu {
                 provider: provider.clone(),
                 twin_id,
+                order,
+                separator_before,
                 label,
                 callback,
-            }));
+            },
+        ));
     }
 
     /// Clear all script-authored menus owned by one Twin identity.
     pub fn clear_scripted_twin(&mut self, twin_id: u64) {
         self.scripted_menus
             .retain(|menu| menu.twin_id != Some(twin_id));
+        self.scripted_settings_submenus
+            .retain(|submenu| submenu.twin_id != Some(twin_id));
     }
 
-    /// Top-level labels available to the responsive menu layout.
-    pub fn scripted_menu_labels(&self) -> impl Iterator<Item = &str> {
-        self.scripted_menus.iter().map(|menu| menu.label.as_str())
+    /// Replace all Settings submenus contributed by one script provider.
+    pub fn replace_scripted_settings_submenus(
+        &mut self,
+        provider: impl Into<String>,
+        twin_id: Option<u64>,
+        submenus: Vec<(i64, bool, String, MenuCallback)>,
+    ) {
+        let provider = provider.into();
+        self.scripted_settings_submenus
+            .retain(|existing| existing.provider != provider);
+        self.scripted_settings_submenus
+            .extend(
+                submenus
+                    .into_iter()
+                    .map(
+                        |(order, separator_before, label, callback)| ScriptedSettingsSubmenu {
+                            provider: provider.clone(),
+                            twin_id,
+                            order,
+                            separator_before,
+                            label,
+                            callback,
+                        },
+                    ),
+            );
+    }
+
+    /// Top-level labels available to the responsive menu layout for the active Twin.
+    pub fn scripted_menu_labels_for_active_twin(
+        &self,
+        active_twin_id: Option<u64>,
+    ) -> impl Iterator<Item = &str> {
+        self.scripted_menus
+            .iter()
+            .filter(move |menu| menu.is_visible_for_active_twin(active_twin_id))
+            .map(|menu| menu.label.as_str())
     }
 
     /// Register a settings submenu.

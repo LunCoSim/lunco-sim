@@ -3716,8 +3716,8 @@ def PhysicsScene "Scene"
         assert_eq!(values.1, DVec3::NEG_Y);
     }
 
-    /// A ground plane one level under a plain `Xform` (the shape every scene and
-    /// tutorial authors), plus a rigid-body lander whose only collider is its own
+    /// A ground plane one level under a plain `Xform` (the shape used in most
+    /// scenes), plus a rigid-body lander whose only collider is its own
     /// root geometry, plus a lander with a collider CHILD.
     const SCENE: &str = r#"#usda 1.0
 (

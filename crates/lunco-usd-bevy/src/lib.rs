@@ -695,7 +695,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 if prim_path.path.is_empty() {
                     // `try_insert` (not `.insert`): one of these prims may have been
                     // despawned between sync's iterate (above) and ApplyDeferred — the
-                    // moonbase autoload vs first-run tutorial race is the canonical case.
+                    // moonbase autoload vs first-run scene race is the canonical case.
                     // See `sync_usd_visuals`'s panic-safe note below.
                     commands.entity(entity).try_insert(UsdPrimPath {
                         stage_handle: prim_path.stage_handle.clone(),

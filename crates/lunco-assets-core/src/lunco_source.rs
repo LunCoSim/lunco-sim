@@ -317,14 +317,14 @@ mod tests {
     #[test]
     fn synchronous_twin_reads_share_the_canonical_traversal_guard() {
         let root = tempfile::tempdir().expect("temporary Twin root");
-        lunco_storage::write_file_sync(&root.path().join("lesson.rhai"), b"40 + 2")
-            .expect("lesson");
+        lunco_storage::write_file_sync(&root.path().join("scenario.rhai"), b"40 + 2")
+            .expect("scenario");
         let cached = crate::twin_cache_dir(root.path());
         lunco_storage::ensure_directory_sync(&cached).expect("cache root");
         lunco_storage::write_file_sync(&cached.join("downloaded.rhai"), b"20 + 22")
-            .expect("cached lesson");
+            .expect("cached scenario");
 
-        let id = "twin://example/lesson.rhai";
+        let id = "twin://example/scenario.rhai";
         assert_eq!(
             read_asset_bytes_in_scope(
                 id,

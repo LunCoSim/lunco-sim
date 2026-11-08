@@ -4,6 +4,8 @@
     {
       "track": "Start Here",
       "title": "Lunar Rover Lab",
+      "featured": true,
+      "featured_description": "Drive, compare settings, and save a lunar rover Twin.",
       "blurb": "Classroom workshop: drive, inspect speed, compare two drive settings, move a block, and save a personal Twin.",
       "difficulty": "beginner",
       "lesson_type": "exercise",

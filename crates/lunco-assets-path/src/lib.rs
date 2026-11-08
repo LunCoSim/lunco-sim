@@ -164,7 +164,7 @@ pub fn relative_path(reference: &str) -> Option<PathBuf> {
 /// Asset references that cross a root are scheme-qualified. A root-relative
 /// path therefore has to be strictly relative and must not contain a segment
 /// whose meaning changes when it is joined on another platform. Keep this
-/// check at the asset boundary so Twin readers, downloads, and tutorial
+/// check at the asset boundary so Twin readers, downloads, and scenario
 /// sources cannot disagree about traversal.
 pub fn is_safe_relative_path(rel: &str) -> bool {
     if rel.contains('\\') || relative_path(rel).is_none() {
@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn root_relative_paths_reject_traversal_and_absolute_spellings() {
         for path in [
-            "tutorials/basic/lesson.rhai",
+            "training/basic/scenario.rhai",
             "terrain/apollo15/.cache/dtm.tif",
         ] {
             assert!(is_safe_relative_path(path));
@@ -582,13 +582,13 @@ mod tests {
             ".",
             "..",
             "../outside.rhai",
-            "tutorials/../../outside.rhai",
+            "training/../../outside.rhai",
             "/etc/passwd",
             "C:/Users/user/secret.rhai",
-            r"tutorials\\..\\outside.rhai",
-            "tutorials//lesson.rhai",
-            "tutorials/file:stream.rhai",
-            "tutorials/nul\0.rhai",
+            r"training\\..\\outside.rhai",
+            "training//scenario.rhai",
+            "training/file:stream.rhai",
+            "training/nul\0.rhai",
         ] {
             assert!(!is_safe_relative_path(path));
         }

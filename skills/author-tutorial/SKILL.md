@@ -11,8 +11,9 @@ description: >
 
 A lesson is a file-backed Rhai scenario with optional standard USD scene
 content. The application Rhai policy reads generic JSON asset snapshots,
-selects the tutorial catalog, and builds the workbench menu. The shared Rust
-asset and UI layers know only text assets, JSON values, and generic menu trees.
+selects the tutorial catalog, and builds the workbench menu and optional
+empty-viewport quick action. The shared Rust asset and UI layers know only text
+assets, typed generic menu trees, and generic viewport actions.
 The lesson does not need a Rust type, registry, lifecycle owner, or custom USD
 schema.
 
@@ -39,7 +40,9 @@ examples under `assets/tutorials/`.
 }
 ```
 
-The `track` value determines the submenu containing the lesson. Reuse an
+The `track` value determines the submenu under **Scenarios → Tutorials**. Set
+`featured: true` on at most one entry to expose it on the empty viewport, and
+use optional `featured_description` for a short button summary. Reuse an
 existing track when the lesson belongs to that learning path. The Rhai policy
 at `assets/scripting/policy/application_asset_lifecycle.rhai` discovers the unique
 marked catalog from generic asset-scope events and uses the shared `parse_json`
@@ -119,7 +122,7 @@ The helper makes Skip terminal and emits `TUTORIAL_SKIPPED`, without emitting
 `MISSION_COMPLETE`. An exercise instead calls `tutorials::finish(ctx, message)`
 after its own verified result, and handles `tutorials::navigation` in its event
 hook. A standalone launch without catalog context has no next-lesson action;
-its copy should direct the learner to Tutorials rather than promise a dialog.
+its copy should direct the learner to Scenarios rather than promise a dialog.
 `tutorials::start_path` relaunches a guide with its exact calling Twin owner;
 Restart uses this same path and preserves scene edits. Do not use `RestartScene`
 as a guide restart: a scene-free tour has no scene to reload. An explicit

@@ -350,9 +350,9 @@ impl SceneTransition {
 
 /// A typed request for the authoritative scene owner to perform a transition.
 ///
-/// This is deliberately separate from the public API command envelope. A
-/// tutorial or another in-process domain can request a scene without encoding
-/// a command name and JSON parameters, while the USD command owner remains the
+/// This is deliberately separate from the public API command envelope. An
+/// in-process domain can request a scene without encoding a command name and
+/// JSON parameters, while the USD command owner remains the
 /// only code that resolves paths and performs the transition.
 #[derive(Event, Debug, Clone, PartialEq, Eq)]
 pub struct SceneTransitionIntent {

@@ -966,8 +966,8 @@ fn retire_scene_cameras(
 
 /// Reset scene-faulted simulation state before the outgoing entities are
 /// reclaimed. A terminal fault deliberately stops physics for the bad scene,
-/// but it must not become a process-wide lock that prevents the next tutorial
-/// or scenario from loading. The fault and its safety hold have the same scene
+/// but it must not become a process-wide lock that prevents the next scene or
+/// scenario from loading. The fault and its safety hold have the same scene
 /// ownership, so they are cleared together at the one teardown boundary.
 fn reset_scene_runtime_safety(
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,

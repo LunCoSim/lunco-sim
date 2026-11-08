@@ -1,7 +1,7 @@
 # Authored lessons
 
-The default classroom activity is **Start Here → Lunar Rover Lab**, also
-available from the opening screen. Its curriculum, model assumptions,
+The default classroom activity is **Scenarios → Tutorials → Start Here → Lunar
+Rover Lab**. Its curriculum, model assumptions,
 instructor checkpoints, save contract and acceptance commands are documented
 in [Classroom onboarding](../../docs/tutorials/06-classroom-onboarding.md).
 
@@ -23,11 +23,15 @@ assets/tutorials/
 ```
 
 The catalog is presentation data. Each entry names a `source_asset`, may name a
-`scene_asset`, and belongs to a `track`; the application presents each track as
-a submenu and keeps the entries in authored order. Both assets are resolved
-through the asset system. The menu sends `reload_policy: "restart"`
-so selecting a lesson always gets a
-fresh scenario start after its requested scene is composed. Other applications
+`scene_asset`, and belongs to a `track`; the policy presents entries under
+**Scenarios → Tutorials → track → lesson** and keeps authored order. At most
+one entry may set `featured: true`; the policy also exposes that lesson as a
+quick action on the empty viewport. An optional `featured_description` gives
+that button a shorter summary than the lesson's menu tooltip. The same catalog rule applies to a Twin,
+whose menu is nested under its name and whose quick action is visible only
+while that Twin is active. Both assets are resolved through the asset system. The menu sends
+`reload_policy: "restart"` so selecting a lesson always gets a fresh scenario
+start after its requested scene is composed. Other applications
 can reuse the same generic command with their own catalog or no menu at all.
 
 An opened Twin may contribute the same catalog shape in any JSON asset under
@@ -35,15 +39,19 @@ its root, provided it carries `kind = "lunco.tutorial-catalog.v1"`. The shared
 asset layer asynchronously loads indexed JSON assets and sends a complete
 scope snapshot and canonical URI root to the application policy. Rhai uses
 `parse_json`, validates the unique catalog, resolves relative references under
-that scope root, and contributes the tracks under the Twin's name. Closing the
-Twin removes its menu contribution. A Twin lesson that needs a world must name
-its scene explicitly, so selecting it cannot accidentally keep an unrelated
-scene from the previous lesson.
+that scope root, and contributes the lesson tree under the Twin's name. Closing
+the Twin removes its menu and viewport actions. A Twin lesson that needs a
+world must name its scene explicitly, so selecting it cannot accidentally keep
+an unrelated scene from the previous lesson.
 
 Optional `lesson_type` is `tour`, `exercise`, or `challenge`;
 `duration_minutes` is a positive integer estimate. `next_source_asset` names
 another entry in the same catalog. The application policy rejects missing
 targets and cycles, and passes the resolved path as typed scenario parameters.
+`featured` is an optional boolean and may be true on only one entry in a
+catalog. `featured_description` is an optional string used only by its quick
+action. No lesson title, catalog parser, or lesson-selection rule is compiled
+into the Rust UI host.
 The shared `tutorials::navigation` and `tutorials::finish` functions consume
 that path. Standalone scenario launches omit catalog navigation.
 Restart relaunches the selected guide through the same launcher and retains its
@@ -51,8 +59,8 @@ path and exact Twin owner. It does not require or reset a mounted scene.
 Completion actions are visible across perspectives.
 
 A persisted report can read `tutorials::application_path(source_asset)` to
-resume an installed application lesson. This uses `InspectScriptedMenus`'s
-current bound action tree, not a second curriculum registry. The report builds
+resume an installed application lesson. This reads `InspectScriptedMenus`'s
+current typed action tree, not a second curriculum registry. The report builds
 its continuation label from the returned path and passes that path to
 `tutorials::start_path` when the learner chooses Next. This is an interactive
 presentation operation; headless report validation does not need menu actions.

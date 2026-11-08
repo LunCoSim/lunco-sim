@@ -26,7 +26,7 @@
 //! consumes it. Every type below passes that test:
 //! - [`TelemetryEvent`]/[`TelemetryValue`]/[`Severity`]: the push channel,
 //!   emitted and observed by 14+ crates (workbench status bus, terrain
-//!   `DEM_BUILD_FAILED`, tutorial, autopilot,
+//!   `DEM_BUILD_FAILED`, scenario, autopilot,
 //!   scripting, the API envelope…) — none of which link `lunco-telemetry`.
 //! - [`SampledParameter`]: the pull-channel packet, observed by
 //!   `lunco_api::subscription` and logged by this crate's own `log.rs` —
@@ -115,7 +115,7 @@ pub struct TelemetryEvent {
 ///
 /// Commands that can originate outside the API dispatcher (viewport input,
 /// native panels, or typed observers) use this same representation as the API
-/// projector. Tutorial and mission policy can therefore consume the command
+/// projector. Scenario and mission policy can therefore consume the command
 /// name without importing the command's owning crate.
 pub(crate) fn command_telemetry_event(name: impl Into<String>) -> TelemetryEvent {
     let name = name.into();

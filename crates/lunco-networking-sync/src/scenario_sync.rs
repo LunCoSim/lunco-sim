@@ -35,8 +35,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use lunco_command_contracts::{SessionId, SyncChannel};
+use lunco_command_contracts::{Ack, OpId, SessionId, SyncChannel};
 use lunco_core_session::NetworkRole;
+use lunco_hooks::HookValue;
 use lunco_storage::StorageHandle;
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
@@ -540,6 +541,18 @@ pub struct CachedTwinSummary {
     pub revision: [u8; 32],
     pub cached_at_unix_ns: u64,
     pub admission_token: String,
+}
+
+impl CachedTwinSummary {
+    /// Stable textual identity for typed application menus and commands.
+    pub fn scenario_id_text(&self) -> String {
+        uuid::Uuid::from_bytes(self.scenario_id).to_string()
+    }
+
+    /// Lowercase immutable revision identity used by the cache resolver.
+    pub fn revision_text(&self) -> String {
+        hex_bytes(&self.revision)
+    }
 }
 
 /// Cache catalog processing and metadata retention budgets. Asset cache bytes
@@ -1625,6 +1638,48 @@ fn read_and_chunk(jobs: Vec<(Vec<u8>, PathBuf)>) -> Vec<AssetChunkMsg> {
 
 // ── Promote: downloaded (read-only) scenario → editable on-disk Twin ──────────
 
+/// Mount one exact cached scenario revision for a Rhai-authored scene action.
+#[lunco_core::Command(default)]
+pub struct MountCachedScenarioTwin {
+    /// Stable scenario UUID from the cache catalog.
+    pub scenario_id: String,
+    /// Exact lowercase SHA-256 revision selected by the authored action.
+    pub revision: String,
+    /// Logical name for the mounted Twin root.
+    pub name: String,
+    /// Manifest-relative scene path admitted from this cached revision.
+    pub scene: String,
+}
+
+#[lunco_core::on_command(MountCachedScenarioTwin)]
+fn on_mount_cached_scenario_twin(
+    trigger: On<MountCachedScenarioTwin>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+) -> Result<Ack, String> {
+    let request = trigger.event();
+    let scenario_id = uuid::Uuid::parse_str(&request.scenario_id)
+        .map_err(|error| format!("invalid downloaded scenario identity: {error}"))?;
+    let revision = parse_hex::<32>(&request.revision).ok_or_else(|| {
+        "downloaded scenario revision must be 64 lowercase hexadecimal digits".to_owned()
+    })?;
+    let roots = roots.ok_or_else(|| "Twin scene registry is unavailable".to_owned())?;
+    let mount = mount_scenario_twin(
+        &roots,
+        scenario_id.as_bytes(),
+        &revision,
+        &request.name,
+        &request.scene,
+    )
+    .map_err(|error| format!("could not mount downloaded scenario Twin: {error}"))?;
+    Ok(Ack::with_data(
+        OpId::new(),
+        HookValue::map([
+            ("path", HookValue::str(mount.path)),
+            ("authority", HookValue::str(mount.authority)),
+        ]),
+    ))
+}
+
 /// Command: materialize the currently-loaded downloaded scenario into an
 /// **editable** on-disk Twin at `folder`, add it to the workspace, and swap the
 /// running scene to it. The counterpart to the default read-only consume — "keep
@@ -1744,7 +1799,7 @@ fn promote_scenario_to_folder(
     );
 }
 
-lunco_core::register_commands!(on_promote_scenario);
+lunco_core::register_commands!(on_mount_cached_scenario_twin, on_promote_scenario);
 
 #[cfg(test)]
 mod tests {

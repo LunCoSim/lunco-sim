@@ -342,8 +342,8 @@ fn register_hud_settings_menu(world: &mut World) {
                 "Transient terrain/network lifecycle state",
             ),
             (
-                "Tutorial, notification, and blackout HUDs",
-                "Lesson and runtime session lifecycle state",
+                "Guided, notification, and blackout HUDs",
+                "Authored guidance and runtime session state",
             ),
         ] {
             ui.horizontal(|ui| {

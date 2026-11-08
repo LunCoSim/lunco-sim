@@ -62,6 +62,8 @@ pub(crate) fn render_workbench(
     state: &mut bevy::ecs::system::SystemState<(EguiContexts, Res<WorkbenchMenuRegistry>)>,
     mut menu_snapshot: Local<Option<WorkbenchMenuRegistry>>,
     mut direct_menu_labels: Local<Vec<String>>,
+    mut direct_menu_twin: Local<Option<u64>>,
+    mut direct_menu_initialized: Local<bool>,
     mut anchor_rects: Local<Vec<(Cow<'static, str>, egui::Rect)>>,
 ) {
     let (ctx, menu_registry_changed) = {
@@ -76,8 +78,21 @@ pub(crate) fn render_workbench(
     };
     if menu_registry_changed || menu_snapshot.is_none() {
         let snapshot = world.resource::<WorkbenchMenuRegistry>().clone();
-        *direct_menu_labels = direct_menu_width_labels(&snapshot);
         *menu_snapshot = Some(snapshot);
+    }
+    let active_twin_id = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|workspace| workspace.active_twin)
+        .map(lunco_workspace::TwinId::raw);
+    if menu_registry_changed || !*direct_menu_initialized || *direct_menu_twin != active_twin_id {
+        *direct_menu_labels = direct_menu_width_labels(
+            menu_snapshot
+                .as_ref()
+                .expect("menu snapshot is initialized above"),
+            active_twin_id,
+        );
+        *direct_menu_twin = active_twin_id;
+        *direct_menu_initialized = true;
     }
 
     if !world.contains_resource::<WorkbenchLayout>()
@@ -198,13 +213,16 @@ pub(crate) fn render_workbench(
 /// The registry snapshot is stable until its owner changes, so this projection
 /// is prepared with that snapshot instead of allocating a vector and set on
 /// every egui pass.
-fn direct_menu_width_labels(menus: &WorkbenchMenuRegistry) -> Vec<String> {
+fn direct_menu_width_labels(
+    menus: &WorkbenchMenuRegistry,
+    active_twin_id: Option<u64>,
+) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut labels = Vec::with_capacity(6 + menus.custom_menus.len() + menus.scripted_menus.len());
     for label in ["File", "Edit", "View"]
         .into_iter()
         .chain(menus.custom_menus.iter().map(|(name, _)| name.as_str()))
-        .chain(menus.scripted_menu_labels())
+        .chain(menus.scripted_menu_labels_for_active_twin(active_twin_id))
         .chain(["Settings", "Help", "Time"])
     {
         if seen.insert(label) {
@@ -921,9 +939,25 @@ pub(crate) fn render_settings_menu(
     ui.separator();
 
     // Feature areas stay discoverable without forcing the root Settings menu
-    // to contain every row or fill the viewport.
-    for (label, callbacks) in &menus.settings_submenus {
-        ui.menu_button(label, |ui| {
+    // to contain every row or fill the viewport. Script settings use the same
+    // replaceable provider and Twin lifetimes as scripted workbench menus.
+    let active_twin_id = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|workspace| workspace.active_twin)
+        .map(lunco_workspace::TwinId::raw);
+    let mut labels = Vec::new();
+    for (label, _) in &menus.settings_submenus {
+        if !labels.contains(label) {
+            labels.push(label.clone());
+        }
+    }
+    for submenu in &menus.scripted_settings_submenus {
+        if submenu.is_visible_for_active_twin(active_twin_id) && !labels.contains(&submenu.label) {
+            labels.push(submenu.label.clone());
+        }
+    }
+    for label in labels {
+        ui.menu_button(&label, |ui| {
             let max_width = settings_submenu_max_width(ui.ctx().content_rect().width());
             let max_height = ui.spacing().interact_size.y * 24.0;
             egui::ScrollArea::vertical()
@@ -931,11 +965,38 @@ pub(crate) fn render_settings_menu(
                 .max_height(max_height)
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
-                    for (i, callback) in callbacks.iter().enumerate() {
-                        if i > 0 {
+                    let native_callbacks = menus
+                        .settings_submenus
+                        .iter()
+                        .filter(|(native_label, _)| native_label == &label)
+                        .flat_map(|(_, callbacks)| callbacks.iter())
+                        .collect::<Vec<_>>();
+                    let mut scripted = menus
+                        .scripted_settings_submenus
+                        .iter()
+                        .filter(|submenu| {
+                            submenu.label == label
+                                && submenu.is_visible_for_active_twin(active_twin_id)
+                        })
+                        .collect::<Vec<_>>();
+                    scripted.sort_by(|left, right| {
+                        left.order
+                            .cmp(&right.order)
+                            .then_with(|| left.provider.cmp(&right.provider))
+                    });
+                    for (index, callback) in native_callbacks.iter().enumerate() {
+                        if index > 0 {
                             ui.separator();
                         }
                         run_menu_callback(ui, world, callback.as_ref());
+                    }
+                    let mut has_previous = !native_callbacks.is_empty();
+                    for submenu in scripted {
+                        if has_previous && submenu.separator_before {
+                            ui.separator();
+                        }
+                        run_menu_callback(ui, world, submenu.callback.as_ref());
+                        has_previous = true;
                     }
                 });
         });
@@ -1053,6 +1114,10 @@ pub(crate) fn render_custom_menus(
     menus: &WorkbenchMenuRegistry,
     mut anchors: Option<&mut Vec<(Cow<'static, str>, egui::Rect)>>,
 ) {
+    let active_twin_id = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|workspace| workspace.active_twin)
+        .map(lunco_workspace::TwinId::raw);
     let _span = bevy::log::info_span!(
         "workbench_custom_menus_render",
         custom_menu_count = menus.custom_menus.len(),
@@ -1065,11 +1130,23 @@ pub(crate) fn render_custom_menus(
             let mut contributions = menus
                 .scripted_menus
                 .iter()
-                .filter(|contribution| contribution.label == *name)
+                .filter(|contribution| {
+                    contribution.label == *name
+                        && contribution.is_visible_for_active_twin(active_twin_id)
+                })
                 .collect::<Vec<_>>();
-            contributions.sort_by(|left, right| left.provider.cmp(&right.provider));
-            for contribution in contributions {
+            contributions.sort_by(|left, right| {
+                left.order
+                    .cmp(&right.order)
+                    .then_with(|| left.provider.cmp(&right.provider))
+            });
+            let mut has_previous = true;
+            for contribution in &contributions {
+                if has_previous && contribution.separator_before {
+                    ui.separator();
+                }
                 run_menu_callback(ui, world, contribution.callback.as_ref());
+                has_previous = true;
             }
         });
         if let Some(anchors) = anchors.as_deref_mut() {
@@ -1077,13 +1154,16 @@ pub(crate) fn render_custom_menus(
         }
     }
     for (index, menu) in menus.scripted_menus.iter().enumerate() {
+        if !menu.is_visible_for_active_twin(active_twin_id) {
+            continue;
+        }
         if menus
             .custom_menus
             .iter()
             .any(|(name, _)| name == &menu.label)
-            || menus.scripted_menus[..index]
-                .iter()
-                .any(|earlier| earlier.label == menu.label)
+            || menus.scripted_menus[..index].iter().any(|earlier| {
+                earlier.label == menu.label && earlier.is_visible_for_active_twin(active_twin_id)
+            })
         {
             continue;
         }
@@ -1091,11 +1171,23 @@ pub(crate) fn render_custom_menus(
             let mut contributions = menus
                 .scripted_menus
                 .iter()
-                .filter(|contribution| contribution.label == menu.label)
+                .filter(|contribution| {
+                    contribution.label == menu.label
+                        && contribution.is_visible_for_active_twin(active_twin_id)
+                })
                 .collect::<Vec<_>>();
-            contributions.sort_by(|left, right| left.provider.cmp(&right.provider));
-            for contribution in contributions {
+            contributions.sort_by(|left, right| {
+                left.order
+                    .cmp(&right.order)
+                    .then_with(|| left.provider.cmp(&right.provider))
+            });
+            let mut has_previous = false;
+            for contribution in &contributions {
+                if has_previous && contribution.separator_before {
+                    ui.separator();
+                }
                 run_menu_callback(ui, world, contribution.callback.as_ref());
+                has_previous = true;
             }
         });
         if let Some(anchors) = anchors.as_deref_mut() {

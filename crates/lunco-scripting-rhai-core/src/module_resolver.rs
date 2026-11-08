@@ -753,7 +753,7 @@ mod tests {
         let twin_source = "fn value() { 17 }";
         let app_source = "fn value() { 23 }";
         modules.insert(
-            "twin://17/lesson.rhai".into(),
+            "twin://17/scenario.rhai".into(),
             twin_source.into(),
             engine.compile(twin_source).expect("Twin module parses"),
         );
@@ -765,14 +765,18 @@ mod tests {
                 .expect("application module parses"),
         );
 
-        assert!(modules.remove("twin://17/lesson.rhai"));
-        assert!(modules.get("twin://17/lesson.rhai", twin_source).is_none());
+        assert!(modules.remove("twin://17/scenario.rhai"));
+        assert!(
+            modules
+                .get("twin://17/scenario.rhai", twin_source)
+                .is_none()
+        );
         assert!(
             modules
                 .get("lunco://scripts/app.rhai", app_source)
                 .is_some()
         );
-        assert!(!modules.remove("twin://17/lesson.rhai"));
+        assert!(!modules.remove("twin://17/scenario.rhai"));
     }
 
     /// The reason this resolver exists: rhai's default `FileModuleResolver` would

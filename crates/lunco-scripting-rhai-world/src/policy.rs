@@ -36,6 +36,9 @@ pub const APPLICATION_STARTUP_HOOK: &str = "application.startup";
 /// Generic application asset lifecycle policy for authored asset consumers.
 pub const APPLICATION_ASSET_HOOK: &str = "application.asset.lifecycle";
 
+/// Application policy for grouping and presenting the admitted scene catalog.
+pub const APPLICATION_SCENARIOS_MENU_HOOK: &str = "application.scenarios.menu";
+
 /// The generic lifecycle seam for the active Twin. The application startup
 /// policy installs the default implementation; a Twin startup policy may
 /// replace it for that Twin's authored lifecycle behavior.
@@ -60,6 +63,17 @@ lunco_hooks::declare_hook! {
     output: Map,
     deterministic: false,
     required: false,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: APPLICATION_SCENARIOS_MENU_HOOK,
+    owner: "lunco-workbench",
+    description: "Compose the Scenarios menu and empty-viewport actions from admitted scene catalog facts.",
+    signature: [ctx: Map],
+    output: Map,
+    deterministic: false,
+    required: true,
     installable: true,
 }
 
@@ -754,13 +768,261 @@ pub fn handle_application_scene_asset_lifecycle(
     );
 }
 
+/// Run the application Rhai policy whenever the admitted scene menu facts change.
+pub fn handle_application_scene_catalog_facts(
+    trigger: On<lunco_scripting_rhai_core::ui_bridge::ApplicationSceneCatalogChanged>,
+    mut commands: Commands,
+) {
+    use lunco_scripting_rhai_core::ui_bridge::{
+        ApplicationSceneCatalogChanged, CachedScenarioTwin, SceneCatalogEntry, SceneCatalogTwin,
+        ScriptUiRequest,
+    };
+
+    fn twin_value(twin: &SceneCatalogTwin) -> HookValue {
+        HookValue::map([
+            ("id", HookValue::str(twin.id.to_string())),
+            (
+                "authority",
+                twin.authority
+                    .as_ref()
+                    .map_or(HookValue::Unit, |authority| {
+                        HookValue::str(authority.clone())
+                    }),
+            ),
+            (
+                "name",
+                twin.name
+                    .as_ref()
+                    .map_or(HookValue::Unit, |name| HookValue::str(name.clone())),
+            ),
+            (
+                "directory",
+                twin.directory
+                    .as_ref()
+                    .map_or(HookValue::Unit, |directory| {
+                        HookValue::str(directory.clone())
+                    }),
+            ),
+            (
+                "default_scene",
+                twin.default_scene
+                    .as_ref()
+                    .map_or(HookValue::Unit, |scene| HookValue::str(scene.clone())),
+            ),
+        ])
+    }
+
+    fn scene_value(scene: &SceneCatalogEntry) -> HookValue {
+        HookValue::map([
+            ("uri", HookValue::str(scene.uri.clone())),
+            ("relative_path", HookValue::str(scene.relative_path.clone())),
+            ("stem", HookValue::str(scene.stem.clone())),
+            (
+                "description",
+                scene
+                    .description
+                    .as_ref()
+                    .map_or(HookValue::Unit, |description| {
+                        HookValue::str(description.clone())
+                    }),
+            ),
+            ("is_test", HookValue::Bool(scene.is_test)),
+            (
+                "twin",
+                scene.twin.as_ref().map_or(HookValue::Unit, twin_value),
+            ),
+        ])
+    }
+
+    let facts: &ApplicationSceneCatalogChanged = trigger.event();
+    let context = HookValue::map([
+        (
+            "current_scene",
+            facts
+                .current_scene
+                .as_ref()
+                .map_or(HookValue::Unit, |path| HookValue::str(path.clone())),
+        ),
+        (
+            "active_twin",
+            facts
+                .active_twin
+                .as_ref()
+                .map_or(HookValue::Unit, twin_value),
+        ),
+        (
+            "twins",
+            HookValue::Array(facts.twins.iter().map(twin_value).collect()),
+        ),
+        (
+            "cached_twins",
+            HookValue::Array(
+                facts
+                    .cached_twins
+                    .iter()
+                    .map(|download: &CachedScenarioTwin| {
+                        HookValue::map([
+                            ("scenario_id", HookValue::str(download.scenario_id.clone())),
+                            ("revision", HookValue::str(download.revision.clone())),
+                            ("name", HookValue::str(download.name.clone())),
+                            (
+                                "default_scene",
+                                download
+                                    .default_scene
+                                    .as_ref()
+                                    .map_or(HookValue::Unit, |scene| HookValue::str(scene.clone())),
+                            ),
+                            (
+                                "total_bytes",
+                                HookValue::str(download.total_bytes.to_string()),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "download_sync_enabled",
+            HookValue::Bool(facts.download_sync_enabled),
+        ),
+        ("show_test_assets", HookValue::Bool(facts.show_test_assets)),
+        ("catalog_ready", HookValue::Bool(facts.catalog_ready)),
+        (
+            "catalog_error",
+            facts
+                .catalog_error
+                .as_ref()
+                .map_or(HookValue::Unit, |error| HookValue::str(error.clone())),
+        ),
+        (
+            "scenes",
+            HookValue::Array(facts.scenes.iter().map(scene_value).collect()),
+        ),
+    ]);
+    let result = lunco_hooks::invoke_unclassified(APPLICATION_SCENARIOS_MENU_HOOK, &[context]);
+    let contribution = match result {
+        Some(Ok(value @ HookValue::Map(_))) => parse_workbench_policy_output(&value),
+        Some(Ok(value)) => Err(format!(
+            "scene-catalog policy returned {}, expected map",
+            value.type_name()
+        )),
+        Some(Err(error)) => Err(error.to_string()),
+        None => Err("scene-catalog policy is not installed".to_owned()),
+    };
+    let (menus, settings_submenus, viewport_actions, viewport_guidance, navigation_entries) =
+        match contribution {
+            Ok(contribution) => contribution,
+            Err(error) => {
+                warn!("[scenarios] application scene-catalog policy failed: {error}");
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "application-scene-catalog-policy-failed".into(),
+                    message: error,
+                });
+                (Vec::new(), Vec::new(), Vec::new(), None, Vec::new())
+            }
+        };
+    commands.trigger(ScriptUiRequest::WorkbenchMenus {
+        provider: "application:scenarios".to_owned(),
+        twin_id: None,
+        menus,
+        settings_submenus,
+        viewport_actions,
+        viewport_guidance,
+        navigation_entries,
+    });
+}
+
+fn parse_workbench_policy_output(
+    value: &HookValue,
+) -> Result<
+    (
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>,
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>,
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptViewportAction>,
+        Option<String>,
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchNavigationEntry>,
+    ),
+    String,
+> {
+    let menus = parse_script_workbench_menus(value)?;
+    let settings_submenus = parse_script_workbench_settings_submenus(value)?;
+    let viewport_actions = parse_script_viewport_actions(value)?;
+    let viewport_guidance = match value.get("viewport_guidance") {
+        None | Some(HookValue::Unit) => None,
+        Some(HookValue::Str(guidance)) if !guidance.trim().is_empty() => Some(guidance.clone()),
+        Some(HookValue::Str(_)) => return Err("viewport_guidance must not be empty".into()),
+        Some(other) => {
+            return Err(format!(
+                "viewport_guidance must be a string, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    let navigation_entries = parse_script_workbench_navigation_entries(value)?;
+    Ok((
+        menus,
+        settings_submenus,
+        viewport_actions,
+        viewport_guidance,
+        navigation_entries,
+    ))
+}
+
+fn parse_script_workbench_navigation_entries(
+    value: &HookValue,
+) -> Result<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchNavigationEntry>, String> {
+    use lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchNavigationEntry;
+
+    let entries = match value.get("navigation_entries") {
+        None | Some(HookValue::Unit) => return Ok(Vec::new()),
+        Some(HookValue::Array(entries)) => entries,
+        Some(other) => {
+            return Err(format!(
+                "`navigation_entries` must be an array, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    if entries.len() > 512 {
+        return Err("one policy result may contribute at most 512 navigation entries".into());
+    }
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let path = format!("navigation_entries[{index}]");
+            let fields = hook_map(value, &path)?;
+            let id = hook_string(fields, "id", &path)?;
+            let label = hook_string(fields, "label", &path)?;
+            let detail = hook_string(fields, "detail", &path)?;
+            let category = hook_string(fields, "category", &path)?;
+            for (field, content) in [("id", &id), ("label", &label), ("category", &category)] {
+                if content.trim().is_empty() {
+                    return Err(format!("{path}.{field} must not be empty"));
+                }
+            }
+            let action = parse_script_workbench_action(fields, &path)?
+                .ok_or_else(|| format!("{path} requires a tool action"))?;
+            Ok(ScriptWorkbenchNavigationEntry {
+                id,
+                label,
+                detail,
+                category,
+                action,
+            })
+        })
+        .collect()
+}
+
 fn asset_menu_provider(
     twin_id: Option<lunco_workspace::TwinId>,
     twin_name: Option<&str>,
 ) -> Result<String, &'static str> {
     match (twin_id, twin_name) {
         (None, None) => Ok("application:json-assets".to_owned()),
-        (Some(_), Some(name)) if !name.is_empty() => Ok(format!("twin:{name}:json-assets")),
+        (Some(twin_id), Some(name)) if !name.is_empty() => {
+            Ok(format!("twin:{}:json-assets", twin_id.raw()))
+        }
         (Some(_), _) => Err("Twin JSON scope is missing its asset authority"),
         (None, Some(_)) => Err("application JSON scope cannot have a Twin authority"),
     }
@@ -775,6 +1037,10 @@ fn apply_application_asset_policy(
     payload: HookValue,
     commands: &mut Commands,
 ) {
+    let scope_name = twin_name
+        .as_deref()
+        .unwrap_or("application assets")
+        .to_owned();
     let context = HookValue::map([
         ("provider", HookValue::str(provider.to_owned())),
         (
@@ -803,7 +1069,7 @@ fn apply_application_asset_policy(
         &[HookValue::str(event.to_owned()), context],
     );
     let actions = match result {
-        None => Ok((Vec::new(), Vec::new())),
+        None => Ok((Vec::new(), Vec::new(), Vec::new(), Vec::new())),
         Some(Ok(value @ HookValue::Map(_))) => parse_application_asset_actions(&value),
         Some(Ok(value)) => Err(format!(
             "asset lifecycle policy returned {}, expected map",
@@ -811,11 +1077,15 @@ fn apply_application_asset_policy(
         )),
         Some(Err(error)) => Err(error.to_string()),
     };
-    let (menus, dataset_text_artifacts) = match actions {
+    let (menus, settings_submenus, viewport_actions, dataset_text_artifacts) = match actions {
         Ok(actions) => actions,
         Err(error) => {
             warn!("[application-assets] `{provider}` policy failed: {error}");
-            (Vec::new(), Vec::new())
+            commands.trigger(lunco_core::RuntimeError {
+                name: "application-asset-lifecycle-policy-failed".into(),
+                message: format!("{scope_name}: {error}"),
+            });
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new())
         }
     };
     commands.trigger(
@@ -823,6 +1093,10 @@ fn apply_application_asset_policy(
             provider: provider.to_owned(),
             twin_id: twin_id.map(lunco_workspace::TwinId::raw),
             menus,
+            settings_submenus,
+            viewport_actions,
+            viewport_guidance: None,
+            navigation_entries: Vec::new(),
         },
     );
     for id in dataset_text_artifacts {
@@ -835,11 +1109,15 @@ fn parse_application_asset_actions(
 ) -> Result<
     (
         Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>,
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>,
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptViewportAction>,
         Vec<String>,
     ),
     String,
 > {
     let menus = parse_script_workbench_menus(value)?;
+    let settings_submenus = parse_script_workbench_settings_submenus(value)?;
+    let viewport_actions = parse_script_viewport_actions(value)?;
     let artifacts = match value.get("dataset_text_artifacts") {
         None => Vec::new(),
         Some(HookValue::Array(items)) => {
@@ -871,49 +1149,161 @@ fn parse_application_asset_actions(
             ));
         }
     };
-    Ok((menus, artifacts))
+    Ok((menus, settings_submenus, viewport_actions, artifacts))
+}
+
+fn parse_script_viewport_actions(
+    value: &HookValue,
+) -> Result<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptViewportAction>, String> {
+    use lunco_scripting_rhai_core::ui_bridge::{ScriptViewportAction, ScriptViewportVisibility};
+
+    const MAX_VIEWPORT_ACTIONS: usize = 512;
+
+    let actions = match value.get("viewport_actions") {
+        None | Some(HookValue::Unit) => return Ok(Vec::new()),
+        Some(HookValue::Array(actions)) => actions,
+        Some(other) => {
+            return Err(format!(
+                "`viewport_actions` must be an array, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    if actions.len() > MAX_VIEWPORT_ACTIONS {
+        return Err(format!(
+            "one policy result may contribute at most {MAX_VIEWPORT_ACTIONS} viewport actions"
+        ));
+    }
+    actions
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let path = format!("viewport_actions[{index}]");
+            let fields = hook_map(value, &path)?;
+            let label = hook_string(fields, "label", &path)?;
+            if label.trim().is_empty() {
+                return Err(format!("{path}.label must not be empty"));
+            }
+            let description = match hook_field(fields, "description") {
+                None => String::new(),
+                Some(HookValue::Str(description)) => description.clone(),
+                Some(other) => {
+                    return Err(format!(
+                        "{path}.description must be a string, got {}",
+                        other.type_name()
+                    ));
+                }
+            };
+            let enabled = hook_bool(fields, "enabled", true, &path)?;
+            let primary = hook_bool(fields, "primary", false, &path)?;
+            let visibility = match hook_field(fields, "visibility") {
+                None | Some(HookValue::Unit) => ScriptViewportVisibility::Always,
+                Some(HookValue::Str(value)) if value == "always" => {
+                    ScriptViewportVisibility::Always
+                }
+                Some(HookValue::Str(value)) if value == "no_active_twin" => {
+                    ScriptViewportVisibility::NoActiveTwin
+                }
+                Some(HookValue::Str(value)) => {
+                    return Err(format!(
+                        "{path}.visibility must be `always` or `no_active_twin`, got `{value}`"
+                    ));
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "{path}.visibility must be a string, got {}",
+                        other.type_name()
+                    ));
+                }
+            };
+            let action = parse_script_workbench_action(fields, &path)?
+                .ok_or_else(|| format!("{path} requires a tool action"))?;
+            Ok(ScriptViewportAction {
+                label,
+                description,
+                enabled,
+                primary,
+                visibility,
+                action,
+            })
+        })
+        .collect()
 }
 
 fn parse_script_workbench_menus(
     value: &HookValue,
 ) -> Result<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>, String> {
+    parse_script_workbench_menu_array(value, "menus", true)
+}
+
+fn parse_script_workbench_settings_submenus(
+    value: &HookValue,
+) -> Result<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>, String> {
+    parse_script_workbench_menu_array(value, "settings_submenus", false)
+}
+
+fn parse_script_workbench_menu_array(
+    value: &HookValue,
+    field: &str,
+    required: bool,
+) -> Result<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>, String> {
     use lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu;
 
-    let menus = match value.get("menus") {
+    let menus = match value.get(field) {
         Some(HookValue::Array(menus)) => menus,
+        Some(HookValue::Unit) if !required => return Ok(Vec::new()),
         Some(other) => {
             return Err(format!(
-                "`menus` must be an array, got {}",
+                "`{field}` must be an array, got {}",
                 other.type_name()
             ));
         }
-        None => return Err("result has no `menus` array".into()),
+        None if !required => return Ok(Vec::new()),
+        None => return Err(format!("result has no `{field}` array")),
     };
     if menus.len() > 32 {
-        return Err("one policy result may contribute at most 32 top-level menus".into());
+        return Err(format!(
+            "one policy result may contribute at most 32 `{field}` entries"
+        ));
     }
     let mut labels = HashSet::new();
     menus
         .iter()
         .enumerate()
         .map(|(index, menu)| {
-            let fields = hook_map(menu, &format!("menus[{index}]"))?;
-            let label = hook_string(fields, "label", &format!("menus[{index}]"))?;
+            let path = format!("{field}[{index}]");
+            let fields = hook_map(menu, &path)?;
+            let label = hook_string(fields, "label", &path)?;
             if label.trim().is_empty() {
-                return Err(format!("menus[{index}].label must not be empty"));
+                return Err(format!("{path}.label must not be empty"));
             }
-            if !labels.insert(label.clone()) {
-                return Err(format!("duplicate top-level menu label `{label}`"));
+            let order = match hook_field(fields, "order") {
+                None => 0,
+                Some(HookValue::Int(order)) => *order,
+                Some(HookValue::UInt(order)) => i64::try_from(*order)
+                    .map_err(|_| format!("{path}.order exceeds the signed integer range"))?,
+                Some(other) => {
+                    return Err(format!(
+                        "{path}.order must be an integer, got {}",
+                        other.type_name()
+                    ));
+                }
+            };
+            let separator_before = hook_bool(fields, "separator_before", false, &path)?;
+            if !labels.insert((label.clone(), order)) {
+                return Err(format!(
+                    "duplicate `{field}` label `{label}` at order {order}"
+                ));
             }
             let entries = match hook_field(fields, "items") {
                 Some(HookValue::Array(items)) => items,
                 Some(other) => {
                     return Err(format!(
-                        "menus[{index}].items must be an array, got {}",
+                        "{path}.items must be an array, got {}",
                         other.type_name()
                     ));
                 }
-                None => return Err(format!("menus[{index}] has no `items` array")),
+                None => return Err(format!("{path} has no `items` array")),
             };
             let mut count = 0;
             let items = entries
@@ -922,13 +1312,18 @@ fn parse_script_workbench_menus(
                 .map(|(entry_index, item)| {
                     parse_script_workbench_item(
                         item,
-                        &format!("menus[{index}].items[{entry_index}]"),
+                        &format!("{path}.items[{entry_index}]"),
                         0,
                         &mut count,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(ScriptWorkbenchMenu { label, items })
+            Ok(ScriptWorkbenchMenu {
+                label,
+                order,
+                separator_before,
+                items,
+            })
         })
         .collect()
 }
@@ -939,9 +1334,7 @@ fn parse_script_workbench_item(
     depth: usize,
     count: &mut usize,
 ) -> Result<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenuItem, String> {
-    use lunco_scripting_rhai_core::ui_bridge::{
-        ScriptWorkbenchMenuAction, ScriptWorkbenchMenuItem,
-    };
+    use lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenuItem;
 
     if depth > 8 {
         return Err(format!("{path} exceeds the maximum menu depth of 8"));
@@ -951,6 +1344,21 @@ fn parse_script_workbench_item(
         return Err("one policy result may contribute at most 512 menu items".into());
     }
     let fields = hook_map(value, path)?;
+    let separator = hook_bool(fields, "separator", false, path)?;
+    if separator {
+        if fields.len() != 1 {
+            return Err(format!("{path} separator cannot have other menu fields"));
+        }
+        return Ok(ScriptWorkbenchMenuItem {
+            label: String::new(),
+            tooltip: None,
+            enabled: true,
+            separator: true,
+            selection: None,
+            action: None,
+            children: Vec::new(),
+        });
+    }
     let label = hook_string(fields, "label", path)?;
     if label.trim().is_empty() {
         return Err(format!("{path}.label must not be empty"));
@@ -965,12 +1373,39 @@ fn parse_script_workbench_item(
             ));
         }
     };
-    let enabled = match hook_field(fields, "enabled") {
-        None => true,
-        Some(HookValue::Bool(enabled)) => *enabled,
+    let enabled = hook_bool(fields, "enabled", true, path)?;
+    let selected = match hook_field(fields, "selected") {
+        None | Some(HookValue::Unit) => None,
+        Some(HookValue::Bool(selected)) => Some(*selected),
         Some(other) => {
             return Err(format!(
-                "{path}.enabled must be boolean, got {}",
+                "{path}.selected must be a boolean, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    let selection = match (hook_field(fields, "selection"), selected) {
+        (None, None) | (Some(HookValue::Unit), None) => None,
+        (Some(HookValue::Str(kind)), Some(selected)) if kind == "radio" => {
+            Some(lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchSelection::Radio(selected))
+        }
+        (Some(HookValue::Str(kind)), Some(selected)) if kind == "checkbox" => {
+            Some(lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchSelection::Checkbox(selected))
+        }
+        (Some(HookValue::Str(kind)), Some(_)) => {
+            return Err(format!(
+                "{path}.selection must be radio or checkbox, got `{kind}`"
+            ));
+        }
+        (Some(HookValue::Str(_)), None) => {
+            return Err(format!("{path}.selection requires a selected boolean"));
+        }
+        (None | Some(HookValue::Unit), Some(_)) => {
+            return Err(format!("{path}.selected requires a selection style"));
+        }
+        (Some(other), _) => {
+            return Err(format!(
+                "{path}.selection must be radio or checkbox, got {}",
                 other.type_name()
             ));
         }
@@ -996,10 +1431,36 @@ fn parse_script_workbench_item(
             ));
         }
     };
+    let action = parse_script_workbench_action(fields, path)?;
+    match (action.is_some(), children.is_empty(), enabled) {
+        (true, false, _) => return Err(format!("{path} cannot combine an action with children")),
+        (false, true, true) => return Err(format!("{path} needs an action or children")),
+        _ => {}
+    }
+    if selection.is_some() && action.is_none() {
+        return Err(format!("{path}.selection requires an action"));
+    }
+    Ok(ScriptWorkbenchMenuItem {
+        label,
+        tooltip,
+        enabled,
+        separator: false,
+        selection,
+        action,
+        children,
+    })
+}
+
+fn parse_script_workbench_action(
+    fields: &[(String, HookValue)],
+    path: &str,
+) -> Result<Option<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenuAction>, String> {
+    use lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenuAction;
+
     let tool = hook_field(fields, "tool").and_then(HookValue::as_str);
     let hook = hook_field(fields, "hook").and_then(HookValue::as_str);
-    let action = match (tool, hook) {
-        (Some(tool), Some(hook)) if children.is_empty() => {
+    match (tool, hook) {
+        (Some(tool), Some(hook)) => {
             if tool.trim().is_empty() || hook.trim().is_empty() {
                 return Err(format!("{path} tool and hook must not be empty"));
             }
@@ -1022,25 +1483,31 @@ fn parse_script_workbench_item(
                     ));
                 }
             };
-            Some(ScriptWorkbenchMenuAction {
+            Ok(Some(ScriptWorkbenchMenuAction {
                 tool: tool.to_owned(),
                 hook: hook.to_owned(),
                 args,
-            })
+            }))
         }
-        (None, None) if !children.is_empty() => None,
-        (None, None) if !enabled => None,
-        (Some(_), Some(_)) => return Err(format!("{path} cannot combine an action with children")),
-        (None, None) => return Err(format!("{path} needs an action or children")),
-        _ => return Err(format!("{path} must provide both `tool` and `hook`")),
-    };
-    Ok(ScriptWorkbenchMenuItem {
-        label,
-        tooltip,
-        enabled,
-        action,
-        children,
-    })
+        (None, None) => Ok(None),
+        _ => Err(format!("{path} must provide both `tool` and `hook`")),
+    }
+}
+
+fn hook_bool(
+    fields: &[(String, HookValue)],
+    key: &str,
+    default: bool,
+    path: &str,
+) -> Result<bool, String> {
+    match hook_field(fields, key) {
+        None => Ok(default),
+        Some(HookValue::Bool(value)) => Ok(*value),
+        Some(other) => Err(format!(
+            "{path}.{key} must be boolean, got {}",
+            other.type_name()
+        )),
+    }
 }
 
 fn hook_map<'a>(value: &'a HookValue, path: &str) -> Result<&'a [(String, HookValue)], String> {
@@ -3019,5 +3486,50 @@ mod tests {
         });
         retract_policy(MERGE_SEAM, Some(&journal));
         journal.with_read(|journal| assert_eq!(*journal.merge_strategy(), MergeStrategy::Default));
+    }
+
+    #[test]
+    fn twin_json_asset_menu_providers_use_stable_workspace_identity() {
+        let first = asset_menu_provider(
+            Some(lunco_workspace::TwinId::new(41)),
+            Some("Shared display name"),
+        )
+        .unwrap();
+        let second = asset_menu_provider(
+            Some(lunco_workspace::TwinId::new(42)),
+            Some("Shared display name"),
+        )
+        .unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(first, "twin:41:json-assets");
+        assert_eq!(second, "twin:42:json-assets");
+    }
+
+    #[test]
+    fn viewport_action_parser_accepts_a_scrollable_scene_list() {
+        let actions = (0..21)
+            .map(|index| {
+                HookValue::map([
+                    ("label", HookValue::str(format!("Scene {index}"))),
+                    ("tool", HookValue::str("scenarios")),
+                    ("hook", HookValue::str("load")),
+                    ("visibility", HookValue::str("no_active_twin")),
+                    (
+                        "args",
+                        HookValue::map([("uri", HookValue::str("scene.usda"))]),
+                    ),
+                ])
+            })
+            .collect();
+        let output = HookValue::map([("viewport_actions", HookValue::Array(actions))]);
+
+        let parsed = parse_script_viewport_actions(&output).unwrap();
+
+        assert_eq!(parsed.len(), 21);
+        assert_eq!(
+            parsed[0].visibility,
+            lunco_scripting_rhai_core::ui_bridge::ScriptViewportVisibility::NoActiveTwin
+        );
     }
 }

@@ -11,7 +11,7 @@ fn steps() {
         #{ anchor: "panel.sandbox_inspector", focus: "sandbox_inspector", title: "Read Inspector",        body: "Open Inspector to read the selected object's pose, components, and authored properties." },
         #{ anchor: "panel.telemetry_browser", focus: "telemetry_browser", title: "Read telemetry",        body: "Use Analyze to open Telemetry beside Graphs. Select a port such as throttle, altitude, or battery to read its live value." },
         #{ anchor: "",                      title: "Read state from code",  body: "Call `ListEntities` to get an entity's `api_id`. Use `ListPorts` to discover exact names, then pass selected names in `ReadPorts`'s required `port_names` array. Use `CosimStatus` and `GetBrokenConnections` to inspect the Modelica link." },
-        #{ anchor: "",                      title: "Inspect, then act",     body: "Use selection, Inspector, and Telemetry to answer whether the simulation is working. Choose another lesson from Tutorials after finishing this tour." },
+        #{ anchor: "",                      title: "Inspect, then act",     body: "Use selection, Inspector, and Telemetry to answer whether the simulation is working. Choose another lesson from Scenarios after finishing this tour." },
     ]
 }
 

@@ -306,14 +306,20 @@ project content. Rigid folder layouts fight user intuition.
 
 ## 3. The `twin.toml` manifest
 
-The Scenarios menu uses `[usd].scenes` globs to discover loadable stages.
-Keep verification fixtures in `scenes/tests/` with Rhai observers in
-`scenarios/tests/`. Curate the interactive list with explicit scene paths or
-narrow globs, and include the fixture directory. **Scenario** and **Test Scenarios** are peer submenus; each marks the current scene with a single-selection
-control. Multiple open Twins are distinguished by stable logical names inside
-these lists, never by transient mount authorities. Twin tests remain accessible
-when asset browsers hide test content. **Show test scenes** controls asset
-browsers and **Library tests**.
+The required Rhai `application.scenarios.menu` policy builds the Scenarios
+tree from the admitted scene inventory. It lists engine scenes under
+**Library**, scenes directly under each open Twin's name, and that Twin's test
+scenes in a **Test Scenes** submenu. Current-scene selection, restart, section
+dividers, and the **Show library test scenes** checkbox are policy decisions.
+The checkbox lives under **Settings → Sim Core** and does not hide Twin tests.
+The existing `AssetVisibilitySettings` stores that preference. `[usd].scenes`
+globs curate each Twin's loadable scene list. Keep
+verification fixtures in `scenes/tests/` with Rhai observers in
+`scenarios/tests/`, and include the fixture directory in the Twin globs when
+those tests need to be discoverable. Multiple open Twins use stable workspace
+identity for ownership. Rhai chooses the display label from the authored Twin
+name, directory-name fact, or stable ID, never a transient asset mount
+authority.
 
 The minimum Twin manifest declares its top-level `name` and `version`. The
 following example shows the current manifest fields:
@@ -459,10 +465,12 @@ folders; files within them can still be opened explicitly.
 `ReadActiveWorkspace` distinguishes `ephemeral` from `twin` scopes;
 `ReadActiveTwinContract` reports no open Twin for the ephemeral case.
 
-With a Twin open and no mounted scene, the viewport offers its declared
-default when the file exists and the scenes selected by its `[usd].scenes` globs.
-Scene buttons dispatch the ordinary Twin scene command with the active Twin's
-mounted authority. The general welcome actions appear when no Twin is open.
+With a Twin open and no mounted scene, the viewport lists its declared default
+when admitted and every other regular scene selected by its `[usd].scenes`
+globs. Test scenes stay in the Twin's **Scenarios → Test Scenes** submenu and
+do not appear in this list. Scene buttons dispatch the ordinary Twin scene
+command with the active Twin's mounted authority. Application welcome actions
+appear only when no Twin is active.
 
 To set the project override through the HTTP API, obtain the active `twin_id`
 from `ReadActiveTwinContract`, then send this request to `/api/commands`,

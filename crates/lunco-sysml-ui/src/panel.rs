@@ -1337,7 +1337,7 @@ impl SysmlRequirementsPanel {
                 self.render_status_breakdown(
                     ui, view_model, runs, missing_criteria, no_verify, unmapped_verify, theme,
                 );
-            }).response.on_hover_text("Counts by evidence, test execution, and overall status. For a walkthrough, use Tutorials → LunCoSim → SysML Requirements.");
+            }).response.on_hover_text("Counts by evidence, test execution, and overall status. For an in-app walkthrough, open the Scenarios menu.");
 
         });
         let card_width = summary_card_width(ui.available_width(), ui.spacing().item_spacing.x);

@@ -253,23 +253,62 @@ Rhai policy chooses which artifacts that scene uses. Rust validates the
 complete action map, then the generic asset runtime resolves registry ids to
 canonical `lunco://` or `twin://` URIs and loads text through the shared
 `TextAsset` loader. Missing or unreadable requested datasets are reported;
-unrequested datasets remain quiet. `SceneTransitionStarted` retires outstanding reads and
-`SceneTeardown` removes domain data derived from the outgoing scene.
+unrequested datasets remain quiet. If the policy returns a malformed result or
+fails, its provider contribution is cleared and a shared runtime notification
+shows the owning asset scope and diagnostic. `SceneTransitionStarted` retires
+outstanding reads and `SceneTeardown` removes domain data derived from the
+outgoing scene.
 
-Rust also validates the generic menu tree and replaces that provider's
-contribution. The UI host binds every leaf to an explicit provider-owned
-`ToolHookBinding` lease before publishing it. Each installation has a fresh
-widget identity; replacement retires that root and its endpoints. Selection
-creates an owner-bound invocation child, so application menus remain usable
+Rust validates the generic menu tree and replaces that provider's contribution.
+The UI host retains typed action descriptions in the provider's immutable tree
+and resolves the current tool endpoint while an open menu is rendered. An
+action is enabled only when that endpoint is registered; the host checks it
+again on selection. This lets asynchronous asset policies publish menus before
+their tool sources finish loading without accepting a click that cannot run.
+Empty-viewport actions use the same live check, and quick-open re-resolves the
+current provider when activated. Each installation has a fresh widget identity;
+replacement retires that root and its queued invocations. Twin-owned menu trees
+and quick-open entries are visible only for their exact active Twin. Selection
+creates an owner-bound invocation child, so application menus remain available
 during scene preparation and reset. Provider replacement or Twin closure
-revokes old input and queued work. Execution ownership and clocks remain
-separate from the exact `target_twin_id` carried by nested commands.
-Selected actions route through the shared bound Rhai tool queue. Twin
-contributions are cleared on `TwinClosed`, and a late contribution for an
-already-closed Twin is discarded. An absent optional hook clears its
-contribution; a fault or malformed action map is warned and queues no asset
-reads. This is the startup-to-menu path used by the authored tutorial catalog
-policy, so no Rust tutorial menu or catalog parser is needed.
+revokes old input and queued work. Execution ownership and clocks remain separate from the exact
+`target_twin_id` carried by nested commands. Selected actions route through the
+shared Rhai tool queue. Twin contributions are cleared on `TwinClosed`, and a
+late contribution for an already-closed Twin is discarded. An absent optional
+hook clears its contribution; a fault or malformed action map is warned and
+queues no asset reads. The authored scenario catalog uses this generic path;
+Rust contains no lesson catalog or launch policy.
+
+The required application-scoped `application.scenarios.menu(ctx: Map) -> Map`
+hook is owned by the workbench integration. Its typed facts contain the
+committed scene URI, open and active Twin identities, admitted library/Twin
+scene inventory, scene descriptions and test classification, the saved
+`AssetVisibilitySettings` value, scene-inventory readiness/errors, and cached
+Twin-download summaries. The Rhai policy owns grouping and labels, selected
+scene markers, restart, section dividers, the Library-test visibility checkbox,
+Twin test submenus, downloaded-Twin entries, and empty-viewport scene actions.
+It orders same-label menu contributions so Restart and Twin content precede
+Tutorials, with the Library grouped below Tutorials. The
+application asset-catalog policy contributes the authored Tutorials submenu
+through the same replaceable `WorkbenchMenus` host.
+
+The result provides the Scenarios menu tree, typed empty-viewport actions and
+guidance, and quick-open scene destinations. All three are refreshed from the
+same facts when workspace/Twin, committed scene, asset inventory, download
+registry, or saved visibility preference changes; no menu polling or startup-
+only snapshot is used. The UI host consumes only generic presentation and
+typed tool actions. The visibility checkbox sends `SetShowTestAssets`, which
+updates the existing persisted settings section; Rhai decides where and how
+that preference is presented under **Settings → Sim Core**. Twin test scenes
+remain available in each Twin's **Test Scenes** submenu while the preference
+controls Library tests.
+
+The policy is required because there is no native Scenarios fallback. A hook
+fault or malformed menu result reports a runtime error and clears its provider
+contribution. The production `application_json_catalogs` scene gate exercises
+current-scene selection, Twin/library grouping, hidden and visible tests,
+viewport actions, and quick-open destinations through the production Rhai
+interpreter.
 
 Physics owns the required deterministic
 `physics.initialization(facts: Map) -> String` seam for pre-admission decisions

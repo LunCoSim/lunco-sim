@@ -375,37 +375,81 @@ UI projection plugins that read shell-owned workbench resources install
 `WorkbenchPlugin` when it is not already present. An authored Rhai policy can
 return generic workbench-menu trees; the application adapter publishes them as
 `ScriptUiRequest::WorkbenchMenus`, and the shell renders each provider's
-replaceable contribution. Repeated labels from providers share one top-level
-menu. Selected leaf actions route through the Rhai tool registry. The tutorial
-policy uses this host to project its catalog and launch lessons through the
-generic `RunScenarioAsset` command. `WorkbenchSnapshot` supplies normal shell
-geometry; lesson lifecycle and scene composition remain outside the workbench.
+replaceable contribution. Asset-scope events can replace a contribution while
+the application is running, and repeated labels share one top-level menu. The
+same request can contribute replaceable Settings submenus, and menu trees can
+include generic divider rows. Same-label menu contributions use Rhai-authored
+order and boundary dividers; the host applies that order without knowing the
+contributing policy. Menu trees retain typed tool action descriptions.
+The host resolves the current
+tool registration while rendering an open menu and enables an action only when
+that exact endpoint is available. Empty-viewport actions use the same live
+readiness check, and quick-open destinations are resolved from current provider
+state when queried. Asset policies may publish their menu before a tool source
+finishes loading; its action stays disabled until registration completes. On
+selection, the host pins the invocation to its provider and Twin owner. The
+Scenarios menu policy supplies the admitted scene chooser, while the application
+asset-lifecycle policy projects authored tutorial catalogs into the same menu
+and launches selected entries through the generic `RunScenarioAsset` command.
+If an asset policy fails or returns malformed menu data, its provider is
+cleared and the shared runtime notification reports the scope and cause.
+`WorkbenchSnapshot`
+supplies normal shell geometry; lesson lifecycle and scene composition remain
+outside the workbench.
 
-`InspectScriptedMenus` reads the installed provider/Twin identities, labels,
-enabled states, and typed tool action arguments. The application menu host
-retains immutable bound trees shared by its renderer and this reader; it keeps
-no second catalog. Replacing a provider or closing its Twin retires that tree
-and its bindings together. Missing bindings reject inspection visibly. This
-read surface does not invoke callbacks or bypass their source-scope validation.
+`InspectScriptedMenus` reads the installed provider/Twin identities, menu and
+Settings labels, divider rows, effective enabled states, live action
+availability, and typed tool action arguments. The application menu host retains immutable action trees shared by
+its renderer and this reader; it keeps no second catalog. Twin providers use
+their stable workspace identity, not their display name. Replacing a provider
+or closing its Twin retires that tree and any queued invocations together.
+Inspection does not invoke callbacks or bypass their source-scope validation.
+Twin-owned menu trees and quick-open entries are visible only while their exact
+Twin is active; application-owned entries remain available across workspace
+switches. Changing the active Twin refreshes the menu-width projection and the
+navigation result set from the same committed owner identity.
 The `tutorials::application_path` reader selects one enabled application lesson
 from those actions, allowing a reopened report to resume the current catalog
 path. Curriculum selection and continuation remain Rhai policy.
 
 The generic `ViewportPlaceholder` carries the domain's current empty-state
-message plus host-authored guidance and typed actions. Each action provides a
+message plus policy-authored guidance and typed actions. Each action provides a
 short visible description alongside its button. The shell renders those actions
-in the viewport and defers their `PanelCtx` commands until the layout render
-scope ends; applications own the action labels, descriptions, and command
-targets.
+in a scrollable viewport list and defers their `PanelCtx` intents until the
+layout render scope ends; applications own the action labels, descriptions,
+visibility and command targets. Rhai policy contributions use the same provider
+and Twin lifetime validation as menu actions. Their buttons stay disabled until
+the current Rhai tool endpoint is available, then resolve and validate it again
+at selection.
 
-LunCoSim's application composition supplies **Start Lunar Rover Lab** as the
-primary opening action, alongside demo exploration and Open Twin. That fixed
-product entry point submits `OpenTwinAsset` for the exact bundled manifest; the
-shared shell owns no curriculum, objective or routing decision. The catalog
-asset policy resolves learning paths, and the shared `tutorials` Rhai tool owns
-tour cursors and continuation. Domain exercises retain their own authoritative
-state checks. See [classroom onboarding](../tutorials/06-classroom-onboarding.md)
-for the report/save lifecycle and production acceptance.
+The application-required `application.scenarios.menu` Rhai policy owns the
+complete Scenarios tree: library and Twin groups, test-scene visibility,
+current-scene selection, restart, section dividers, downloaded Twin entries, and their typed
+actions. Restart stays first and is disabled while no scene is loaded. A Twin
+group offers **Load Default Scene**, its regular scenes, then a separate
+**Test Scenes** submenu. With a Twin active and no live scene, the welcome card
+lists its default scene and every other regular scene; it never includes test
+scenes or application-only welcome actions. The policy also supplies
+empty-viewport guidance/actions and the matching quick-open scene destinations;
+the card is shown only while no live scene is mounted. The UI adapter supplies
+admitted inventory, committed scene, workspace, and saved-preference facts when
+those inputs change; it does not construct a native Scenarios menu. The menu host
+provides generic radio/checkbox rendering and routes selected actions through
+the Rhai tool registry. The persisted test-content preference controls Library
+tests; the Rhai-authored checkbox is under Settings → Sim Core. Twin tests stay
+under each Twin's **Test Scenes** submenu. A Rhai checkbox changes that
+preference through the existing typed settings command.
+
+Tutorial catalogs use the same replaceable menu provider and live under
+Scenarios → Tutorials → track → lesson. Catalog policy can mark one lesson as
+the empty viewport's featured action; application-scope featured lessons are
+visible only while no Twin is active. **Explore demo sandbox** is also an
+authored policy action; **Open Twin** is the generic shell entry point when no
+Twin is active.
+The shared `tutorials` Rhai tool owns tour cursors and continuation. Domain
+exercises retain their own authoritative state checks. See [classroom
+onboarding](../tutorials/06-classroom-onboarding.md) for the report/save
+lifecycle and production acceptance.
 
 `lunco-luncosim-services` owns asset-aware Twin opening. It resolves the
 manifest through `SchemeRegistry` on a worker and submits the scan to
@@ -794,7 +838,8 @@ View → Find files and Ctrl/Cmd+P open quick navigation. Empty search starts wi
 active-Twin files; typing or explicit scopes finds library sources, scenes and
 actions. Ctrl/Cmd+Shift+P opens panel/perspective actions. Scene results say Load
 and identify world replacement; scene menus and search read admitted indexed
-inventories. Scenarios remains the scene-switching surface.
+inventories. Rhai owns the Scenarios tree and supplies the scene destinations
+to quick navigation from the same policy result.
 
 Editor owners publish exact URI/purpose through `InstancePanel::navigation_source`.
 Document tab tooltips expose it, and the tab context menu offers Reveal in Twin.
@@ -937,19 +982,15 @@ write via temp-file + rename — a kill mid-write can't corrupt the
 file. A corrupt file silently falls back to empty recents on next
 boot.
 
-### 9a.1 Scenario registry failure presentation
+### 9a.1 Scenario inventory failure
 
-The Scenarios menu owns only presentation. If `TwinRoots`, the shared asset
-manifest, or scene discovery is unavailable, it renders the concise
-`Scenarios unavailable` state and sends the full cause through the existing
-`lunco-status-core::status_bus::StatusBus` Recent-status reader. The UI does not remove or replace the active
-Twin to manufacture that failure.
-
-The windowed production harness exposes the explicit typed
-`SetScenarioRegistryFixture { unavailable }` command. It toggles a transient
-UI-owned fixture resource, so acceptance can exercise the real menu and status
-path without mutating `TwinRoots` or scene data. Its default is disabled and
-`unavailable: false` restores normal discovery.
+The application adapter sends inventory readiness and any discovery error to
+`application.scenarios.menu`. The required Rhai policy replaces the menu with
+an unavailable or loading state while leaving the active workspace untouched.
+An installed-policy fault or malformed result raises the normal runtime error
+and clears the provider contribution; no Rust-authored chooser is installed as
+a fallback. The production authored gate exercises selection, test visibility,
+Twin groups, viewport actions, and quick-open destinations from the policy.
 
 ### 9b. Settings (`lunco-settings`)
 

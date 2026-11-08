@@ -1,9 +1,8 @@
 # Classroom onboarding: Lunar Rover Lab
 
 Lunar Rover Lab is the default first activity for a workshop participant.
-Choose **Start Lunar Rover Lab** on the opening screen, or **Tutorials →
-Start Here → Lunar Rover Lab**. The larger demo sandbox remains available
-for free exploration.
+Choose **Scenarios → Start Here → Lunar Rover Lab**. The larger demo sandbox
+remains available for free exploration.
 
 The entry point opens the bundled classroom Twin through `OpenTwinAsset`.
 Its manifest selects a document-backed scene and embeds the workshop guide.
@@ -113,7 +112,7 @@ Lesson-specific objectives and classroom decisions stay in Rhai.
 owner. It works when no scene is mounted and preserves existing scene edits.
 The classroom's explicit **Restart whole lab (discard edits)** remains the
 document-reset action. Completion cards remain usable across perspectives.
-Standalone launches direct the learner to Tutorials when no path was supplied.
+Standalone launches direct the learner to Scenarios when no path was supplied.
 
 ## Verification and classroom pilot
 

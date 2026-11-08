@@ -17,7 +17,7 @@ Edit a file, reload the scene, watch it change. That's the whole loop. Let's go.
 Everything you create is prefixed `my_` so it sits alongside the shipped assets
 rather than on top of them. The finished article is already in the repo — peek at
 `assets/vessels/landers/descent_lander.usda` and `assets/scenes/luncosim/lander_ops.usda`
-whenever you want to see where this is heading, or play it from the 🎓 Tutorials
+whenever you want to see where this is heading, or play it from the Scenarios
 menu in the luncosim.
 
 You can run your work at any point with:
@@ -1016,7 +1016,7 @@ behind how scenarios are put together, see
 ## Related
 
 - **Play the interactive version**: the in-app *Lander & Rover Mission* lesson
-  (🎓 Tutorials menu in the luncosim) walks the same mission with on-screen coaching.
+  (Scenarios menu in the luncosim) walks the same mission with on-screen coaching.
   It watches the very events you emitted in Step 9 and turns them into a checklist.
 - **Next walkthrough**: [02 — Author your own controller](02-authoring-a-controller.md) — build the lander's GNC yourself.
 - **Then**: [03 — Cosim: when a model flies physics](03-cosim.md) — the wiring from Step 4, in depth.

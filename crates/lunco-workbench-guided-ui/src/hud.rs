@@ -554,7 +554,7 @@ pub(crate) fn draw_guided_hud(
 ) {
     let active = snapshot.as_ref().and_then(|s| s.active_perspective());
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    // The lesson HUD is a specific-HUD readout: above docked panels and below
+    // The scene-specific HUD is a specific-HUD readout: above docked panels and below
     // the general HUD, UI surfaces, popups, and menus.
     let screen = ctx.viewport_rect();
     let theme = theme

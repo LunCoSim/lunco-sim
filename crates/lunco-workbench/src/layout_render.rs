@@ -1271,45 +1271,62 @@ pub(super) fn render_layout(
                                     ));
                                 }
                                 ui.add_space(theme.spacing.item_spacing * 2.0);
-                                egui::ScrollArea::vertical()
-                                    .max_height(ctx.viewport_rect().height() * 0.45)
-                                    .auto_shrink([true, true])
-                                    .show(ui, |ui| {
-                                        let action_height = ui
-                                            .spacing()
-                                            .interact_size
-                                            .y
-                                            .max(theme.spacing.titlebar_control_size.y);
-                                        for (index, action) in actions.iter().enumerate() {
-                                            let button = egui::Button::new(action.label.as_str())
-                                                .corner_radius(theme.rounding.button);
-                                            let button = if action.primary {
-                                                button.fill(theme.tokens.surface_raised).stroke(
-                                                    egui::Stroke::new(1.5, theme.tokens.accent),
-                                                )
-                                            } else {
-                                                button
-                                            };
-                                            if ui
-                                                .add_sized(
+                                let mut draw_actions = |ui: &mut egui::Ui| {
+                                    let action_height = ui
+                                        .spacing()
+                                        .interact_size
+                                        .y
+                                        .max(theme.spacing.titlebar_control_size.y);
+                                    for (index, action) in actions.iter().enumerate() {
+                                        let available = (action.is_available)();
+                                        let button = egui::Button::new(action.label.as_str())
+                                            .corner_radius(theme.rounding.button);
+                                        let button = if action.primary {
+                                            button
+                                                .fill(theme.tokens.surface_raised)
+                                                .stroke(egui::Stroke::new(1.5, theme.tokens.accent))
+                                        } else {
+                                            button
+                                        };
+                                        let response = ui
+                                            .add_enabled_ui(action.enabled && available, |ui| {
+                                                ui.add_sized(
                                                     [ui.available_width(), action_height],
                                                     button,
                                                 )
-                                                .clicked()
-                                            {
-                                                activate = Some(action.activate.clone());
-                                            }
-                                            if !action.description.is_empty() {
-                                                ui.label(
-                                                    egui::RichText::new(&action.description)
-                                                        .color(theme.tokens.text_subdued),
-                                                );
-                                            }
-                                            if index + 1 < actions.len() {
-                                                ui.add_space(theme.spacing.item_spacing);
-                                            }
+                                            })
+                                            .inner;
+                                        let response = if available {
+                                            response
+                                        } else {
+                                            response.on_hover_text(
+                                                "The Rhai action is currently unavailable.",
+                                            )
+                                        };
+                                        if response.clicked() {
+                                            activate = Some(action.activate.clone());
                                         }
-                                    });
+                                        if !action.description.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(&action.description)
+                                                    .color(theme.tokens.text_subdued),
+                                            );
+                                        }
+                                        if index + 1 < actions.len() {
+                                            ui.add_space(theme.spacing.item_spacing);
+                                        }
+                                    }
+                                };
+                                if actions.len() <= 3 && ctx.viewport_rect().height() >= 360.0 {
+                                    draw_actions(ui);
+                                } else {
+                                    let action_list_height = ctx.viewport_rect().height() * 0.60;
+                                    egui::ScrollArea::vertical()
+                                        .max_height(action_list_height)
+                                        .min_scrolled_height(action_list_height)
+                                        .auto_shrink([true, true])
+                                        .show(ui, |ui| draw_actions(ui));
+                                }
                             });
                     }
                 });

@@ -3,12 +3,14 @@
 const TUTORIAL_CATALOG_KIND = "lunco.tutorial-catalog.v1";
 
 fn empty_menu_contribution() {
-    #{ menus: [] }
+    #{ menus: [], viewport_actions: [] }
 }
 
-fn tutorial_menu_contribution(items) {
+fn scenario_menu_contribution(items, ctx) {
     let menu = #{};
-    menu.label = "Tutorials";
+    menu.label = "Scenarios";
+    menu.order = if ctx.scope == "twin" { -50 } else { 0 };
+    menu.separator_before = ctx.scope != "twin";
     menu.items = items;
     let menus = [];
     menus.push(menu);
@@ -17,21 +19,29 @@ fn tutorial_menu_contribution(items) {
     result
 }
 
+fn tutorials_menu_item(items) {
+    let item = #{};
+    item.label = "Tutorials";
+    item.children = items;
+    item
+}
+
 fn loading_menu_items(ctx) {
-    let items = [];
+    let lessons = [];
     let loading = #{};
     loading.label = "Loading…";
     loading.enabled = false;
-    items.push(loading);
+    lessons.push(loading);
+    let tutorials = tutorials_menu_item(lessons);
     if ctx.scope == "twin" {
         let wrapper = #{};
         wrapper.label = ctx.twin_name;
-        wrapper.children = items;
+        wrapper.children = [tutorials];
         let wrapped = [];
         wrapped.push(wrapper);
         return wrapped;
     }
-    items
+    [tutorials]
 }
 
 fn blank_text(text) {
@@ -164,6 +174,39 @@ fn track_menu_item(name, items) {
     item
 }
 
+fn featured_viewport_action(lesson, menu_item, scope) {
+    let action = #{};
+    action.label = "Start " + lesson.title;
+    action.description = lesson.blurb;
+    if lesson.contains("featured_description") {
+        if type_of(lesson.featured_description) != "string" {
+            throw("featured_description must be a string");
+        }
+        action.description = lesson.featured_description;
+    }
+    action.enabled = true;
+    action.primary = true;
+    action.visibility = if scope == "application" { "no_active_twin" } else { "always" };
+    action.tool = menu_item.tool;
+    action.hook = menu_item.hook;
+    action.args = menu_item.args;
+    action
+}
+
+fn append_featured_action(viewport_actions, lesson, menu_item, catalog_uri, entry, scope) {
+    if !lesson.contains("featured") { return viewport_actions; }
+    if type_of(lesson.featured) != "bool" {
+        throw(entry + " featured must be a boolean");
+    }
+    if !lesson.featured { return viewport_actions; }
+    if viewport_actions.len() != 0 {
+        throw(catalog_uri + " may mark only one lesson featured");
+    }
+    let updated = viewport_actions;
+    updated.push(featured_viewport_action(lesson, menu_item, scope));
+    updated
+}
+
 fn application_asset_lifecycle(event, ctx) {
     if event == "scene_loaded" {
         if ctx.payload.path.type_of() != "string" {
@@ -178,7 +221,7 @@ fn application_asset_lifecycle(event, ctx) {
         if ctx.scope == "twin" && !ctx.payload.has_json_assets {
             return empty_menu_contribution();
         }
-        return tutorial_menu_contribution(loading_menu_items(ctx));
+        return scenario_menu_contribution(loading_menu_items(ctx), ctx);
     }
     if event != "json_scope_changed" {
         return empty_menu_contribution();
@@ -236,6 +279,7 @@ fn application_asset_lifecycle(event, ctx) {
     let root = ctx.asset_root_uri;
     let track_names = [];
     let track_items = [];
+    let viewport_actions = [];
     let lesson_index = 0;
     for lesson in catalog["tutorials"] {
         let index = lesson_index;
@@ -275,7 +319,10 @@ fn application_asset_lifecycle(event, ctx) {
         let source_asset = qualify_catalog_asset(root, lesson["source_asset"]);
         let scene_asset = qualify_catalog_asset(root, scene_asset);
         let path = learning_path(lesson, catalog, root);
-        track_items[group].push(lesson_menu_item(lesson, source_asset, scene_asset, ctx.twin_id, path));
+        let menu_item = lesson_menu_item(lesson, source_asset, scene_asset, ctx.twin_id, path);
+        track_items[group].push(menu_item);
+        viewport_actions = append_featured_action(
+            viewport_actions, lesson, menu_item, catalog_uri, entry, ctx.scope);
     }
 
     let tracks = [];
@@ -283,9 +330,11 @@ fn application_asset_lifecycle(event, ctx) {
         tracks.push(track_menu_item(track_names[index], track_items[index]));
     }
 
-    let items = tracks;
+    let items = [tutorials_menu_item(tracks)];
     if ctx.scope == "twin" {
-        items = [#{ label: ctx.twin_name, children: tracks }];
+        items = [#{ label: ctx.twin_name, children: items }];
     }
-    #{ menus: [#{ label: "Tutorials", items: items }] }
+    let result = scenario_menu_contribution(items, ctx);
+    result.viewport_actions = viewport_actions;
+    result
 }

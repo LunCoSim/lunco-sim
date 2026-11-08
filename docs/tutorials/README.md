@@ -8,8 +8,10 @@ track; the other tracks remain available as individual lessons and references.
 This directory contains authoring walkthroughs and links to the authored
 lessons shipped under `assets/tutorials/`. A lesson is an ordinary Rhai
 scenario with optional USD scene content. The application Rhai policy owns
-catalog selection and menu construction; the shared asset lifecycle and
-workbench menu host stay tutorial-agnostic.
+catalog selection and contributes its lesson tree under Scenarios → Tutorials;
+the shared asset lifecycle and workbench menu host stay tutorial-agnostic. An
+explicitly featured catalog entry can also supply the empty viewport's quick
+action through the same generic tool dispatch path.
 
 For cross-host skill usage, task routing, format boundaries, dynamic Rhai
 tools, and the full development cycle, start with
@@ -24,15 +26,16 @@ its own workbench with Rhai over the registered panel capabilities.
 
 ## In-app lessons
 
-At startup, the application policy manifest installs
-`application.asset.lifecycle` from
+When an application JSON scope loads or changes, the application policy
+manifest invokes `application.asset.lifecycle` from
 `assets/scripting/policy/application_asset_lifecycle.rhai`. The shared text-asset
 layer emits loading and changed events for the engine JSON scope and each
 opened Twin. Rhai receives complete snapshots, parses them with the shared
 `parse_json` function, selects and validates the unique catalog, groups entries
-by track in authored order, and returns generic workbench menu data. The
-workbench renders the contribution and sends a selected item through the
-`tutorials` Rhai tool in `assets/scripting/tools/tutorials.rhai`. The tool
+by track in authored order, and returns generic workbench menu and viewport
+action data. The workbench merges the current contribution into the Scenarios
+menu and sends a selected item through the `tutorials` Rhai tool in
+`assets/scripting/tools/tutorials.rhai`. The tool
 submits `RunScenarioAsset` with a script, optional scene, parameters, and
 `reload_policy: "restart"`. Command payloads use the enum's serialized
 snake-case value. The command does not open a layer itself:
@@ -42,10 +45,11 @@ An omitted host target resolves to the active `WorldRoot`.
 
 The Rust menu host validates and renders generic menu trees and dispatches
 actions through the Rhai tool registry. A contribution is replaced by provider
-when its asset scope changes and removed when a Twin closes; the tutorial
-catalog, track grouping, path qualification, and launch policy remain authored
-in Rhai; the shared asset layer supplies the canonical root for scope-relative
-asset references.
+when its asset scope changes and removed when a Twin closes. The menu remains
+available across scene changes, and asset edits replace its contribution while
+the application is running; it does not poll each frame. The catalog, track
+grouping, path qualification, and launch policy remain authored in Rhai; the
+shared asset layer supplies the canonical root for scope-relative references.
 
 The shared `lunco-workbench-guided-ui` package and Rhai prelude provide hints,
 spotlights, coach cards, and objectives. They are reusable presentation and

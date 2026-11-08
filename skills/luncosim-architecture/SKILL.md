@@ -907,11 +907,11 @@ External refreshes advance the live generation and invalidate consumers but do
 not create a second undo/journal entry. Never replace a host to hot-swap source;
 that discards history and breaks the canonical document identity.
 
-Failure-path acceptance must use an owner-local, transient fixture or typed test
-command. For example, the Scenarios menu may inject its unavailable presentation
-state without removing or replacing `TwinRoots`, the active Twin, or scene data;
-the default production path remains unchanged and the detailed cause still flows
-through the shared `StatusBus`.
+The Scenarios menu receives inventory readiness and discovery errors as typed
+application facts. Its required Rhai policy presents loading or unavailable
+state without changing `TwinRoots`, the active Twin, or scene data. Keep failure
+injection at the inventory owner or exercise the policy with authored facts;
+do not add a UI-only fixture command or a Rust-authored chooser fallback.
 
 Repeated presentation solvers must also be value-idempotent: compare derived
 `Transform`/`CellCoord` values before assignment. Bevy marks mutable component

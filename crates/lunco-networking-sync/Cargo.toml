@@ -13,6 +13,7 @@ layout-sync = ["dep:lunco-workbench-core"]
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-id = { path = "../lunco-id" }
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 avian3d = { workspace = true }
 bevy = { workspace = true, features = ["keyboard", "mouse"] }

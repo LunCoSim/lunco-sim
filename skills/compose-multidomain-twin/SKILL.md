@@ -269,8 +269,10 @@ scene loads when the effective default-scene setting is enabled. See
 Keep interactive stages in `scenes/` and verdict fixtures in `scenes/tests/`,
 paired with `scenarios/tests/` observers. Declare both directories in
 `[usd].scenes` (for example `["scenes/*.usda", "scenes/tests/*.usda"]`).
-Scenarios offers **Scenario** and **Test Scenarios** as peer submenus; use
-explicit paths or narrow globs to curate the interactive list.
+The Rhai-authored Scenarios menu lists interactive scenes under **Library**
+and Twin scenes directly under each Twin's name. Twin test scenes stay in that
+Twin's **Test Scenes** submenu; **Settings → Sim Core** controls only **Library
+tests** through `AssetVisibilitySettings`. Use explicit paths or narrow globs to curate each Twin's scene list.
 Update verification registry paths and runners when relocating a fixture,
 and preserve its asset dependencies through typed USD document operations.
 

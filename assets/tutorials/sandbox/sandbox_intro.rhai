@@ -27,7 +27,7 @@ fn steps() {
         // 7
         #{ anchor: "",                      focus: (),             title: "Find command help",       body: "Open Help to find command and automation guidance. Rhai, the HTTP API, MCP clients, and the UI use the same typed commands.", require: "cmd:GuidedNext" },
         // 8
-        #{ anchor: "",                      focus: (),             title: "Choose a lesson",         body: "You have reviewed the basic controls. Open Tutorials and choose First Drive or Moon Driving Basics to practise rover driving.", require: "cmd:GuidedNext" },
+        #{ anchor: "",                      focus: (),             title: "Choose a lesson",         body: "You have reviewed the basic controls. Open Scenarios and choose First Drive or Moon Driving Basics to practise rover driving.", require: "cmd:GuidedNext" },
     ]
 }
 

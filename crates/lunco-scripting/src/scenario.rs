@@ -392,7 +392,7 @@ pub fn resolve_scenario_audience(
 /// or fight replication — the same reason cosim/physics only step on the host).
 ///
 /// - `Host` — host / standalone only (the safe default; all existing scenarios).
-/// - `Client` — **client only**: presentation / HUD / camera / tutorial coaching.
+/// - `Client` — **client only**: presentation / HUD / camera / authored guidance.
 ///   Its `cmd()`s are restricted to the client-local surface
 ///   ([`lunco_core::ClientCommandPolicy`]); an authoritative command is dropped.
 /// - `Both` — every peer (each peer still filtered by the same client-local rule
@@ -1867,7 +1867,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     }
 
     /// Stop one scenario synchronously at an ownership boundary. Scene and
-    /// tutorial owners stop programs before reclaiming their hosts; attachment
+    /// scenario owners stop programs before reclaiming their hosts; attachment
     /// removal also retires execution before final scene resource resets.
     pub fn stop_entity(world: &mut World, entity: Entity) {
         Self::stop_entity_with_twin_owner(world, entity, None);

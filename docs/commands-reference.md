@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**319 commands** across **61** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**320 commands** across **61** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (25 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (26 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (4 commands)
 
 **USD / scenes**
@@ -103,13 +103,13 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-services`](#lunco-luncosim-services) (2 commands)
-- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (7 commands)
+- [`lunco-luncosim-ui`](#lunco-luncosim-ui) (6 commands)
 - [`lunco-modelica-api`](#lunco-modelica-api) (10 commands)
 - [`lunco-modelica-runtime`](#lunco-modelica-runtime) (1 command)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
 - [`lunco-networking-core`](#lunco-networking-core) (1 command)
-- [`lunco-networking-sync`](#lunco-networking-sync) (8 commands)
+- [`lunco-networking-sync`](#lunco-networking-sync) (9 commands)
 - [`lunco-notifications-core`](#lunco-notifications-core) (1 command)
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
@@ -431,6 +431,16 @@ actually call, with the fields the deserializer actually accepts. See the
 | `tool` | `String` |  Registered Rhai tool namespace. |
 | `hook` | `String` |  One-argument pointer-move hook name. |
 | `context` | `BTreeMap < String, String >` |  Stable context merged with each live pointer sample. |
+
+#### `SetShowTestAssets`
+
+ Set the persisted test-asset visibility preference selected by Rhai policy.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/asset_visibility.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `show` | `bool` |  Whether asset consumers include test content in their listings. |
 
 #### `SetUsdViewPreviewTransform`
 
@@ -2574,8 +2584,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `InspectScriptedMenus`
 
- Inspect the currently installed script menu trees and typed action arguments.
- Application and Twin contributions retain their exact provider and owner.
+ Inspect installed script menu and Settings trees, live action availability,
+ and typed arguments. Application and Twin contributions retain their exact owner.
 
 - *defined in:* `crates/lunco-luncosim-ui/src/ui/scripted_menus.rs`
 - *fields:* none — call with `InspectScriptedMenus` (no params)
@@ -2615,20 +2625,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `enabled` | `bool` |   |
-
-#### `SetScenarioRegistryFixture`
-
- Toggle the explicit production-harness failure fixture.
-
- This command is intentionally narrow: it changes only the menu's
- presentation fixture and leaves every Twin/scene resource untouched. The
- default `false` state has no effect on ordinary production runs.
-
-- *defined in:* `crates/lunco-luncosim-ui/src/ui/scenario_fixture.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `unavailable` | `bool` |  `true` injects the unavailable state; `false` restores normal discovery. |
 
 #### `ShowCameraImageSettings`
 
@@ -2886,6 +2882,19 @@ actually call, with the fields the deserializer actually accepts. See the
 | `lead_secs` | `Option < f32 >` |   |
 
 ### `lunco-networking-sync` <a id="lunco-networking-sync"></a>
+
+#### `MountCachedScenarioTwin`
+
+ Mount one exact cached scenario revision for a Rhai-authored scene action.
+
+- *defined in:* `crates/lunco-networking-sync/src/scenario_sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `scenario_id` | `String` |  Stable scenario UUID from the cache catalog. |
+| `revision` | `String` |  Exact lowercase SHA-256 revision selected by the authored action. |
+| `name` | `String` |  Logical name for the mounted Twin root. |
+| `scene` | `String` |  Manifest-relative scene path admitted from this cached revision. |
 
 #### `PromoteScenario`
 
@@ -4747,7 +4756,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 319 commands from the runtime schema; scanned 1091 .rs files for docs (0 parse failure(s) skipped).
+<!-- 320 commands from the runtime schema; scanned 1090 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

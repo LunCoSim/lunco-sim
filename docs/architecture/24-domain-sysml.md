@@ -175,7 +175,7 @@ a status reference. Summary cards use stacked text and native button focus,
 disabled, and selected states. Their counts describe requirement entries;
 run-button counts describe unique mapped tests. The selected requirement's
 statement precedes source metadata. The application catalog exposes
-**Tutorials → LunCoSim → SysML Requirements**, an authored Rhai tour using the
+**Scenarios → LunCoSim → SysML Requirements**, an authored Rhai tour using the
 active Twin and existing guided-tour commands.
 
 The runner returns report schema 2 over the child-process boundary. It separates

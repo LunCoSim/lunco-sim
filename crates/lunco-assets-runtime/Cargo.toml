@@ -22,6 +22,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin" }
+lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
 serde_json = { workspace = true }

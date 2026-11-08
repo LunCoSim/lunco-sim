@@ -18,7 +18,7 @@ use lunco_usd_bevy_camera::camera_switch::{
 };
 use lunco_workbench_core::presentation::{ViewportPlaceholder, ViewportPlaceholderAction};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
-use lunco_workbench_core::{MenuCtx, PanelCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
+use lunco_workbench_core::{PanelCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
 
 mod camera_feed;
 mod camera_feed_images;
@@ -36,8 +36,6 @@ mod rhai_editor_panel;
 /// In-app rhai REPL panel (web + native). Empty unless the API bridge is
 /// available — the file carries its own `#![cfg(…)]`.
 mod rhai_repl_panel;
-/// Explicit production-harness injection for the Scenarios menu failure path.
-mod scenario_fixture;
 /// Generic workbench host for application menus contributed by Rhai policies.
 mod scripted_menus;
 /// Typed intent emitted by the authored terrain-progress surface.
@@ -122,38 +120,35 @@ pub struct LunCoSimUiConfig {
 
 fn install_viewport_placeholder_actions(world: &mut World) {
     let mut placeholder = world.resource_mut::<ViewportPlaceholder>();
-    set_welcome_actions(&mut placeholder);
+    set_welcome_actions(&mut placeholder, Vec::new(), None);
 }
 
-fn set_welcome_actions(placeholder: &mut ViewportPlaceholder) {
-    placeholder.guidance = Some("Choose what you'd like to do:".into());
-    placeholder.actions = vec![
-        ViewportPlaceholderAction {
-            label: "Start Lunar Rover Lab".into(),
-            description: "A 30-minute workshop: drive, measure, compare, and save your Twin."
-                .into(),
-            primary: true,
-            activate: Arc::new(start_rover_lab),
-        },
-        ViewportPlaceholderAction {
-            label: "Explore demo sandbox".into(),
-            description: "Explore the larger collection of vehicles and physics demonstrations."
-                .into(),
-            primary: false,
-            activate: Arc::new(load_sandbox_demo),
-        },
-        ViewportPlaceholderAction {
-            label: "Open Twin".into(),
-            description: "Choose a Twin project folder from your computer.".into(),
-            primary: false,
-            activate: Arc::new(open_twin),
-        },
-    ];
+fn set_welcome_actions(
+    placeholder: &mut ViewportPlaceholder,
+    policy_actions: Vec<ViewportPlaceholderAction>,
+    guidance: Option<String>,
+) {
+    placeholder.guidance = guidance;
+    let mut policy_actions = policy_actions;
+    policy_actions.push(ViewportPlaceholderAction {
+        label: "Open Twin".into(),
+        description: "Choose a Twin project folder from your computer.".into(),
+        enabled: true,
+        is_available: Arc::new(|| true),
+        primary: false,
+        activate: Arc::new(open_twin),
+    });
+    placeholder.actions = policy_actions;
 }
 
 /// Exact asset authorities, scoped to the workspace Twin identities.
 #[derive(Resource, Default)]
 struct PlaceholderTwinMounts(BTreeMap<lunco_workspace::TwinId, String>);
+
+#[derive(Resource, Default)]
+struct LastSceneCatalogFacts(
+    Option<lunco_scripting_rhai_core::ui_bridge::ApplicationSceneCatalogChanged>,
+);
 
 fn remember_placeholder_twin(
     event: On<lunco_assets_runtime::TwinAssetMounted>,
@@ -171,167 +166,218 @@ fn forget_placeholder_twin(
     mounts.0.remove(&event.event().twin);
 }
 
-fn twin_scene_action(
-    twin: lunco_workspace::TwinId,
-    authority: &str,
-    path: &str,
-    primary: bool,
-) -> ViewportPlaceholderAction {
-    let name = authority.to_owned();
-    let relative_path = path.to_owned();
-    ViewportPlaceholderAction {
-        label: if primary {
-            "Load default scene".into()
-        } else {
-            path.to_owned()
-        },
-        description: if primary {
-            path.to_owned()
-        } else {
-            String::new()
-        },
-        primary,
-        activate: Arc::new(move |ctx| {
-            ctx.trigger_command(
-                lunco_usd_bevy_runtime_core::OpenTwinScene {
-                    twin_id: twin.raw(),
-                    name: name.clone(),
-                    relative_path: relative_path.clone(),
-                },
-                lunco_core::CommandOrigin::LocalUser {
-                    session_id: lunco_command_contracts::SessionId::LOCAL,
-                },
-            );
-        }),
-    }
-}
-
-fn sync_twin_empty_actions(
-    workspace: Res<lunco_workspace::WorkspaceResource>,
-    mounts: Res<PlaceholderTwinMounts>,
-    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
-    roots: Option<Res<lunco_assets_core::TwinRoots>>,
-    mut placeholder: ResMut<ViewportPlaceholder>,
-) {
-    if !workspace.is_changed()
-        && !mounts.is_changed()
-        && !manifest
-            .as_ref()
-            .is_some_and(|manifest| manifest.is_changed())
-    {
-        return;
-    }
-    let Some((id, twin)) = workspace
-        .active_twin
-        .and_then(|id| workspace.twin(id).map(|twin| (id, twin)))
-    else {
-        set_welcome_actions(&mut placeholder);
-        return;
-    };
-    let Some(authority) = mounts.0.get(&id) else {
-        placeholder.guidance = Some("Preparing workspace…".into());
-        placeholder.actions.clear();
-        return;
-    };
-    if twin.manifest.is_none() {
-        let mut actions = Vec::new();
-        for file in twin.files() {
-            if file.relative_path.components().count() != 1 {
-                continue;
-            }
-            let Some(path) = file.relative_path.to_str() else {
-                continue;
-            };
-            if lunco_usd_core::commands::is_usd_path(path) {
-                actions.push(twin_scene_action(id, authority, path, false));
-            }
-        }
-        actions.sort_by(|a, b| a.label.cmp(&b.label));
-        placeholder.guidance = Some(if actions.is_empty() {
-            "This folder has no scenes to load.".into()
-        } else {
-            "Choose a scene from this folder.".into()
-        });
-        placeholder.actions = actions;
-        return;
-    }
-    let twin_name = twin
-        .manifest
-        .as_ref()
-        .map(|manifest| manifest.name.as_str())
-        .or_else(|| twin.root.file_name().and_then(|name| name.to_str()))
-        .unwrap_or("Project");
-    let declared_default = twin
+fn scenario_twin_facts(
+    id: lunco_workspace::TwinId,
+    twin: &lunco_twin::Twin,
+    mounts: &PlaceholderTwinMounts,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> lunco_scripting_rhai_core::ui_bridge::SceneCatalogTwin {
+    let name = twin.manifest.as_ref().map(|manifest| manifest.name.clone());
+    let directory = twin
+        .root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned);
+    let authority = mounts
+        .0
+        .get(&id)
+        .cloned()
+        .or_else(|| roots.and_then(|roots| roots.name_for_root(&twin.root).ok().flatten()));
+    let default_scene = twin
         .manifest
         .as_ref()
         .and_then(|manifest| manifest.usd.as_ref())
         .and_then(|usd| usd.default_scene.as_deref())
         .map(|path| path.replace('\\', "/"));
-    let default = declared_default.clone().filter(|path| {
-        twin.files().iter().any(|file| {
-            file.relative_path
-                .components()
-                .eq(std::path::Path::new(path).components())
-        })
-    });
-    let missing_default = declared_default.is_some() && default.is_none();
-    let mut actions = Vec::new();
-    if let Some(default) = default.as_deref() {
-        actions.push(twin_scene_action(id, authority, default, true));
+    lunco_scripting_rhai_core::ui_bridge::SceneCatalogTwin {
+        id: id.raw(),
+        authority,
+        name,
+        directory,
+        default_scene,
     }
-    let scenes = match (manifest.as_deref(), roots.as_deref()) {
-        (Some(manifest), Some(roots)) => {
-            lunco_assets_runtime::discovery::list_indexed_scene_assets(manifest, roots, &[twin])
-                .map(|assets| {
-                    assets
-                        .into_iter()
-                        .filter(|asset| asset.twin.is_some())
-                        .map(|asset| asset.rel)
-                        .collect::<Vec<_>>()
-                })
-                .map_err(|error| error.to_string())
-        }
-        _ => Err("Scene catalog is unavailable.".into()),
-    };
-    placeholder.guidance = Some(match scenes {
-        Ok(mut scenes) => {
-            scenes.sort();
-            scenes.dedup();
-            for path in scenes
-                .iter()
-                .filter(|path| Some(path.as_str()) != default.as_deref())
+}
+
+fn publish_scene_catalog_facts(
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    mounts: Res<PlaceholderTwinMounts>,
+    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    metadata: Option<Res<lunco_scene_catalog::catalog::AssetMetaStore>>,
+    #[cfg(feature = "networking")] downloads: Option<
+        Res<lunco_networking_sync::scenario_sync::CachedTwinsRegistry>,
+    >,
+    current_scene: Res<CurrentScenePath>,
+    visibility: Option<Res<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>>,
+    mut last_facts: ResMut<LastSceneCatalogFacts>,
+    mut commands: Commands,
+) {
+    let inputs_changed = workspace.is_changed()
+        || mounts.is_changed()
+        || manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.is_changed())
+        || roots.as_ref().is_some_and(|roots| roots.is_changed())
+        || metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.is_changed())
+        || current_scene.is_changed()
+        || visibility
+            .as_ref()
+            .is_some_and(|visibility| visibility.is_changed())
+        || {
+            #[cfg(feature = "networking")]
             {
-                actions.push(twin_scene_action(id, authority, path, false));
+                downloads
+                    .as_ref()
+                    .is_some_and(|downloads| downloads.is_changed())
             }
-            if actions.is_empty() && missing_default {
-                "This folder has no scenes to load. The configured default scene was not found."
-                    .to_owned()
-            } else if actions.is_empty() {
-                "This folder has no scenes to load.".to_owned()
-            } else if missing_default {
-                format!(
-                    "{twin_name} · The configured default scene was not found. Choose another scene."
-                )
-            } else {
-                format!("{twin_name} · Choose a scene.")
+            #[cfg(not(feature = "networking"))]
+            {
+                false
+            }
+        };
+    if !inputs_changed {
+        return;
+    }
+
+    use lunco_scripting_rhai_core::ui_bridge::{
+        ApplicationSceneCatalogChanged, CachedScenarioTwin, SceneCatalogEntry,
+    };
+    let show_test_assets = visibility
+        .as_ref()
+        .is_some_and(|settings| settings.show_test_assets);
+    let mut facts = ApplicationSceneCatalogChanged {
+        current_scene: (!current_scene.0.is_empty())
+            .then(|| lunco_assets_core::engine_asset_uri(&current_scene.0)),
+        active_twin: None,
+        twins: workspace
+            .twins()
+            .map(|(id, twin)| scenario_twin_facts(id, twin, &mounts, roots.as_deref()))
+            .collect(),
+        cached_twins: {
+            #[cfg(feature = "networking")]
+            {
+                downloads
+                    .as_deref()
+                    .map(|registry| {
+                        registry
+                            .entries
+                            .iter()
+                            .map(|summary| CachedScenarioTwin {
+                                scenario_id: summary.scenario_id_text(),
+                                revision: summary.revision_text(),
+                                name: summary.name.clone(),
+                                default_scene: summary.default_scene.clone(),
+                                total_bytes: summary.total_bytes,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            #[cfg(not(feature = "networking"))]
+            {
+                Vec::<CachedScenarioTwin>::new()
+            }
+        },
+        download_sync_enabled: cfg!(feature = "networking"),
+        show_test_assets,
+        catalog_ready: manifest.as_ref().is_some_and(|manifest| manifest.ready()),
+        catalog_error: None,
+        scenes: Vec::new(),
+    };
+    facts.active_twin = workspace.active_twin.and_then(|id| {
+        workspace
+            .twin(id)
+            .map(|twin| scenario_twin_facts(id, twin, &mounts, roots.as_deref()))
+    });
+
+    match (manifest.as_deref(), roots.as_deref()) {
+        (None, _) => facts.catalog_error = Some("engine scene inventory is unavailable".into()),
+        (Some(manifest), _) if !manifest.ready() => {}
+        (Some(_manifest), None) => {
+            facts.catalog_error = Some("Twin scene registry is unavailable".into());
+        }
+        (Some(manifest), Some(roots)) => {
+            let twins = workspace.twins().map(|(_, twin)| twin).collect::<Vec<_>>();
+            match lunco_assets_runtime::discovery::list_indexed_scene_assets(
+                manifest, roots, &twins,
+            ) {
+                Ok(assets) => {
+                    let mut scenes = Vec::with_capacity(assets.len());
+                    let mut error = None;
+                    for asset in assets {
+                        let twin = match asset.twin.as_deref() {
+                            None => None,
+                            Some(authority) => match facts
+                                .twins
+                                .iter()
+                                .find(|twin| twin.authority.as_deref() == Some(authority))
+                            {
+                                Some(twin) => Some(twin.clone()),
+                                None => {
+                                    error = Some(format!(
+                                        "scene `{}` has no open workspace Twin owner",
+                                        asset.asset_path
+                                    ));
+                                    break;
+                                }
+                            },
+                        };
+                        scenes.push(SceneCatalogEntry {
+                            uri: lunco_assets_core::engine_asset_uri(&asset.asset_path),
+                            relative_path: asset.rel.clone(),
+                            stem: asset.stem,
+                            description: metadata
+                                .as_deref()
+                                .and_then(|metadata| metadata.description(&asset.asset_path))
+                                .map(str::to_owned),
+                            is_test: lunco_assets_runtime::discovery::is_test_asset(&asset.rel),
+                            twin,
+                        });
+                    }
+                    if let Some(error) = error {
+                        facts.catalog_error = Some(error);
+                    } else {
+                        scenes.sort_by(|left, right| left.uri.cmp(&right.uri));
+                        facts.scenes = scenes;
+                    }
+                }
+                Err(error) => facts.catalog_error = Some(error.to_string()),
             }
         }
-        Err(error) => format!("{twin_name} · Scene list unavailable: {error}"),
-    });
-    placeholder.actions = actions;
+    }
+    if last_facts.0.as_ref() != Some(&facts) {
+        last_facts.0 = Some(facts.clone());
+        commands.trigger(facts);
+    }
 }
 
-fn load_sandbox_demo(ctx: &mut PanelCtx<'_>) {
-    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
-        path: "lunco://scenes/luncosim/sandbox_scene.usda".into(),
-        root_prim: String::new(),
-    });
+fn sync_viewport_placeholder(
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    scripted_menus: Res<scripted_menus::ScriptedMenuBindings>,
+    mut placeholder: ResMut<ViewportPlaceholder>,
+) {
+    if !workspace.is_changed() && !scripted_menus.is_changed() {
+        return;
+    }
+    refresh_viewport_placeholder(&workspace, &scripted_menus, &mut placeholder);
 }
 
-fn start_rover_lab(ctx: &mut PanelCtx<'_>) {
-    ctx.trigger(lunco_luncosim_services::OpenTwinAsset {
-        manifest_asset: "lunco://tutorials/classroom/twin.toml".into(),
-    });
+pub(super) fn refresh_viewport_placeholder(
+    workspace: &lunco_workspace::WorkspaceResource,
+    scripted_menus: &scripted_menus::ScriptedMenuBindings,
+    placeholder: &mut ViewportPlaceholder,
+) {
+    let active_twin_id = workspace.active_twin.map(lunco_workspace::TwinId::raw);
+    let policy_actions = scripted_menus::viewport_actions_for(scripted_menus, active_twin_id);
+    let guidance = scripted_menus::viewport_guidance_for(scripted_menus, active_twin_id);
+    if active_twin_id.is_none() {
+        set_welcome_actions(placeholder, policy_actions, guidance);
+    } else {
+        placeholder.guidance = guidance;
+        placeholder.actions = policy_actions;
+    }
 }
 
 fn open_twin(ctx: &mut PanelCtx<'_>) {
@@ -436,7 +482,6 @@ impl Plugin for LunCoSimUiPlugin {
         }
 
         add_runtime_ui_layer(app);
-        scenario_fixture::install(app);
         crate::register_save_scenario_command(app);
         // A windowed host requires a presentation contract. Authored tracks and
         // LocalEmbodiment cameras remain authoritative; the USD projection may add
@@ -518,9 +563,13 @@ impl Plugin for LunCoSimUiPlugin {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 install_viewport_placeholder_actions(app.world_mut());
                 app.init_resource::<PlaceholderTwinMounts>()
+                    .init_resource::<LastSceneCatalogFacts>()
                     .add_observer(remember_placeholder_twin)
                     .add_observer(forget_placeholder_twin)
-                    .add_systems(Update, sync_twin_empty_actions);
+                    .add_systems(
+                        Update,
+                        (publish_scene_catalog_facts, sync_viewport_placeholder).chain(),
+                    );
                 app.init_resource::<scripted_menus::ScriptedMenuBindings>();
                 scripted_menus::register_all_commands(app);
                 app.add_observer(on_runtime_ui_action)
@@ -573,27 +622,10 @@ impl Plugin for LunCoSimUiPlugin {
             .add_systems(
                 Startup,
                 (
-                    init_current_scene_path,
-                    register_sandbox_scenarios_menu,
+                    scripted_menus::register_navigation,
                     register_camera_menu,
                     register_downloadable_assets_settings,
                 ),
-            )
-            .add_observer(
-                |t: On<lunco_usd_bevy_runtime_core::scene::LoadScene>,
-                 current: Option<ResMut<CurrentScenePath>>,
-                 current_name: Option<ResMut<CurrentSceneName>>| {
-                    if let Some(mut current) = current {
-                        current.0 = t.event().path.clone();
-                    }
-                    if let Some(mut name) = current_name {
-                        name.0 = std::path::Path::new(&t.event().path)
-                            .file_name()
-                            .and_then(|f| f.to_str())
-                            .unwrap_or(&t.event().path)
-                            .to_string();
-                    }
-                },
             )
             .add_observer(
                 |_t: On<lunco_core::SceneTransitionStarted>,
@@ -602,6 +634,27 @@ impl Plugin for LunCoSimUiPlugin {
                     if matches!(_t.event().transition, lunco_core::SceneTransition::Clear) {
                         current.0.clear();
                         current_name.0.clear();
+                    }
+                },
+            )
+            .add_observer(
+                |transition: On<lunco_core::SceneTransitionCompleted>,
+                 mut current: ResMut<CurrentScenePath>,
+                 mut current_name: ResMut<CurrentSceneName>| {
+                    match &transition.event().transition {
+                        lunco_core::SceneTransition::Load { path, .. }
+                        | lunco_core::SceneTransition::Restart { path, .. } => {
+                            current.0 = path.clone();
+                            current_name.0 = std::path::Path::new(path)
+                                .file_name()
+                                .and_then(|file| file.to_str())
+                                .unwrap_or(path)
+                                .to_owned();
+                        }
+                        lunco_core::SceneTransition::Clear => {
+                            current.0.clear();
+                            current_name.0.clear();
+                        }
                     }
                 },
             )
@@ -861,7 +914,7 @@ fn on_guided_stop_requested(
 ) {
     let Some(owner) = overlay.owner_script else {
         commands.trigger(lunco_notifications_core::ShowNotification {
-            text: "This guided lesson has no active scenario to stop.".into(),
+            text: "This guided activity has no active scenario to stop.".into(),
             kind: "warn".into(),
             secs: 0.0,
         });
@@ -873,7 +926,7 @@ fn on_guided_stop_requested(
     else {
         overlay.clear();
         commands.trigger(lunco_notifications_core::ShowNotification {
-            text: "The guided lesson's scenario is no longer available.".into(),
+            text: "The guided activity's scenario is no longer available.".into(),
             kind: "warn".into(),
             secs: 0.0,
         });
@@ -882,7 +935,7 @@ fn on_guided_stop_requested(
     if scenarios.get(target).is_err() {
         overlay.clear();
         commands.trigger(lunco_notifications_core::ShowNotification {
-            text: "The guided lesson's scenario is no longer running.".into(),
+            text: "The guided activity's scenario is no longer running.".into(),
             kind: "warn".into(),
             secs: 0.0,
         });
@@ -1443,23 +1496,6 @@ fn luncosim_boot_from_url(
     state.done = true;
 }
 
-fn init_current_scene_path(
-    scene_path: Res<InitialScenePath>,
-    mut current: ResMut<CurrentScenePath>,
-    current_name: Option<ResMut<CurrentSceneName>>,
-) {
-    if let Some(path) = scene_path.0.as_deref() {
-        current.0 = path.to_string();
-        if let Some(mut name) = current_name {
-            name.0 = std::path::Path::new(path)
-                .file_name()
-                .and_then(|f| f.to_str())
-                .unwrap_or(path)
-                .to_string();
-        }
-    }
-}
-
 #[cfg(all(feature = "package-icons", not(target_arch = "wasm32")))]
 fn install_window_icon(
     mut created: MessageReader<bevy::window::WindowCreated>,
@@ -1668,445 +1704,9 @@ fn register_downloadable_assets_settings(world: &mut World) {
     });
 }
 
-const SCENARIO_MENU_MAX_WIDTH: f32 = 420.0;
-const SCENARIO_MENU_HEIGHT: f32 = 360.0;
-const SCENARIO_REGISTRY_ERROR_EVENT: &str = "scenario-registry-unavailable";
-const SCENARIO_REGISTRY_ERROR_LABEL: &str = "Scenarios unavailable";
-
-fn scenario_registry_diagnostic(detail: impl Into<String>) -> String {
-    format!("Twin registry unavailable: {}", detail.into())
-}
-
-fn scenario_registry_status_message(detail: &str) -> String {
-    format!("{SCENARIO_REGISTRY_ERROR_EVENT} [source=0]: {detail}")
-}
-
-fn report_scenario_registry_error(ctx: &mut MenuCtx, detail: impl Into<String>) {
-    let detail = scenario_registry_diagnostic(detail);
-    let status_message = scenario_registry_status_message(&detail);
-    let already_reported = ctx
-        .resource::<lunco_status_core::status_bus::StatusBus>()
-        .and_then(|bus| bus.history().next_back())
-        .is_some_and(|event| {
-            event.source == lunco_status_core::status_bus::TELEMETRY_SOURCE
-                && event.level == lunco_status_core::status_bus::StatusLevel::Error
-                && event.message == status_message
-        });
-    if !already_reported {
-        ctx.trigger(lunco_telemetry_core::TelemetryEvent {
-            name: SCENARIO_REGISTRY_ERROR_EVENT.to_owned(),
-            source: 0,
-            severity: lunco_telemetry_core::Severity::Error,
-            data: lunco_telemetry_core::TelemetryValue::String(detail),
-            timestamp: 0.0,
-            sim_secs: 0.0,
-            sim_tick: 0,
-        });
-    }
-}
-
-fn render_scenario_registry_unavailable(ui: &mut bevy_egui::egui::Ui) {
-    ui.label(SCENARIO_REGISTRY_ERROR_LABEL);
-    ui.label(bevy_egui::egui::RichText::new("See Recent status for diagnostic details.").weak());
-}
-
-fn register_sandbox_scenarios_menu(world: &mut World) {
-    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
-        return;
-    };
-    menus.register_custom_menu("Scenarios", render_scenarios_menu);
-    world.init_resource::<lunco_workbench_core::navigation::NavigationRegistry>();
-    world
-        .resource_mut::<lunco_workbench_core::navigation::NavigationRegistry>()
-        .register(&["Scenes"], scene_navigation_entries);
-}
-
-fn scene_navigation_entries(
-    world: &World,
-) -> Result<Vec<lunco_workbench_core::navigation::NavigationEntry>, String> {
-    let manifest = world
-        .get_resource::<lunco_assets_runtime::discovery::AssetManifest>()
-        .ok_or("Scene inventory unavailable")?;
-    if !manifest.ready() {
-        return Err("Scene inventory is loading".into());
-    }
-    let roots = world
-        .get_resource::<lunco_assets_core::TwinRoots>()
-        .ok_or("Scene source registry unavailable")?;
-    let twins: Vec<_> = world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
-        .map(|workspace| workspace.twins().map(|(_, twin)| twin).collect())
-        .unwrap_or_default();
-    let assets =
-        lunco_assets_runtime::discovery::list_indexed_scene_assets(manifest, roots, &twins)
-            .map_err(|error| error.to_string())?;
-    assets
-        .into_iter()
-        .filter(|asset| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
-        .map(|asset| {
-            let path = lunco_assets_core::engine_asset_uri(&asset.asset_path);
-            let owner = match asset.twin.as_deref() {
-                Some(authority) => roots
-                    .logical_name(authority)
-                    .map_err(|error| error.to_string())?,
-                None => "LunCo Library".into(),
-            };
-            Ok(lunco_workbench_core::navigation::NavigationEntry {
-                id: format!("scene:{path}"),
-                label: format!("Load {}", clean_scene_name(&asset.stem)),
-                detail: format!("{owner} / {} · replaces the loaded scene", asset.rel),
-                category: "Scenes".into(),
-                activate: std::sync::Arc::new(move |ctx| {
-                    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
-                        path: path.clone(),
-                        root_prim: String::new(),
-                    })
-                }),
-            })
-        })
-        .collect()
-}
-
-fn render_scenarios_menu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
-    let current_scene = ctx
-        .resource::<CurrentScenePath>()
-        .filter(|path| !path.0.is_empty())
-        .map(|path| lunco_assets_core::engine_asset_uri(&path.0));
-    let has_scene = current_scene.is_some();
-
-    ui.add_enabled_ui(has_scene, |ui| {
-        if ui.button("Restart Scenario").clicked() {
-            // `LoadScene` deliberately no-ops for the active `(stage, root)`.
-            // RestartScene is the lifecycle verb that clears the current world,
-            // invalidates the stage asset, and mounts a newly read source.
-            ctx.trigger(lunco_usd_bevy_runtime_core::scene::RestartScene::default());
-            ui.close();
-        }
-    });
-
-    ui.separator();
-
-    // ── Downloaded Twins (scenario-sync cache, G3) ───────────────────
-    // Twins fetched from a server into the local cache — loadable offline
-    // as a `twin://` root over the cache dir. Networking-only; the registry rebuilds from
-    // `<cache>/scenarios/index.json` at boot and updates as downloads finish.
-    #[cfg(feature = "networking")]
-    {
-        use lunco_networking_sync::scenario_sync::CachedTwinsRegistry;
-        let entries = ctx
-            .resource::<CachedTwinsRegistry>()
-            .map(|r| r.entries.clone())
-            .unwrap_or_default();
-        ui.menu_button(format!("Downloaded Twins ({})", entries.len()), |ui| {
-                ui.set_min_width(ui.spacing().menu_width);
-                ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
-                if entries.is_empty() {
-                    ui.label(
-                        bevy_egui::egui::RichText::new("(connect to a server to download one)")
-                            .weak()
-                            .italics(),
-                    );
-                }
-                bevy_egui::egui::ScrollArea::vertical()
-                    .max_height(SCENARIO_MENU_HEIGHT)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for entry in &entries {
-                            let mb = (entry.total_bytes as f64) / (1024.0 * 1024.0);
-                            let label = if entry.name.is_empty() {
-                                format!("Downloaded twin  ({mb:.0} MB)")
-                            } else {
-                                format!("{}  ({mb:.0} MB)", entry.name)
-                            };
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), 0.0],
-                                    bevy_egui::egui::Button::new(label).wrap(),
-                                )
-                                .clicked()
-                            {
-                                if let Some(scene) = entry.default_scene.clone() {
-                                    // The cache root gets a local load authority and
-                                    // retains the host's stable logical source identity.
-                                    let Some(twins) = ctx
-                                        .resource::<lunco_assets_core::twin_source::TwinRoots>()
-                                        .cloned()
-                                    else {
-                                        continue;
-                                    };
-                                    let path = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
-                                        &twins,
-                                        &entry.scenario_id,
-                                        &entry.revision,
-                                        &entry.name,
-                                        &scene,
-                                    ) {
-                                        Ok(mount) => mount.path,
-                                        Err(error) => {
-                                            ctx.trigger(lunco_telemetry_core::TelemetryEvent {
-                                                name: "scenario-twin-mount-failed".into(),
-                                                source: 0,
-                                                severity: lunco_telemetry_core::Severity::Error,
-                                                data: lunco_telemetry_core::TelemetryValue::String(
-                                                    format!(
-                                                        "could not mount downloaded scenario Twin: {error}"
-                                                    ),
-                                                ),
-                                                timestamp: 0.0,
-                                                sim_secs: 0.0,
-                                                sim_tick: 0,
-                                            });
-                                            continue;
-                                        }
-                                    };
-                                    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
-                                        path,
-                                        root_prim: String::new(),
-                                    });
-                                    ui.close();
-                                }
-                            }
-                        }
-                    });
-            });
-        ui.separator();
-    }
-
-    let Some(roots) = ctx
-        .resource::<lunco_assets_core::twin_source::TwinRoots>()
-        .cloned()
-    else {
-        report_scenario_registry_error(ctx, "the Twin registry resource is unavailable");
-        render_scenario_registry_unavailable(ui);
-        return;
-    };
-
-    if ctx
-        .resource::<scenario_fixture::ScenarioRegistryFixture>()
-        .is_some_and(|fixture| fixture.unavailable)
-    {
-        report_scenario_registry_error(ctx, "the injected production-harness fixture is active");
-        render_scenario_registry_unavailable(ui);
-        return;
-    }
-
-    let Some(manifest) = ctx.resource::<lunco_assets_runtime::discovery::AssetManifest>() else {
-        render_scenario_registry_unavailable(ui);
-        return;
-    };
-    // On the web the listing arrives by fetch. "Not loaded yet" is not "no
-    // scenes" — say which, rather than showing an empty menu that looks final.
-    if !manifest.ready() {
-        ui.label(
-            bevy_egui::egui::RichText::new("(loading asset list…)")
-                .weak()
-                .italics(),
-        );
-        return;
-    }
-
-    // Every loadable scene in the project. Which files those are is the
-    // project's answer, not this menu's: each Twin declares `[usd] scenes`
-    // in its `twin.toml`, the engine library uses its own `scenes/` layout.
-    // See `discovery::list_scene_assets` for why the menu stopped deciding.
-    let twins: Vec<_> = ctx
-        .resource::<lunco_workspace::WorkspaceResource>()
-        .map(|workspace| workspace.twins().map(|(_, twin)| twin).collect())
-        .unwrap_or_default();
-    let mut assets = match lunco_assets_runtime::discovery::list_indexed_scene_assets(
-        manifest, &roots, &twins,
-    ) {
-        Ok(assets) => assets,
-        Err(error) => {
-            report_scenario_registry_error(ctx, error.to_string());
-            render_scenario_registry_unavailable(ui);
-            return;
-        }
-    };
-    // Names copied out here so every click can dispatch through `MenuCtx`.
-    let twin_names = match roots.names().and_then(|names| {
-        names
-            .into_iter()
-            .map(|authority| {
-                let label = roots.logical_name(&authority)?;
-                Ok((authority, label))
-            })
-            .collect::<Result<Vec<_>, lunco_assets_core::TwinRootsError>>()
-    }) {
-        Ok(names) => names,
-        Err(error) => {
-            report_scenario_registry_error(ctx, error.to_string());
-            render_scenario_registry_unavailable(ui);
-            return;
-        }
-    };
-
-    // Twin tests stay reachable in their own submenu. The browser preference
-    // controls the engine library's test collection, independently of Twins.
-    let show_tests = ctx
-        .resource::<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>()
-        .is_some_and(|s| s.show_test_assets);
-    if !show_tests {
-        assets.retain(|asset| {
-            asset.twin.is_some() || !lunco_assets_runtime::discovery::is_test_asset(&asset.rel)
-        });
-    }
-    assets.sort_by(|a, b| a.stem.cmp(&b.stem));
-
-    if assets.is_empty() {
-        ui.label(
-            bevy_egui::egui::RichText::new("(no scenes found)")
-                .weak()
-                .italics(),
-        );
-        return;
-    }
-
-    // Each scene's standard USD `doc` metadata, straight from the catalogue's
-    // metadata store — the scan already read and parsed every project
-    // `*.usda`, so re-reading them here would be a second parse of the
-    // same default prim of the same file.
-    //
-    // The store fills asynchronously, so a scene not yet read simply
-    // shows no tooltip this frame and gets one on the next redraw.
-    let descs: Vec<Option<String>> = {
-        let Some(store) = ctx.resource::<lunco_scene_catalog::catalog::AssetMetaStore>() else {
-            return;
-        };
-        assets
-            .iter()
-            .map(|a| store.description(&a.asset_path).map(str::to_string))
-            .collect()
-    };
-
-    let render =
-        |ui: &mut bevy_egui::egui::Ui,
-         ctx: &mut MenuCtx,
-         items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
-            ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
-            bevy_egui::egui::ScrollArea::vertical()
-                .max_height(SCENARIO_MENU_HEIGHT)
-                .auto_shrink([true, true])
-                .show(ui, |ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        for (asset, desc) in items {
-                            let label = clean_scene_name(&asset.stem);
-                            let path = lunco_assets_core::engine_asset_uri(&asset.asset_path);
-                            let selected = current_scene.as_deref() == Some(path.as_str());
-                            let resp = ui.radio(selected, label);
-                            // Show the plain-language "what is this demo" blurb on hover.
-                            // `on_hover_text` consumes and returns the `Response` (chaining API).
-                            let resp = match desc {
-                                Some(d) => resp.on_hover_text(d.as_str()),
-                                None => resp,
-                            };
-                            if resp.clicked() {
-                                ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
-                                    path,
-                                    root_prim: String::new(),
-                                });
-                                ui.close();
-                            }
-                        }
-                    });
-                });
-        };
-
-    let paired: Vec<(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)> =
-        assets.iter().zip(descs.iter()).collect();
-    let regular: Vec<_> = paired
-        .iter()
-        .copied()
-        .filter(|(asset, _)| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
-        .collect();
-    let tests: Vec<_> = paired
-        .iter()
-        .copied()
-        .filter(|(asset, _)| lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
-        .collect();
-
-    // Presentation labels never expose mount authorities. With several open
-    // Twins, their stable logical names disambiguate the nested lists.
-    let render_twins =
-        |ui: &mut bevy_egui::egui::Ui,
-         ctx: &mut MenuCtx,
-         items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
-            if twin_names.len() == 1 {
-                render(ui, ctx, items);
-            } else {
-                for (authority, label) in &twin_names {
-                    let group: Vec<_> = items
-                        .iter()
-                        .copied()
-                        .filter(|(asset, _)| asset.twin.as_deref() == Some(authority.as_str()))
-                        .collect();
-                    if !group.is_empty() {
-                        ui.menu_button(label, |ui| render(ui, ctx, &group));
-                    }
-                }
-            }
-        };
-    let twin_scenes: Vec<_> = regular
-        .iter()
-        .copied()
-        .filter(|(asset, _)| asset.twin.is_some())
-        .collect();
-    if !twin_scenes.is_empty() {
-        ui.menu_button("Scenario", |ui| render_twins(ui, ctx, &twin_scenes));
-    }
-    let twin_tests: Vec<_> = tests
-        .iter()
-        .copied()
-        .filter(|(asset, _)| asset.twin.is_some())
-        .collect();
-    if !twin_tests.is_empty() {
-        ui.menu_button("Test Scenarios", |ui| render_twins(ui, ctx, &twin_tests));
-    }
-
-    let library: Vec<_> = regular
-        .iter()
-        .copied()
-        .filter(|(a, _)| a.twin.is_none())
-        .collect();
-    if !library.is_empty() {
-        if !twin_scenes.is_empty() || !twin_tests.is_empty() {
-            ui.separator();
-        }
-        ui.menu_button("Library", |ui| {
-            render(ui, ctx, &library);
-        });
-    }
-    let library_tests: Vec<_> = tests
-        .iter()
-        .copied()
-        .filter(|(a, _)| a.twin.is_none())
-        .collect();
-    if show_tests && !library_tests.is_empty() {
-        ui.menu_button("Library tests", |ui| {
-            render(ui, ctx, &library_tests);
-        });
-    }
-}
-
-fn clean_scene_name(stem: &str) -> String {
-    stem.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        RuntimeUiDropdownState, runtime_ui_dimension, scenario_registry_diagnostic,
-        scenario_registry_status_message,
-    };
+    use super::{RuntimeUiDropdownState, runtime_ui_dimension};
     use lunco_exposure_core::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;
 
@@ -2196,30 +1796,6 @@ mod tests {
     }
 
     #[test]
-    fn scenario_registry_diagnostics_stay_out_of_the_menu_label() {
-        let detail = scenario_registry_diagnostic("missing twin.toml");
-        assert_eq!(
-            super::SCENARIO_REGISTRY_ERROR_LABEL,
-            "Scenarios unavailable"
-        );
-        assert_eq!(
-            scenario_registry_status_message(&detail),
-            "scenario-registry-unavailable [source=0]: Twin registry unavailable: missing twin.toml"
-        );
-        assert!(!super::SCENARIO_REGISTRY_ERROR_LABEL.contains("missing twin.toml"));
-    }
-
-    #[test]
-    fn scenario_registry_fixture_is_transient_and_disabled_by_default() {
-        let mut fixture = super::scenario_fixture::ScenarioRegistryFixture::default();
-        assert!(!fixture.unavailable);
-        fixture.unavailable = true;
-        assert!(fixture.unavailable);
-        fixture.unavailable = false;
-        assert!(!fixture.unavailable);
-    }
-
-    #[test]
     fn guided_stop_targets_the_authored_scenario_and_clears_the_coach() {
         let mut app = bevy::prelude::App::new();
         let owner = lunco_core::GlobalEntityId::from_raw(120);
@@ -2234,7 +1810,7 @@ mod tests {
             .insert_resource(lunco_workbench_guided_ui::GuidedOverlay {
                 owner_script: Some(owner),
                 tour: Some(lunco_workbench_guided_ui::TourStep {
-                    title: "Lesson".into(),
+                    title: "Authored scenario".into(),
                     ..Default::default()
                 }),
                 ..Default::default()

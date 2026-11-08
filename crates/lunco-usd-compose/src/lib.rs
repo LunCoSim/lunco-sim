@@ -3,7 +3,7 @@
 //! `lunco-assets-core` owns canonical asset identities and storage locations. This
 //! crate owns the USD meaning of those bytes: sublayers, references, payloads,
 //! variants, and OpenUSD stage assembly. It is deliberately below the Bevy
-//! projector and the simulation umbrella, so tutorials and headless tools can
+//! projector and the simulation umbrella, so scenarios and headless tools can
 //! consume a composed stage without creating an upward dependency cycle.
 
 mod resolver;

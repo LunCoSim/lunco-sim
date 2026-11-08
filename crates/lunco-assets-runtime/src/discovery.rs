@@ -675,14 +675,28 @@ pub fn list_indexed_scene_assets(
             )
         })?;
         let globs = scene_globs_from_manifest(twin.manifest.as_ref());
+        let default_scene = twin
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.usd.as_ref())
+            .and_then(|usd| usd.default_scene.as_deref())
+            .map(|path| path.replace('\\', "/"));
         for file in twin.files() {
             let rel = logical_catalog_path(&file.relative_path).map_err(|error| {
                 lunco_assets_core::TwinRootsError::AssetResolution(error.kind(), error.to_string())
             })?;
-            let matches = globs
+            let matches_manifest = globs
                 .iter()
                 .any(|glob| lunco_twin::glob_matches(glob, &rel));
-            if rel.ends_with(".usda") && matches {
+            let is_default_scene = default_scene.as_deref() == Some(rel.as_str())
+                && lunco_usd_core::commands::is_usd_path(&rel);
+            let is_unmanifested_root_scene = twin.manifest.is_none()
+                && std::path::Path::new(&rel).components().count() == 1
+                && lunco_usd_core::commands::is_usd_path(&rel);
+            if (rel.ends_with(".usda") && matches_manifest)
+                || is_default_scene
+                || is_unmanifested_root_scene
+            {
                 assets.push(AssetFile {
                     asset_path: lunco_assets_core::twin_uri(&authority, &file.relative_path),
                     stem: stem_of(&rel),

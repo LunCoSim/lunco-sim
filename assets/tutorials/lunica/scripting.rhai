@@ -12,7 +12,7 @@ fn steps() {
         #{ anchor: "",                        focus: (),                   title: "Use the command bus",   body: "Open Help or the live REPL. Send a typed command such as `OpenClass` with a qualified class name, then check the model view." },
         #{ anchor: "",                        focus: (),                   title: "Use the API or MCP",    body: "Follow the API or MCP guidance under Help. Send `ExecuteCommand` to `/api/commands`, then inspect the response." },
         #{ anchor: "panel.modelica_journal",  focus: "modelica_journal",   title: "Read the journal",           body: "Open Journal to review authored document operations. It does not record every transient UI or runtime command." },
-        #{ anchor: "",                        focus: (),                   title: "Edit a tutorial",     body: "Tutorial scripts live in `assets/tutorials/lunica`. Edit one, reopen it from Tutorials, and test the change." },
+        #{ anchor: "",                        focus: (),                   title: "Edit a tutorial",     body: "Tutorial scripts live in `assets/tutorials/lunica`. Edit one, reopen it from Scenarios, and test the change." },
     ]
 }
 

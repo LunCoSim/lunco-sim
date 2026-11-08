@@ -1699,7 +1699,7 @@ fn exposure_value_to_native<B: ValueBuilder>(
 ///
 /// Unresolvable (no such resource — a bare `World`) ⇒ `true`: a world with no
 /// scripting plugin has no window either, and an authored program that runs when it
-/// should not is visible, whereas a lesson that silently refuses to run in CI is
+/// should not is visible, whereas a scenario that silently refuses to run in CI is
 /// a green test that tested nothing.
 pub fn is_unattended() -> bool {
     with_world(|w| w.get_resource::<ScenarioAudience>().copied())

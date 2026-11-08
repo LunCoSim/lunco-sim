@@ -61,6 +61,14 @@ pub struct ViewportPlaceholderAction {
     pub label: String,
     /// Short explanation shown alongside the action in the empty state.
     pub description: String,
+    /// Whether the action can currently be selected.
+    pub enabled: bool,
+    /// Whether the action's live endpoint is available to receive input.
+    ///
+    /// The presentation host evaluates this only while drawing the visible
+    /// placeholder, so asynchronously registered actions become available
+    /// without polling their owner or accepting a click that cannot dispatch.
+    pub is_available: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
     /// Whether this is the primary action in the empty state.
     pub primary: bool,
     /// Queue the owning application's typed command after the UI pass.
