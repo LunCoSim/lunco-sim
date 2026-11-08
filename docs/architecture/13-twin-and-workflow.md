@@ -315,14 +315,13 @@ these lists, never by transient mount authorities. Twin tests remain accessible
 when asset browsers hide test content. **Show test scenes** controls asset
 browsers and **Library tests**.
 
-The only file a Twin *must* have. It declares:
+The minimum Twin manifest declares its top-level `name` and `version`. The
+following example shows the current manifest fields:
 
 ```toml
-[project]
 name = "Lunar Base Alpha"
-version = "0.3.0"
+version = "0.1.0"
 description = "South pole colony with ISRU plant"
-lunco_version = ">=0.6"
 
 [sysml]
 # Entry-point SysML file for system structure + requirements.
@@ -342,30 +341,19 @@ externals = [
 ]
 
 [usd]
-# The Twin's entry-point USD stage — the one that becomes the active stage
-# (projected into the Grid) when the Twin opens. Path is relative to the Twin
-# root. This is the declared "which scene opens" answer that core USD leaves to
-# convention; LunCoSim never *infers* a starting scene from a folder of many
-# `.usda` files. The Rhai Twin loading policy selects this scene. Other `.usda`
-# files in the Twin are indexed but not mounted automatically.
+# Entry-point USD stage and the Twin's loadable scene inventory.
 default_scene = "main_scene.usda"
-# Loadable scene globs include both interactive stages and verification fixtures.
 scenes = ["scenes/*.usda", "scenes/tests/*.usda"]
 
-[environment]
-default = "moon"                  # or path to environment.ron
-
-[references]
-mode = "hybrid"                   # "path" | "uuid" | "hybrid" (default)
-
-[workspace]
-default = "build"                 # which workspace opens by default
-
 [settings]
-# Generic project-owned scalar settings. The camera-status HUD defaults on
-# when this key is omitted; set false to hide it for this Twin.
+# Generic project-owned scalar settings.
 "ui.camera_status" = true
 ```
+
+Unknown TOML fields are ignored and reported as a Warning in Recent Events
+(`TWIN_MANIFEST_UNKNOWN_FIELDS`) when the Twin opens. Their values are not
+applied and are not retained if the manifest is saved. Invalid TOML and invalid
+values for known fields still prevent the Twin from opening.
 
 Opening a scene explicitly selects it for the current Twin session. The
 selection is delivered to the lifecycle policy as `scene_override`; it does
@@ -384,8 +372,8 @@ verification = "RoverWheelRequirements::Verify"
 usd_path = "/World/Rover/Wheels"
 ```
 
-Minimal Twin = just `[project]` + `[modelica]` (or whichever domains are
-used). Everything else has sensible defaults.
+Minimal Twin = top-level `name` and `version`. Add only supported sections for
+the domains the Twin uses.
 
 `[settings]` is the extensibility seam for project policy. Keys are dotted,
 namespaced scalars (`bool`, integer, number, or string), and are stored in the

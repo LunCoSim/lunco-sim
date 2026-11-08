@@ -272,7 +272,8 @@ impl TwinMode {
         let mut twin = Twin::index(canonical_self, has_manifest)?;
 
         if has_manifest {
-            let manifest = TwinManifest::read(&manifest_path)?;
+            let (manifest, unknown_fields) = TwinManifest::read_with_diagnostics(&manifest_path)?;
+            twin.manifest_unknown_fields = unknown_fields;
 
             if let Some(default_scene) = manifest
                 .usd
@@ -414,6 +415,9 @@ pub struct Twin {
     pub root: PathBuf,
     /// The parsed `twin.toml`, if the folder has one.
     pub manifest: Option<TwinManifest>,
+    /// Unknown `twin.toml` field paths found while reading this Twin.
+    /// They are ignored by this version and surfaced by the workspace opener.
+    manifest_unknown_fields: Vec<String>,
     /// Files discovered inside the folder, classified by extension.
     ///
     /// Excludes `twin.toml` itself and the hidden `.lunco/` directory.
@@ -436,6 +440,11 @@ impl Twin {
             .as_ref()
             .and_then(|m| m.journal.as_ref())
             .is_some_and(|j| j.persist)
+    }
+
+    /// Field paths in `twin.toml` that this version does not recognize.
+    pub fn manifest_unknown_fields(&self) -> &[String] {
+        &self.manifest_unknown_fields
     }
 
     /// Walk the folder and classify every file by extension.
@@ -493,6 +502,7 @@ impl Twin {
         Ok(Twin {
             root,
             manifest: None,
+            manifest_unknown_fields: Vec::new(),
             files,
             children: Vec::new(),
         })

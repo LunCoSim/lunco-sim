@@ -10936,6 +10936,7 @@ dependencies = [
  "lunco-doc",
  "lunco-storage",
  "serde",
+ "serde_ignored",
  "smol_str 0.3.6",
  "tempfile",
  "thiserror 2.0.18",
@@ -16134,6 +16135,16 @@ checksum = "3323d093d7597660758b742dd7a1525539613f6182b306a4e1dd6e01a89bada9"
 dependencies = [
  "erased-serde",
  "serde",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

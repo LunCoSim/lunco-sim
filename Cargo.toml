@@ -414,6 +414,7 @@ rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "e325c2c1
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.
 serde = { version = "1.0", features = ["derive"] }
+serde_ignored = "0.1.14"
 serde_json = "1.0"
 url = "2.5.8"
 percent-encoding = "2.3.2"

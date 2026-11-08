@@ -134,6 +134,13 @@ prepared report. The query does not rename files or choose a winner. Its Rhai po
 is `assets/scripting/policy/lint_twin.rhai`, so a running session can replace
 `lint.twin` for the next explicit check.
 
+Workspace Twin opens tolerate unknown `twin.toml` fields and publish a
+`TWIN_MANIFEST_UNKNOWN_FIELDS` Warning to Recent Events and telemetry. Unknown
+values are ignored and are not retained when the manifest is next saved;
+malformed TOML or invalid values for recognized fields still fail the open.
+`ValidateTwin` remains a resolver-namespace check and does not report these
+manifest warnings in its collision report.
+
 For the active Twin in a running scene, use the live command instead:
 
 ```rhai

@@ -44,6 +44,12 @@ use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
 /// WHY — that string is what a status bar / diagnostics row shows verbatim.
 pub const TWIN_OPEN_FAILED: &str = "TWIN_OPEN_FAILED";
 
+/// Telemetry event published after a Twin opens with unsupported manifest keys.
+///
+/// The manifest's known fields remain usable; the Warning payload names ignored
+/// paths so users can correct or remove configuration this version cannot apply.
+pub const TWIN_MANIFEST_UNKNOWN_FIELDS: &str = "TWIN_MANIFEST_UNKNOWN_FIELDS";
+
 /// Scalar wire value accepted by [`SetTwinSetting`]. The command uses a
 /// generic value enum rather than a field for each preference, so adding a new
 /// Twin setting never changes the Rust command surface.
@@ -227,6 +233,22 @@ fn twin_open_failed(detail: impl Into<String>) -> TelemetryEvent {
         source: 0,
         severity: Severity::Error,
         data: TelemetryValue::String(detail.into()),
+        timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
+    }
+}
+
+fn twin_manifest_unknown_fields(path: &std::path::Path, fields: &[String]) -> TelemetryEvent {
+    TelemetryEvent {
+        name: TWIN_MANIFEST_UNKNOWN_FIELDS.into(),
+        source: 0,
+        severity: Severity::Warning,
+        data: TelemetryValue::String(format!(
+            "Opened Twin {} with unsupported twin.toml field(s) ignored: {}. They are not applied and will be removed if the manifest is saved.",
+            path.display(),
+            fields.join(", ")
+        )),
         timestamp: 0.0,
         sim_secs: 0.0,
         sim_tick: 0,
@@ -845,6 +867,14 @@ pub fn drain_pending_twin_opens(
                             return;
                         }
                     };
+                    let manifest_warnings: Vec<_> = twin
+                        .walk()
+                        .filter_map(|opened| {
+                            let fields = opened.manifest_unknown_fields();
+                            (!fields.is_empty())
+                                .then(|| twin_manifest_unknown_fields(&opened.root, fields))
+                        })
+                        .collect();
                     if entry.mode == TwinOpenMode::Replace {
                         close_all_open_folders(world, &entry.log_tag);
                     }
@@ -868,6 +898,9 @@ pub fn drain_pending_twin_opens(
                     }
                     drop(workspace);
                     world.trigger(TwinAdded { twin: twin_id });
+                    for warning in manifest_warnings {
+                        world.trigger(warning);
+                    }
                     match &entry.scene {
                         Some(rel) => info!(
                             "[{}] opened {} @ `{rel}`",
@@ -1206,6 +1239,65 @@ mod tests {
             .expect("created Twin is registered");
         assert_eq!(twin.1.root, root);
         assert_eq!(twin.1.manifest.as_ref().unwrap().name, "Command Twin");
+    }
+
+    #[test]
+    fn unknown_manifest_fields_emit_warning_and_do_not_block_open() {
+        #[derive(Resource, Default)]
+        struct ManifestWarnings(Vec<(String, Severity, String)>);
+
+        let root = tempfile::tempdir().expect("Twin directory");
+        lunco_storage::write_file_sync(
+            &root.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"legacy\"\nversion = \"0.1.0\"\n\n[downloads]\nsuppress_missing_prompt = true\n",
+        )
+        .expect("manifest");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<WorkspaceResource>()
+            .init_resource::<PendingTwinOpens>()
+            .init_resource::<crate::SceneLoadingSettings>()
+            .init_resource::<crate::SceneLoadingCli>()
+            .init_resource::<ManifestWarnings>()
+            .add_systems(Update, drain_pending_twin_opens)
+            .add_observer(
+                |trigger: On<TelemetryEvent>, mut warnings: ResMut<ManifestWarnings>| {
+                    let event = trigger.event();
+                    if event.name == TWIN_MANIFEST_UNKNOWN_FIELDS {
+                        let TelemetryValue::String(message) = &event.data else {
+                            panic!("manifest warning must include a readable message");
+                        };
+                        warnings
+                            .0
+                            .push((event.name.clone(), event.severity, message.clone()));
+                    }
+                },
+            );
+
+        spawn_twin_from_path(
+            root.path(),
+            &mut app.world_mut().resource_mut::<PendingTwinOpens>(),
+            "OpenTwin",
+            TwinOpenMode::Replace,
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.world().resource::<WorkspaceResource>().twins().count() != 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Twin open did not complete"
+            );
+            app.update();
+            std::thread::yield_now();
+        }
+
+        let warnings = &app.world().resource::<ManifestWarnings>().0;
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].0, TWIN_MANIFEST_UNKNOWN_FIELDS);
+        assert_eq!(warnings[0].1, Severity::Warning);
+        assert!(warnings[0].2.contains("downloads"));
+        assert!(warnings[0].2.contains("not applied"));
     }
 
     #[test]

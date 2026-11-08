@@ -1,7 +1,7 @@
 //! `twin.toml` — the Twin manifest.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -18,6 +18,30 @@ fn storage_io(e: StorageError) -> std::io::Error {
         StorageError::Io(io) => io,
         other => std::io::Error::other(other.to_string()),
     }
+}
+
+fn unknown_field_path(path: &serde_ignored::Path<'_>) -> String {
+    fn collect(path: &serde_ignored::Path<'_>, segments: &mut Vec<String>) {
+        match path {
+            serde_ignored::Path::Root => {}
+            serde_ignored::Path::Seq { parent, index } => {
+                segments.push(index.to_string());
+                collect(parent, segments);
+            }
+            serde_ignored::Path::Map { parent, key } => {
+                segments.push(key.clone());
+                collect(parent, segments);
+            }
+            serde_ignored::Path::Some { parent }
+            | serde_ignored::Path::NewtypeStruct { parent }
+            | serde_ignored::Path::NewtypeVariant { parent } => collect(parent, segments),
+        }
+    }
+
+    let mut segments = Vec::new();
+    collect(path, &mut segments);
+    segments.reverse();
+    segments.join(".")
 }
 
 /// Name of the Twin manifest file at the root of a Twin folder.
@@ -40,7 +64,6 @@ pub const RESULTS_DIR_NAME: &str = "results";
 /// Cargo's `[workspace.members]` — a twin.toml describes one Twin and
 /// optionally the Twins it composes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct TwinManifest {
     /// Human-readable name of the Twin.
     pub name: String,
@@ -176,7 +199,6 @@ impl Eq for TwinSettingValue {}
 /// history panel read it live. This section governs only whether it is
 /// **written to and read from `<twin>/history/journal.json`**.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
 pub struct JournalManifest {
     /// Persist this Twin's edit history across sessions.
     ///
@@ -194,7 +216,6 @@ pub struct JournalManifest {
 
 /// One Twin-approved native hook provider (`[[native_plugins]]`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct NativePluginManifest {
     /// Stable provider identity reported by the library descriptor.
     pub id: String,
@@ -237,7 +258,6 @@ fn default_native_plugin_enabled() -> bool {
 /// standard source-root load operation used for every other Modelica library.
 /// When omitted from the section, the Twin root is the declared search root.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ModelicaManifest {
     /// Twin-relative directories containing Modelica files or package roots.
     #[serde(default = "default_modelica_paths")]
@@ -265,7 +285,6 @@ fn default_modelica_paths() -> Vec<PathBuf> {
 
 /// One entry in `[modelica].externals`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ModelicaExternal {
     /// Human-readable library name used in diagnostics and source-root ids.
     pub name: String,
@@ -281,7 +300,6 @@ pub struct ModelicaExternal {
 /// Full resolution rule in `docs/architecture/21-domain-usd.md`
 /// § "Which stage opens".
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
 pub struct UsdManifest {
     /// Entry-point USD stage — the one loaded as the active stage when
     /// the Twin opens. Path is **relative to the Twin root**. `None`
@@ -362,7 +380,6 @@ pub fn glob_matches(glob: &str, path: &str) -> bool {
 /// Reference to a sub-Twin. Local for now; remote URLs reserved for
 /// future "point this child at an IPFS/HTTPS twin bundle" support.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct TwinChildRef {
     /// Logical name for the child. Displayed in the Twin Browser as the
     /// node label; does not need to match the folder name on disk but
@@ -446,6 +463,13 @@ impl TwinManifest {
 
     /// Read and parse `twin.toml` from disk.
     pub fn read(path: &Path) -> Result<Self, TwinError> {
+        Self::read_with_diagnostics(path).map(|(manifest, _)| manifest)
+    }
+
+    /// Read and parse `twin.toml`, returning paths of fields this version does
+    /// not understand. Unknown values are ignored and are not retained when
+    /// the manifest is saved.
+    pub fn read_with_diagnostics(path: &Path) -> Result<(Self, Vec<String>), TwinError> {
         let handle = StorageHandle::File(path.to_path_buf());
         let bytes = FileStorage::new()
             .read_sync(&handle)
@@ -457,7 +481,12 @@ impl TwinManifest {
             path: path.to_path_buf(),
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
         })?;
-        Ok(toml::from_str(&text)?)
+        let deserializer = toml::de::Deserializer::parse(&text)?;
+        let mut unknown_fields = BTreeSet::new();
+        let manifest = serde_ignored::deserialize(deserializer, |field| {
+            unknown_fields.insert(unknown_field_path(&field));
+        })?;
+        Ok((manifest, unknown_fields.into_iter().collect()))
     }
 
     /// Serialize and write this manifest to disk. Overwrites if present.
@@ -479,7 +508,6 @@ impl TwinManifest {
 /// list is intentionally small and explicit so a missing or duplicate mapping
 /// cannot silently select a different test.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
 pub struct VerificationManifest {
     /// Qualified SysML verification name to scene/backend mappings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -488,7 +516,6 @@ pub struct VerificationManifest {
 
 /// One Twin-owned binding for a SysML verification case.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct VerificationCase {
     /// Qualified SysML verification-case name.
     pub name: String,
@@ -508,7 +535,6 @@ pub struct VerificationCase {
 /// thresholds remain in the component's SysML source; the manifest only
 /// declares ownership and points to the qualified verification case.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ComponentManifest {
     /// Stable Twin-local component identifier.
     pub name: String,
@@ -527,7 +553,6 @@ pub struct ComponentManifest {
 /// optional entry point and additional roots for source-set discovery; it does
 /// not duplicate source text or semantic model state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct SysmlManifest {
     /// Twin-relative entry-point `.sysml` or `.kerml` source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -684,14 +709,40 @@ mod tests {
     }
 
     #[test]
-    fn unknown_field_rejected() {
+    fn unknown_manifest_fields_are_reported_while_known_fields_load() {
         let text = r#"
 name = "x"
 version = "0.1.0"
-rogue_field = true
+
+[downloads]
+suppress_missing_prompt = true
+
+[usd]
+default_scene = "main.usda"
+future_option = true
 "#;
-        let result: Result<TwinManifest, _> = toml::from_str(text);
-        assert!(result.is_err());
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("twin.toml");
+        lunco_storage::write_file_sync(&path, text.as_bytes()).unwrap();
+
+        let (manifest, unknown_fields) = TwinManifest::read_with_diagnostics(&path).unwrap();
+
+        assert_eq!(manifest.name, "x");
+        assert_eq!(
+            manifest
+                .usd
+                .as_ref()
+                .and_then(|usd| usd.default_scene.as_deref()),
+            Some("main.usda")
+        );
+        assert_eq!(
+            unknown_fields,
+            vec!["downloads".to_string(), "usd.future_option".to_string()]
+        );
+
+        let invalid_path = temp.path().join("invalid.toml");
+        lunco_storage::write_file_sync(&invalid_path, b"name = [not valid toml").unwrap();
+        assert!(TwinManifest::read_with_diagnostics(&invalid_path).is_err());
     }
 
     #[test]

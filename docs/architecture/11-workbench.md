@@ -1154,8 +1154,8 @@ empty state is visible, so an isolated Editor preview does not hide it.
 The Twin view is cleared on `TwinClosed`; workspace changes
 rebuild the snapshot, so setting edits, reload, Twin replacement, and reset
 use the same manifest/storage owner. The panel is intentionally limited to
-the generic scalar map for other Twin settings. Structured manifest sections such as `[usd]`,
-`[downloads]`, and `[journal]` remain owned by their domain/workspace
+the generic scalar map for other Twin settings. Structured manifest sections
+such as `[usd]` and `[journal]` remain owned by their domain/workspace
 surfaces, and user-global preferences remain in `settings.json`.
 
 ## 10. Theming and input bindings

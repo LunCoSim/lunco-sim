@@ -9,6 +9,7 @@ description = "Twin — LunCoSim's top-level persistent artifact. Folder + twin.
 lunco-doc = { path = "../lunco-doc" }
 lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
+serde_ignored = { workspace = true }
 toml = { workspace = true }
 walkdir = "2.5"
 thiserror = { workspace = true }
