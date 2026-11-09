@@ -15,6 +15,7 @@
 //! possessing a vessel, so it is already answering a question you just asked.
 
 use bevy::prelude::*;
+use lunco_capture::camera_feed::{CameraFeeds, CreateCameraFeed, MAX_CAMERA_FEEDS};
 use lunco_input_ui::InputOverlaySettings;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_twin::TwinSettingValue;
@@ -246,7 +247,7 @@ fn register_hud_settings_menu(world: &mut World) {
 
         ui.label(
             egui::RichText::new("User-controlled HUDs")
-                .weak()
+                .strong()
                 .text_style(lunco_theme::TypographyRole::Label.text_style()),
         );
 
@@ -255,6 +256,35 @@ fn register_hud_settings_menu(world: &mut World) {
         };
         let original_overlays = overlays;
         lunco_viz::graph_hud_menu_ui(ui, ctx);
+
+        if let Some(feeds) = ctx.resource::<CameraFeeds>() {
+            let camera_view_count = feeds.instances.len();
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Camera views").strong());
+                ui.label(
+                    egui::RichText::new(format!("{camera_view_count}/{MAX_CAMERA_FEEDS}"))
+                        .weak()
+                        .small(),
+                );
+                let add_view = ui.add_enabled(
+                    camera_view_count < MAX_CAMERA_FEEDS,
+                    egui::Button::new("+ Add camera view"),
+                );
+                if add_view
+                    .on_hover_text(if camera_view_count < MAX_CAMERA_FEEDS {
+                        "Open another independent camera view. Choose its camera from the view toolbar."
+                    } else {
+                        "All camera views are in use. Close a view before adding another."
+                    })
+                    .clicked()
+                {
+                    ctx.trigger(CreateCameraFeed {});
+                }
+            });
+        } else {
+            ui.label(egui::RichText::new("Camera views unavailable").weak());
+        }
+
         ui.checkbox(&mut overlays.sky_clock, "Time HUD (top-left)")
             .on_hover_text("Show the celestial time HUD and its current epoch.");
         ui.checkbox(
@@ -326,32 +356,34 @@ fn register_hud_settings_menu(world: &mut World) {
         );
 
         ui.separator();
-        ui.label(
-            egui::RichText::new("Automatic HUDs")
-                .weak()
-                .text_style(lunco_theme::TypographyRole::Label.text_style()),
-        );
-        for (label, owner) in [
-            ("Rover HUD", "Driven-vessel possession and capability state"),
-            (
-                "Lander control cards",
-                "Authored USD control-HUD metadata on the active scene",
-            ),
-            (
-                "Terrain and scenario-download progress",
-                "Transient terrain/network lifecycle state",
-            ),
-            (
-                "Guided, notification, and blackout HUDs",
-                "Authored guidance and runtime session state",
-            ),
-        ] {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                ui.label(egui::RichText::new("Automatic").weak().small());
+        egui::CollapsingHeader::new("Automatic HUDs")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Managed by the active scene or runtime state.").weak(),
+                );
+                for (label, owner) in [
+                    ("Rover HUD", "Driven-vessel possession and capability state"),
+                    (
+                        "Lander control cards",
+                        "Authored USD control-HUD metadata on the active scene",
+                    ),
+                    (
+                        "Terrain and scenario-download progress",
+                        "Transient terrain/network lifecycle state",
+                    ),
+                    (
+                        "Guided, notification, and blackout HUDs",
+                        "Authored guidance and runtime session state",
+                    ),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        ui.label(egui::RichText::new("Automatic").weak().small());
+                    });
+                    ui.label(egui::RichText::new(owner).weak());
+                }
             });
-            ui.label(egui::RichText::new(owner).weak());
-        }
     });
 }
 

@@ -133,8 +133,11 @@ Verify the saved width and rendered stroke in the actual plot panel.
 
 The main Camera picker includes mounted sensor cameras, grouped by controlled
 USD owner with path-aware search. Use **Image controls…** for the selected main
-camera. Each camera window keeps source, resolution and **Style** controls
-on one toolbar line, with the graph HUD frame and `+`/`×` buttons. Its image controls affect only that feed; depth range,
+camera. Start the first independent camera view from **Settings → HUD → + Add
+camera view**; the menu shows the active count out of eight and disables the
+action at the limit. Each camera window keeps source, resolution and **Style**
+controls on one toolbar line, with the graph HUD frame and `+`/`×` buttons.
+Its image controls affect only that feed; depth range,
 noise, seed, animation, quantization and shader asset are live typed settings.
 See [camera image controls](../../docs/architecture/render-decoupling.md#camera-image-controls)
 for owners, shader bindings, physical scope and completion events. Verify both

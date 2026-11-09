@@ -75,7 +75,6 @@ pub(super) fn draw_camera_feed(
     mut state: ResMut<CameraFeedUiState>,
     mut commands: Commands,
     selection: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
-    presentations: Query<&lunco_render::camera_image::CameraImagePresentation>,
     authored_images: Query<(&bevy_hui::prelude::Tags, &InheritedVisibility)>,
 ) {
     state
@@ -222,13 +221,6 @@ pub(super) fn draw_camera_feed(
                     }).response.on_hover_text(&title);
                 });});
                 ui.add_space(theme.spacing.window_padding);
-                if feed.source.is_some() {
-                    let caption=if feed.image_ready(&presentations) {
-                        format!("{:?} · {} × {}",feed.effects.mode,feed.width,feed.height)
-                    }else{"Preparing image…".into()};
-                    ui.add(egui::Label::new(caption).truncate()).on_hover_text(
-                        "Image settings must finish rendering before capture. Shader diagnostics appear in Recent Events.");
-                }
                 let available=ui.available_size();
                 if feed.match_window && available.x>0.0 && available.y>0.0 {
                     // Logical UI points become physical render-target pixels only here.

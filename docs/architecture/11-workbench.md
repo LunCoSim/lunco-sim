@@ -1081,6 +1081,11 @@ actual dimensions before queued user intents so a size preset remains pending.
 Each instance scopes its picker cache and UI identity separately. Scene teardown
 releases every HUD-owned grid and plot, including while hidden. These native
 windows use the measured View scene area and exclude offline capture.
+Settings → HUD includes **+ Add camera view** with the current view count and
+eight-view limit, so the first view can be opened without an existing camera
+window. The action uses `CreateCameraFeed`; the new view then uses its toolbar
+to select a live camera. The automatic-HUD inventory is collapsed until
+requested, keeping user-controlled settings in view.
 The submenu also edits the existing `OverlaySettings`, `PerfHudSettings`,
 and `InputOverlaySettings` resources and the active Twin's generic
 `ui.camera_status` value. It also removes the `celestial-view` entry from the
