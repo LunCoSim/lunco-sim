@@ -1,6 +1,7 @@
 //! Multi-instance time-series plots over shared signal and experiment owners.
-//! The canonical Graphs instance is seeded by Analyze. Telemetry checkboxes
-//! bind to that config; additional plots retain independent signal selections.
+//! The canonical Graphs instance is seeded by Analyze and can be opened from
+//! any Modelica view. Telemetry checkboxes bind to that config; additional
+//! plots retain independent signal selections.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -43,10 +44,10 @@ impl InstancePanel for ModelicaPlotPanel {
 
     fn menu_entry(&self) -> Option<lunco_workbench_core::InstancePanelMenuEntry> {
         Some(lunco_workbench_core::InstancePanelMenuEntry {
-            group: lunco_workbench_core::PanelMenuGroup::Analysis,
+            group: lunco_workbench_core::PanelMenuGroup::Lunica,
             title: "Graphs",
             instance: DEFAULT_MODELICA_GRAPH.0,
-            perspective: Some(lunco_workbench_core::PerspectiveId::new("analysis")),
+            perspective: Some(lunco_workbench_core::PerspectiveId::new("modelica_analyze")),
         })
     }
 

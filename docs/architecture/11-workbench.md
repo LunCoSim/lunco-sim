@@ -496,7 +496,7 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | Analyze (`analysis`) | Inspect and compare simulation signals | Live scene center; Graphs below the scene; Telemetry above Entities left; Ports right |
 | Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Editor (`editor`) | Edit an explicitly opened document | Twin browser/Prims tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
-| Lunica (`modelica_analyze`) | Engineer continuous models | Twin browser above Components left; model workspace or open model views center; selected-component Inspector right; Welcome remains available from View |
+| Lunica (`modelica_analyze`) | Engineer continuous models | Twin browser above Components left; model workspace or open model views center; selected-component Inspector right; Graphs opens on demand in a resizable bottom dock; Welcome remains available from View |
 
 Lunica's Components filters and grouped sections derive their library roots and
 immediate packages from the admitted Modelica class index. Every indexed root
@@ -505,13 +505,21 @@ appear only when all of their authored classes exist in that index. When none
 match, Welcome continues to expose indexed library examples and bundled
 LunCoSim demos.
 
+When no Modelica view is open, the workspace start surface centers its paired
+primary actions. They use the same size and responsive layout as Welcome,
+stacking when a narrow panel cannot fit them side by side.
+
 Optional panel contributions still use `Panel::visible_in_perspective`, for
 example requirement details in Editor. Terrain is a specialist preset available under View → Perspectives, without
 a pinned title-bar tab. Compact windows collapse pinned tasks into one picker.
 
 Use the title-bar tabs or **View → Perspectives** to select a task. **View →
 Build / Analyze / Editor / Lunica / General** contains optional panels. The
-canonical Graphs menu action activates Analyze when that workflow is available.
+canonical Graphs menu action activates Lunica. In a Modelica view, the
+**Graphs** toolbar button opens the same canonical plot in a resizable bottom
+dock without changing the active perspective or replacing the central model
+workspace. Analyze continues to open Graphs with Telemetry and Ports for signal
+inspection and comparison.
 **Help → Perspective help** reads the current registry, including Twin-defined
 tasks. **View → Reset Layout** reapplies the current definition.
 Selecting the active task is idempotent. Reopening an authored initial instance
@@ -629,8 +637,9 @@ The layout's viewport visibility is also an explicit perspective contract.
 Perspectives with a central editor surface keep the scene hidden unless their
 slot intent includes `ViewportPanel` or their authored definition sets
 `scene_visible`. Analyze uses the same central `ViewportPanel` as Build, with
-Graphs in the bottom dock. A host without a live viewport keeps Graphs in the
-center. A full-window presentation perspective such as luncosim's View also sets
+Graphs in the bottom dock. Lunica opens Graphs on demand below the model
+workspace. A host without a live viewport keeps Graphs in the center. A
+full-window presentation perspective such as luncosim's View also sets
 `Perspective::scene_visible_when_docked()` so focused tutorial or user panels
 can be painted over the live scene without turning the scene camera off.
 

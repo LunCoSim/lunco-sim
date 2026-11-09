@@ -51,12 +51,20 @@ cannot hide the empty live state. Verify its buttons with
 ## Graph readability
 
 Analyze places the live viewport in the center and Graphs in the bottom dock,
-with Telemetry and Ports alongside. Author this through
-`assets/scripting/policy/workbench_perspectives.rhai`; increment the perspective
-revision when changing default placement so saved layouts adopt it. Hosts
-without a live viewport use a central graph. Verify placement and graph reopening
-with `scripts/api/test_workbench_perspectives.py --port <free-port>` and inspect
-its Analyze screenshots.
+with Telemetry and Ports alongside. Lunica keeps the model workspace central;
+the Modelica view's **Graphs** toolbar button opens the canonical plot in a
+resizable bottom dock on demand, and **View → Lunica → Graphs** provides the
+same entry point. The plot's Variables and Runs pickers select result curves;
+live channels can also be chosen in Telemetry. Empty plots explain how to add
+data, and mixed-unit plots explain that they share one vertical axis. Author
+default placement through `assets/scripting/policy/workbench_perspectives.rhai`;
+increment the perspective revision when changing default placement so saved
+layouts adopt it. Hosts without a live viewport use a central graph. Verify
+placement and graph reopening with
+`scripts/api/test_workbench_perspectives.py --port <free-port>` and inspect its
+Lunica and Analyze screenshots. The no-model workspace and Welcome surfaces
+share equally sized primary actions, centered as a pair and stacked in narrow
+panels.
 
 For a viewport demonstration, enable **Settings → HUD → Telemetry graphs**.
 Use the card's **Parameters** picker to browse source/component groups or

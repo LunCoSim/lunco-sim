@@ -336,9 +336,13 @@ impl WorkbenchLayout {
                 })
             })
             // Priority 3: use a Center singleton as the fallback for ordinary
-            // slots. A lower-right tab needs its own split below the Inspector.
+            // slots. Bottom tools need a split below the Center, not another tab
+            // in its leaf; a lower-right tab similarly splits below Inspector.
             .or_else(|| {
-                if preferred_slot == Some(PanelSlot::RightInspectorBottom) {
+                if matches!(
+                    preferred_slot,
+                    Some(PanelSlot::Bottom | PanelSlot::RightInspectorBottom)
+                ) {
                     None
                 } else {
                     find_leaf_matching(main, |t| match *t {
@@ -408,6 +412,33 @@ impl WorkbenchLayout {
                     .split_above(node, 0.7, vec![tab]);
             } else if let Some(node) = first_leaf(self.dock.main_surface_mut()) {
                 self.dock.main_surface_mut()[node].append_tab(tab);
+            } else {
+                self.dock = DockState::new(vec![tab]);
+            }
+            if let Some(path) = self.dock.find_tab(&tab) {
+                self.dock.set_focused_node_and_surface(path.node_path());
+                let _ = self.dock.set_active_tab(path);
+            }
+        } else if preferred_slot == Some(PanelSlot::Bottom) {
+            let center_leaf = {
+                let main = self.dock.main_surface_mut();
+                find_leaf_matching(main, |candidate| match *candidate {
+                    TabId::Singleton(id) => center_ids.contains(&id),
+                    TabId::Instance { .. } => center_instances.contains(candidate),
+                })
+            };
+            if let Some(center) = center_leaf {
+                self.dock
+                    .main_surface_mut()
+                    .split_below(center, 0.7, vec![tab]);
+            } else if let Some(viewport) = vp_leaf {
+                self.dock
+                    .main_surface_mut()
+                    .split_below(viewport, 0.7, vec![tab]);
+            } else if !self.dock.main_surface().is_empty() {
+                self.dock
+                    .main_surface_mut()
+                    .split_below(NodeIndex::root(), 0.7, vec![tab]);
             } else {
                 self.dock = DockState::new(vec![tab]);
             }
