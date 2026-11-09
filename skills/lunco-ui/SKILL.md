@@ -395,15 +395,12 @@ for the return schema, namespace, lifecycle and production acceptance. Policy
 updates preserve visited user layouts; explicit Reset Layout uses the new plan.
 The default Editor has no central tabs. Open documents and tools explicitly,
 or declare them in the owning perspective policy; do not seed empty editors.
-When a perspective gains center content, the workbench keeps a persistent
-center anchor so closing the last document or closeable center panel cannot
-collapse the center region. A perspective may use a nonclosable center panel as
-its task-specific landing surface; otherwise the shell supplies its generic
-Workspace tab. Keep this invariant in the workbench layout owner instead of
-adding a domain-specific dock fallback. Persistent panels cannot be hidden from
-the View menu. Closing a singleton from its tab updates the saved slot intent
-after the egui pass, so the closed feature stays closed when revisiting the
-perspective.
+The center is empty when no center panel or document is open. Closing the last
+center tab leaves the scene or canvas area visible without a tab strip. Reopen a
+panel from View; its declared slot is restored while open documents remain
+available in their own tabs. Closing a singleton from its tab updates the saved
+slot intent after the egui pass, so the closed feature stays closed when
+revisiting the perspective.
 `PerspectiveAdmission` fences workspace restoration while definitions prepare.
 Activation of the current task preserves its dock; Reset Layout is explicit.
 For a title-free measurement/diagram overlay, author `floating` in that same

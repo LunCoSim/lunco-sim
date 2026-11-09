@@ -186,11 +186,9 @@ private dock layout.
    behind transient side or bottom panels. The 3D renders full-window
    (`lunco_viewport_core::SceneViewport::rect` is `None`) and the chrome is layered on top of it —
    see § 3.1.
-   Center-driven layouts keep a persistent anchor in this dock region. A
-   perspective's nonclosable center panel can serve as its landing surface;
-   otherwise the shell supplies a generic Workspace tab when center content
-   opens. Closing the last document or closeable center panel returns to that
-   anchor, keeping the side browser and inspector in their assigned regions.
+   The center is empty when no center panel or document is open. Closing the
+   last center tab leaves the scene or canvas area visible without a tab strip;
+   panels can be reopened from View in their declared slots.
 6. **Properties / Inspector (right)** — context-aware content for the
    current selection and workspace. See § 6.
 7. **Bottom panel (toggleable)** — workspace-dependent: Console, Plots,
@@ -675,15 +673,12 @@ pub trait Panel: Send + Sync + 'static {
 }
 ```
 
-Every center-driven dock has a persistent center anchor. A perspective may
-place a nonclosable panel in its center slot to provide a task-specific landing
-surface. When it has no such panel, the shell adds its hidden-from-View,
-nonclosable Workspace tab as the anchor. The shell adds it as soon as center
-intent exists, repairs it in older saved layouts, and keeps it beside the
-center tabs. Closing the last closeable center tab therefore leaves the center
-region and other dock regions in place. Closing a singleton from its tab also
-removes that panel from the perspective's slot intent after the egui pass, so a
-later restore does not reopen it.
+The center is empty when no center panel or document is open. Closing the last
+center tab leaves the scene or canvas area visible without a tab strip. Reopen a
+panel from View; its declared slot is restored while open documents remain
+available in their own tabs. Closing a singleton from its tab also removes that
+panel from the perspective's slot intent after the egui pass, so a later restore
+does not reopen it.
 
 The workbench owns panel-surface presentation. Ordinary dock and side-panel
 bodies use the theme's translucent `DesignTokens::overlay_backdrop` by default;

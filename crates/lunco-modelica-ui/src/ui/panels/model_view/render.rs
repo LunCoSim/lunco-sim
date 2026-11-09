@@ -243,11 +243,7 @@ impl InstancePanel for ModelViewPanel {
             .map(|s| s.view_mode)
             .unwrap_or_default();
 
-        let show_controls = ctx.resource::<lunco_theme::DiagramPresentationSettings>()
-            .is_none_or(|settings| settings.show_controls);
-        let new_view_mode = if show_controls || view_mode != ModelViewMode::Canvas {
-            render_unified_toolbar(doc, view_mode, ui, ctx)
-        } else { view_mode };
+        let new_view_mode = render_unified_toolbar(doc, view_mode, ui, ctx);
         if new_view_mode != view_mode {
             if view_mode == ModelViewMode::Text {
                 let pending = ctx

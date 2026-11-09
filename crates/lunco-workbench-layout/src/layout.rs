@@ -11,7 +11,6 @@ use egui_dock::{DockState, NodeIndex};
 use lunco_workbench_core::{
     InstancePanel, Panel, PanelId, PanelRenderTarget, PanelSlot, Perspective,
     PerspectiveFloatingPanel, PerspectiveId, PerspectiveLayoutPlan, TabId,
-    WORKBENCH_CENTER_ANCHOR_ID,
 };
 use lunco_workbench_state::{PerspectiveDockSnapshot, WorkspaceStateLayoutProvider};
 use std::collections::HashMap;
@@ -148,81 +147,7 @@ impl WorkbenchLayout {
             }
         }
         self.panels.insert(id, panel);
-        let (planned_center, planned_center_required) = self.active_center_plan();
-        self.ensure_center_anchor_intent(planned_center_required, &planned_center);
         self.rebuild_dock();
-    }
-
-    fn active_center_plan(&self) -> (Vec<PanelId>, bool) {
-        let Some(plan) = self
-            .active_perspective
-            .as_ref()
-            .and_then(|active| self.perspectives.iter().find(|p| p.id() == *active))
-            .map(|perspective| perspective.layout())
-        else {
-            return (Vec::new(), false);
-        };
-        let mut center = plan.center.primary;
-        center.extend(plan.center.secondary);
-        let has_center_intent = !center.is_empty()
-            || plan
-                .instance_tabs
-                .iter()
-                .any(|tab| tab.slot == PanelSlot::Center);
-        (center, has_center_intent)
-    }
-
-    fn ensure_center_anchor_intent(
-        &mut self,
-        planned_center_required: bool,
-        planned_center: &[PanelId],
-    ) -> bool {
-        let center_required =
-            planned_center_required || !self.center.is_empty() || self.center_has_initial_instances;
-        if !center_required {
-            let before = self.center.len();
-            self.center
-                .retain(|panel| *panel != WORKBENCH_CENTER_ANCHOR_ID);
-            return self.center.len() != before;
-        }
-
-        let persistent_panel = self
-            .center
-            .iter()
-            .chain(planned_center)
-            .copied()
-            .find(|panel| {
-                *panel != WORKBENCH_CENTER_ANCHOR_ID
-                    && self
-                        .panels
-                        .get(panel)
-                        .is_some_and(|registered| !registered.closable())
-            });
-        if let Some(panel) = persistent_panel {
-            let mut changed = false;
-            if !self.center.contains(&panel) {
-                self.center.push(panel);
-                changed = true;
-            }
-            let before = self.center.len();
-            self.center
-                .retain(|candidate| *candidate != WORKBENCH_CENTER_ANCHOR_ID);
-            changed |= self.center.len() != before;
-            if changed {
-                self.active_center_tab = self
-                    .active_center_tab
-                    .min(self.center.len().saturating_sub(1));
-            }
-            return changed;
-        }
-
-        if self.center.contains(&WORKBENCH_CENTER_ANCHOR_ID)
-            || !self.panels.contains_key(&WORKBENCH_CENTER_ANCHOR_ID)
-        {
-            return false;
-        }
-        self.center.push(WORKBENCH_CENTER_ANCHOR_ID);
-        true
     }
 
     fn add_panel_to_slot(&mut self, id: PanelId, slot: PanelSlot) {
@@ -240,7 +165,9 @@ impl WorkbenchLayout {
     }
 
     fn has_slot_intent(&self, id: PanelId) -> bool {
-        self.floating_panels.iter().any(|p| p.tab == TabId::Singleton(id))
+        self.floating_panels
+            .iter()
+            .any(|p| p.tab == TabId::Singleton(id))
             || self.side_browser.contains(&id)
             || self.side_browser_bottom.contains(&id)
             || self.center.contains(&id)
@@ -270,14 +197,23 @@ impl WorkbenchLayout {
     /// recreated beside surviving semantic regions through egui_dock.
     pub fn open_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
-        let floating = self.active_perspective.as_ref()
+        let floating = self
+            .active_perspective
+            .as_ref()
             .and_then(|id| self.perspectives.iter().find(|p| p.id() == *id))
-            .and_then(|p| p.layout().floating_panels.into_iter().find(|p| p.tab == tab));
+            .and_then(|p| {
+                p.layout()
+                    .floating_panels
+                    .into_iter()
+                    .find(|p| p.tab == tab)
+            });
         if let Some(floating) = floating {
             if !self.floating_panels.iter().any(|p| p.tab == tab) {
                 self.floating_panels.push(floating);
             }
-            while let Some(path) = self.dock.find_tab(&tab) { self.dock.remove_tab(path); }
+            while let Some(path) = self.dock.find_tab(&tab) {
+                self.dock.remove_tab(path);
+            }
             return;
         }
         let slot = self
@@ -316,7 +252,6 @@ impl WorkbenchLayout {
             && !self.active_perspective_scene_visible_when_docked()
         {
             self.center_has_initial_instances = true;
-            self.ensure_center_anchor_intent(true, &[]);
             self.rebuild_dock_with_instances(&[lunco_workbench_core::PerspectiveInstanceTab {
                 kind,
                 instance,
@@ -613,6 +548,24 @@ impl WorkbenchLayout {
             slot.floating_panels.retain(|p| p.tab != tab);
             remove(&mut slot.dock);
         }
+        self.center_has_initial_instances = self.dock.iter_all_tabs().any(|(_, tab)| {
+            let TabId::Instance { kind, instance } = *tab else {
+                return false;
+            };
+            let planned_slot = self
+                .active_perspective
+                .as_ref()
+                .and_then(|active| self.perspectives.iter().find(|p| p.id() == *active))
+                .and_then(|p| {
+                    p.layout()
+                        .instance_tabs
+                        .into_iter()
+                        .find(|tab| tab.kind == kind && tab.instance == instance)
+                        .map(|tab| tab.slot)
+                });
+            planned_slot.or_else(|| self.instance_panels.get(&kind).map(|p| p.default_slot()))
+                == Some(PanelSlot::Center)
+        });
     }
 
     /// Materialize a renderer-independent perspective plan into the concrete
@@ -627,11 +580,6 @@ impl WorkbenchLayout {
         self.side_browser = plan.side_browser.primary;
         self.side_browser_bottom = plan.side_browser.secondary;
         self.center = plan.center.primary;
-        let planned_center = self.center.clone();
-        let planned_center_required = !planned_center.is_empty()
-            || !plan.center.secondary.is_empty()
-            || self.center_has_initial_instances;
-        self.ensure_center_anchor_intent(planned_center_required, &planned_center);
         self.active_center_tab = plan
             .active_center_tab
             .unwrap_or(0)
@@ -646,7 +594,11 @@ impl WorkbenchLayout {
                 if self.has_slot_intent(*panel_id) {
                     return None;
                 }
-                if self.floating_panels.iter().any(|p| p.tab == TabId::Singleton(*panel_id)) {
+                if self
+                    .floating_panels
+                    .iter()
+                    .any(|p| p.tab == TabId::Singleton(*panel_id))
+                {
                     return None;
                 }
                 panel
@@ -657,7 +609,6 @@ impl WorkbenchLayout {
         for (panel_id, slot) in contributions {
             self.add_panel_to_slot(panel_id, slot);
         }
-        self.ensure_center_anchor_intent(planned_center_required, &planned_center);
         self.rebuild_dock_with_instances(&plan.instance_tabs);
     }
 
@@ -672,9 +623,46 @@ impl WorkbenchLayout {
         }
     }
 
-    /// Whether this task has a central singleton or admitted instance intent.
+    /// Whether a central panel or center-slot instance is currently open.
     pub fn has_central_content(&self) -> bool {
-        !self.center.is_empty() || self.center_has_initial_instances
+        let center_instances_enabled = self.center_has_initial_instances
+            || self
+                .active_perspective
+                .as_ref()
+                .and_then(|active| self.perspectives.iter().find(|p| p.id() == *active))
+                .is_some_and(|perspective| {
+                    let plan = perspective.layout();
+                    plan.center
+                        .primary
+                        .iter()
+                        .chain(&plan.center.secondary)
+                        .any(|id| self.panels.contains_key(id))
+                        || plan
+                            .instance_tabs
+                            .iter()
+                            .any(|tab| tab.slot == PanelSlot::Center)
+                });
+        self.dock.iter_all_tabs().any(|(_, tab)| match *tab {
+            TabId::Singleton(id) => self.center.contains(&id) && self.panels.contains_key(&id),
+            TabId::Instance { kind, instance } => {
+                center_instances_enabled && {
+                    let planned_slot = self
+                        .active_perspective
+                        .as_ref()
+                        .and_then(|active| self.perspectives.iter().find(|p| p.id() == *active))
+                        .and_then(|p| {
+                            p.layout()
+                                .instance_tabs
+                                .into_iter()
+                                .find(|tab| tab.kind == kind && tab.instance == instance)
+                                .map(|tab| tab.slot)
+                        });
+                    planned_slot
+                        .or_else(|| self.instance_panels.get(&kind).map(|p| p.default_slot()))
+                        == Some(PanelSlot::Center)
+                }
+            }
+        })
     }
 
     /// Replace policy-owned definitions without rebuilding a visited layout.
@@ -1262,10 +1250,10 @@ impl WorkbenchLayout {
             if let Some(snap) = docks.get(active).filter(|snap| {
                 snap.layout_revision == self.perspective_layout_revision_by_str(active)
             }) {
-                if self.set_dock_from_json(snap.dock.clone(), id_map) {
-                    if let Some(intent) = snap.center_has_initial_instances {
-                        self.center_has_initial_instances = intent;
-                    }
+                if let Some(slot) =
+                    self.reconcile_dock_slot(&PerspectiveId::new(active), snap, id_map)
+                {
+                    self.restore_perspective(slot);
                     self.ensure_chrome_present();
                 }
             }
@@ -1327,16 +1315,28 @@ impl WorkbenchLayout {
         id_map: &HashMap<(&'static str, u64), u64>,
     ) -> Option<PerspectiveDockSlot> {
         let dock = self.reconcile_dock(snap.dock.clone(), id_map)?;
+        let registered = |ids: &[PanelId]| {
+            ids.iter()
+                .copied()
+                .filter(|id| self.panels.contains_key(id))
+                .collect::<Vec<_>>()
+        };
+        let center = registered(&snap.center);
+        let active_center_tab = snap.active_center_tab.min(center.len().saturating_sub(1));
         Some(PerspectiveDockSlot {
             dock,
             // Anchored geometry belongs to the current authored plan rather
             // than a stale physical-window position in persisted dock JSON.
-            floating_panels: self.perspectives.iter().find(|p| p.id() == *perspective)
-                .map(|p| p.layout().floating_panels).unwrap_or_default(),
-            side_browser: snap.side_browser.clone(),
-            side_browser_bottom: snap.side_browser_bottom.clone(),
-            center: snap.center.clone(),
-            active_center_tab: snap.active_center_tab,
+            floating_panels: self
+                .perspectives
+                .iter()
+                .find(|p| p.id() == *perspective)
+                .map(|p| p.layout().floating_panels)
+                .unwrap_or_default(),
+            side_browser: registered(&snap.side_browser),
+            side_browser_bottom: registered(&snap.side_browser_bottom),
+            center,
+            active_center_tab,
             center_has_initial_instances: snap.center_has_initial_instances.unwrap_or_else(|| {
                 self.perspectives
                     .iter()
@@ -1348,9 +1348,9 @@ impl WorkbenchLayout {
                             .any(|tab| tab.slot == PanelSlot::Center)
                     })
             }),
-            right_inspector: snap.right_inspector.clone(),
-            right_inspector_bottom: snap.right_inspector_bottom.clone(),
-            bottom: snap.bottom.clone(),
+            right_inspector: registered(&snap.right_inspector),
+            right_inspector_bottom: registered(&snap.right_inspector_bottom),
+            bottom: registered(&snap.bottom),
         })
     }
 
@@ -1429,10 +1429,13 @@ impl WorkbenchLayout {
             self.floating_panels.push(panel);
             return true;
         }
-        if slot == PanelSlot::Center && id != WORKBENCH_CENTER_ANCHOR_ID {
-            let (mut planned_center, _) = self.active_center_plan();
-            planned_center.push(id);
-            if self.ensure_center_anchor_intent(true, &planned_center) {
+        if slot == PanelSlot::Center {
+            self.add_panel_to_slot(id, slot);
+            let center_singleton_open = self
+                .center
+                .iter()
+                .any(|panel| self.dock.find_tab(&TabId::Singleton(*panel)).is_some());
+            if !center_singleton_open {
                 self.rebuild_dock();
                 if self.dock.find_tab(&tab).is_some() {
                     return true;
@@ -1443,16 +1446,20 @@ impl WorkbenchLayout {
         if self.dock.iter_all_tabs().any(|(_, t)| *t == tab) {
             return false;
         }
-        let main = self.dock.main_surface_mut();
         // Find an existing tab in the same slot to drop next to.
         let neighbour: Option<PanelId> = match slot {
             PanelSlot::SideBrowser => self.side_browser.first().copied(),
-            PanelSlot::Center => self.center.first().copied(),
+            PanelSlot::Center => self
+                .center
+                .iter()
+                .copied()
+                .find(|panel| self.dock.find_tab(&TabId::Singleton(*panel)).is_some()),
             PanelSlot::RightInspector => self.right_inspector.first().copied(),
             PanelSlot::RightInspectorBottom => self.right_inspector_bottom.first().copied(),
             PanelSlot::Bottom => self.bottom.first().copied(),
             PanelSlot::Hidden => None,
         };
+        let main = self.dock.main_surface_mut();
         let target_node: Option<NodeIndex> = neighbour.and_then(|nid| {
             let target_tab = TabId::Singleton(nid);
             // Walk all nodes; egui_dock's NodeIndex is opaque so we
@@ -1507,7 +1514,9 @@ impl WorkbenchLayout {
     /// activating Experiments before screenshotting it).
     pub fn focus_singleton(&mut self, id: PanelId) -> bool {
         let tab = TabId::Singleton(id);
-        if self.floating_panels.iter().any(|p| p.tab == tab) { return true; }
+        if self.floating_panels.iter().any(|p| p.tab == tab) {
+            return true;
+        }
         if let Some(pos) = self.dock.find_tab(&tab) {
             self.dock.set_focused_node_and_surface(pos.node_path());
             // A stale path here means the tab is present but unreachable — report
@@ -1652,13 +1661,6 @@ impl WorkbenchLayout {
                 }
             }
         }
-        if let Some(anchor_index) = center_tabs
-            .iter()
-            .position(|tab| *tab == TabId::Singleton(WORKBENCH_CENTER_ANCHOR_ID))
-        {
-            let anchor = center_tabs.remove(anchor_index);
-            center_tabs.push(anchor);
-        }
         let active_instance: Option<(PanelId, u64)> =
             self.focused_tab().and_then(|tab| match tab {
                 TabId::Instance { kind, instance } if self.instance_panels.contains_key(kind) => {
@@ -1790,14 +1792,6 @@ impl WorkbenchLayout {
     /// registered centre singleton — the luncosim's `View`) are left
     /// untouched: their chrome lives outside the dock by design.
     pub fn ensure_chrome_present(&mut self) {
-        let (planned_center, planned_center_required) = self.active_center_plan();
-        if self.ensure_center_anchor_intent(planned_center_required, &planned_center) {
-            warn!(
-                "[WorkspaceState] restored dock missing its persistent center anchor; \
-                 rebuilding layout (open documents preserved, split sizes reset)"
-            );
-            self.rebuild_dock();
-        }
         if !self.perspective_chrome_complete() {
             warn!(
                 "[WorkspaceState] restored dock missing perspective chrome; \
@@ -1952,10 +1946,6 @@ mod tests {
             self.slot
         }
 
-        fn closable(&self) -> bool {
-            self.id != WORKBENCH_CENTER_ANCHOR_ID
-        }
-
         fn visible_in_perspective(&self, perspective: PerspectiveId) -> Option<PanelSlot> {
             self.contribution
                 .as_ref()
@@ -1985,263 +1975,67 @@ mod tests {
         }
     }
 
-    struct PersistentTestPanel(PanelId);
-
-    impl Panel for PersistentTestPanel {
-        fn id(&self) -> PanelId {
-            self.0
-        }
-
-        fn title(&self) -> String {
-            self.0.as_str().to_owned()
-        }
-
-        fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-            lunco_workbench_core::PanelMenuGroup::Hidden
-        }
-
-        fn default_slot(&self) -> PanelSlot {
-            PanelSlot::Center
-        }
-
-        fn closable(&self) -> bool {
-            false
-        }
-
-        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
-    }
-
-    fn register_center_fallback(layout: &mut WorkbenchLayout) {
-        layout.register(TestPanel {
-            id: WORKBENCH_CENTER_ANCHOR_ID,
-            slot: PanelSlot::Hidden,
-            contribution: None,
-        });
-    }
-
     #[test]
-    fn closable_center_features_keep_the_center_leaf_when_closed() {
-        let perspective = PerspectiveId::new("center_anchor");
-        let browser = PanelId("center_anchor_browser");
-        let inspector = PanelId("center_anchor_inspector");
-        let output = PanelId("center_anchor_output");
-        let feature = PanelId("center_anchor_feature");
-        let document = PanelId("center_anchor_document");
+    fn closing_the_last_center_panel_leaves_an_empty_center_and_can_reopen() {
+        let perspective = PerspectiveId::new("empty_center");
+        let browser = PanelId("empty_center_browser");
+        let center = PanelId("empty_center_panel");
+        let inspector = PanelId("empty_center_inspector");
         let mut layout = WorkbenchLayout::default();
-        register_center_fallback(&mut layout);
-        layout.register(TestPanel {
-            id: browser,
-            slot: PanelSlot::SideBrowser,
-            contribution: None,
-        });
-        layout.register(TestPanel {
-            id: feature,
-            slot: PanelSlot::Center,
-            contribution: None,
-        });
-        layout.register(TestPanel {
-            id: inspector,
-            slot: PanelSlot::RightInspector,
-            contribution: None,
-        });
-        layout.register(TestPanel {
-            id: output,
-            slot: PanelSlot::Bottom,
-            contribution: None,
-        });
-        layout.register_instance_panel(TestInstancePanel(document, false));
+        for (id, slot) in [
+            (browser, PanelSlot::SideBrowser),
+            (center, PanelSlot::Center),
+            (inspector, PanelSlot::RightInspector),
+        ] {
+            layout.register(TestPanel {
+                id,
+                slot,
+                contribution: None,
+            });
+        }
         let mut plan = PerspectiveLayoutPlan::new();
-        plan.center = plan.center.single(Some(feature));
+        plan.center = plan.center.single(Some(center));
         plan.side_browser = plan.side_browser.single(Some(browser));
         plan.right_inspector = plan.right_inspector.single(Some(inspector));
-        plan.bottom = plan.bottom.single(Some(output));
         layout.register_perspective(TestPerspective {
             id: perspective.clone(),
             plan,
         });
         layout.activate_perspective(perspective);
 
-        layout.open_instance(document, 7);
-        layout.close_instance(document, 7);
-        layout.center.retain(|panel| *panel != feature);
-        assert!(layout.remove_panel_from_dock(feature));
-
-        let anchor = TabId::Singleton(WORKBENCH_CENTER_ANCHOR_ID);
-        let browser = TabId::Singleton(browser);
-        let anchor_node = layout
-            .dock
-            .find_tab(&anchor)
-            .expect("center anchor remains");
-        let browser_node = layout
-            .dock
-            .find_tab(&browser)
-            .expect("browser remains docked");
-        assert_ne!(anchor_node.node, browser_node.node);
-        let inspector_node = layout
-            .dock
-            .find_tab(&TabId::Singleton(inspector))
-            .expect("inspector remains docked");
-        let output_node = layout
-            .dock
-            .find_tab(&TabId::Singleton(output))
-            .expect("bottom panel remains docked");
-        assert_ne!(anchor_node.node, inspector_node.node);
-        assert_ne!(anchor_node.node, output_node.node);
-    }
-
-    #[test]
-    fn center_document_opened_without_a_center_panel_keeps_the_anchor() {
-        let perspective = PerspectiveId::new("document_center_anchor");
-        let browser = PanelId("document_center_browser");
-        let document = PanelId("document_center_view");
-        let mut layout = WorkbenchLayout::default();
-        register_center_fallback(&mut layout);
-        layout.register(TestPanel {
-            id: browser,
-            slot: PanelSlot::SideBrowser,
-            contribution: None,
-        });
-        layout.register_instance_panel(TestInstancePanel(document, false));
-        let mut plan = PerspectiveLayoutPlan::new();
-        plan.side_browser = plan.side_browser.single(Some(browser));
-        layout.register_perspective(TestPerspective {
-            id: perspective.clone(),
-            plan,
-        });
-        layout.activate_perspective(perspective);
-
-        layout.open_instance(document, 3);
-        assert!(
-            layout
-                .dock
-                .find_tab(&TabId::instance(document, 3))
-                .is_some()
-        );
-        assert_eq!(
-            layout.focused_tab().cloned(),
-            Some(TabId::instance(document, 3))
-        );
-        layout.close_instance(document, 3);
-
-        assert!(layout.center.contains(&WORKBENCH_CENTER_ANCHOR_ID));
-        assert!(
-            layout
-                .dock
-                .find_tab(&TabId::Singleton(WORKBENCH_CENTER_ANCHOR_ID))
-                .is_some()
-        );
+        assert!(layout.has_central_content());
+        layout.center.retain(|panel| *panel != center);
+        assert!(layout.remove_panel_from_dock(center));
+        assert!(!layout.has_central_content());
         assert!(layout.dock.find_tab(&TabId::Singleton(browser)).is_some());
-    }
-
-    #[test]
-    fn opening_a_persistent_center_panel_uses_it_as_the_anchor() {
-        let perspective = PerspectiveId::new("dynamic_center_anchor");
-        let browser = PanelId("dynamic_center_browser");
-        let center = PanelId("dynamic_persistent_center");
-        let mut layout = WorkbenchLayout::default();
-        register_center_fallback(&mut layout);
-        layout.register(TestPanel {
-            id: browser,
-            slot: PanelSlot::SideBrowser,
-            contribution: None,
-        });
-        layout.register(PersistentTestPanel(center));
-        let mut plan = PerspectiveLayoutPlan::new();
-        plan.side_browser = plan.side_browser.single(Some(browser));
-        layout.register_perspective(TestPerspective {
-            id: perspective.clone(),
-            plan,
-        });
-        layout.activate_perspective(perspective);
+        assert!(layout.dock.find_tab(&TabId::Singleton(inspector)).is_some());
 
         assert!(layout.insert_panel_into_dock(center, PanelSlot::Center));
-
-        assert!(layout.center.contains(&center));
-        assert!(!layout.center.contains(&WORKBENCH_CENTER_ANCHOR_ID));
+        assert!(layout.has_central_content());
         assert!(layout.dock.find_tab(&TabId::Singleton(center)).is_some());
     }
 
     #[test]
-    fn center_contributions_also_keep_the_center_anchor() {
-        let perspective = PerspectiveId::new("center_contribution_anchor");
-        let center = PanelId("center_contribution_panel");
+    fn closing_the_last_planned_center_instance_leaves_the_center_empty() {
+        let kind = PanelId("center_document");
         let mut layout = WorkbenchLayout::default();
-        register_center_fallback(&mut layout);
-        layout.register(TestPanel {
-            id: center,
-            slot: PanelSlot::Hidden,
-            contribution: Some((perspective.clone(), PanelSlot::Center)),
-        });
-        layout.register_perspective(TestPerspective {
-            id: perspective.clone(),
-            plan: PerspectiveLayoutPlan::new(),
-        });
-        layout.activate_perspective(perspective);
-
-        assert!(layout.center.contains(&center));
-        assert!(layout.center.contains(&WORKBENCH_CENTER_ANCHOR_ID));
-        assert!(layout.dock.find_tab(&TabId::Singleton(center)).is_some());
-        assert!(
-            layout
-                .dock
-                .find_tab(&TabId::Singleton(WORKBENCH_CENTER_ANCHOR_ID))
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn restored_center_layout_repairs_a_missing_anchor() {
-        let perspective = PerspectiveId::new("restored_center_anchor");
-        let feature = PanelId("restored_center_feature");
-        let mut layout = WorkbenchLayout::default();
-        register_center_fallback(&mut layout);
-        layout.register(TestPanel {
-            id: feature,
-            slot: PanelSlot::Center,
-            contribution: None,
-        });
+        layout.register_instance_panel(TestInstancePanel(kind, false));
         let mut plan = PerspectiveLayoutPlan::new();
-        plan.center = plan.center.single(Some(feature));
+        plan.instance_tabs
+            .push(lunco_workbench_core::PerspectiveInstanceTab {
+                kind,
+                instance: 9,
+                slot: PanelSlot::Center,
+            });
         layout.register_perspective(TestPerspective {
-            id: perspective.clone(),
+            id: PerspectiveId::new("planned_document"),
             plan,
         });
-        layout.activate_perspective(perspective);
+        assert!(layout.has_central_content());
 
-        layout
-            .center
-            .retain(|panel| *panel != WORKBENCH_CENTER_ANCHOR_ID);
-        let anchor_tab = TabId::Singleton(WORKBENCH_CENTER_ANCHOR_ID);
-        let anchor_path = layout.dock.find_tab(&anchor_tab).expect("old anchor tab");
-        layout.dock.remove_tab(anchor_path);
-        layout.ensure_chrome_present();
+        layout.close_instance(kind, 9);
 
-        assert!(layout.center.contains(&WORKBENCH_CENTER_ANCHOR_ID));
-        assert!(
-            layout
-                .dock
-                .find_tab(&TabId::Singleton(WORKBENCH_CENTER_ANCHOR_ID))
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn perspective_center_anchor_reuses_its_persistent_panel() {
-        let perspective = PerspectiveId::new("authored_center_anchor");
-        let anchor = PanelId("authored_center_anchor_panel");
-        let mut layout = WorkbenchLayout::default();
-        register_center_fallback(&mut layout);
-        layout.register(PersistentTestPanel(anchor));
-        let mut plan = PerspectiveLayoutPlan::new();
-        plan.center = plan.center.single(Some(anchor));
-        layout.register_perspective(TestPerspective {
-            id: perspective.clone(),
-            plan,
-        });
-        layout.activate_perspective(perspective);
-
-        assert!(layout.center.contains(&anchor));
-        assert!(!layout.center.contains(&WORKBENCH_CENTER_ANCHOR_ID));
+        assert!(!layout.has_central_content());
     }
 
     struct TestInstancePanel(PanelId, bool);
@@ -2263,8 +2057,14 @@ mod tests {
             height: 400,
             inset: 24,
         });
-        layout.register_perspective(TestPerspective { id: id.clone(), plan });
-        layout.register_perspective(TestPerspective { id: other.clone(), plan: PerspectiveLayoutPlan::new() });
+        layout.register_perspective(TestPerspective {
+            id: id.clone(),
+            plan,
+        });
+        layout.register_perspective(TestPerspective {
+            id: other.clone(),
+            plan: PerspectiveLayoutPlan::new(),
+        });
         layout.open_instance(kind, 7);
         layout.open_instance(kind, 7);
         layout.rebuild_dock();
@@ -2280,7 +2080,12 @@ mod tests {
         assert_eq!(layout.floating_panels.len(), 1);
         layout.replace_authored_perspectives(&[id], Vec::new());
         assert!(layout.floating_panels.is_empty());
-        assert!(layout.dock_cache.values().all(|s| s.floating_panels.is_empty()));
+        assert!(
+            layout
+                .dock_cache
+                .values()
+                .all(|s| s.floating_panels.is_empty())
+        );
     }
 
     impl InstancePanel for TestInstancePanel {
@@ -2325,6 +2130,44 @@ mod tests {
         restored.seed_perspective_docks(&saved, &HashMap::new());
         assert!(restored.has_central_content());
         assert!(restored.dock.find_tab(&TabId::instance(kind, 7)).is_some());
+    }
+
+    #[test]
+    fn saved_empty_center_stays_empty_when_restored() {
+        let id = PerspectiveId::new("empty_center_restore");
+        let center = PanelId("restored_center_panel");
+        let side = PanelId("restored_side_panel");
+        let make_layout = || {
+            let mut layout = WorkbenchLayout::default();
+            for (panel, slot) in [(center, PanelSlot::Center), (side, PanelSlot::SideBrowser)] {
+                layout.register(TestPanel {
+                    id: panel,
+                    slot,
+                    contribution: None,
+                });
+            }
+            let mut plan = PerspectiveLayoutPlan::new();
+            plan.center = plan.center.single(Some(center));
+            plan.side_browser = plan.side_browser.single(Some(side));
+            layout.register_perspective(TestPerspective {
+                id: id.clone(),
+                plan,
+            });
+            layout
+        };
+
+        let mut original = make_layout();
+        original.center.clear();
+        original.remove_panel_from_dock(center);
+        let saved = original.capture_perspective_docks();
+
+        let mut restored = make_layout();
+        restored.seed_perspective_docks(&saved, &HashMap::new());
+
+        assert!(restored.center.is_empty());
+        assert!(!restored.has_central_content());
+        assert!(restored.dock.find_tab(&TabId::Singleton(center)).is_none());
+        assert!(restored.dock.find_tab(&TabId::Singleton(side)).is_some());
     }
 
     struct RightInspectorBottomInstancePanel(PanelId);

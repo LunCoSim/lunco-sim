@@ -3934,21 +3934,15 @@ mod tests {
             PanelSlot::Center
         }
 
-        fn closable(&self) -> bool {
-            self.0 != lunco_workbench_core::WORKBENCH_CENTER_ANCHOR_ID
-        }
-
         fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
     }
 
     #[test]
-    fn closing_a_center_panel_removes_its_intent_and_preserves_the_anchor() {
+    fn closing_the_last_center_panel_leaves_the_center_empty() {
         let center_panel = PanelId("closeable_center_panel");
-        let anchor_panel = lunco_workbench_core::WORKBENCH_CENTER_ANCHOR_ID;
         let mut layout = WorkbenchLayout::default();
         layout.register(DockPanel(center_panel));
-        layout.register(DockPanel(anchor_panel));
-        assert!(layout.center.contains(&anchor_panel));
+        assert!(layout.has_central_content());
 
         let mut app = App::new();
         app.init_resource::<PendingLayoutRequests>();
@@ -3962,13 +3956,7 @@ mod tests {
 
         let layout = app.world().resource::<WorkbenchLayout>();
         assert!(!layout.center.contains(&center_panel));
-        assert!(layout.center.contains(&anchor_panel));
-        assert!(
-            layout
-                .dock
-                .find_tab(&TabId::Singleton(anchor_panel))
-                .is_some()
-        );
+        assert!(!layout.has_central_content());
         assert!(
             layout
                 .dock
@@ -3978,33 +3966,25 @@ mod tests {
     }
 
     #[test]
-    fn singleton_close_queues_layout_cleanup_and_rejects_persistent_panels() {
+    fn singleton_close_queues_layout_cleanup() {
         let closeable_id = PanelId("closeable_singleton");
-        let anchor_id = lunco_workbench_core::WORKBENCH_CENTER_ANCHOR_ID;
         let mut app = App::new();
         app.init_resource::<PendingLayoutRequests>();
         let mut panels: HashMap<PanelId, Box<dyn Panel>> = HashMap::new();
         panels.insert(closeable_id, Box::new(DockPanel(closeable_id)));
-        panels.insert(anchor_id, Box::new(DockPanel(anchor_id)));
         let mut instance_panels: HashMap<PanelId, Box<dyn InstancePanel>> = HashMap::new();
 
-        let (closeable_response, anchor_response) = {
+        let close_response = {
             let mut viewer = PanelTabViewer {
                 panels: &mut panels,
                 instance_panels: &mut instance_panels,
                 world: app.world_mut(),
                 surface: PanelSurfaceStyle::default(),
             };
-            let mut closeable_tab = TabId::Singleton(closeable_id);
-            let mut anchor_tab = TabId::Singleton(anchor_id);
-            (
-                viewer.on_close(&mut closeable_tab),
-                viewer.on_close(&mut anchor_tab),
-            )
+            viewer.on_close(&mut TabId::Singleton(closeable_id))
         };
 
-        assert!(matches!(closeable_response, OnCloseResponse::Close));
-        assert!(matches!(anchor_response, OnCloseResponse::Ignore));
+        assert!(matches!(close_response, OnCloseResponse::Close));
         let pending = &app.world().resource::<PendingLayoutRequests>().0;
         assert_eq!(pending.len(), 1);
         assert!(matches!(

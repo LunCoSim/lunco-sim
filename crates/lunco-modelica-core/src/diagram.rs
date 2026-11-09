@@ -52,24 +52,27 @@ pub struct DiagramClass {
 
 /// Resolve a class's source owner through the shared session symbol index.
 pub fn class_source_uri(session: &mut Session, target: &str) -> Result<String, String> {
-    session
-        .workspace_symbol_query(target.rsplit('.').next().unwrap_or(target))
-        .into_iter()
-        .find(|symbol| {
-            let full = symbol
-                .container_name
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(|p| format!("{p}.{}", symbol.name))
-                .unwrap_or_else(|| symbol.name.clone());
-            full == target
-                && matches!(
-                    symbol.kind,
-                    rumoca_compile::compile::WorkspaceSymbolKind::Class(_)
-                )
-        })
-        .map(|symbol| symbol.uri)
-        .ok_or_else(|| format!("Modelica source for `{target}` is unavailable"))
+    let leaf = rumoca_core::qualified_name_segments(target)
+        .last()
+        .unwrap_or(target);
+    for symbol in session.workspace_symbol_query(leaf) {
+        if symbol.name != leaf
+            || !matches!(
+                symbol.kind,
+                rumoca_compile::compile::WorkspaceSymbolKind::Class(_)
+            )
+        {
+            continue;
+        }
+        let declares_target = session
+            .get_document(&symbol.uri)
+            .and_then(|document| document.parsed())
+            .is_some_and(|definition| definition.get_class_by_qualified_name(target).is_some());
+        if declares_target {
+            return Ok(symbol.uri);
+        }
+    }
+    Err(format!("Modelica source for `{target}` is unavailable"))
 }
 
 // Component declarations already include inherited members. Connections must
@@ -784,6 +787,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nested_class_source_uses_the_exact_within_scope() {
+        let mut session = Session::default();
+        session
+            .add_document(
+                "Modelica/Blocks/package.mo",
+                "within Modelica.Blocks.Examples; model BusUsage end BusUsage;",
+            )
+            .unwrap();
+        session
+            .add_document(
+                "Other/Examples/package.mo",
+                "within Other.Examples; model BusUsage end BusUsage;",
+            )
+            .unwrap();
+
+        assert_eq!(
+            class_source_uri(&mut session, "Modelica.Blocks.Examples.BusUsage").unwrap(),
+            "Modelica/Blocks/package.mo"
+        );
+    }
+
+    #[test]
     fn interface_capture_retains_ports_without_projecting_internal_bodies() {
         let mut session = Session::default();
         session
@@ -833,7 +858,10 @@ end Library;
     #[test]
     fn graphical_ports_exclude_plain_causal_values_but_preserve_their_interface() {
         let mut session = Session::default();
-        session.add_document("authored-connectors.mo", r#"
+        session
+            .add_document(
+                "authored-connectors.mo",
+                r#"
 package DiagramFixture
   connector Pin
     flow Real i;
@@ -854,16 +882,30 @@ package DiagramFixture
     Pin private_terminal;
   end Device;
 end DiagramFixture;
-"#).unwrap();
-        let snapshot = DiagramSnapshot::capture(&mut session,
-            "DiagramFixture.Device", DiagramScope::ClassInterface).unwrap();
+"#,
+            )
+            .unwrap();
+        let snapshot = DiagramSnapshot::capture(
+            &mut session,
+            "DiagramFixture.Device",
+            DiagramScope::ClassInterface,
+        )
+        .unwrap();
         let class = snapshot.class("DiagramFixture.Device").unwrap();
         let ports = snapshot.class_ports(class);
         assert_eq!(ports.len(), 2);
-        assert!(ports.iter().any(|p| p.name == "inherited_terminal" && p.x == -100.0));
+        assert!(
+            ports
+                .iter()
+                .any(|p| p.name == "inherited_terminal" && p.x == -100.0)
+        );
         assert!(ports.iter().any(|p| p.name == "signal" && p.y == 100.0));
         for name in ["command", "measured"] {
-            let member = class.members.iter().find(|m| m.component.name == name).unwrap();
+            let member = class
+                .members
+                .iter()
+                .find(|m| m.component.name == name)
+                .unwrap();
             assert!(snapshot.is_port(member));
             assert_eq!(snapshot.ports_for_component(member).len(), 1);
         }

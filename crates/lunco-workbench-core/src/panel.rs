@@ -20,13 +20,6 @@ impl PanelId {
     }
 }
 
-/// Stable id for the workbench-owned center fallback tab.
-///
-/// Center-driven layouts keep this tab when none of their own center panels is
-/// persistent, so closing the last document or view leaves the center dock in
-/// place.
-pub const WORKBENCH_CENTER_ANCHOR_ID: PanelId = PanelId("workbench::center_anchor");
-
 fn intern(s: &str) -> &'static str {
     static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
     let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
