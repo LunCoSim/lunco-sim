@@ -24,10 +24,10 @@
 //!
 //! ```modelica
 //! model VisualDiagram
-//!   import Modelica.Electrical.Analog.Basic.Resistor;
-//!   import Modelica.Electrical.Analog.Basic.Capacitor;
-//!   import Modelica.Electrical.Analog.Sources.ConstantVoltage;
-//!   import Modelica.Electrical.Analog.Basic.Ground;
+//!   import SampleLibrary.Electrical.Analog.Basic.Resistor;
+//!   import SampleLibrary.Electrical.Analog.Basic.Capacitor;
+//!   import SampleLibrary.Electrical.Analog.Sources.ConstantVoltage;
+//!   import SampleLibrary.Electrical.Analog.Basic.Ground;
 //!
 //!   ConstantVoltage V1(V=10) annotation(...);
 //!   Resistor R1(R=100) annotation(...);
@@ -540,11 +540,11 @@ mod tests {
         let expected = LibraryIndex {
             components: vec![
                 component(
-                    "Modelica.Electrical.Analog.Basic.Resistor",
+                    "SampleLibrary.Electrical.Analog.Basic.Resistor",
                     "Electrical/Analog",
                 ),
                 component(
-                    "Modelica.Electrical.Analog.Basic.Ground",
+                    "SampleLibrary.Electrical.Analog.Basic.Ground",
                     "Electrical/Analog",
                 ),
             ],

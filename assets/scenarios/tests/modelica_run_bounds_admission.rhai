@@ -38,7 +38,7 @@ fn on_start(me, params) {
         #{ fields: #{h0: -1.0}, diagnostic: "h0" }
     ];
     let good = modelica_editor::new_scratch(
-        "model BoundsProbe Real x(start=1, fixed=true); equation der(x)=0; end BoundsProbe;", "Bounds admission valid");
+        "model BoundsProbe Real x(start=1, fixed=true); equation der(x)=0; annotation(experiment(StopTime=1, Interval=0, NumberOfIntervals=10)); end BoundsProbe;", "Bounds admission valid");
     if good == () || good.ok != true { this = finish(this, ["valid scratch creation failed"]); return; }
     this.good = good.doc_id;
     let bad = modelica_editor::new_scratch(
@@ -62,6 +62,14 @@ fn on_tick(me, params) {
         this.failures.push(t_true(annotation != () && annotation.ok == false
             && annotation.error != () && annotation.error.to_string().contains("NumberOfIntervals"),
             "invalid authored count reports the owning diagnostic: " + annotation.to_string()));
+        let resolved = query("QueryExperimentBounds", #{doc_id: this.good, class: "BoundsProbe"});
+        let authored = resolved != () && resolved.ok != false && resolved.classes != ()
+            && resolved.classes.len() == 1 && resolved.classes[0].annotation_bounds != ()
+            && resolved.classes[0].annotation_bounds.t_end == 1.0
+            && resolved.classes[0].annotation_bounds.dt == ()
+            && resolved.classes[0].annotation_bounds.n_intervals == 10;
+        this.failures.push(t_true(authored,
+            "public bounds query maps Interval=0 to unspecified spacing and retains NumberOfIntervals: " + resolved.to_string()));
         this.phase = "invalid";
     }
     if this.phase == "invalid" {

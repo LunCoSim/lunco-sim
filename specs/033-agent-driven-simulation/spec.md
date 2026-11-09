@@ -46,7 +46,7 @@ So that I can resolve "Annotated Rocket Engine" to `bundled://AnnotatedRocketSta
 
 1. **Given** the bundled examples include `RocketEngine.mo` and `AnnotatedRocketStage.mo`, **When** I call `find_model("rocket")`, **Then** both appear in the response with their `bundled://` URIs and a relevance score.
 2. **Given** a Twin is open containing `models/rover.mo`, **When** I call `find_model("rover")`, **Then** the file appears with its absolute path as URI and a `source: "twin"` tag.
-3. **Given** I call `find_model("PID")`, **When** a source library containing it is loaded, **Then** results include `Modelica.Blocks.Continuous.PID` and any examples named `*.PID*` from that source library.
+3. **Given** I call `find_model("PID")`, **When** a source library containing a PID class is loaded, **Then** results include its fully qualified class name and matching examples from that source library.
 4. **Given** an empty query, **When** I call `find_model("")`, **Then** I receive an `ApiResponse::Error` (do not return the entire universe).
 
 ---

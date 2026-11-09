@@ -69,7 +69,7 @@ pub fn locate_library_file(qualified: &str) -> Option<std::path::PathBuf> {
 ///
 /// Tries the qualified name's prefixes longest-first; at each depth
 /// prefers a `package.mo` directory over a flat `.mo` (so
-/// `Modelica.Blocks` → `Modelica/Blocks/package.mo`, not the
+/// `Control.Blocks` → `Control/Blocks/package.mo`, not the
 /// grandparent `Modelica/package.mo`). `base` is the root the
 /// candidate is joined onto (a disk dir, or `""` for the in-memory
 /// bundle's relative keys); `contains` tests membership against that

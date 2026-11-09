@@ -571,13 +571,13 @@ end Metadata;"#;
             "within LunCo.Pointing;\n",
             "model SunTracker\n",
             "  extends LunCo.Controls.Base;\n",
-            "  Modelica.Blocks.Interfaces.RealInput azimuth;\n",
+            "  SampleLibrary.Blocks.Interfaces.RealInput azimuth;\n",
             "end SunTracker;\n",
         );
         let interface = parse_model_interface(source, "SunTracker.mo");
         assert_eq!(
             interface.required_source_roots,
-            BTreeSet::from(["LunCo".to_owned(), "Modelica".to_owned()])
+            BTreeSet::from(["LunCo".to_owned(), "SampleLibrary".to_owned()])
         );
     }
 

@@ -128,6 +128,9 @@ fn main() {
             ));
         }
         app.add_plugins(ModelicaWorkbenchPlugin::default());
+        app.world_mut()
+            .resource_mut::<lunco_workbench_browser::navigation::BrowserView>()
+            .section = lunco_modelica_ui::ui::browser_section::MODELICA_BROWSER_SECTION_ID.into();
         // Frame pacing: Continuous focused (vsync paces Update); low-power
         // unfocused. (The 5 Hz "UI vanishes on zoom" spike-train fix.) Native
         // only — wasm is paced by requestAnimationFrame.

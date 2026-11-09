@@ -109,7 +109,7 @@ pub fn set_options(opts: PrettyOptions) {
 /// Produces text of the form:
 ///
 /// ```modelica
-///   Modelica.Electrical.Analog.Basic.Resistor R1(R=100) annotation(
+///   SampleLibrary.Electrical.Resistor R1(R=100) annotation(
 ///     Placement(transformation(extent={{-10,-10},{10,10}}))
 ///   );
 /// ```
@@ -119,7 +119,7 @@ pub fn set_options(opts: PrettyOptions) {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ComponentDecl {
     /// Fully-qualified or imported type name
-    /// (e.g. `"Modelica.Electrical.Analog.Basic.Resistor"` or `"Resistor"`).
+    /// (e.g. `"SampleLibrary.Electrical.Resistor"` or `"Resistor"`).
     pub type_name: String,
     /// Instance name (e.g. `"R1"`).
     pub name: String,
@@ -903,14 +903,14 @@ mod tests {
     #[test]
     fn component_decl_no_modifications_no_placement() {
         let d = ComponentDecl {
-            type_name: "Modelica.Electrical.Analog.Basic.Ground".into(),
+            type_name: "SampleLibrary.Electrical.Ground".into(),
             name: "GND".into(),
             modifications: vec![],
             placement: None,
         };
         assert_eq!(
             component_decl(&d),
-            "  Modelica.Electrical.Analog.Basic.Ground GND;\n"
+            "  SampleLibrary.Electrical.Ground GND;\n"
         );
     }
 

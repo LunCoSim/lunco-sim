@@ -1319,7 +1319,7 @@ fn dispatch_experiment(
             }
             // Library classes compile from the loaded session, not a temp
             // overlay — this is what makes a
-            // drilled source library example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
+            // drilled source library example (e.g. `Library.Examples.Sample`)
             // run without a self-duplicate-class collision.
             let source = lunco_modelica_source_roots::compile_overlay_source(document);
             // The document's stable session URI — the SAME canonical identity

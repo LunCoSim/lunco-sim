@@ -33,12 +33,19 @@ Lunica can be served as a web application:
 
 ## Key Workflows
 
-### 1. Modelica source-library bootstrap
-Lunica needs its configured source libraries on hand. On first use (desktop):
-1. **Download source libraries**: Ensure the configured source-library roots are installed in the LunCo cache.
-2. **Index the source libraries**: The desktop workbench runs the native asset
-   indexer in the background; it can also be invoked directly to produce the
-   pre-parsed cache:
+### 1. Modelica source libraries
+No external Modelica library is required to launch Lunica. The Twin Browser and
+Components palette use the package roots and classes present in the installed
+library index, so any installed library can be browsed through the same UI.
+Curated Welcome learning paths appear only when all their referenced classes
+are present; indexed library examples and bundled LunCoSim demos remain
+available when no curated path matches.
+
+On desktop, install a source-library dataset through **Settings → Data &
+libraries**, or configure a local source root through **Settings → Modelica**.
+The workbench builds the editor index in the background; it can also be
+generated directly for a configured source root to produce the pre-parsed
+cache:
    ```bash
    cargo run --release -p lunco-modelica-assets --bin modelica_library_indexer
    ```

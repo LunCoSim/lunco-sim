@@ -53,25 +53,25 @@ fn build_rc_circuit_from_empty_model() {
 
     let components = vec![
         (
-            "Modelica.Electrical.Analog.Sources.ConstantVoltage",
+            "SampleLibrary.Electrical.Analog.Sources.ConstantVoltage",
             "V1",
             vec![("V", "10")],
             Placement::at(-40.0, 0.0),
         ),
         (
-            "Modelica.Electrical.Analog.Basic.Resistor",
+            "SampleLibrary.Electrical.Analog.Basic.Resistor",
             "R1",
             vec![("R", "100")],
             Placement::at(0.0, 20.0),
         ),
         (
-            "Modelica.Electrical.Analog.Basic.Capacitor",
+            "SampleLibrary.Electrical.Analog.Basic.Capacitor",
             "C1",
             vec![("C", "0.001")],
             Placement::at(0.0, -20.0),
         ),
         (
-            "Modelica.Electrical.Analog.Basic.Ground",
+            "SampleLibrary.Electrical.Analog.Basic.Ground",
             "GND",
             vec![],
             Placement::at(40.0, 0.0),

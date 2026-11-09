@@ -161,8 +161,8 @@ To cosim it onto a rover:
 ## Where models live and how to edit them
 
 The full Modelica IDE is embedded in the luncosim as the **Design workspace** —
-open `Lander.mo`, `LunCo/Electrical/Battery.mo`, or any [Modelica Standard Library](https://github.com/modelica/ModelicaStandardLibrary)
-class, edit the source or the diagram, compile, and run with live plots. That is
+open `Lander.mo`, `LunCo/Electrical/Battery.mo`, or a class from any installed
+Modelica library, edit the source or the diagram, compile, and run with live plots. That is
 the same workbench the standalone *lunica* app provides; in the luncosim it sits
 alongside the 3D scene so a model and the physics it drives can be open at once.
 

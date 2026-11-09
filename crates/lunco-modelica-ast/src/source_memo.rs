@@ -89,12 +89,12 @@ mod tests {
     #[test]
     fn invalidation_drops_a_filled_memo() {
         let mut memo: SourceMemo<u32> = SourceMemo::default();
-        memo.insert("Modelica.Blocks.Add", Some(7));
-        assert_eq!(memo.peek("Modelica.Blocks.Add"), Some(Some(7)));
+        memo.insert("SampleLibrary.Blocks.Add", Some(7));
+        assert_eq!(memo.peek("SampleLibrary.Blocks.Add"), Some(Some(7)));
 
         invalidate_source_memos();
         assert_eq!(
-            memo.peek("Modelica.Blocks.Add"),
+            memo.peek("SampleLibrary.Blocks.Add"),
             None,
             "stale epoch must miss"
         );

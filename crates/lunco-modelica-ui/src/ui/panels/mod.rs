@@ -16,3 +16,4 @@ pub mod palette;
 pub mod placeholder;
 pub mod telemetry;
 pub mod welcome;
+pub mod workspace;

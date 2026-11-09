@@ -1,6 +1,6 @@
 //! Cross-domain URI registry — one scheme, one handler, one dispatch.
 //!
-//! Modelica cross-references (`modelica://Modelica.Blocks.Examples.PID`),
+//! Modelica cross-references (`modelica://SampleLibrary.Controls.Gain`),
 //! future USD prim refs (`usd://path/to/stage.usd@</World/Foo>`), and
 //! SysML v2 element refs (`sysml://package::Element`) all want the same
 //! UX: a clickable link in a document that lands the user on the right

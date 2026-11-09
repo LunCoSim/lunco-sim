@@ -328,9 +328,9 @@ mod native {
     ///
     /// `exclude` drops top-level packages by name — applied ONLY at the root level
     /// (`dir == root`) so a coincidentally-named nested package is never affected.
-    /// A pattern ending in `*` is a prefix match (e.g. `ModelicaTest*` catches the
-    /// `ModelicaTest/` dir plus the `ModelicaTestConversion4.mo` /
-    /// `ModelicaTestOverdetermined.mo` siblings, and any future `ModelicaTest…`
+    /// A pattern ending in `*` is a prefix match (e.g. `DemoLibrary*` catches the
+    /// `DemoLibrary/` dir plus the `DemoLibraryConversion4.mo` /
+    /// `DemoLibraryOverdetermined.mo` siblings, and any future `DemoLibrary…`
     /// suite a source-library bump adds). A top-level `.mo`'s package name is its file stem.
     fn collect_mo_files(root: &Path, dir: &Path, exclude: &[String], out: &mut Vec<PathBuf>) {
         let Ok(rd) = fs::read_dir(dir) else { return };

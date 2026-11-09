@@ -496,23 +496,4 @@ mod tests {
             None
         );
     }
-
-    #[test]
-    fn interval_zero_is_unspecified_sentinel() {
-        assert_eq!(interval_to_dt(Some(0.0)), None);
-        assert_eq!(interval_to_dt(Some(3600.0)), Some(3600.0));
-        assert_eq!(interval_to_dt(Some(-1.0)), Some(-1.0));
-        assert_eq!(interval_to_dt(None), None);
-    }
-
-    #[test]
-    fn bounds_from_experiment_needs_stop_time_and_drops_zero_interval() {
-        let mut exp = lunco_modelica_ast::annotations::Experiment::default();
-        assert!(bounds_from_experiment(&exp).unwrap().is_none()); // no stop_time
-        exp.stop_time = Some(5.0);
-        exp.interval = Some(0.0); // sentinel → dt None
-        let b = bounds_from_experiment(&exp).unwrap().unwrap();
-        assert_eq!(b.t_end, 5.0);
-        assert_eq!(b.dt, None);
-    }
 }

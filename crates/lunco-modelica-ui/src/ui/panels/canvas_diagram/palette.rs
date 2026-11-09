@@ -106,9 +106,9 @@ pub(super) fn library_package_tree() -> &'static LibraryPackageNode {
         let mut root = LibraryPackageNode::new();
         for comp in lunco_modelica_index::visual_diagram::library_class_library() {
             // Split the qualified path into package segments + a
-            // trailing class name. `Modelica.Electrical.Analog.
-            // Basic.Resistor` → walk subpackages
-            // [Modelica, Electrical, Analog, Basic], attach class
+            // trailing class name. `SampleLibrary.Electrical.Passive.
+            // Resistor` → walk subpackages
+            // [SampleLibrary, Electrical, Passive], attach class
             // `Resistor`.
             let mut parts: Vec<&str> = comp.name.split('.').collect();
             let Some(_class_name) = parts.pop() else {

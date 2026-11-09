@@ -18,9 +18,9 @@ fn on_start(me, ctx) {
     this=#{done:false, ticks:0, docs:[], phase:"parse", target:0, failures:[]};
     let opened=editor::new_scratch(`within RunSpace;
 package CompileIdentity
+  type Temperature = Real(unit="K");
   model Plain
-    import SI = Modelica.Units.SI;
-    output SI.Temperature answer=1;
+    output Temperature answer=1;
   end Plain;
   model 'Quoted.Name' output Real answer(unit="m")=2; end 'Quoted.Name';
 end CompileIdentity;`,"Class compile identity");
@@ -42,7 +42,7 @@ fn on_tick(me, ctx) {
         if default_status==() || default_status.ast_parsed!=true { return; }
         let source=query("GetDocumentSource",#{doc_id:this.doc});
         this.pending=editor::apply(this.doc,[
-            modelica_add_component("RunSpace.CompileIdentity.Plain","SI.Temperature","ambient",
+            modelica_add_component("RunSpace.CompileIdentity.Plain","RunSpace.CompileIdentity.Temperature","ambient",
                 modelica_placement(0.0,0.0,20.0,20.0),[]),
             modelica_add_equation("RunSpace.CompileIdentity.Plain","ambient","2.0")
         ],source.generation);
@@ -51,7 +51,7 @@ fn on_tick(me, ctx) {
     if this.phase=="edit" {
         let edited=ack(this.pending);
         if edited==() || edited.status=="pending" { return; }
-        if edited.ok!=true { this=finish(this,["imported component edit rejected: "+edited.to_string()]); return; }
+        if edited.ok!=true { this=finish(this,["declared component type edit rejected: "+edited.to_string()]); return; }
         let status=query("CompileStatus",#{doc_id:this.doc});
         if status==() || status.ast_parsed!=true { return; }
         this.pending=cmd("RunExperiment",#{doc_id:this.doc,class:"Other.CompileIdentity.Plain",t_end:0.02,n_intervals:2});
@@ -65,14 +65,14 @@ fn on_tick(me, ctx) {
     }
     if this.phase=="start" {
         if this.target==0 {
-            this.pending=cmd("RunExperiment",#{doc_id:this.doc,class:"RunSpace.CompileIdentity.Plain",t_end:0.02,n_intervals:2});
+            this.pending=cmd("RunExperiment",#{doc_id:this.doc,class:"Plain",t_end:0.02,n_intervals:2});
         } else if this.target==1 {
             this.pending=cmd("RunExperiment",#{doc_id:this.doc,class:"CompileIdentity.'Quoted.Name'",t_end:0.02,n_intervals:2});
         } else if this.target==2 {
             this.pending=cmd("RunExperiment",#{doc_id:this.doc,class:"'Quoted.Name'",t_end:0.02,n_intervals:2});
         } else if this.target==3 {
             let source=query("GetDocumentSource",#{doc_id:this.doc});
-            this.pending=cmd("RunModelicaSolve",#{doc_id:this.doc,class:"CompileIdentity.Plain",
+            this.pending=cmd("RunModelicaSolve",#{doc_id:this.doc,class:"Plain",
                 source_generation:source.generation,t_start:0.0,t_end:0.02,dt:0.01,label:"Headless run identity"});
         } else {
             this.pending=cmd("RunExperiment",#{doc_id:this.default_doc,t_end:0.02,n_intervals:2});
@@ -105,7 +105,7 @@ fn on_tick(me, ctx) {
         let ambient_ok=result.series.ambient!=() && result.series.ambient.len()==3
             && result.metadata.ambient!=() && result.metadata.ambient.unit=="K";
         if ambient_ok { for sample in result.series.ambient { ambient_ok=ambient_ok && sample==2.0; } }
-        this.failures.push(t_true(ambient_ok,"structurally authored imported type keeps resolved units and values"));
+        this.failures.push(t_true(ambient_ok,"structurally authored package type keeps resolved units and values"));
     }
     if this.target<4 { this.target+=1; this.phase="start"; return; }
     this=finish(this,this.failures);

@@ -30,7 +30,7 @@ use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 
 /// Persistent open-count ledger keyed by the fully-qualified class
-/// name (e.g. `"Modelica.Blocks.Examples.PID_Controller"`). Missing
+/// name (e.g. `"Library.Examples.Sample"`). Missing
 /// entries are treated as zero — don't insert on read.
 #[derive(Resource, Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ExampleProgress {

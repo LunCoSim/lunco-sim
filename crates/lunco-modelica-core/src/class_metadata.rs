@@ -28,7 +28,7 @@ use lunco_modelica_index::index::{ClassEntry, ClassKind};
 /// callers that only want the display fields use this.
 #[derive(Clone, Debug)]
 pub struct ClassMetadata {
-    /// Fully-qualified absolute name (`"Modelica.Blocks.Examples.PID_Controller"`).
+    /// Fully-qualified absolute name (`"Library.Examples.Sample"`).
     pub qualified: String,
     /// Modelica class kind.
     pub kind: ClassKind,

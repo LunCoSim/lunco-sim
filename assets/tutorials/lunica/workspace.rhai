@@ -6,8 +6,8 @@ fn steps() {
     [
         #{ anchor: "",                         focus: (),                     title: "Find your workspace",   body: "This lesson shows where models live and where to find examples. Press Next to continue." },
         #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Open a Twin",     body: "In Twin Browser, expand a Twin and select a model. A Twin contains `.mo` files and a manifest." },
-        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Duplicate before editing", body: "Bundled demos and the Modelica Standard Library are read-only. Right-click a class and choose Duplicate to make an editable copy." },
-        #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Follow a Learning Path",   body: "Open Learning Paths and choose Circuits, Control, or Mechanics. Select a class and follow its signal or behaviour goal." },
+        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Duplicate before editing", body: "Bundled demos and indexed library classes are read-only. Right-click a class and choose Duplicate to make an editable copy." },
+        #{ anchor: "",                         focus: (),                     title: "Explore examples",   body: "View → Lunica opens the Welcome panel. Curated learning paths appear when their classes are installed; browse available library examples and bundled demos there." },
         #{ anchor: "",                         focus: (),                     title: "Choose a model",   body: "Find a model you want to investigate and identify its source in the Twin browser. Finish this tour to choose your next lesson." },
     ]
 }

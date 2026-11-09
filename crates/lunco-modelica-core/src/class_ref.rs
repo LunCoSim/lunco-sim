@@ -11,7 +11,7 @@
 //!
 //! | String form | `ClassRef` form |
 //! |---|---|
-//! | `library_path:Modelica.Blocks.Examples.PID_Controller` | `ClassRef::source("Modelica", ["Blocks","Examples","PID_Controller"])` |
+//! | `library_path:SampleLibrary.System.Component` | `ClassRef::source("SampleLibrary", ["System","Component"])` |
 //! | `bundled://AnnotatedRocketStage.mo#AnnotatedRocketStage.RocketStage` | `ClassRef::bundled(["AnnotatedRocketStage","RocketStage"])` |
 //! | `/abs/path/to/MyModel.mo` | `ClassRef::user_file("/abs/path/to/MyModel.mo", [])` |
 //! | `mem://Untitled1` | `ClassRef::untitled(doc_id, ["Untitled1"])` (needs doc id) |
@@ -135,8 +135,8 @@ impl ClassRef {
 
     /// Absolute qualified name with the library root prepended.
     ///
-    /// - `ClassRef::source("Modelica", ["Blocks","Examples","PID_Controller"])` →
-    ///   `"Modelica.Blocks.Examples.PID_Controller"`.
+    /// - `ClassRef::source("SampleLibrary", ["System","Component"])` →
+    ///   `"SampleLibrary.System.Component"`.
     /// - `ClassRef::source("ExternalLibrary", ["Boundaries","CreateState"])` →
     ///   `"ExternalLibrary.Boundaries.CreateState"`.
     /// - Libraries with empty `root_name()` (`Bundled`, `UserFile`,
@@ -255,17 +255,16 @@ mod tests {
 
     #[test]
     fn library_qualified_round_trip() {
-        let c = ClassRef::parse_tree_id("library_path:Modelica.Blocks.Examples.PID_Controller")
-            .unwrap();
+        let c = ClassRef::parse_tree_id("library_path:SampleLibrary.System.Component").unwrap();
         assert_eq!(
             c.library,
             Library::Source {
-                root: "Modelica".into()
+                root: "SampleLibrary".into()
             }
         );
-        assert_eq!(c.path, vec!["Blocks", "Examples", "PID_Controller"]);
-        assert_eq!(c.qualified(), "Modelica.Blocks.Examples.PID_Controller");
-        assert_eq!(c.short_name(), "PID_Controller");
+        assert_eq!(c.path, vec!["System", "Component"]);
+        assert_eq!(c.qualified(), "SampleLibrary.System.Component");
+        assert_eq!(c.short_name(), "Component");
         assert!(!c.is_library_root());
     }
 

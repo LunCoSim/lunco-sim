@@ -429,7 +429,7 @@ listing use their own explicit `type` values.
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"type":"ExecuteCommand","command":"OpenClass","params":{"qualified":"Modelica.Blocks.Continuous.PID"}}'
+  -d '{"type":"ExecuteCommand","command":"OpenClass","params":{"qualified":"ControlLibrary.Controllers.PID"}}'
 ```
 
 Successful fire-and-forget response: `{"data":{"accepted":true}}`. Typed result

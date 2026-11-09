@@ -84,7 +84,7 @@ pub struct ModelicaIndex {
     /// All classes defined in this document, by qualified name.
     pub classes: HashMap<String, ClassEntry>,
 
-    /// Within-clause path, if any (e.g. `"Modelica.Mechanics"`).
+    /// Within-clause path, if any (e.g. `"SampleLibrary.Mechanics"`).
     pub within_path: Option<String>,
 
     /// Whether the lenient parse reported any errors. Mirrors the document
@@ -232,7 +232,7 @@ impl ClassEntry {
     }
 
     /// Second-level segment of the qualified name — e.g.
-    /// `"Modelica.Electrical.Analog.Examples.X"` → `"Electrical"`.
+    /// `"SampleLibrary.Electrical.Examples.X"` → `"Electrical"`.
     /// Empty when the name has fewer than two dotted segments.
     pub fn domain(&self) -> &str {
         rumoca_core::qualified_name_segments(&self.name)
@@ -1073,7 +1073,7 @@ end Labels;"#;
         );
     }
 
-    const SRC: &str = "within Demo;\n\nmodel RC\n  parameter Real R = 100;\n  Real x;\n  Modelica.Electrical.Analog.Basic.Resistor resistor;\nend RC;\n";
+    const SRC: &str = "within Demo;\n\nmodel RC\n  parameter Real R = 100;\n  Real x;\n  SampleLibrary.Electrical.Basic.Resistor resistor;\nend RC;\n";
 
     #[test]
     fn rebuild_populates_within_classes_components() {
@@ -1106,7 +1106,7 @@ end Labels;"#;
             .expect("resistor present");
         assert_eq!(
             resistor.type_name,
-            "Modelica.Electrical.Analog.Basic.Resistor"
+            "SampleLibrary.Electrical.Basic.Resistor"
         );
         assert_eq!(resistor.causality, Causality::None);
 

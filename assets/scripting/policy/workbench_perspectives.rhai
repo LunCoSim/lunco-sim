@@ -65,11 +65,13 @@ fn assemble(facts) {
     }
     if has_panel(facts, "lunco.workbench.twin_browser") && "modelica_model_view" in facts.instance_kinds {
         let model = #{
-            id: "modelica_analyze", title: "∿ Lunica", interaction: "editor", revision: 1,
-            description: "Open Modelica sources from Twin. Choose the Modelica view to browse packages and classes. Edit diagrams or equations, compile and run; compare signals in Analyze.",
+            id: "modelica_analyze", title: "∿ Lunica", interaction: "editor", revision: 2,
+            description: "Browse Twin models and insertable components on the left. Edit the active Modelica view in the center and inspect selected components on the right. Welcome and learning paths remain available from View.",
             left: ["lunco.workbench.twin_browser"],
         };
-        if has_panel(facts, "modelica_welcome") { model.center = ["modelica_welcome"]; }
+        if has_panel(facts, "modelica_component_palette") { model.left_bottom = ["modelica_component_palette"]; }
+        if has_panel(facts, "modelica_diagram_inspector") { model.right = ["modelica_diagram_inspector"]; }
+        if has_panel(facts, "modelica_workspace") { model.center = ["modelica_workspace"]; }
         if has_panel(facts, "workbench::viewport") {
             result.push(model);
         } else {

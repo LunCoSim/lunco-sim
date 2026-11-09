@@ -12,8 +12,8 @@
 // `dae.states` with zero equations defining `der(w_rel)`, so
 // `reorder_equations_for_solver` raises `MissingStateEquation`.
 //
-// Every `Modelica.Mechanics.Rotational.*` example (First,
-// PID_Controller, …) hits this.
+// Every rotational drivetrain model using the compliant spring/damper
+// components hits this.
 //
 // * On `origin/main` of rumoca — Compile fails with
 //   `MissingStateEquation("damper.w_rel")`.

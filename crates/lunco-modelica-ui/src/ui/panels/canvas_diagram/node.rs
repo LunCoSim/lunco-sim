@@ -28,7 +28,7 @@ pub struct IconNodeData {
     pub(super) semantic: Option<std::sync::Arc<super::semantic::SemanticDiagram>>,
     /// Runtime path is independent of the local authored label.
     pub value_instance: String,
-    /// Fully-qualified type name (e.g. `Modelica.Electrical.Analog.Basic.Resistor`).
+    /// Fully-qualified type name (e.g. `SampleLibrary.Electrical.Resistor`).
     pub qualified_type: String,
     /// Modelica partial class, rendered with a dashed border.
     pub partial: bool,

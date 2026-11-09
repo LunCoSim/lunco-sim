@@ -37,6 +37,9 @@ use lunco_workbench_browser::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSe
 // `crate::sim_default::drilled_class_for_doc`.
 use crate::ui::document_context::ModelicaDocuments;
 
+/// Stable id of the Modelica section in the shared Twin Browser.
+pub const MODELICA_BROWSER_SECTION_ID: &str = "lunco.modelica.classes";
+
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
 struct ClassEntry {
@@ -59,7 +62,7 @@ pub struct ModelicaSection;
 
 impl BrowserSection for ModelicaSection {
     fn id(&self) -> &str {
-        "lunco.modelica.classes"
+        MODELICA_BROWSER_SECTION_ID
     }
 
     fn title(&self) -> &str {

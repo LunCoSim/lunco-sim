@@ -1303,7 +1303,7 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
 
     let looks_like_qualified_name = uri.contains('.') && !uri.contains('/') && !uri.contains('\\');
     if looks_like_qualified_name {
-        // A bare qualified name (e.g. `Modelica.Blocks.Examples.PID_Controller`)
+        // A bare qualified name (e.g. `Library.Examples.Sample`)
         // is an "open as my editable copy" request — dispatch as a duplicate
         // with an empty name so the handler derives the default `<short>Copy`.
         commands.trigger(OpenClass {

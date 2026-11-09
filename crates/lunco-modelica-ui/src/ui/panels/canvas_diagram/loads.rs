@@ -428,9 +428,9 @@ pub fn drive_duplicate_loads(
         // the projection finds inherited connectors. Same pattern as
         // the drill-in path. The duplicated copy carries `within
         // <origin package>;` so the within-prefixed qualified path
-        // (e.g. `Modelica.Blocks.Continuous.PIDCopy`) gives the
+        // (e.g. `SampleLibrary.Controls.DerivativeCopy`) gives the
         // scope-chain resolver enough context to walk up to
-        // `Modelica.Blocks.Interfaces.SISO`.
+        // `SampleLibrary.Controls.Interfaces.SignalBlock`.
         if let Some(host) = registry.host(doc_id) {
             // Read within-prefix + extends from the Index. Both are
             // pre-extracted during rebuild, so no AST walk per drill-in.
@@ -767,12 +767,9 @@ fn open_drill_in_tab(
 
     if needs_load {
         // Spawn the off-thread load. `load_library_class` extracts only
-        // the target class from the wrapper file: a 152 KB
-        // `Modelica/Blocks/package.mo` becomes a ~7 KB doc holding
-        // just `PID_Controller` + a `within Modelica.Blocks.Examples;`
-        // prefix for scope-chain resolution. Lazy doc — no main-
-        // thread parse on install; `drive_engine_sync` parses the
-        // small slice off-thread. Driver: `drive_drill_in_loads`.
+        // the requested class from its source file and retains its `within`
+        // prefix for scope-chain resolution. The document is parsed off-thread
+        // by `drive_engine_sync`; the UI thread does not parse the library file.
         let path_for_task = file_path.to_path_buf();
         let qualified_for_task = qualified.to_string();
         let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {

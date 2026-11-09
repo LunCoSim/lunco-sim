@@ -1,8 +1,8 @@
 //! Component Palette — search-first flat list of instantiable source library components.
 //!
 //! Solves the research-flagged pain with the Libraries browser: users
-//! don't want to navigate `Modelica > Electrical > Analog > Basic >
-//! Resistor` every time they need a resistor — they want to type
+//! don't want to navigate `Controls > SignalBlocks > Gain` every time
+//! they need a block — they want to type
 //! "resis", see results, and drop one onto the canvas. Figma / UE
 //! asset-browser style.
 //!
@@ -10,17 +10,16 @@
 //! [`lunco_modelica_index::visual_diagram::library_class_library`] — interfaces and
 //! package nodes are excluded. One row per component. Click a row to
 //! instantiate on the active Diagram tab (placement cycles through a
-//! 3-column grid to avoid overlap).
+//! 3-column grid to avoid overlap). Results stay browseable when no writable
+//! Modelica document is active, but insertion is disabled with guidance.
 //!
 //! **Search**: case-insensitive substring match against the component's
-//! display name, full source library path, category, and description. Top-100
-//! matches rendered; typing narrows quickly. No fuzzy-matching
-//! library is pulled in yet — substring + simple scoring is enough
-//! for ~1-5k components.
+//! display name, full source library path, category, and description. Library
+//! and package filters come from the installed index, so any admitted Modelica
+//! roots can be browsed. Top-100 matches rendered; typing narrows quickly.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_theme::ColorAlpha;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_modelica_index::visual_diagram::library_class_library;
@@ -70,8 +69,8 @@ pub(crate) fn on_place_component_requested(
     });
 }
 
-/// Per-frame UI state for the palette. Holds the search query + the
-/// active category filter chip.
+/// Per-frame UI state for the palette. Holds the search query and
+/// library/package filter selection.
 ///
 /// Everything else (the component catalog) is static, owned by
 /// `library_class_library()`; we just filter over its slice.
@@ -79,60 +78,10 @@ pub(crate) fn on_place_component_requested(
 pub struct PaletteState {
     /// Current search query — normalized on compare (lowercase).
     pub query: String,
-    /// Selected top-level category chip (`None` = "All"). Derived
-    /// from the qualified source path's second segment — e.g.
-    /// `Modelica.Electrical.…` → `Some("Electrical")` and
-    /// `External.Media.…` → `Some("Media")`.
+    /// Selected installed source root (`None` = all roots).
+    pub library: Option<&'static str>,
+    /// Selected immediate package within the selected root.
     pub category: Option<&'static str>,
-}
-
-/// The categories we surface as filter chips, in display order.
-/// Derived from Modelica's top-level packages; anything that doesn't
-/// match one of these falls under `"Other"`.
-///
-/// The source library top-level packages we surface as category chips, in
-/// display order. Chip colours come from the schematic-token set in
-/// `lunco-theme` (see [`category_color`]) — this file no longer
-/// hardcodes palette picks. If you need a new category, add its
-/// name here and add the Modelica-side → schematic-token mapping
-/// in [`category_color`].
-const CATEGORIES: &[&str] = &[
-    "Electrical",
-    "Mechanical",
-    "Thermal",
-    "Fluid",
-    "Media",
-    "Magnetic",
-    "Blocks",
-    "Math",
-    "StateGraph",
-    "Other",
-];
-
-/// Map a category name to its chip colour via the current theme's
-/// schematic tokens. Mapping choices track domain intent —
-/// `Electrical → wire_electrical`, `Mechanical → wire_mechanical`,
-/// etc. — so a theme override of `wire_electrical` propagates to
-/// the palette automatically.
-///
-/// For categories with no obvious wire-domain cognate (`Blocks`,
-/// `Math`, `StateGraph`) we land on signal/integer/boolean tokens —
-/// they're generic "processing" colours that don't carry a physical
-/// domain meaning, which matches how those categories feel.
-fn category_color(name: &str, theme: &lunco_theme::Theme) -> egui::Color32 {
-    let s = &theme.schematic;
-    match name {
-        "Electrical" => s.wire_electrical,
-        "Mechanical" => s.wire_mechanical,
-        "Thermal" => s.wire_thermal,
-        "Fluid" => s.wire_fluid,
-        "Media" => s.wire_fluid,
-        "Magnetic" => s.wire_multibody,
-        "Blocks" => s.wire_signal,
-        "Math" => s.wire_integer,
-        "StateGraph" => s.wire_boolean,
-        _ => s.wire_unknown,
-    }
 }
 
 /// Should this entry be shown in the instantiable palette?
@@ -160,19 +109,20 @@ pub(crate) fn is_instantiable(c: &lunco_modelica_index::index::ClassEntry) -> bo
     )
 }
 
-/// Memoized, instantiable subset of the source-library index plus the
-/// no-query per-category tally. The source-library index is immutable once
-/// loaded ([`library_class_library`] is a `&'static` cache), so the
-/// instantiable filter + the default chip counts — previously rebuilt
-/// **every frame** over the whole ~700-class library just to render the
-/// palette header and chips (CQ-208) — run once and are read thereafter.
-/// Only the *query-filtered* counts stay per-frame, and only while the
-/// user is actually typing a search.
+/// Memoized instantiable classes and their library/package counts. The
+/// installed class index is immutable during a session, so these counts are
+/// built once. Query-filtered counts are calculated only while searching.
 struct PaletteCatalog {
     /// Instantiable classes (connectors/partials dropped), in library order.
     lib: Vec<&'static lunco_modelica_index::index::ClassEntry>,
-    /// Per-category counts with no search query active (the default chips).
-    cat_counts_all: std::collections::HashMap<&'static str, usize>,
+    /// Installed source roots, sorted for stable filters.
+    libraries: Vec<&'static str>,
+    /// Per-library counts with no search query active.
+    library_counts: std::collections::HashMap<&'static str, usize>,
+    /// Immediate packages under each installed root.
+    packages: std::collections::HashMap<&'static str, Vec<&'static str>>,
+    /// Per-package counts, keyed by root and package.
+    package_counts: std::collections::HashMap<(&'static str, &'static str), usize>,
     /// `lib.len()` — total instantiable component count.
     total: usize,
 }
@@ -183,7 +133,10 @@ fn palette_catalog() -> &'static PaletteCatalog {
     let empty = || {
         EMPTY.get_or_init(|| PaletteCatalog {
             lib: Vec::new(),
-            cat_counts_all: std::collections::HashMap::new(),
+            libraries: Vec::new(),
+            library_counts: std::collections::HashMap::new(),
+            packages: std::collections::HashMap::new(),
+            package_counts: std::collections::HashMap::new(),
             total: 0,
         })
     };
@@ -198,34 +151,52 @@ fn palette_catalog() -> &'static PaletteCatalog {
     }
     let lib: Vec<&'static lunco_modelica_index::index::ClassEntry> =
         lib_all.iter().filter(|c| is_instantiable(c)).collect();
-    let mut cat_counts_all: std::collections::HashMap<&'static str, usize> =
+    let mut library_counts: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::new();
+    let mut packages: std::collections::HashMap<&'static str, Vec<&'static str>> =
+        std::collections::HashMap::new();
+    let mut package_counts: std::collections::HashMap<(&'static str, &'static str), usize> =
         std::collections::HashMap::new();
     for c in &lib {
-        *cat_counts_all.entry(category_of(&c.name)).or_insert(0) += 1;
+        let library = library_of(c.name.as_str());
+        let package = category_of(c.name.as_str());
+        *library_counts.entry(library).or_insert(0) += 1;
+        *package_counts.entry((library, package)).or_insert(0) += 1;
+        packages.entry(library).or_default().push(package);
+    }
+    let mut libraries = library_counts.keys().copied().collect::<Vec<_>>();
+    libraries.sort_unstable();
+    for package_names in packages.values_mut() {
+        package_names.sort_unstable();
+        package_names.dedup();
     }
     let total = lib.len();
     let _ = CACHE.set(PaletteCatalog {
         lib,
-        cat_counts_all,
+        libraries,
+        library_counts,
+        packages,
+        package_counts,
         total,
     });
     CACHE.get().unwrap_or_else(|| empty())
 }
 
-/// Match a component's source library path to one of our display categories.
-fn category_of(qualified_path: &str) -> &'static str {
-    // The first segment is the source-root identity. Category labels are
-    // derived from the next segment for every source root; no library name
-    // is treated as the canonical one.
-    let first = rumoca_core::qualified_name_segments(qualified_path)
+/// Top-level installed source root for a fully-qualified class.
+fn library_of(qualified_path: &str) -> &str {
+    rumoca_core::qualified_name_segments(qualified_path)
+        .next()
+        .unwrap_or(qualified_path)
+}
+
+/// Immediate package below the installed root for a fully-qualified class.
+fn category_of(qualified_path: &str) -> &str {
+    let Some((parent_path, _)) = qualified_path.rsplit_once('.') else {
+        return "General";
+    };
+    rumoca_core::qualified_name_segments(parent_path)
         .nth(1)
-        .unwrap_or("Other");
-    for &c in CATEGORIES {
-        if c == first {
-            return c;
-        }
-    }
-    "Other"
+        .unwrap_or("General")
 }
 
 /// The panel. Zero-sized; state lives in [`PaletteState`].
@@ -260,17 +231,28 @@ impl Panel for ComponentPalettePanel {
             .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
-        let all_chip_color = theme.tokens.text_subdued;
         let muted_text = theme.tokens.text_subdued;
+        let active_target = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.active_document)
+            .and_then(|document| {
+                let documents = ctx.resource::<crate::ui::document_context::ModelicaDocuments>()?;
+                let host = documents.host(document)?;
+                let origin = host.document().origin();
+                Some(origin.is_writable() || origin.is_untitled())
+            });
+        let can_insert = active_target == Some(true);
 
-        // Snapshot the query + selected category up front.
+        // Snapshot the query and selected library/package filters.
         let state = ctx.resource::<PaletteState>();
         let query = state.map(|s| s.query.clone()).unwrap_or_default();
         let query_lc = query.to_lowercase();
-        let selected_category: Option<&'static str> = state.and_then(|s| s.category);
+        let selected_library = state.and_then(|s| s.library);
+        let selected_category = state.and_then(|s| s.category);
 
         // Render the search box; capture any edit.
         let mut new_query = query.clone();
+        let mut new_library = selected_library;
         let mut new_category = selected_category;
         let mut clear_all = false;
 
@@ -287,89 +269,132 @@ impl Panel for ComponentPalettePanel {
             }
         });
 
-        // Precompute per-category counts for the chip labels (filtered
-        // by the current search, so a chip says "Electrical (7)" = 7
-        // matches in this category given the current query).
-        // Pre-filter: drop connectors / Interfaces / Internal entries
-        // before any scoring or counting so they don't pollute totals,
-        // chip counts, or the search results.
-        // Instantiable base list + default chip counts come from the
-        // memoized catalog (immutable source library — built once, not per frame).
+        // Pre-filter partial classes and connectors before counting or display.
+        // The static counts come from the memoized index; active searches only
+        // recount matching classes for the visible chips.
         let catalog = palette_catalog();
         let lib = &catalog.lib;
         let pre_filter_total = catalog.total;
-        // With no query the chip counts are the static per-category totals;
-        // only an active search needs a per-frame re-tally (and only while
-        // the search box is non-empty).
-        let (cat_counts, pre_filter_matches): (
-            std::collections::HashMap<&'static str, usize>,
-            usize,
-        ) = if query_lc.is_empty() {
-            (catalog.cat_counts_all.clone(), pre_filter_total)
-        } else {
-            let mut counts: std::collections::HashMap<&'static str, usize> =
-                std::collections::HashMap::new();
-            let mut matches = 0usize;
+        let mut library_counts = catalog.library_counts.clone();
+        let mut package_counts = catalog.package_counts.clone();
+        let mut query_matches = pre_filter_total;
+        if !query_lc.is_empty() {
+            library_counts.clear();
+            package_counts.clear();
+            query_matches = 0;
             for c in lib.iter() {
-                if score_component(c, &query_lc) > 0.0 {
-                    matches += 1;
-                    *counts.entry(category_of(&c.name)).or_insert(0) += 1;
+                if score_component(c, &query_lc) <= 0.0 {
+                    continue;
                 }
+                query_matches += 1;
+                let library = library_of(c.name.as_str());
+                let category = category_of(c.name.as_str());
+                *library_counts.entry(library).or_insert(0) += 1;
+                *package_counts.entry((library, category)).or_insert(0) += 1;
             }
-            (counts, matches)
-        };
+        }
 
-        // ── Category chips ──
-        // `All` + one chip per known category. Chips with zero matches
-        // are dimmed but still clickable (they'll just show an empty
-        // list). Scroll horizontally on narrow docks.
-        egui::ScrollArea::horizontal()
-            .id_salt("palette_categories")
-            .max_height(26.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let all_count = pre_filter_matches;
-                    if chip(
-                        ui,
-                        "All",
-                        all_chip_color,
-                        all_count,
-                        selected_category.is_none(),
-                    ) {
-                        new_category = None;
-                    }
-                    for &cat in CATEGORIES {
-                        let count = cat_counts.get(cat).copied().unwrap_or(0);
-                        if chip(
-                            ui,
-                            cat,
-                            category_color(cat, &theme),
-                            count,
-                            selected_category == Some(cat),
-                        ) {
-                            new_category = Some(cat);
+        // Installed roots are the first filter level. A dropdown keeps every
+        // root reachable in the narrow sidebar without relying on hidden
+        // horizontal scrolling.
+        let previous_library = new_library;
+        let library_label = new_library.map_or_else(
+            || format!("All libraries ({query_matches})"),
+            |library| {
+                format!(
+                    "{library} ({})",
+                    library_counts.get(library).copied().unwrap_or(0)
+                )
+            },
+        );
+        egui::ComboBox::from_id_salt("palette_library_filter")
+            .selected_text(library_label)
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut new_library,
+                    None,
+                    format!("All libraries ({query_matches})"),
+                );
+                for &library in &catalog.libraries {
+                    let count = library_counts.get(library).copied().unwrap_or(0);
+                    ui.selectable_value(
+                        &mut new_library,
+                        Some(library),
+                        format!("{library} ({count})"),
+                    );
+                }
+            });
+        if new_library != previous_library {
+            new_category = None;
+        }
+
+        // Package filters are scoped to the selected root. This preserves
+        // useful domain navigation for large libraries without hiding other
+        // installed roots behind an "Other" bucket.
+        if let Some(library) = new_library {
+            let all_count = library_counts.get(library).copied().unwrap_or(0);
+            let package_label = new_category.map_or_else(
+                || format!("All packages ({all_count})"),
+                |category| {
+                    format!(
+                        "{category} ({})",
+                        package_counts
+                            .get(&(library, category))
+                            .copied()
+                            .unwrap_or(0)
+                    )
+                },
+            );
+            egui::ComboBox::from_id_salt(("palette_package_filter", library))
+                .selected_text(package_label)
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut new_category,
+                        None,
+                        format!("All packages ({all_count})"),
+                    );
+                    if let Some(packages) = catalog.packages.get(library) {
+                        for &category in packages {
+                            let count = package_counts
+                                .get(&(library, category))
+                                .copied()
+                                .unwrap_or(0);
+                            ui.selectable_value(
+                                &mut new_category,
+                                Some(category),
+                                format!("{category} ({count})"),
+                            );
                         }
                     }
                 });
-            });
+        }
 
         // Header row: summary + clear-filter.
         ui.horizontal(|ui| {
-            let visible = if let Some(cat) = selected_category {
-                cat_counts.get(cat).copied().unwrap_or(0)
+            let visible = if let (Some(library), Some(category)) = (new_library, new_category) {
+                package_counts
+                    .get(&(library, category))
+                    .copied()
+                    .unwrap_or(0)
+            } else if let Some(library) = new_library {
+                library_counts.get(library).copied().unwrap_or(0)
             } else {
-                pre_filter_matches
+                query_matches
             };
             ui.label(
-                egui::RichText::new(if query_lc.is_empty() && selected_category.is_none() {
-                    format!("{} components", pre_filter_total)
-                } else {
-                    format!("{} of {} matching", visible, pre_filter_total)
-                })
+                egui::RichText::new(
+                    if query_lc.is_empty() && new_library.is_none() && new_category.is_none() {
+                        format!("{} components", pre_filter_total)
+                    } else {
+                        format!("{} of {} matching", visible, pre_filter_total)
+                    },
+                )
                 .text_style(lunco_theme::TypographyRole::Caption.text_style())
                 .color(muted_text),
             );
-            if (!query_lc.is_empty() || selected_category.is_some())
+            if (!query_lc.is_empty() || new_library.is_some() || new_category.is_some())
                 && lunco_workbench_widgets::icon_text_button(
                     ui,
                     lunco_workbench_widgets::UiIcon::Close,
@@ -381,24 +406,43 @@ impl Panel for ComponentPalettePanel {
                 clear_all = true;
             }
         });
+        if !can_insert {
+            let message = if active_target.is_some() {
+                "The active Modelica source is read-only. Duplicate it to add components."
+            } else {
+                "Open or create a writable Modelica model to add components."
+            };
+            let color = if active_target.is_some() {
+                theme.tokens.warning
+            } else {
+                theme.tokens.text_subdued
+            };
+            ui.add(egui::Label::new(egui::RichText::new(message).color(color)).wrap());
+        }
         ui.separator();
 
         // Write back state changes.
         if clear_all {
             ctx.resource_scope::<PaletteState, _>(|_, state| {
                 state.query.clear();
+                state.library = None;
                 state.category = None;
             });
             // Skip subsequent rendering with stale query.
             return;
         }
-        if new_query != query || new_category != selected_category {
+        if new_query != query
+            || new_library != selected_library
+            || new_category != selected_category
+        {
             ctx.resource_scope::<PaletteState, _>(|_, state| {
                 state.query = new_query.clone();
+                state.library = new_library;
                 state.category = new_category;
             });
         }
         let query_lc = new_query.to_lowercase();
+        let selected_library = new_library;
         let selected_category = new_category;
 
         // ── Filter + rank ──
@@ -409,12 +453,17 @@ impl Panel for ComponentPalettePanel {
         //   +1.5 path contains query
         //   +1 category contains query
         //   +0.5 description contains query
-        // Plus: category filter acts as a hard gate.
+        // Library and package selections act as hard gates.
         let mut scored: Vec<(&lunco_modelica_index::index::ClassEntry, f32)> = lib
             .iter()
             .filter_map(|c| {
+                if let Some(library) = selected_library {
+                    if library_of(c.name.as_str()) != library {
+                        return None;
+                    }
+                }
                 if let Some(cat) = selected_category {
-                    if category_of(&c.name) != cat {
+                    if category_of(c.name.as_str()) != cat {
                         return None;
                     }
                 }
@@ -441,12 +490,9 @@ impl Panel for ComponentPalettePanel {
         let shown = scored.len().min(shown_cap);
 
         // ── Result list ──
-        // When the user is searching or filtered to a single category,
-        // render a flat (score-sorted) list — matches VS Code's
-        // search-results behaviour. With no filter, group by category
-        // into collapsible sections (Figma Assets style, OMEdit's
-        // component-tree style). Each section is closed by default
-        // except the first, keeping long category chains scannable.
+        // Searches and package-specific filters use a flat ranked list.
+        // Otherwise, group by installed root and immediate package. This keeps
+        // large roots from opening as one unscannable flat list.
         let mut clicked: Option<lunco_modelica_index::index::ClassEntry> = None;
         let mut drag_started_def: Option<lunco_modelica_index::index::ClassEntry> = None;
         // Snapshot the currently-dragged def name so render_component_row
@@ -459,14 +505,39 @@ impl Panel for ComponentPalettePanel {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if is_searching {
+                if lib.is_empty() {
+                    if lunco_modelica_index::visual_diagram::library_index_available() {
+                        ui.label(
+                            egui::RichText::new(
+                                "The indexed libraries contain no instantiable components.",
+                            )
+                            .color(muted_text),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(
+                                "No Modelica library index is available. Install or configure libraries in Settings → Data & libraries or Settings → Modelica.",
+                            )
+                            .color(muted_text),
+                        );
+                    }
+                } else if scored.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No components match the current search and filters.")
+                            .color(muted_text),
+                    );
+                } else if is_searching {
                     // Flat list (top-100 matches, score-ordered).
                     for (comp, _score) in scored.iter().take(shown) {
                         let being_dragged = dragging_path
                             .as_deref()
                             .map(|p| p == comp.name.as_str())
                             .unwrap_or(false);
-                        let action = render_component_row(ui, comp, &theme, being_dragged);
+                        let action = ui
+                            .add_enabled_ui(can_insert, |ui| {
+                                render_component_row(ui, comp, &theme, being_dragged)
+                            })
+                            .inner;
                         if action.clicked {
                             clicked = Some((*comp).clone());
                         }
@@ -485,39 +556,43 @@ impl Panel for ComponentPalettePanel {
                         );
                     }
                 } else {
-                    // Grouped by top-level category — collapsible. First
-                    // group (highest-count Electrical usually) is
-                    // expanded by default so users see something
-                    // immediately.
+                    // Group by root and immediate package. Include the root
+                    // in group labels until the user has selected one.
                     let mut groups: std::collections::BTreeMap<
-                        &'static str,
+                        (&'static str, &'static str),
                         Vec<&lunco_modelica_index::index::ClassEntry>,
                     > = std::collections::BTreeMap::new();
                     for (comp, _score) in scored.iter() {
-                        let cat = category_of(&comp.name);
-                        groups.entry(cat).or_default().push(*comp);
+                        let key = (
+                            library_of(comp.name.as_str()),
+                            category_of(comp.name.as_str()),
+                        );
+                        groups.entry(key).or_default().push(*comp);
                     }
-                    // Render in CATEGORIES order so the color story is
-                    // consistent across sessions.
-                    let mut first = true;
-                    for &cat in CATEGORIES {
-                        let Some(list) = groups.get(cat) else {
-                            continue;
+                    for ((library, category), list) in groups {
+                        let title = if selected_library.is_some() {
+                            category.to_owned()
+                        } else {
+                            format!("{library} · {category}")
                         };
                         let header = egui::CollapsingHeader::new(
-                            egui::RichText::new(format!("{} ({})", cat, list.len()))
-                                .color(category_color(cat, &theme))
+                            egui::RichText::new(format!("{} ({})", title, list.len()))
+                                .color(theme.tokens.text_subdued)
                                 .strong(),
                         )
-                        .default_open(first)
-                        .id_salt(("palette_cat", cat));
+                        .default_open(false)
+                        .id_salt(("palette_group", library, category));
                         header.show(ui, |ui| {
                             for comp in list {
                                 let being_dragged = dragging_path
                                     .as_deref()
                                     .map(|p| p == comp.name.as_str())
                                     .unwrap_or(false);
-                                let action = render_component_row(ui, comp, &theme, being_dragged);
+                                let action = ui
+                                    .add_enabled_ui(can_insert, |ui| {
+                                        render_component_row(ui, comp, &theme, being_dragged)
+                                    })
+                                    .inner;
                                 if action.clicked {
                                     clicked = Some((*comp).clone());
                                 }
@@ -526,7 +601,6 @@ impl Panel for ComponentPalettePanel {
                                 }
                             }
                         });
-                        first = false;
                     }
                 }
             });
@@ -711,8 +785,7 @@ fn render_component_row(
     theme: &lunco_theme::Theme,
     is_being_dragged: bool,
 ) -> RowAction {
-    let cat_name = category_of(&comp.name);
-    let cat_color = category_color(cat_name, theme);
+    let cat_color = theme.schematic.wire_unknown;
     let muted = theme.tokens.text_subdued;
 
     // Dim the row while it's the active drag source so the user has
@@ -771,44 +844,6 @@ fn render_component_row(
         clicked: resp.clicked(),
         drag_started: resp.drag_started(),
     }
-}
-
-/// Draw one category chip. Returns `true` if the user just clicked
-/// it. Selected chips render with a tinted background; non-selected
-/// chips are outlined. Count is suffixed in parentheses.
-fn chip(ui: &mut egui::Ui, name: &str, color: egui::Color32, count: usize, selected: bool) -> bool {
-    // Tone down the fill for non-selected chips.
-    let fill = if selected {
-        color.linear_multiply(0.30)
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    let stroke_color = if count == 0 { color.alpha(90) } else { color };
-    let label = if count > 0 {
-        format!("{} ({})", name, count)
-    } else {
-        name.to_string()
-    };
-    // Selected chips paint white-on-dark regardless of theme mode:
-    // the fill above is `color.linear_multiply(0.30)` — multiplying
-    // any palette entry by 0.3 always lands in the "very dark"
-    // quadrant, so a white glyph stays readable in both Mocha and
-    // Latte. Non-selected chips inherit the category `color` itself,
-    // which is already a schematic-token value.
-    let resp = ui.add(
-        egui::Button::new(
-            egui::RichText::new(label)
-                .text_style(lunco_theme::TypographyRole::Button.text_style())
-                .color(if selected {
-                    egui::Color32::WHITE
-                } else {
-                    color
-                }),
-        )
-        .fill(fill)
-        .stroke(egui::Stroke::new(1.0, stroke_color)),
-    );
-    resp.clicked()
 }
 
 /// Score a component against a lowercased query. Higher = better.

@@ -6,9 +6,8 @@
 //! 2. **Get Started** — New Model · Open Folder/File buttons. On desktop,
 //!    we offer "Open Folder" (native picker); on web (where folder
 //!    picking is limited) we show "Open File".
-//! 3. **example paths** — three hand-authored example paths
-//!    (Circuits 101, Control basics, Moving parts), each a sequence
-//!    of 5 source library classes with a one-line goal. Progress dots
+//! 3. **example paths** — authored learning paths are shown only when every
+//!    referenced class exists in the installed library index. Progress dots
 //!    (⚪ not opened · ✅ opened) drive a subtle game-feel;
 //!    `opened` state is read from the persisted `ExampleProgress`
 //!    ledger (bumped by the `OpenClass` observer in
@@ -16,8 +15,8 @@
 //!    one is open at a time — avoids the "wall of cards" feel of
 //!    the earlier draft.
 //! 4. **Modelica library examples** — collapsed by default, behind a
-//!    `CollapsingHeader`. Search box + domain chips + 2-col card
-//!    grid over the full ~700 source library examples. For power-users who
+//!    `CollapsingHeader`. Search box + dynamically derived library filters +
+//!    2-col card grid over indexed library examples. For power-users who
 //!    know what they want; no progress tracking here.
 //! 5. **Shortcuts footer**.
 //!
@@ -25,8 +24,8 @@
 //! `OpenClass`. The canvas read-only guard surfaces an explanation
 //! on first edit attempt (see `canvas_diagram::apply_ops`).
 //!
-//! The panel is non-closable so the dock layout always has a center
-//! anchor — even with no tabs open, the user has somewhere to land.
+//! The panel remains available from View → Lunica as an optional learning
+//! surface. The Modelica workspace has its own compact start panel.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -35,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::bundled_models;
 use crate::ui::welcome_progress::ExampleProgress;
-use lunco_modelica_index::visual_diagram::library_class_library;
+use lunco_modelica_index::visual_diagram::{library_class_library, library_index_available};
 
 const EXAMPLE_PATHS_KIND: &str = "lunco.modelica-example-paths.v1";
 
@@ -222,25 +221,12 @@ struct WelcomeState {
 
 const STATE_ID: &str = "modelica_welcome_state_v2";
 
-fn domain_icon(domain: &str) -> &'static str {
-    match domain {
-        "Electrical" => "⚡",
-        "Mechanics" => "M",
-        "Fluid" => "F",
-        "Thermal" => "T",
-        // Use widely-rendered glyphs instead of the newer emoji
-        // that turn into tofu in the bundled DejaVu Sans fallback:
-        // 🧲/🧮/🛠/⏱ tend to miss, ⊗/Σ/⚒/⧖ are in basic math
-        // plane and present in every sans font we've loaded.
-        "Magnetic" => "⊗",
-        "Blocks" => "Blocks",
-        "ComplexBlocks" => "Complex Blocks",
-        "Math" => "Σ",
-        "StateGraph" => "⇄",
-        "Clocked" => "⧖",
-        "Media" => "◆",
-        "Utilities" => "⚒",
-        _ => "Model",
+fn library_domain(qualified: &str) -> String {
+    let mut parts = rumoca_core::qualified_name_segments(qualified);
+    let library = parts.next().unwrap_or(qualified);
+    match parts.next() {
+        Some(domain) => format!("{library}/{domain}"),
+        None => library.to_owned(),
     }
 }
 
@@ -254,7 +240,7 @@ fn is_top_level_example(c: &lunco_modelica_index::index::ClassEntry) -> bool {
 }
 
 /// Memoized top-level-example subset of the source-library index, plus the
-/// per-domain counts the Browse-all chips show. The source-library index is
+/// per-library/package counts the Browse-all chips show. The source-library index is
 /// immutable once loaded ([`library_class_library`] is a `&'static` cache),
 /// so this filter+tally — previously rebuilt **every frame**, even with
 /// the Browse-all section collapsed, just to show the header count
@@ -266,6 +252,7 @@ fn is_top_level_example(c: &lunco_modelica_index::index::ClassEntry) -> bool {
 struct WelcomeCatalog {
     examples: Vec<&'static lunco_modelica_index::index::ClassEntry>,
     domain_counts: Vec<(String, usize)>,
+    class_names: Vec<&'static str>,
 }
 
 fn welcome_catalog() -> &'static WelcomeCatalog {
@@ -273,6 +260,7 @@ fn welcome_catalog() -> &'static WelcomeCatalog {
     static EMPTY: WelcomeCatalog = WelcomeCatalog {
         examples: Vec::new(),
         domain_counts: Vec::new(),
+        class_names: Vec::new(),
     };
     if let Some(c) = CACHE.get() {
         return c;
@@ -285,15 +273,22 @@ fn welcome_catalog() -> &'static WelcomeCatalog {
     }
     let examples: Vec<&'static lunco_modelica_index::index::ClassEntry> =
         lib.iter().filter(|c| is_top_level_example(c)).collect();
+    let mut class_names = lib
+        .iter()
+        .map(|class| class.name.as_str())
+        .collect::<Vec<_>>();
+    class_names.sort_unstable();
+    class_names.dedup();
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for c in &examples {
-        *counts.entry(c.domain().to_string()).or_default() += 1;
+        *counts.entry(library_domain(&c.name)).or_default() += 1;
     }
     let mut domain_counts: Vec<(String, usize)> = counts.into_iter().collect();
     domain_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let _ = CACHE.set(WelcomeCatalog {
         examples,
         domain_counts,
+        class_names,
     });
     CACHE.get().unwrap_or(&EMPTY)
 }
@@ -331,7 +326,7 @@ impl Panel for WelcomePanel {
     }
 
     fn closable(&self) -> bool {
-        false
+        true
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
@@ -571,41 +566,63 @@ impl Panel for WelcomePanel {
                 let w = ui.available_width().min(760.0);
                 ui.set_max_width(w);
 
-                // Overall header — "X of N paths started" turns the
-                // section into a tiny dashboard.
-                let total_steps: usize = registry.paths.iter().map(|p| p.steps.len()).sum();
-                let done_steps: usize = registry
-                    .paths
+                let catalog = welcome_catalog();
+                let available_paths = if library_index_available() {
+                    registry
+                        .paths
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, path)| {
+                            !path.steps.is_empty()
+                                && path.steps.iter().all(|step| {
+                                    catalog
+                                        .class_names
+                                        .binary_search(&step.qualified.as_str())
+                                        .is_ok()
+                                })
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let total_steps = available_paths
                     .iter()
-                    .flat_map(|p| p.steps.iter())
-                    .filter(|s| progress.is_opened(&s.qualified))
+                    .map(|(_, path)| path.steps.len())
+                    .sum::<usize>();
+                let done_steps = available_paths
+                    .iter()
+                    .flat_map(|(_, path)| path.steps.iter())
+                    .filter(|step| progress.is_opened(&step.qualified))
                     .count();
                 ui.horizontal(|ui| {
                     ui.heading(
                         egui::RichText::new("example paths")
                             .text_style(lunco_theme::TypographyRole::Section.text_style()),
                     );
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} of {} steps opened",
-                            done_steps, total_steps
-                        ))
-                        .text_style(lunco_theme::TypographyRole::Caption.text_style())
-                        .color(muted),
-                    );
+                    if total_steps > 0 {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} of {} steps opened",
+                                done_steps, total_steps
+                            ))
+                            .text_style(lunco_theme::TypographyRole::Caption.text_style())
+                            .color(muted),
+                        );
+                    }
                 });
                 ui.add_space(2.0);
-                ui.label(
-                    egui::RichText::new(
-                        "Three guided tours through Modelica. Click to \
-                         expand, click a step to open it read-only.",
-                    )
-                    .color(muted),
-                );
+                let description = if !library_index_available() {
+                    "Learning paths appear when an installed Modelica library is indexed."
+                } else if available_paths.is_empty() {
+                    "No curated paths match the indexed libraries. Browse available examples below."
+                } else {
+                    "Curated paths match the installed libraries. Click to expand, then open a step read-only."
+                };
+                ui.label(egui::RichText::new(description).color(muted));
                 ui.add_space(10.0);
 
-                for (i, path) in registry.paths.iter().enumerate() {
+                for (i, path) in available_paths.iter().copied() {
                     let opened = path
                         .steps
                         .iter()
@@ -692,27 +709,19 @@ impl Panel for WelcomePanel {
                             let opens = progress.opens_of(&step.qualified);
                             let is_open = opens > 0;
 
-                            // Resolve index entry for path-exists
-                            // validation (rare missing means label
-                            // still renders but click is disabled).
-                            let exists = library_class_library()
-                                .iter()
-                                .any(|c| c.name == step.qualified);
-
                             let step_h = 48.0;
                             let indent = 32.0;
                             let step_w = (ui.available_width() - indent).max(220.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(indent);
-                                let resp = ui.add_enabled(
-                                    exists,
-                                    egui::Button::new("")
-                                        .min_size(egui::vec2(step_w, step_h))
-                                        .fill(card_fill)
-                                        .stroke(egui::Stroke::new(1.0, card_stroke)),
-                                );
-                                let resp = if exists {
-                                    resp.on_hover_text(format!(
+                                let resp = ui
+                                    .add_sized(
+                                        [step_w, step_h],
+                                        egui::Button::new("")
+                                            .fill(card_fill)
+                                            .stroke(egui::Stroke::new(1.0, card_stroke)),
+                                    )
+                                    .on_hover_text(format!(
                                         "{}\n\n{}\n\n{}",
                                         step.qualified,
                                         step.goal,
@@ -723,13 +732,7 @@ impl Panel for WelcomePanel {
                                         } else {
                                             format!("Opened {} times.", opens)
                                         },
-                                    ))
-                                } else {
-                                    resp.on_hover_text(
-                                        "Missing from library_index.json — \
-                                         re-run the indexer.",
-                                    )
-                                };
+                                    ));
                                 let rect = resp.rect;
                                 let painter = ui.painter_at(rect).with_clip_rect(rect);
 
@@ -775,7 +778,7 @@ impl Panel for WelcomePanel {
                                     );
                                 }
 
-                                if exists && resp.clicked() {
+                                if resp.clicked() {
                                     open_library = Some(step.qualified.clone());
                                 }
                             });
@@ -788,7 +791,7 @@ impl Panel for WelcomePanel {
 
             ui.add_space(24.0);
 
-            // ── Modelica library examples (collapsed by default) ─
+            // ── Installed Modelica library examples (collapsed by default) ─
             ui.vertical_centered(|ui| {
                 // Adaptive width — honour 760px as the comfort-read
                 // ceiling but shrink to fit narrow panels so the
@@ -800,7 +803,7 @@ impl Panel for WelcomePanel {
 
                 egui::CollapsingHeader::new(
                     egui::RichText::new(format!(
-                        "Modelica library examples ({} available)",
+                        "Installed library examples ({} available)",
                         examples.len()
                     ))
                     .text_style(lunco_theme::TypographyRole::Label.text_style())
@@ -811,8 +814,8 @@ impl Panel for WelcomePanel {
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(
-                            "Installed Modelica library examples. \
-                             Filter by domain or search by name and description.",
+                            "Examples from the indexed libraries. \
+                             Filter by library and package or search by name and description.",
                         )
                         .color(muted),
                     );
@@ -841,7 +844,17 @@ impl Panel for WelcomePanel {
 
                     ui.add_space(6.0);
 
-                    // Domain chips — read the precomputed per-domain tally.
+                    if examples.is_empty() {
+                        let message = if library_index_available() {
+                            "No top-level example classes were found in the indexed libraries."
+                        } else {
+                            "No Modelica library is indexed yet. Bundled LunCoSim demos remain available above."
+                        };
+                        ui.label(egui::RichText::new(message).color(muted));
+                        return;
+                    }
+
+                    // Library/package chips — read the precomputed tally.
                     let domain_counts = &catalog.domain_counts;
 
                     ui.horizontal_wrapped(|ui| {
@@ -875,7 +888,11 @@ impl Panel for WelcomePanel {
                             wstate.browse_domain.clear();
                         }
                         for (domain, count) in domain_counts {
-                            let label = format!("{} {} ({})", domain_icon(domain), domain, count);
+                            let label = format!(
+                                "• {} ({})",
+                                domain.replace('/', " · "),
+                                count
+                            );
                             if chip(ui, label, wstate.browse_domain == *domain).clicked() {
                                 wstate.browse_domain = domain.clone();
                             }
@@ -889,7 +906,8 @@ impl Panel for WelcomePanel {
                         .iter()
                         .copied()
                         .filter(|c| {
-                            (wstate.browse_domain.is_empty() || c.domain() == wstate.browse_domain)
+                            (wstate.browse_domain.is_empty()
+                                || library_domain(&c.name) == wstate.browse_domain)
                                 && (query_lc.is_empty()
                                     || c.short_name().to_lowercase().contains(&query_lc)
                                     || c.name.to_lowercase().contains(&query_lc)
@@ -946,7 +964,7 @@ impl Panel for WelcomePanel {
                                     painter.text(
                                         rect.min + egui::vec2(28.0, 8.0),
                                         egui::Align2::LEFT_TOP,
-                                        format!("{}  {}", domain_icon(c.domain()), c.short_name()),
+                                        format!("•  {}", c.short_name()),
                                         lunco_theme::TypographyRole::Label
                                             .font_id(ui.style().as_ref()),
                                         title_tint,

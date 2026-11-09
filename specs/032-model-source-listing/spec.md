@@ -77,14 +77,14 @@ So that I can find a class to open without reading 2500 entries at once
 
 **Why this priority**: source libraries are large enough that a single dump would blow agent context. Pagination + filters are required, not optional.
 
-**Independent Test**: Issue `list_library(filter:{examples_only:true, prefix:"Modelica.Blocks"}, limit:50)`, receive ≤50 example classes from `Modelica.Blocks.*` plus a `next_cursor` for the rest.
+**Independent Test**: Call `list_library(limit:1)` and use the returned class path to derive its library root and immediate package. Query that prefix and category, and verify every returned class matches them. Query `examples_only:true` and verify every returned class is under an `.Examples.` package; an installed library without examples may return an empty page.
 
 **Acceptance Scenarios**:
 
 1. **Given** a source library is available, **When** I call `list_library(limit:200)`, **Then** I receive 200 entries plus a `next_cursor` token I can pass back for the next page.
-2. **Given** I pass `filter:{prefix:"Modelica.Electrical"}`, **When** I call `list_library`, **Then** every entry returned has a qualified name starting with `Modelica.Electrical`.
+2. **Given** I pass a prefix derived from an admitted class path, **When** I call `list_library`, **Then** every entry returned has a qualified name starting with that prefix.
 3. **Given** I pass `filter:{examples_only:true}`, **When** I call `list_library`, **Then** every entry returned has `.Examples.` in its qualified path.
-4. **Given** I pass `filter:{category:"Blocks"}`, **When** I call `list_library`, **Then** every entry has `Blocks` as its top-level package segment after the source root.
+4. **Given** I pass the immediate package name derived from an admitted class path, **When** I call `list_library`, **Then** every entry has that package as its first segment after the source root.
 5. **Given** a source library has not finished loading, **When** I call `list_library`, **Then** the call still returns valid authoritative data, even at the cost of blocking.
 
 ---
@@ -97,7 +97,7 @@ So that I do not need to know whether the target is bundled, from an admitted so
 
 **Why this priority**: Collapses the three existing open commands (`OpenFile`, `OpenClass`, `OpenExample`) plus the missing `bundled://` and `mem://` paths into one entry point.
 
-**Independent Test**: Issue `open("bundled://RC_Circuit.mo")`, `open("Modelica.Blocks.Examples.PID_Controller")`, `open("/abs/path/foo.mo")`, `open("mem://Untitled3")`. Verify each lands the correct document on screen.
+**Independent Test**: Issue `list_library(limit:1)` and pass one returned qualified class name to `open(uri)`, then issue `open("bundled://RC_Circuit.mo")`, `open("/abs/path/foo.mo")`, and `open("mem://Untitled3")`. Verify each lands the correct document on screen. The source-class case uses the installed index rather than assuming a specific library.
 
 **Acceptance Scenarios**:
 

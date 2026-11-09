@@ -118,7 +118,7 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// Modelica trees in the workbench.
 ///
 /// `max_nodes` is a guard against accidentally projecting a huge
-/// package (e.g. `Modelica.Units`) into a diagram — returns an error
+/// package with many scalar type declarations into a diagram — returns an error
 /// if the parsed graph exceeds the cap. See
 /// [`DEFAULT_MAX_DIAGRAM_NODES`] for the conventional value; the
 /// canvas projection reads it from `DiagramProjectionLimits` so
@@ -147,9 +147,8 @@ pub fn import_model_to_diagram_from_ast(
         return Ok(VisualDiagram::default());
     }
 
-    // Safety: prevent projecting absurdly huge packages (e.g.
-    // `Modelica.Units` with thousands of type declarations) as a
-    // diagram. The cap is caller-supplied so power users editing
+    // Safety: prevent projecting oversized packages with thousands of
+    // type declarations as a diagram. The cap is caller-supplied so power users editing
     // rich composed models can raise it via Settings; default is
     // `DEFAULT_MAX_DIAGRAM_NODES`.
     if graph.node_count() > max_nodes {

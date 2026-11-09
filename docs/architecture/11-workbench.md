@@ -493,7 +493,14 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | Analyze (`analysis`) | Inspect and compare simulation signals | Live scene center; Graphs below the scene; Telemetry above Entities left; Ports right |
 | Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Editor (`editor`) | Edit an explicitly opened document | Twin browser/Prims tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
-| Lunica (`modelica_analyze`) | Engineer continuous models | Twin browser; Welcome or open model views center |
+| Lunica (`modelica_analyze`) | Engineer continuous models | Twin browser above Components left; model workspace or open model views center; selected-component Inspector right; Welcome remains available from View |
+
+Lunica's Components filters and grouped sections derive their library roots and
+immediate packages from the admitted Modelica class index. Every indexed root
+uses the same search, filter and insertion path. Curated Welcome learning paths
+appear only when all of their authored classes exist in that index. When none
+match, Welcome continues to expose indexed library examples and bundled
+LunCoSim demos.
 
 Optional panel contributions still use `Panel::visible_in_perspective`, for
 example requirement details in Editor. Terrain is a specialist preset available under View → Perspectives, without
@@ -1467,7 +1474,7 @@ refs, external anchors) without reinventing the wheel.
 
 - `UriRegistry` (Bevy `Resource`) holds scheme handlers. Each domain
   plugin registers its own on `build()`:
-  - `lunco-modelica-ui` → `modelica://Modelica.Blocks.Examples.PID` → drill-in.
+  - `lunco-modelica-ui` → `modelica://SampleLibrary.Controls.Gain` → drill-in.
   - Future USD command domain → `usd://stage.usd@</World/Rover>`.
   - Future `lunco-sysml` → `sysml://package::Element`.
 - `UriClicked` event carries `{ uri, resolution }`; domain observers

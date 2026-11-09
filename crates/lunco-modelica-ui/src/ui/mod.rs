@@ -450,7 +450,9 @@ impl Plugin for ModelicaUiPlugin {
         // an unrelated plot that already received the same numeric identity.
         app.init_resource::<lunco_viz::VisualizationRegistry>();
         viz::ensure_default_modelica_graph(
-            &mut app.world_mut().resource_mut::<lunco_viz::VisualizationRegistry>(),
+            &mut app
+                .world_mut()
+                .resource_mut::<lunco_viz::VisualizationRegistry>(),
         );
         if !app.is_plugin_added::<lunco_modelica_core::modelica_lint::ModelicaLintPlugin>() {
             app.add_plugins(lunco_modelica_core::modelica_lint::ModelicaLintPlugin);
@@ -686,6 +688,7 @@ impl Plugin for ModelicaUiPlugin {
                 )
                     .chain(),
             )
+            .register_panel(panels::workspace::ModelicaWorkspacePanel)
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_instance_panel(panels::graphs::ModelicaPlotPanel)

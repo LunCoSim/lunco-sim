@@ -789,7 +789,7 @@ post(){ curl -s -X POST $API -H "Content-Type: application/json" -d "$1"; }
 
 # 1. Open a model. Prefer the unified opener (bundled example / qualified source-library name / path):
 post '{"type":"ExecuteCommand","command":"Open","params":{"uri":"bundled://SpringMass.mo"}}'
-#    bundled://Name.mo | Modelica.Blocks.Examples.PID_Controller | /abs/path.mo | mem://Untitled
+#    bundled://Name.mo | Library.Examples.Sample | /abs/path.mo | mem://Untitled
 #    List embedded examples first: {"type":"ExecuteCommand","command":"ListBundled","params":{}}
 
 # 2. Wait for the AST parse (background). Poll CompileStatus until ast_parsed:true:
@@ -1393,7 +1393,7 @@ bounded worker admission. API edits waive the typing debounce; unrelated UI
 activity cannot block parsing. `modelica_run_metadata.rhai` verifies that a
 replacement draft compiles while earlier runs retain their checked facts.
 
-For library execution acceptance, run `modelica_library_smoke.rhai` through the production scene runner. It checks an acausal electrical circuit, a dynamic block trajectory, units, and terminal rejection of a missing declaration. Experiments admit required source roots through the same registry as interactive compilation.
+For Modelica execution acceptance, run `modelica_execution_smoke.rhai` through the production scene runner. It checks inline equation execution, a dynamic trajectory, output units, and terminal rejection of an unresolved class without requiring an optional library. Test an installed library through its indexed source and normal compile/run path; do not make the generic execution gate depend on one library being present.
 
 An authored `within` clause sets the compiler namespace; it does not itself
 request an external source library. Use Rumoca’s

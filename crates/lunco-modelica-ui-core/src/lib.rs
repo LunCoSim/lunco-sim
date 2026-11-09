@@ -49,7 +49,7 @@ pub enum ClassAction {
 #[Command(default)]
 pub struct OpenClass {
     /// Fully-qualified class path, for example
-    /// `Modelica.Blocks.Examples.PID_Controller`.
+    /// `Library.Examples.Sample`.
     pub qualified: String,
     /// Whether to view or duplicate the class.
     #[serde(default)]

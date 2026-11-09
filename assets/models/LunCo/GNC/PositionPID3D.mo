@@ -7,7 +7,7 @@ within LunCo.GNC;
 //
 // This model owns navigation/control mathematics. USD owns target and sensor
 // wiring, while Rhai owns only mission sequencing. There is no per-tick script
-// controller and no Modelica Standard Library dependency.
+// controller and no external source-library dependency.
 model PositionPID3D
   extends LunCo.Icons.Guidance;
 

@@ -2861,7 +2861,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `qualified` | `String` |  Fully-qualified class path, for example  `Modelica.Blocks.Examples.PID_Controller`. |
+| `qualified` | `String` |  Fully-qualified class path, for example  `Library.Examples.Sample`. |
 | `action` | `ClassAction` |  Whether to view or duplicate the class. |
 
 ### `lunco-networking-core` <a id="lunco-networking-core"></a>

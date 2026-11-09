@@ -19,7 +19,7 @@ pub enum PackageNode {
     Category {
         id: String,
         name: String,
-        /// Modelica dot-path (e.g. "Modelica.Electrical.Analog")
+        /// Modelica dot-path (e.g. "SampleLibrary.Electrical.Analog")
         package_path: String,
         /// None means not yet scanned. Some(vec![]) means scanned and empty.
         #[serde(default)]

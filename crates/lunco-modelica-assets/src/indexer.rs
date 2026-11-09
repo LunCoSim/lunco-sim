@@ -133,9 +133,9 @@ fn encode_parsed_bundle<W: std::io::Write>(
 /// declares `package <FolderName> … end <FolderName>` per MLS.
 ///
 /// Without this check, a naïve `"{current_path}.{name}"` join for
-/// `Modelica/Blocks/package.mo` produces `Modelica.Blocks.Blocks`
-/// instead of `Modelica.Blocks`. Nested classes then compound:
-/// `Modelica.Blocks.Blocks.Examples.BooleanNetwork1`.
+/// `Control/Blocks/package.mo` produces `Control.Blocks.Blocks`
+/// instead of `Control.Blocks`. Nested classes then compound:
+/// `Control.Blocks.Examples.BooleanNetwork1`.
 ///
 /// Two cases qualify:
 ///  1. `name == "package"` — files that
@@ -626,12 +626,11 @@ pub fn run_with_cancel(
     indexer.verbose = opts.verbose;
 
     // Single source of truth for the native source set (source tree +
-    // companions + discovered third-party libs), shared with the
-    // source-root discovery. `native_library_roots` returns folder
-    // packages as `(dir, prefix)` and standalone companion files (e.g.
-    // `Complex.mo`, referenced by Modelica.Fluid / ComplexBlocks)
-    // separately, since the indexer keys flat files by declared class name
-    // and folder packages by their `package.mo` `within` shape.
+    // companions + discovered third-party libraries), shared with source-root
+    // discovery. `native_library_roots` returns folder packages as `(dir,
+    // prefix)` and standalone companion files separately, since the indexer
+    // keys flat files by declared class name and folder packages by their
+    // `package.mo` `within` shape.
     let (root_dirs, companion_files) = native_library_roots(&library_root);
     for (dir, prefix) in &root_dirs {
         bail_if_cancelled!();

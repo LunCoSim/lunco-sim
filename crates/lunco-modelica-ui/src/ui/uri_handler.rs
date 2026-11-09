@@ -68,10 +68,10 @@ mod tests {
     fn class_ref_resolves_to_open_document() {
         let h = ModelicaUriHandler;
         assert_eq!(
-            h.resolve("modelica://Modelica.Blocks.Examples.PID_Controller"),
+            h.resolve("modelica://Library.Examples.Sample"),
             UriResolution::OpenDocument {
                 doc_kind: "modelica",
-                identifier: "Modelica.Blocks.Examples.PID_Controller".to_string(),
+                identifier: "Library.Examples.Sample".to_string(),
             }
         );
     }
@@ -80,9 +80,9 @@ mod tests {
     fn anchor_resolves_to_navigate_anchor() {
         let h = ModelicaUriHandler;
         assert_eq!(
-            h.resolve("modelica://Modelica.Blocks#Overview"),
+            h.resolve("modelica://SampleLibrary.Blocks#Overview"),
             UriResolution::NavigateAnchor {
-                identifier: "Modelica.Blocks".to_string(),
+                identifier: "SampleLibrary.Blocks".to_string(),
                 anchor: "Overview".to_string(),
             }
         );

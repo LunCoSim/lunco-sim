@@ -74,7 +74,7 @@ pub struct DocumentKindMeta {
 
     /// URI scheme this kind contributes to
     /// [`UriRegistry`](lunco_workbench_core::uri::UriRegistry)
-    /// (e.g. `"modelica"` for `modelica://Modelica.Blocks.Examples.PID`).
+    /// (e.g. `"modelica"` for `modelica://SampleLibrary.Controls.Gain`).
     /// Informational here — the actual handler is registered separately
     /// by the same domain plugin.
     pub uri_scheme: Option<&'static str>,

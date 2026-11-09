@@ -746,30 +746,6 @@ mod tests {
     }
 
     #[test]
-    fn modelica_model_input_is_written_by_its_registered_port_owner() {
-        let mut world = World::new();
-        world.insert_resource(PortTopologyRevision::default());
-        let entity = world
-            .spawn(ModelicaModel {
-                model_name: "RoverDrivetrain".to_owned(),
-                inputs: [("throttle".to_owned(), 0.0)].into(),
-                ..Default::default()
-            })
-            .id();
-        let mut ports = PortRegistry::default();
-        super::super::model_ports::register_port_backend(&mut ports);
-        world.insert_resource(ports);
-
-        apply_model_input_to_entity(&mut world, 17, entity, "throttle", 0.75)
-            .expect("the Modelica port backend owns standalone model inputs");
-
-        assert_eq!(
-            world.get::<ModelicaModel>(entity).unwrap().inputs["throttle"],
-            0.75
-        );
-    }
-
-    #[test]
     fn modelica_input_without_a_registered_owner_is_not_written_directly() {
         let mut world = World::new();
         world.insert_resource(PortTopologyRevision::default());

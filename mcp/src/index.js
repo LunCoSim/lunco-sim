@@ -173,8 +173,8 @@ const STATIC_TOOLS = [
           type: 'object',
           description: 'Optional filters. Combined with AND.',
           properties: {
-            prefix: { type: 'string', description: 'Qualified-name prefix, e.g. "Modelica.Blocks".' },
-            category: { type: 'string', description: 'Top-level package, e.g. "Blocks", "Electrical".' },
+            prefix: { type: 'string', description: 'Qualified-name prefix, e.g. "ExampleLibrary.Controls".' },
+            category: { type: 'string', description: 'Top-level package, e.g. "Controls" or "Thermal".' },
             examples_only: { type: 'boolean', description: 'When true, return only `*.Examples.*` classes.' },
           },
         },
