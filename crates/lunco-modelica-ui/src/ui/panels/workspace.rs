@@ -20,11 +20,15 @@ impl Panel for ModelicaWorkspacePanel {
     }
 
     fn menu_group(&self) -> PanelMenuGroup {
-        PanelMenuGroup::Lunica
+        PanelMenuGroup::Hidden
     }
 
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
+    }
+
+    fn closable(&self) -> bool {
+        false
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

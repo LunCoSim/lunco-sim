@@ -56,6 +56,10 @@ cache:
 - **Simulate**: Configure experiment bounds and run the solver.
 - **Analyze**: Plot variables in real-time or from results.
 
+The Modelica Workspace remains pinned in the center. Closing the last model
+returns to its start actions while the Twin Browser, Components palette and
+Inspector remain in their assigned panes.
+
 ## See also
 
 - [**Modelica Domain Architecture**](../../architecture/20-domain-modelica.md) — how Lunica handles DAEs and solvers.

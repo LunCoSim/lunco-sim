@@ -567,6 +567,7 @@ pub(super) fn render_layout(
                     group: PanelMenuGroup,
                     title: String,
                     open: bool,
+                    closable: bool,
                     singleton: Option<PanelId>,
                     instance: Option<(PanelId, u64)>,
                     perspective: Option<PerspectiveId>,
@@ -591,6 +592,7 @@ pub(super) fn render_layout(
                                     group: p.menu_group(),
                                     title: p.title(),
                                     open: docked.contains(&id),
+                                    closable: p.closable(),
                                     singleton: Some(id),
                                     instance: None,
                                     perspective: None,
@@ -613,6 +615,7 @@ pub(super) fn render_layout(
                             group: entry.group,
                             title: entry.title.to_owned(),
                             open: layout.dock.find_tab(&tab).is_some(),
+                            closable: panel.closable(),
                             singleton: None,
                             instance: Some((*kind, entry.instance)),
                             perspective: entry.perspective.filter(|id| {
@@ -662,13 +665,18 @@ pub(super) fn render_layout(
                             let ViewPanelEntry {
                                 title,
                                 open: is_open,
+                                closable,
                                 singleton,
                                 instance,
                                 perspective,
                                 ..
                             } = entry;
                             let mut checked = is_open;
-                            if ui.checkbox(&mut checked, title).clicked() {
+                            let response = ui.add_enabled(
+                                closable || !is_open,
+                                egui::Checkbox::new(&mut checked, title),
+                            );
+                            if response.clicked() {
                                 if checked && !is_open {
                                     if let Some((kind, instance)) = instance {
                                         if let Some(perspective) = perspective {

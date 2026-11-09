@@ -30,6 +30,7 @@ pub use menu::{
 pub use panel::{
     InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelIntents, PanelMenuGroup,
     PanelRenderTarget, PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, TabId,
+    WORKBENCH_CENTER_ANCHOR_ID,
 };
 pub use perspective::{
     ExplicitPerspectiveChoice, PanelCorner, Perspective, PerspectiveAdmission,

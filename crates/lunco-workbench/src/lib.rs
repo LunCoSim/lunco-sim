@@ -69,6 +69,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod authored_perspectives;
+mod center_anchor;
 mod keybindings;
 mod layout_render;
 mod navigation;
@@ -316,6 +317,13 @@ fn drain_pending_layout_requests(
                 record_explicit_perspective(&layout, workspace.as_deref(), choice.as_deref_mut());
             }
             LayoutRequest::RemoveSingleton(id) => {
+                if layout
+                    .panels
+                    .get(&id)
+                    .is_some_and(|panel| !panel.closable())
+                {
+                    continue;
+                }
                 layout.side_browser.retain(|panel| *panel != id);
                 layout.side_browser_bottom.retain(|panel| *panel != id);
                 layout.center.retain(|panel| *panel != id);
@@ -916,6 +924,7 @@ impl Plugin for WorkbenchPlugin {
         navigation::install(app);
         keybindings::install(app);
         register_all_commands(app);
+        app.register_panel(center_anchor::CenterAnchorPanel);
         app.register_panel(twin_settings::TwinSettingsPanel::default());
         drain_registered_panels(app.world_mut());
         app.add_systems(

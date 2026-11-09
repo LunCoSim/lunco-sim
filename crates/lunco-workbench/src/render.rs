@@ -527,7 +527,16 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     /// actually goes away. Singleton panels close immediately.
     fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
         match *tab {
-            TabId::Singleton(_) => OnCloseResponse::Close,
+            TabId::Singleton(id) => {
+                if self.panels.get(&id).is_some_and(|panel| !panel.closable()) {
+                    return OnCloseResponse::Ignore;
+                }
+                self.world
+                    .resource_mut::<PendingLayoutRequests>()
+                    .0
+                    .push(LayoutRequest::RemoveSingleton(id));
+                OnCloseResponse::Close
+            }
             TabId::Instance { .. } => {
                 // `WorkbenchLayout` is extracted during render, so we
                 // use the standalone `PendingTabCloses` resource. A
@@ -3925,7 +3934,83 @@ mod tests {
             PanelSlot::Center
         }
 
+        fn closable(&self) -> bool {
+            self.0 != lunco_workbench_core::WORKBENCH_CENTER_ANCHOR_ID
+        }
+
         fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
+    }
+
+    #[test]
+    fn closing_a_center_panel_removes_its_intent_and_preserves_the_anchor() {
+        let center_panel = PanelId("closeable_center_panel");
+        let anchor_panel = lunco_workbench_core::WORKBENCH_CENTER_ANCHOR_ID;
+        let mut layout = WorkbenchLayout::default();
+        layout.register(DockPanel(center_panel));
+        layout.register(DockPanel(anchor_panel));
+        assert!(layout.center.contains(&anchor_panel));
+
+        let mut app = App::new();
+        app.init_resource::<PendingLayoutRequests>();
+        app.insert_resource(layout);
+        app.world_mut()
+            .resource_mut::<PendingLayoutRequests>()
+            .0
+            .push(LayoutRequest::RemoveSingleton(center_panel));
+        app.add_systems(Update, drain_pending_layout_requests);
+        app.update();
+
+        let layout = app.world().resource::<WorkbenchLayout>();
+        assert!(!layout.center.contains(&center_panel));
+        assert!(layout.center.contains(&anchor_panel));
+        assert!(
+            layout
+                .dock
+                .find_tab(&TabId::Singleton(anchor_panel))
+                .is_some()
+        );
+        assert!(
+            layout
+                .dock
+                .find_tab(&TabId::Singleton(center_panel))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn singleton_close_queues_layout_cleanup_and_rejects_persistent_panels() {
+        let closeable_id = PanelId("closeable_singleton");
+        let anchor_id = lunco_workbench_core::WORKBENCH_CENTER_ANCHOR_ID;
+        let mut app = App::new();
+        app.init_resource::<PendingLayoutRequests>();
+        let mut panels: HashMap<PanelId, Box<dyn Panel>> = HashMap::new();
+        panels.insert(closeable_id, Box::new(DockPanel(closeable_id)));
+        panels.insert(anchor_id, Box::new(DockPanel(anchor_id)));
+        let mut instance_panels: HashMap<PanelId, Box<dyn InstancePanel>> = HashMap::new();
+
+        let (closeable_response, anchor_response) = {
+            let mut viewer = PanelTabViewer {
+                panels: &mut panels,
+                instance_panels: &mut instance_panels,
+                world: app.world_mut(),
+                surface: PanelSurfaceStyle::default(),
+            };
+            let mut closeable_tab = TabId::Singleton(closeable_id);
+            let mut anchor_tab = TabId::Singleton(anchor_id);
+            (
+                viewer.on_close(&mut closeable_tab),
+                viewer.on_close(&mut anchor_tab),
+            )
+        };
+
+        assert!(matches!(closeable_response, OnCloseResponse::Close));
+        assert!(matches!(anchor_response, OnCloseResponse::Ignore));
+        let pending = &app.world().resource::<PendingLayoutRequests>().0;
+        assert_eq!(pending.len(), 1);
+        assert!(matches!(
+            pending.first(),
+            Some(LayoutRequest::RemoveSingleton(id)) if *id == closeable_id
+        ));
     }
 
     #[test]
