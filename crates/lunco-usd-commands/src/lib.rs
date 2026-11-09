@@ -42,7 +42,7 @@ use lunco_core::{
     ActiveCommandId, AppSceneExt, Command, CommandResults, on_command, register_commands,
 };
 use lunco_doc::OpenOutcome;
-use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{
     CloseDocument, DiscardDocument, DocumentChanged, DocumentClosed, DocumentOpened, ForkDocument,
@@ -1578,9 +1578,11 @@ fn on_commit_usd_proposal(
                 {
                     None => Err(format!("unknown USD proposal {}", proposal_id.0)),
                     Some(proposal) => {
-                        if let Err(error) = refresh_authoring_recipe(world, proposal.doc) {
-                            warn!("[CommitUsdProposal] {error}");
-                            return Err(error);
+                        if !is_root_source_replacement(&proposal.ops) {
+                            if let Err(error) = refresh_authoring_recipe(world, proposal.doc) {
+                                warn!("[CommitUsdProposal] {error}");
+                                return Err(error);
+                            }
                         }
                         let current = world
                             .resource::<DocumentRegistry<UsdDocument>>()
@@ -1820,17 +1822,23 @@ fn on_apply_usd_op(
                 )
                 .entered();
                 let paths_for_error = paths.clone();
-                let result = match refresh_authoring_recipe(world, doc)
-                    .and_then(|()| expand_usd_geometry_ops(vec![op]))
-                {
+                let result = match expand_usd_geometry_ops(vec![op]) {
                     Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
                     Ok(mut expanded) if expanded.len() == 1 => {
                         let expanded_op = expanded.remove(0);
-                        match validate_live_attribute_types(
-                            world,
-                            doc,
-                            std::slice::from_ref(&expanded_op),
-                        ) {
+                        let preflight =
+                            if is_root_source_replacement(std::slice::from_ref(&expanded_op)) {
+                                validate_root_source_replacement(world, doc, &expanded_op)
+                            } else {
+                                refresh_authoring_recipe(world, doc).and_then(|()| {
+                                    validate_live_attribute_types(
+                                        world,
+                                        doc,
+                                        std::slice::from_ref(&expanded_op),
+                                    )
+                                })
+                            };
+                        match preflight {
                             Ok(()) => world
                                 .resource_mut::<DocumentRegistry<UsdDocument>>()
                                 .apply_mutation(
@@ -2299,8 +2307,12 @@ fn apply_ops_as_change_set_result(
     if ops.iter().any(|op| op.edit_target().is_view()) {
         return Err("the disposable view layer only accepts ApplyUsdTransientOps".to_string());
     }
-    refresh_authoring_recipe(world, doc)?;
-    validate_live_attribute_types(world, doc, &ops)?;
+    if is_root_source_replacement(&ops) {
+        validate_root_source_replacement(world, doc, &ops[0])?;
+    } else {
+        refresh_authoring_recipe(world, doc)?;
+        validate_live_attribute_types(world, doc, &ops)?;
+    }
     let total = ops.len();
     let paths: Vec<String> = ops.iter().flat_map(UsdOp::affected_paths).collect();
     let mut target_layers = Vec::new();
@@ -2340,6 +2352,38 @@ fn apply_ops_as_change_set_result(
         journal.as_ref(),
     ));
     Ok((ack, total))
+}
+
+/// A complete root-source replacement is the recovery boundary for a document
+/// whose current source cannot compose. Validate the candidate against its
+/// prepared dependency recipe before the registry commits the authored change.
+fn is_root_source_replacement(ops: &[UsdOp]) -> bool {
+    matches!(
+        ops,
+        [UsdOp::ReplaceSource { edit_target, .. }] if edit_target.is_root()
+    )
+}
+
+fn validate_root_source_replacement(
+    world: &World,
+    doc: DocumentId,
+    op: &UsdOp,
+) -> Result<(), String> {
+    let mut candidate = world
+        .get_resource::<DocumentRegistry<UsdDocument>>()
+        .and_then(|registry| registry.host(doc))
+        .ok_or_else(|| format!("USD document {doc} is not open"))?
+        .document()
+        .clone();
+    candidate
+        .apply(op.clone())
+        .map_err(|error| format!("replacement USD source is invalid: {error}"))?;
+    lunco_usd_compose::validate_layer_structure("<replacement>", candidate.data())
+        .map_err(|error| format!("replacement USD source is structurally invalid: {error}"))?;
+    candidate
+        .open_composed_stage()
+        .map_err(|error| format!("replacement USD source cannot compose: {error}"))?;
+    Ok(())
 }
 
 fn apply_transient_ops_result(

@@ -6,10 +6,10 @@
 )
 
 def Xform "Rucheyok" (
-    documentation = "Solar-powered four-wheel lunar rover assembled from referenced wheels, battery, panel, and flight computer."
     kind = "assembly"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components"]
     prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
+    doc = "Four-wheel solar rover assembled from referenced wheels, battery, panel, and flight computer. The authored body is 15 m × 4 m × 20 m for component and power-system studies."
 )
 {
     uniform token lunco:steeringGeometry = "differential"
@@ -65,7 +65,7 @@ def Xform "Rucheyok" (
     }
     def Cube "Chassis" (
         kind = "subcomponent"
-        prepend apiSchemas = "PhysicsCollisionAPI"
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double size = 1.0

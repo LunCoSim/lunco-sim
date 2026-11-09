@@ -5,7 +5,7 @@
 //! projection. It does not maintain a second asset graph or infer an active
 //! document from UI state.
 
-use bevy::asset::Assets;
+use bevy::asset::{AssetServer, Assets, LoadState};
 use bevy::prelude::{App, Plugin, Vec3, World};
 use lunco_api::queries::{
     ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_bool,
@@ -112,6 +112,21 @@ fn document_stage_recipe(
     let stages = world
         .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
         .ok_or_else(|| native_query_error("USD canonical stage registry is unavailable"))?;
+    if let Some(server) = world.get_resource::<AssetServer>() {
+        match server.get_load_state(stage_id) {
+            Some(LoadState::Failed(error)) => {
+                return Err(native_query_error(format!(
+                    "the USD stage failed to load: {error}; correct the source, then use the explicit Load Scene action in Recent Events"
+                )));
+            }
+            Some(state) if state.is_loading() => {
+                return Err(native_query_error(
+                    "the USD stage is loading; retry composed inspection after the explicit scene load completes",
+                ));
+            }
+            _ => {}
+        }
+    }
     stages
         .admitted_recipe_for(stage_id, assets)
         .map(Some)

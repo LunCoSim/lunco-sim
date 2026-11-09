@@ -764,6 +764,9 @@ The command owner prepares new composition dependencies through bounded core
 work admission before its original atomic journal commit. Its registered scene
 resource retires pending callbacks, receipts, holds and weak result destinations;
 only its monotonic operation identities have application lifetime.
+A root `ReplaceSource` can recover an uncomposable current source: it prepares
+the candidate's dependency closure, checks candidate structure and composition,
+and commits only after those checks pass.
 
 **`lunco-usd-queries`**
 UI-free public query providers for the USD document boundary. It owns

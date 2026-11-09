@@ -32,7 +32,18 @@
       "scene_asset": "lunco://tutorials/sandbox/first_drive.usda",
       "lesson_type": "tour",
       "duration_minutes": 3,
-      "next_source_asset": "lunco://tutorials/perspectives/overview.rhai"
+      "next_source_asset": "lunco://tutorials/luncosim/how_simulation_works.rhai"
+    },
+    {
+      "track": "How It Works",
+      "title": "How Simulation Works",
+      "blurb": "Guided walkthrough: how USD, Modelica, physics, Rhai, and telemetry fit together.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/luncosim/how_simulation_works.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda",
+      "lesson_type": "tour",
+      "duration_minutes": 5,
+      "next_source_asset": "lunco://tutorials/sandbox/cosim.rhai"
     },
     {
       "track": "LunCoSim",
@@ -142,9 +153,9 @@
       "next_source_asset": "lunco://tutorials/sandbox/cosim.rhai"
     },
     {
-      "track": "Sandbox",
-      "title": "Cosim \u2014 Model meets Physics",
-      "blurb": "Guided tour: trace the Modelica-to-physics loop and verify its live connections.",
+      "track": "How It Works",
+      "title": "Model Meets Physics",
+      "blurb": "Guided walkthrough: trace the Modelica-to-physics loop and inspect its live connections.",
       "difficulty": "intermediate",
       "source_asset": "lunco://tutorials/sandbox/cosim.rhai",
       "scene_asset": "lunco://scenes/luncosim/lander_ops.usda",
@@ -166,7 +177,7 @@
     {
       "track": "Rover Driving",
       "title": "Slopes & Tip-Over",
-      "blurb": "Tip a top-heavy rover across a slope, recover it, then climb the fall-line.",
+      "blurb": "Test a rover on a grade, recover it if needed, then climb the fall-line.",
       "difficulty": "beginner",
       "source_asset": "lunco://tutorials/basic/b3_slopes_tipover.rhai",
       "scene_asset": "lunco://tutorials/basic/slope_test.usda",

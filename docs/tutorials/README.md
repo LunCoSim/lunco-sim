@@ -110,7 +110,7 @@ Each walkthrough pairs with an in-app lesson and the reference **[skills](../../
 |---|---|---|
 | 01 — Lander → Rover mission | *Lander & Rover Mission* (luncosim) | [build-usd-scene](../../skills/build-usd-scene/SKILL.md) · [author-scenario](../../skills/author-scenario/SKILL.md) · [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) |
 | 02 — Author your own controller | *Script a Rover* (luncosim) | [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) |
-| 03 — Cosim: when a Model flies physics | *Cosim — Model meets Physics* (luncosim) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
+| 03 — Cosim: when a Model flies physics | *Model Meets Physics* (LunCoSim) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
 | 04 — Attach a simulation program | No paired in-app lesson | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [use-asset-library](../../skills/use-asset-library/SKILL.md) · [test-via-api](../../skills/test-via-api/SKILL.md) |
 
 Walkthrough 04 remains a data/API authoring reference.

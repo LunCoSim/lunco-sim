@@ -33,7 +33,7 @@ def Xform "ModelicaBalloon" (
         float inputs:height.connect = </ModelicaBalloon.outputs:position_y>
         float inputs:velocity
         float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>
-        float inputs:gravity
+        double inputs:gravity
         float inputs:gravity.connect = </ModelicaBalloon/Environment.outputs:gravity_accel>
     }
     def Scope "Looks"

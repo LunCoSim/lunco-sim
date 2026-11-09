@@ -9,8 +9,8 @@
 def Xform "SolarRoverTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    documentation = "Solar-powered rover co-simulation scene. The rover drives Waypoints, drains its battery, then stops to track the sun and charge."
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
+    doc = "Solar-powered rover demonstration. Follow waypoints, observe battery discharge while driving, then stop to track the sun and recharge."
 )
 {
     uniform bool lunco:spawnable = false

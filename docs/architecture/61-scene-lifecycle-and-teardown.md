@@ -77,7 +77,12 @@ The accepted failure also publishes `scene-load-failed` through `RuntimeFaults`
 and the runtime error event. `GetReadiness` therefore remains `ready: false`,
 with the requested asset in `fault.subject` and the loader cause in
 `fault.detail`. Command and UI processing remain available; simulation stops.
-A valid replacement clears the retired scene's fault at teardown.
+The failure is kept in Recent Events without a transient toast or automatic
+retry. A valid root `ReplaceSource` adds a separate actionable status entry;
+choosing Continue refreshes the doc-backed source and submits the original scene
+request as a new transition. The repaired document alone does not clear the
+fault or mount the scene. Composed USD queries report the loader failure and
+direct the caller to that explicit action until the new transition succeeds.
 
 Layer admission validates authored `primChildren` before composition. Each
 entry must be one valid identifier, listed once, with a corresponding local

@@ -441,6 +441,45 @@ fn capture(
             "USD document {doc} already has an edit awaiting dependency preparation"
         ));
     }
+    if let [UsdOp::ReplaceSource { edit_target, text }] = ops
+        && edit_target.is_root()
+    {
+        let mut candidate = world
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .ok_or_else(|| format!("USD document {doc} is not open"))?
+            .document()
+            .clone();
+        candidate
+            .apply(ops[0].clone())
+            .map_err(|error| format!("replacement USD source is invalid: {error}"))?;
+        let (root_id, _, _) = match candidate.origin() {
+            DocumentOrigin::File { path, .. } => document_composition_context(world, doc, path)?,
+            _ => {
+                let root_id = if let Some(recipe) = candidate.authoring_recipe() {
+                    recipe.root_id.clone()
+                } else {
+                    lunco_usd_authoring::author::document_stage_recipe(
+                        candidate.data(),
+                        candidate.runtime_data(),
+                        candidate.view_data(),
+                        None,
+                    )
+                    .map_err(|error| format!("cannot identify replacement USD source: {error}"))?
+                    .root_id
+                };
+                (root_id, None, None)
+            }
+        };
+        let dependencies = lunco_usd_compose::child_layer_ids(&root_id, text.as_bytes())
+            .map_err(|error| format!("replacement USD dependency scan failed: {error}"))?;
+        let recipe = candidate.authoring_recipe();
+        let missing = dependencies
+            .into_iter()
+            .filter(|id| recipe.is_none_or(|recipe| !recipe.bytes.contains_key(id)))
+            .collect();
+        return Ok(Some((candidate, root_id, missing)));
+    }
     refresh_authoring_recipe(world, doc)?;
     let document = world
         .resource::<DocumentRegistry<UsdDocument>>()

@@ -13,5 +13,5 @@ def Xform "RoverStress" (
     prepend references = @lunco://vessels/rovers/variants/rover_easy.usda@</RoverEasy>
 )
 {
-    uniform bool lunco:spawnable = true
+    uniform bool lunco:spawnable = false
 }

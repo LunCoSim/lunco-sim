@@ -13,21 +13,17 @@
 # See `rover_easy.usda` for the tier ladder, and for why grip and torque are authored
 # per wheel rather than on this prim.
 def Xform "RoverAwful" (
-    doc = "Awful rover (Overloaded Hauler) — top-heavy, weak motors, poor grip. Tips at the slightest across-slope steer and barely climbs. The expert tier: only a careful straight-up line and gentle inputs get it to the floor and back."
+    doc = "Hauler rover profile. Bald tires (μ=0.8) and the same 0.4 N·m motor stall torque as Standard. The chassis, mass, centre of mass, inertia, and suspension are shared."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
 )
 {
     uniform bool lunco:spawnable = true
 
-    # Handling, per wheel. `bald` tires: μ=0.8 ⇒ slip limit atan(0.8)=38.7°, against a
-    # SURVEYED site (real Apollo 15 crater) whose ways in run 19.8° on the ДЗЗ route /
-    # 25.5° naive / 31.1° up the steepest sector (N) / 39.9° on the NNW wall — so even
-    # this tier clears every surveyed route; the one genuinely steep line (NNW) is the
-    # only place grip starts to matter. Weak motors are what this tier actually punishes:
-    # 68 N·m at the axle (0.4 N·m shaft stall) is ~1.5× its traction cone
-    # (μ·N·r = 0.8·143.6·0.4 ≈ 46 N·m; N = 532 kg·g_moon/6) — enough for the grades,
-    # but the launch is slow and a wheel that loses grip stays lost.
+    # Handling, per wheel. `bald` tires: μ=0.8 ⇒ idealized slip limit atan(0.8)=38.7°.
+    # The surveyed NNW wall is 39.9°, slightly steeper than that estimate, so grip can
+    # matter there. At 0.4 N·m shaft stall torque, the shared reduction gives 68 N·m
+    # at the axle; the weaker drive makes launches and climbs slower than Explorer LT.
     # ⚠ The wheels, motors and gearboxes are CHILDREN OF THE SUSPENSION, not of the
     # chassis: a rocker-bogie's front wheel hangs off the rocker arm and its middle
     # and rear wheels off the bogie, so each tier's opinions are nested one level
@@ -67,8 +63,8 @@ def Xform "RoverAwful" (
     # TORQUE COMES FROM THE MOTOR — the bottom rung, and the one that makes this
     # rover feel gutless on a grade. The axle torque is derived as stallTorque ·
     # ratio · efficiency = stallTorque · 200 · 0.85, so 0.4 N·m of shaft stall
-    # torque lands 68 N·m at the axle. Ladder preserved: easy 153 › medium 85 ›
-    # awful 68.
+    # torque lands 68 N·m at the axle. Explorer LT reaches 153 N·m; Standard and
+    # Hauler each reach 68 N·m, so their comparison isolates tire friction.
 
     # Rated above the motor for the same reason as the other two tiers: the shipped
     # 400 N·m shaft rating must never be what decides a tier. This rung sits under

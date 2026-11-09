@@ -564,8 +564,11 @@ impl Plugin for LunCoSimUiPlugin {
                 install_viewport_placeholder_actions(app.world_mut());
                 app.init_resource::<PlaceholderTwinMounts>()
                     .init_resource::<LastSceneCatalogFacts>()
+                    .init_scene_resource::<PendingSceneLoadAction>()
                     .add_observer(remember_placeholder_twin)
                     .add_observer(forget_placeholder_twin)
+                    .add_observer(on_scene_source_repair_ready)
+                    .add_observer(on_scene_status_action)
                     .add_systems(
                         Update,
                         (publish_scene_catalog_facts, sync_viewport_placeholder).chain(),
@@ -950,11 +953,56 @@ fn on_guided_stop_requested(
 /// Domain menus keep their controls and selection state; the warning is owned
 /// by the application-wide notification layer.
 fn on_runtime_error_warning(trigger: On<lunco_core::RuntimeError>, mut commands: Commands) {
+    if trigger.event().name == "scene-load-failed" {
+        return;
+    }
     commands.trigger(lunco_notifications_core::ShowNotification {
         text: trigger.event().message.clone(),
         kind: "warn".to_owned(),
         secs: 0.0,
     });
+}
+
+const USD_SCENE_STATUS_ACTION: &str = "USD scene";
+
+#[derive(Resource, Default)]
+struct PendingSceneLoadAction(Option<(String, String)>);
+
+impl SceneResource for PendingSceneLoadAction {
+    fn clear_scene(&mut self) {
+        self.0 = None;
+    }
+}
+
+fn on_scene_source_repair_ready(
+    trigger: On<lunco_usd_bevy_runtime_core::SceneSourceRepairReady>,
+    mut pending: ResMut<PendingSceneLoadAction>,
+    mut status: ResMut<lunco_status_core::status_bus::StatusBus>,
+) {
+    let event = trigger.event();
+    pending.0 = Some((event.path.clone(), event.root_prim.clone()));
+    status.push(
+        USD_SCENE_STATUS_ACTION,
+        lunco_status_core::status_bus::StatusLevel::Attention,
+        format!(
+            "The replacement source is valid. The scene remains stopped; choose Continue to load `{}`.",
+            event.path
+        ),
+    );
+}
+
+fn on_scene_status_action(
+    trigger: On<lunco_status_core::status_bus::StatusBarAction>,
+    mut pending: ResMut<PendingSceneLoadAction>,
+    mut commands: Commands,
+) {
+    if trigger.event().source != USD_SCENE_STATUS_ACTION {
+        return;
+    }
+    let Some((path, root_prim)) = pending.0.take() else {
+        return;
+    };
+    commands.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene { path, root_prim });
 }
 
 fn runtime_ui_action_parameters_to_telemetry(
@@ -1922,6 +1970,68 @@ mod tests {
     use super::{RuntimeUiDropdownState, runtime_ui_dimension};
     use lunco_exposure_core::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;
+
+    #[derive(bevy::prelude::Resource, Default)]
+    struct RequestedScene(Option<(String, String)>);
+
+    fn record_requested_scene(
+        trigger: bevy::prelude::On<lunco_usd_bevy_runtime_core::scene::LoadScene>,
+        mut requested: bevy::prelude::ResMut<RequestedScene>,
+    ) {
+        requested.0 = Some((
+            trigger.event().path.clone(),
+            trigger.event().root_prim.clone(),
+        ));
+    }
+
+    #[test]
+    fn repaired_scene_waits_for_the_recent_events_action() {
+        use bevy::prelude::*;
+        use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
+
+        let mut app = App::new();
+        app.insert_resource(super::PendingSceneLoadAction::default())
+            .insert_resource(StatusBus::default())
+            .insert_resource(RequestedScene::default())
+            .add_observer(super::on_scene_source_repair_ready)
+            .add_observer(super::on_scene_status_action)
+            .add_observer(record_requested_scene);
+
+        app.world_mut()
+            .trigger(lunco_usd_bevy_runtime_core::SceneSourceRepairReady {
+                path: "twin://demo/scenes/mission.usda".to_owned(),
+                root_prim: "/Mission".to_owned(),
+            });
+        app.world_mut().flush();
+
+        assert_eq!(app.world().resource::<RequestedScene>().0, None);
+        let status = app.world().resource::<StatusBus>();
+        let event = status
+            .history()
+            .last()
+            .expect("repair action is in Recent Events");
+        assert_eq!(event.source, "USD scene");
+        assert_eq!(event.level, StatusLevel::Attention);
+        assert!(event.message.contains("scene remains stopped"));
+        assert!(event.message.contains("choose Continue"));
+
+        app.world_mut().trigger(StatusBarAction {
+            source: "USD scene",
+        });
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().resource::<RequestedScene>().0,
+            Some((
+                "twin://demo/scenes/mission.usda".to_owned(),
+                "/Mission".to_owned(),
+            ))
+        );
+        assert_eq!(
+            app.world().resource::<super::PendingSceneLoadAction>().0,
+            None
+        );
+    }
 
     #[test]
     fn scene_lifecycle_retires_dropdown_state_and_preserves_inactive_twin_closure() {

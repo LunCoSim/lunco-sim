@@ -1,5 +1,25 @@
 # Authored lessons
 
+## Suggested learning paths
+
+1. **Start Here → Lunar Rover Lab** is a hands-on workshop: take control, reach
+   a marker, read measured speed, compare two drive runs, move a scene object,
+   and save a personal Twin.
+2. **Moon Driving Basics → Slopes & Tip-Over → Rover Variants** builds driving
+   skill, then compares the authored tire and motor settings on one shared
+   chassis. The variants lesson is a guided comparison; it does not claim that
+   the rover profiles have different center-of-mass settings.
+3. **How Simulation Works → Model Meets Physics → Lander & Rover Mission** moves
+   from the scene/runtime model to a live Modelica/physics connection and then
+   an event-driven mission.
+4. **Build a Scene** is a guided tour of placement, editing, and saving. The
+   assessed placement exercise is **Build a Lunar Base**.
+
+Lesson cards identify tours and exercises explicitly. A tour explains a
+workflow and advances with Next/Back; an exercise waits for the learner's real
+actions or authored state. Choose an exercise when you want the simulator to
+confirm completion.
+
 The default classroom activity is **Scenarios → Tutorials → Start Here → Lunar
 Rover Lab**. Its curriculum, model assumptions,
 instructor checkpoints, save contract and acceptance commands are documented

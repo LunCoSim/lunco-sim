@@ -34,7 +34,7 @@
 # There is no steering knob. The base is a skid rover with authored generic ports:
 # it steers by driving its sides at different speeds, and its wheels do not turn.
 def Xform "RoverEasy" (
-    doc = "Easy rover (Explorer LT) — low centre of mass, planted and forgiving. The trainer tier: it climbs the borderline slope and resists tipping. Start here."
+    doc = "Explorer LT profile. Cleated tires (μ=1.8), 0.9 N·m motor stall torque, and the shared rocker-bogie chassis, mass, centre of mass, inertia, and suspension."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
 )
@@ -51,7 +51,7 @@ def Xform "RoverEasy" (
     # traction cone — τ_cone = μ·N·r per wheel (N = 532 kg·g_moon/6 ≈ 143.6 N,
     # r = 0.4 m ⇒ easy cone 103 N·m). Above ~2× the motor reaction on the free
     # bogie hinge slams it into its ±20° stop and lifts the middle wheels. This
-    # tier: 119 N·m at the axle ⇒ 0.7 N·m shaft stall.
+    # tier: 153 N·m at the axle ⇒ 0.9 N·m shaft stall.
     # ⚠ The wheels, motors and gearboxes are CHILDREN OF THE SUSPENSION, not of the
     # chassis: a rocker-bogie's front wheel hangs off the rocker arm and its middle
     # and rear wheels off the bogie, so each tier's opinions are nested one level
@@ -90,8 +90,8 @@ def Xform "RoverEasy" (
 
     # TORQUE COMES FROM THE MOTOR. The axle torque is derived:
     #   τ_axle = stallTorque · ratio · efficiency = stallTorque · 200 · 0.85
-    # This tier is sized at ~1.2× its traction cone (see the note above): 0.7 N·m
-    # of shaft stall torque lands 119 N·m at the axle — plenty to climb, not
+    # This tier is sized at ~1.5× its traction cone (see the note above): 0.9 N·m
+    # of shaft stall torque lands 153 N·m at the axle — plenty to climb, not
     # enough to slam the bogie. The tier is a per-instance attribute override on a
     # real part, which is also how a single weak or overheating wheel would be
     # expressed.
