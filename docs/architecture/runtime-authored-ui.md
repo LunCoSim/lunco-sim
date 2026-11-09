@@ -23,18 +23,21 @@ The shipped contract deliberately uses the smallest stable subset:
 
 | Capability | Runtime contract |
 |---|---|
-| HUI templates | `<template>`, typed recursive `<property>` values, retained `<node>`, `<text>`, `<button>`, and authored row templates |
+| HUI templates | `<template>`, typed recursive `<property>` values, retained `<node>`, `<text>`, `<button>`, standard `<input type="text|number">`, and authored row templates |
 | HUI events | semantic `on_press` callbacks, including Rhai-authored `tag:action` values and typed `tag:*` parameters; `on_enter`, `on_exit`, `on_spawn`, and `on_change` remain available for a tested surface-specific need |
 | Flair styling | authored `#id` selectors, flex/limited grid layout, overflow clipping, custom properties, transitions, animations, media queries, and bundled font imports where supported by the current Bevy style components |
 | LunCo bridge | revision-gated typed exposures, Rhai-owned view models, keyed collections, retained scrolling, explicit placement, and typed command/event dispatch |
 
-`bevy_hui_widgets 0.6.0` is a separate optional crate, not a dependency of
-LunCoSim. It supplies primitive text-input, slider, and select components, but
-not a browser form model, clipboard/caret editing, validation, keyboard
-navigation, accessibility tree, or rich modal outcome contract. Do not add it
-merely to make a HUD look like a web form. Simple authored viewport modals use
-the generic `modal`/`dismiss_action` surface fields; rich source editing and
-dialogs remain owned by the existing egui workbench.
+The runtime maps standard authored `<input type="text">` and
+`<input type="number">` elements to Bevy's editable text widget. Inputs support
+pointer focus, caret/selection editing, character limits, numeric character
+filtering, and authored tab order. Put `tag:ui_form` and `tag:ui_field` on the
+element; values are strings until the Twin's Rhai policy validates them. This
+is a deliberately small native form contract: browser placeholder behavior,
+sliders, selects, automatic validation messages, and form submission are not
+provided. Simple authored viewport modals use the generic
+`modal`/`dismiss_action` surface fields; rich source editing and dialogs remain
+owned by the existing egui workbench.
 
 ## The boundary
 
@@ -298,14 +301,16 @@ for UI picking when a runtime surface is mounted. This keeps ordinary HUI
 controls and surface dragging on the native pointer path while allowing
 unmarked UI layout to pass scene hits through.
 
-Window surfaces may opt into movement with `draggable: true`. The manifest
+Window surfaces may opt into movement with `draggable: true`. Only a descendant
+tagged `tag:ui_drag_handle="true"` can move or reset the surface, so dragging a
+button or input never moves the whole panel. The manifest
 remains the default and visibility authority; the workbench stores only a
 validated logical top-left override in the active Twin's existing workspace
 state file. Overrides are pruned when a manifest no longer authors their stable
 surface id, are clamped after a resize or DPI change, and are cleared when the
 Twin closes. This keeps runtime layout preferences per-Twin without adding a
-second UI persistence store. A double click restores the authored anchor and
-removes the override. Dragging uses Bevy picking events on the retained HUI
+second UI persistence store. A double click on the drag handle restores the
+authored anchor and removes the override. Dragging uses Bevy picking events on the retained HUI
 tree and the existing pointer propagation path; it does not add a parallel
 egui hit-test or per-frame correction loop. The shipped `celestial-view` surface
 uses a top-centre authored default; Settings ▸ HUD removes only its override,
@@ -516,13 +521,35 @@ Rhai owns the interpretation. This supports Twin-defined actions without
 JavaScript or a JSON payload.
 
 There is no DOM query, JavaScript execution, direct resource mutation, or
-widget-specific Rust callback in an authored template. Inputs, forms, text
-editing, rich modal queue/outcome integration, and accessibility semantics are
-not part of the current surface contract; use egui/workbench panels or add an
-explicit engine capability before assuming those features exist. A visible
-authored modal blocks the shared scene-pick gate and Escape emits its declared
-semantic dismiss action. The shared `lunco-ui::modal` host remains the owner of
-focus, queued rich-dialog outcomes, and typed `CloseModal` dispatch.
+widget-specific Rust callback in an authored template. Standard text and
+number inputs, Twin-scoped forms, editable text, keyed collections, current
+value/status labels, and vertical scrolling are part of the runtime contract.
+Rich modal queue/outcome integration and accessibility semantics are not yet
+provided. A visible authored modal blocks the shared scene-pick gate and Escape
+emits its declared semantic dismiss action. The shared `lunco-ui::modal` host
+remains the owner of focus, queued rich-dialog outcomes, and typed
+`CloseModal` dispatch.
+
+### Keyed HUI collections
+
+Declare a collection on a runtime surface with its exposure `source`, HTML
+container id, row-template asset, and stable record `key`. The row template is
+ordinary authored HUI markup with a single `<node>` root. Its scalar properties
+may populate text, ids, and `tag:*` action/input attributes. The runtime keeps
+one retained row per stable key, updates changed template properties in place,
+removes retired keys, and orders children to match the published array.
+
+Engine-owned lists use their normal `EngineExposures` producer. Twin Rhai
+policies can publish UI-owned rows with `SetRuntimeUiCollectionData`, which
+accepts an ordered array of string maps. The command requires an active Twin,
+checks the namespace and source against the active authored manifest (or the
+mounted surface when no manifest state is available), rejects missing or
+duplicate keys, and bounds row/field/payload sizes. Validation uses the
+manifest declaration before waiting for HUI to mount its surface tree, so
+startup scripts can publish initial rows without racing presentation creation.
+Publications are removed when the owner Twin closes or another Twin takes
+ownership. This keeps application code, Rhai policy, and HTML templates on the
+same generic collection path without giving scripts direct resource access.
 
 ### 3. Style the contents
 
@@ -591,7 +618,7 @@ Non-runtime HUI templates retain their inline styles. The low-level
 real HUI style system and the shared production handoff configuration.
 
 Authored HUI nodes use stable `id` attributes and `#id` selectors. Flair also
-supports class selectors, but HUI 0.7 does not create a `ClassList` from an
+supports class selectors, but HUI 0.8 does not create a `ClassList` from an
 HTML `class` attribute; it parses that attribute as an unknown style property
 and rejects the template.
 

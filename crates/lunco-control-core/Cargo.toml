@@ -6,7 +6,7 @@ license.workspace = true
 description = "Generic semantic-control contracts and input state for LunCoSim"
 
 [dependencies]
-bevy = { workspace = true, features = ["keyboard"] }
+bevy = { workspace = true, features = ["bevy_input_focus", "keyboard"] }
 leafwing-input-manager = { workspace = true }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-core = { path = "../lunco-core" }

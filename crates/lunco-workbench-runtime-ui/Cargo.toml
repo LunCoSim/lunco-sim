@@ -7,6 +7,7 @@ description = "Reusable HUI/Flair runtime-authored surface presentation for LunC
 
 [dependencies]
 bevy_ui_widgets = { workspace = true }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
@@ -18,6 +19,7 @@ bevy = { workspace = true, features = [
     "bevy_ui_render",
     "bevy_window",
     "bevy_picking",
+    "bevy_input_focus",
     "mouse",
 ] }
 bevy_egui = { workspace = true }

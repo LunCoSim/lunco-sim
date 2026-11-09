@@ -461,10 +461,12 @@ fn refresh_live_input_maps(
     settings: Res<ActiveInputBindings>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     focus: Option<Res<lunco_control_core::EguiFocus>>,
+    input_focus: Option<Res<bevy::input_focus::InputFocus>>,
     mut previous_claims: Local<Vec<Vec<KeyCode>>>,
     mut maps: Query<&mut InputMap<UserIntent>>,
 ) {
-    let in_text = focus.is_some_and(|focus| focus.wants_keyboard);
+    let in_text =
+        lunco_control_core::keyboard_input_captured(focus.as_deref(), input_focus.as_deref());
     let claims: Vec<_> = keys
         .as_ref()
         .map(|keys| {

@@ -646,6 +646,17 @@ pub struct EguiFocus {
     pub wants_pointer: bool,
 }
 
+/// Whether physical keyboard input is currently owned by an editor or retained
+/// UI widget. HUI text fields use Bevy's shared [`bevy::input_focus::InputFocus`]
+/// resource; egui panels publish the explicit [`EguiFocus`] snapshot.
+pub fn keyboard_input_captured(
+    egui_focus: Option<&EguiFocus>,
+    retained_ui_focus: Option<&bevy::input_focus::InputFocus>,
+) -> bool {
+    egui_focus.is_some_and(|focus| focus.wants_keyboard)
+        || retained_ui_focus.is_some_and(|focus| focus.get().is_some())
+}
+
 /// Marks the app-level input surface that resolves the local user's semantic
 /// intents when no avatar owns the keyboard. The workbench carries one such
 /// surface so editor-only views can use the same rebindable intent vocabulary
@@ -983,6 +994,24 @@ mod tests {
 #[cfg(test)]
 mod cancel_intent_tests {
     use super::{CancelIntent, EguiFocus, LocalIntentSurface, UserIntent};
+
+    #[test]
+    fn retained_ui_text_focus_captures_keyboard_input() {
+        let egui_focus = EguiFocus::default();
+        assert!(!super::keyboard_input_captured(Some(&egui_focus), None));
+
+        let retained_focus = bevy::input_focus::InputFocus::from_entity(Entity::PLACEHOLDER);
+        assert!(super::keyboard_input_captured(
+            Some(&egui_focus),
+            Some(&retained_focus)
+        ));
+
+        let egui_focus = EguiFocus {
+            wants_keyboard: true,
+            ..default()
+        };
+        assert!(super::keyboard_input_captured(Some(&egui_focus), None));
+    }
     use bevy::prelude::*;
     use leafwing_input_manager::prelude::{ActionState, InputManagerPlugin, InputMap};
 

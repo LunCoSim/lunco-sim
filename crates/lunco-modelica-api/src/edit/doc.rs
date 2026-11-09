@@ -12,6 +12,54 @@ use lunco_modelica_document::ModelicaOp;
 use lunco_modelica_runner::PendingHandles;
 use std::collections::HashSet;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn twin_local_modelica_destination(
+    twin_root: &std::path::Path,
+    requested: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::{Component, PathBuf};
+
+    if requested.as_os_str().is_empty()
+        || requested.extension().and_then(|ext| ext.to_str()) != Some("mo")
+        || requested
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("SaveScratchModelicaDocument requires a safe Twin-local .mo path".into());
+    }
+    let root = std::fs::canonicalize(twin_root)
+        .map_err(|error| format!("resolve active Twin root: {error}"))?;
+    let destination = if requested.is_absolute() {
+        PathBuf::from(requested)
+    } else {
+        root.join(requested)
+    };
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "SaveScratchModelicaDocument destination has no parent".to_owned())?;
+    let parent = std::fs::canonicalize(parent)
+        .map_err(|error| format!("resolve Modelica destination directory: {error}"))?;
+    if !parent.starts_with(&root) {
+        return Err(
+            "SaveScratchModelicaDocument destination must stay inside the active Twin".into(),
+        );
+    }
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| "SaveScratchModelicaDocument destination has no filename".to_owned())?;
+    let destination = parent.join(file_name);
+    if destination.exists() {
+        let existing = std::fs::canonicalize(&destination)
+            .map_err(|error| format!("resolve existing Modelica file: {error}"))?;
+        if !existing.starts_with(&root) {
+            return Err(
+                "SaveScratchModelicaDocument cannot replace a file outside the active Twin".into(),
+            );
+        }
+    }
+    Ok(destination)
+}
+
 /// Identities of untitled documents allocated specifically for generated
 /// API/tool work. Kept separate from generic untitled Editor documents so the
 /// scratch-only close command cannot discard a user's unsaved model.
@@ -25,6 +73,85 @@ pub struct ToolScratchDocuments(HashSet<DocumentId>);
 pub struct CreateScratchModelicaDocument {
     pub source: String,
     pub name: String,
+}
+
+/// Persist an API-owned scratch document as a Modelica file inside the active
+/// Twin. This keeps document persistence available to native HTML/Rhai tools
+/// in headless hosts that do not install the Modelica editor UI plugin.
+#[Command(default)]
+pub struct SaveScratchModelicaDocument {
+    pub doc_id: DocumentId,
+    pub path: String,
+}
+
+#[on_command(SaveScratchModelicaDocument)]
+pub fn on_save_scratch_modelica_document(
+    trigger: On<SaveScratchModelicaDocument>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut scratch_documents: ResMut<ToolScratchDocuments>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let request = trigger.event();
+    let doc_id = request.doc_id;
+    if !scratch_documents.0.contains(&doc_id) {
+        return Err("SaveScratchModelicaDocument only saves API-owned scratch documents".into());
+    }
+    let host = registry
+        .host(doc_id)
+        .ok_or_else(|| format!("SaveScratchModelicaDocument: unknown document {doc_id}"))?;
+    if !host.document().origin().is_untitled() {
+        return Err("SaveScratchModelicaDocument requires an untitled scratch document".into());
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = request;
+        return Err("local Modelica file saving is unavailable on wasm".into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let raw_path = std::path::Path::new(&request.path);
+        let twin_id = workspace
+            .0
+            .active_twin
+            .ok_or_else(|| "SaveScratchModelicaDocument requires an active Twin".to_owned())?;
+        let twin = workspace
+            .0
+            .twin(twin_id)
+            .ok_or_else(|| "SaveScratchModelicaDocument active Twin is unavailable".to_owned())?;
+        let destination = twin_local_modelica_destination(&twin.root, raw_path)?;
+        let source = registry
+            .host(doc_id)
+            .ok_or_else(|| format!("SaveScratchModelicaDocument: unknown document {doc_id}"))?
+            .document()
+            .source()
+            .to_string();
+        let storage = lunco_storage::FileStorage::new();
+        lunco_storage::Storage::write_sync(
+            &storage,
+            &lunco_storage::StorageHandle::File(destination.clone()),
+            source.as_bytes(),
+        )
+        .map_err(|error| format!("save Modelica Twin file {}: {error}", destination.display()))?;
+        let host = registry
+            .host_mut(doc_id)
+            .ok_or_else(|| format!("SaveScratchModelicaDocument: unknown document {doc_id}"))?;
+        host.document_mut()
+            .set_origin(lunco_doc::DocumentOrigin::File {
+                path: destination.clone(),
+                writable: true,
+            });
+        registry.mark_document_saved(doc_id);
+        scratch_documents.0.remove(&doc_id);
+        commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
+        Ok(Ack::with_data(
+            OpId::new(),
+            lunco_api_core::api_value!({
+                "doc_id": doc_id.raw(),
+                "path": destination.display().to_string()
+            }),
+        ))
+    }
 }
 
 #[on_command(CreateScratchModelicaDocument)]
@@ -266,6 +393,72 @@ mod tests {
     use lunco_experiments::ExperimentOrigins;
     use lunco_experiments::{ExperimentRegistry, ModelRef, RunBounds, RunStatus, TwinId};
     use std::collections::BTreeMap;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn scratch_test_root() -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "luncosim-modelica-save-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("models/recipes")).expect("create test Twin");
+        root
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn scratch_save_destination_accepts_a_twin_local_modelica_file() {
+        let root = scratch_test_root();
+        let requested = std::path::Path::new("models/recipes/Blend.mo");
+        let destination = twin_local_modelica_destination(&root, requested).expect("destination");
+        let parent = root
+            .join("models/recipes")
+            .canonicalize()
+            .expect("canonical parent");
+        assert_eq!(destination, parent.join("Blend.mo"));
+        std::fs::remove_dir_all(root).expect("remove test Twin");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn scratch_save_destination_rejects_traversal_and_non_modelica_files() {
+        let root = scratch_test_root();
+        assert!(
+            twin_local_modelica_destination(&root, std::path::Path::new("../outside.mo")).is_err()
+        );
+        assert!(
+            twin_local_modelica_destination(&root, std::path::Path::new("models/recipe.txt"))
+                .is_err()
+        );
+        std::fs::remove_dir_all(root).expect("remove test Twin");
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    #[test]
+    fn scratch_save_destination_rejects_symlink_escape() {
+        let root = scratch_test_root();
+        let outside = root
+            .parent()
+            .expect("temp parent")
+            .join(format!("luncosim-modelica-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).expect("create outside directory");
+        std::os::unix::fs::symlink(&outside, root.join("models/recipes/escape"))
+            .expect("create Twin symlink");
+        assert!(
+            twin_local_modelica_destination(
+                &root,
+                std::path::Path::new("models/recipes/escape/Blend.mo")
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).expect("remove test Twin");
+        std::fs::remove_dir_all(outside).expect("remove outside directory");
+    }
 
     /// Build a world holding one experiment (originating from `run_doc`) at
     /// `status`, then list the live runs the source-swap would cancel for `doc`.

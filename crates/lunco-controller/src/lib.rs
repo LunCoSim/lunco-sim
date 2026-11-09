@@ -1647,6 +1647,9 @@ fn drive_from_bindings(
     // doesn't also drive the vessel — see `PhysicalIntentFrame` below. `Option` so a
     // controller-only test app without the workbench still runs (no gate).
     egui_focus: Option<Res<lunco_control_core::EguiFocus>>,
+    // Retained HUI text fields use Bevy's shared focus resource. Keep their
+    // keystrokes out of vessel ports just as we do for egui editors.
+    input_focus: Option<Res<bevy::input_focus::InputFocus>>,
     // Intents forced by `SimulateIntent` — the headless/API/rhai stand-in for keys.
     sim_intents: Option<Res<SimulatedIntents>>,
     // Port idle-yield and held-input authority-request state.
@@ -1675,7 +1678,8 @@ fn drive_from_bindings(
     // bindings` still runs and `resolve` still writes EVERY bound port — now all
     // 0 — so the vessel decelerates to a clean stop rather than latching its last
     // command (as it would if we simply skipped the system).
-    let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
+    let egui_keyboard =
+        lunco_control_core::keyboard_input_captured(egui_focus.as_deref(), input_focus.as_deref());
     let sim_intents = sim_intents.as_deref();
     // Query iteration follows ECS storage layout, which can change when
     // unrelated components move entities between archetypes. Reuse this local
@@ -2041,11 +2045,13 @@ fn emit_intent_edges(
 fn drive_self_drivers(
     q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControlLink>>,
     egui_focus: Option<Res<lunco_control_core::EguiFocus>>,
+    input_focus: Option<Res<bevy::input_focus::InputFocus>>,
     sim_intents: Option<Res<SimulatedIntents>>,
     mut edge_state: Local<std::collections::HashMap<(Entity, UserIntent), bool>>,
     mut commands: Commands,
 ) {
-    let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
+    let egui_keyboard =
+        lunco_control_core::keyboard_input_captured(egui_focus.as_deref(), input_focus.as_deref());
     let sim_intents = sim_intents.as_deref();
     for (entity, intents, binding) in q_self.iter() {
         let physical = PhysicalIntentFrame::capture(binding, intents, egui_keyboard);
@@ -2538,6 +2544,7 @@ mod tests {
     #[test]
     fn external_semantic_edges_commit_in_stable_order_at_the_admitted_tick() {
         let mut app = App::new();
+        app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
         app.init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_core_runtime::SimTick>()
@@ -2648,6 +2655,7 @@ mod tests {
     #[test]
     fn api_and_direct_command_inputs_commit_in_order_with_capture() {
         let mut app = App::new();
+        app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
         app.init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_core_runtime::SimTick>()

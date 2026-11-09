@@ -1638,8 +1638,6 @@ dependencies = [
 [[package]]
 name = "bevy_flair_style"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb389b8dab2848313d4c9ac2f18cdd61815badb076320474a8844aae5c1ffdc3"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -9423,6 +9421,7 @@ dependencies = [
  "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-modelica-source-roots",
+ "lunco-storage",
  "lunco-twin-journal",
  "lunco-workspace",
  "rumoca-compile",
@@ -12186,6 +12185,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-path",
  "lunco-assets-runtime",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-exposure-core",
  "lunco-hooks",

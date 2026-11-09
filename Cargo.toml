@@ -713,6 +713,10 @@ bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "65dd8f4e86383c1912
 # Pinned upstream source with the approved public path-tracing ordering hook.
 # See third_party/bevy_solari/VENDOR.md for identity and the exact patch.
 bevy_solari = { path = "third_party/bevy_solari" }
+# The Flair 0.9.0 HTML style phase needs its propagation dependency on the
+# containing system set, not on a member nested in that same set. Keep this
+# small compatibility patch local until upstream publishes the schedule fix.
+bevy_flair_style = { path = "third_party/bevy_flair_style" }
 # Native joint/contact relaxation and checked inertia/gyroscopic numerics share one revision.
 avian3d = { git = "https://github.com/LunCoSim/avian", rev = "b8d1f5a3d5aeeb61220813e82607ca6a74e7057a" }
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "01302a171ac3db662c0c322ef9e98fe7d5f33a6a" }

@@ -26,6 +26,7 @@ pub struct ModelicaApiEditPlugin;
 // module that defines each command.
 register_commands!(
     doc::on_create_scratch_modelica_document,
+    doc::on_save_scratch_modelica_document,
     doc::on_close_scratch_modelica_document,
     doc::on_set_document_source,
     component::on_add_modelica_component,

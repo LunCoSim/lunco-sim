@@ -294,8 +294,11 @@ pub(crate) fn avatar_escape_possession(
 }
 
 /// Run condition for keyboard-owned avatar actions.
-pub(crate) fn scene_keyboard_active(focus: Res<lunco_control_core::EguiFocus>) -> bool {
-    !focus.wants_keyboard
+pub(crate) fn scene_keyboard_active(
+    focus: Res<lunco_control_core::EguiFocus>,
+    input_focus: Option<Res<bevy::input_focus::InputFocus>>,
+) -> bool {
+    !lunco_control_core::keyboard_input_captured(Some(&focus), input_focus.as_deref())
 }
 
 #[cfg(test)]
@@ -304,10 +307,8 @@ mod tests {
 
     #[test]
     fn semantic_look_intent_rotates_camera_angles() {
-        let settings = CameraInputSettings {
-            look_radians_per_pointer_unit: 0.01,
-            ..default()
-        };
+        let mut settings = CameraInputSettings::default();
+        settings.look_radians_per_pointer_unit = 0.01;
         let (yaw, pitch) = look_angles(0.0, 0.0, Vec2::new(10.0, -5.0), &settings, 1.0);
 
         assert!((yaw + 0.1).abs() < 1.0e-6);
