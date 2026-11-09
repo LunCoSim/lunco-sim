@@ -462,6 +462,17 @@ through the edited document's own authoring recipe. Runtime-only endpoints are
 checked against the matching live port registry, so another open Twin cannot
 change whether a document's authored wire is valid.
 
+A root `ReplaceSource` is an explicit whole-layer authoring operation. When the
+current root cannot compose, the command owner prepares the candidate's
+dependency closure from the replacement source, validates its child structure
+and composed stage, then commits it through the normal journal path. It does not
+need to compose the broken current root first, and a malformed or uncomposable
+replacement is rejected before the document generation changes. This repairs
+the document only: a failed scene remains stopped. Recent Events offers an
+explicit Load Scene action after the replacement is accepted; that action
+refreshes the doc-backed stage input and starts a new scene transition. Composed
+document queries continue reporting the failed stage until that load completes.
+
 The command owner reuses the live stage's dependency recipe by canonical-stage
 identity and resolver-closure revision. An ordinary edit does not deep-copy
 every referenced layer's bytes; a newly injected dependency or rebuilt stage

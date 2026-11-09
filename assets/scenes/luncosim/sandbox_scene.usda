@@ -7,9 +7,9 @@
 
 def Xform "SandboxScene" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
-    documentation = "The main sandbox: a large flat ground with ramps and rovers. The everyday space for driving rovers around obstacles."
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
     kind = "assembly"
+    doc = "General lunar driving sandbox with flat ground, ramps, and rover examples for free driving and vehicle-control practice."
 )
 {
     uniform bool lunco:spawnable = false

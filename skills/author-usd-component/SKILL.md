@@ -21,6 +21,15 @@ The resulting component is still a normal `.usda` asset, but its persistent
 file is written by the Editor's save operation. Nothing here is a Rust change
 unless the typed owner is missing a generic USD capability.
 
+If an existing root source cannot compose, replace it with one root
+`ReplaceSource` through the document API. The USD command owner prepares the
+replacement's dependency closure and validates its structure and composed stage
+before it commits. Then use `SaveDocument` and read the document back; do not
+edit the source file behind the open document. The replacement repairs the
+document, not the failed scene: it remains stopped until the user chooses the
+Load Scene action in Recent Events. That explicit action reloads the accepted
+document source and starts a new scene transition.
+
 Frame is fixed: **Y-up, right-handed, −Z-forward, SI metres** (`docs/architecture/41-axes-and-units.md`).
 Author in that frame. `upAxis = "Z"` / `metersPerUnit != 1` are converted once at
 the shared USD boundary (`crates/lunco-usd-document/src/units.rs`; the runtime

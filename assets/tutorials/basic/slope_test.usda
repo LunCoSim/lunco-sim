@@ -7,7 +7,7 @@
 
 def Xform "SlopeTest" (
     kind = "assembly"
-    documentation = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
+    doc = "Approx. 18-degree incline for comparing rover traction and motor torque. The Hauler profile uses the shared chassis and centre of mass."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {

@@ -325,7 +325,15 @@ pub fn validate_proposal(
         }
     }
 
+    let whole_root_replacement = matches!(
+        ops,
+        [UsdOp::ReplaceSource { edit_target, .. }] if edit_target.is_root()
+    );
     match scope {
+        // The command owner validates the complete replacement candidate and
+        // its dependency closure before commit; probing the current composed
+        // root here would make a broken source impossible to repair.
+        UsdEditScope::SourceAsset if whole_root_replacement => {}
         UsdEditScope::SourceAsset => {
             for path in &affected_paths {
                 match document.path_is_under_composed_arc(path) {

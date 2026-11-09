@@ -133,30 +133,6 @@ def Xform "SixWheelIndependent" (
             </SixWheelIndependent/Shaft_R1>,
             </SixWheelIndependent/Shaft_R2>,
         ]
-    over "Motor_L0" {
-        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w0>
-        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
-    }
-    over "Motor_L1" {
-        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w1>
-        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
-    }
-    over "Motor_L2" {
-        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w2>
-        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
-    }
-    over "Motor_R0" {
-        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w3>
-        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
-    }
-    over "Motor_R1" {
-        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w4>
-        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
-    }
-    over "Motor_R2" {
-        float inputs:demand.connect = </SixWheelIndependent.inputs:drive_w5>
-        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
-    }
 
     # G4b — the mix. Left bank (w0,w1,w2) = throttle+steer; right bank (w3,w4,w5)
     # = throttle−steer. Pure throttle drives all six equally; pure steer pivots.
@@ -304,6 +280,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w0>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
         float inputs:speed.connect = </SixWheelIndependent/Gearbox_L0.outputs:speed_a>
     }
 
@@ -335,6 +312,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w1>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
         float inputs:speed.connect = </SixWheelIndependent/Gearbox_L1.outputs:speed_a>
     }
 
@@ -367,6 +345,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w2>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
         float inputs:speed.connect = </SixWheelIndependent/Gearbox_L2.outputs:speed_a>
     }
 
@@ -399,6 +378,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w3>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
         float inputs:speed.connect = </SixWheelIndependent/Gearbox_R0.outputs:speed_a>
     }
 
@@ -431,6 +411,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w4>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
         float inputs:speed.connect = </SixWheelIndependent/Gearbox_R1.outputs:speed_a>
     }
 
@@ -463,6 +444,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w5>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
         float inputs:speed.connect = </SixWheelIndependent/Gearbox_R2.outputs:speed_a>
     }
 

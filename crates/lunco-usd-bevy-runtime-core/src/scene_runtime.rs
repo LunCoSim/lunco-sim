@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document as _, OpenOutcome};
-use lunco_doc_bevy::{DocumentRegistry, OpenFile};
+use lunco_doc_bevy::{DocumentChanged, DocumentRegistry, OpenFile};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_stage::{UsdStageAsset, source::UsdSourceBytes};
 use lunco_usd_core::commands::{EmptyViewportReason, is_usd_path};
@@ -25,6 +25,103 @@ use lunco_workspace::{TwinClosed, WorkspaceResource};
 /// not become available. This is a scene-load failure, not a simulation fault:
 /// the viewport remains empty and a later Twin replacement is still admitted.
 pub(crate) const TWIN_SCENE_LOAD_FAILED: &str = "TWIN_SCENE_LOAD_FAILED";
+
+#[derive(Clone)]
+struct FailedTwinSceneRequest {
+    doc: lunco_doc::DocumentId,
+    path: String,
+    root_prim: String,
+    generation: u64,
+}
+
+/// Retains a failed Twin scene request until a new explicit scene transition.
+#[derive(Resource, Default)]
+pub(crate) struct FailedTwinSceneRequestState(Option<FailedTwinSceneRequest>);
+
+/// User action available after an accepted source replacement repairs a
+/// previously failed scene document.
+#[derive(Event, Clone, Debug)]
+pub struct SceneSourceRepairReady {
+    /// The exact scene address to load after the user chooses to continue.
+    pub path: String,
+    /// The original root override, preserving the failed request semantics.
+    pub root_prim: String,
+}
+
+pub(crate) fn remember_failed_twin_scene_request(
+    trigger: On<lunco_core::SceneTransitionFailed>,
+    registry: Option<Res<DocumentRegistry<UsdDocument>>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    mut failed: ResMut<FailedTwinSceneRequestState>,
+) {
+    failed.0 = None;
+    let lunco_core::SceneTransition::Load { path, root_prim } = &trigger.event().transition else {
+        return;
+    };
+    let Some((name, rel)) = lunco_assets_core::parse_twin_uri(path) else {
+        return;
+    };
+    let (Some(registry), Some(backed)) = (registry, backed) else {
+        return;
+    };
+    let Some(doc) = backed.doc_for(name, rel) else {
+        return;
+    };
+    let Some(generation) = registry.host(doc).map(|host| host.document().generation()) else {
+        return;
+    };
+    failed.0 = Some(FailedTwinSceneRequest {
+        doc,
+        path: path.clone(),
+        root_prim: root_prim.clone(),
+        generation,
+    });
+}
+
+pub(crate) fn clear_failed_twin_scene_request(
+    _trigger: On<lunco_core::SceneTransitionStarted>,
+    mut failed: ResMut<FailedTwinSceneRequestState>,
+) {
+    failed.0 = None;
+}
+
+/// Announce a validated source replacement without resuming the failed scene.
+pub(crate) fn announce_repaired_twin_scene(
+    trigger: On<DocumentChanged>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    failed: Res<FailedTwinSceneRequestState>,
+    mut commands: Commands,
+) {
+    let doc = trigger.event().doc;
+    let Some(failed) = failed.0.as_ref().filter(|failed| failed.doc == doc) else {
+        return;
+    };
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    let document = host.document();
+    let generation = document.generation();
+    if generation <= failed.generation || document.parse_error().is_some() {
+        return;
+    }
+    let Some(ops) = document.ops_since(failed.generation) else {
+        return;
+    };
+    if !ops.iter().any(|op| {
+        matches!(
+            op,
+            lunco_usd_document::document::UsdOp::ReplaceSource { edit_target, .. }
+                if edit_target.is_root()
+        )
+    }) || document.authoring_recipe().is_none()
+    {
+        return;
+    }
+    commands.trigger(SceneSourceRepairReady {
+        path: failed.path.clone(),
+        root_prim: failed.root_prim.clone(),
+    });
+}
 
 /// Open one Twin-relative scene selected by the active Rhai loading policy.
 #[Command(default)]
@@ -254,6 +351,9 @@ fn on_load_scene(
 pub(crate) fn execute_admitted_load_scene(
     trigger: On<lunco_core::SceneTransitionAdmitted>,
     asset_server: Res<AssetServer>,
+    registry: Option<Res<DocumentRegistry<UsdDocument>>>,
+    mut backed: Option<ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
     scene: SceneEntities,
@@ -289,6 +389,21 @@ pub(crate) fn execute_admitted_load_scene(
             return;
         }
     };
+    if let Err(error) = refresh_doc_backed_scene_source(
+        &path,
+        registry.as_deref(),
+        backed.as_deref_mut(),
+        roots.as_deref(),
+        &asset_server,
+    ) {
+        warn!("[load-scene] {error}");
+        commands.trigger(lunco_core::SceneTransitionFailed {
+            id: transition_id,
+            transition,
+            error,
+        });
+        return;
+    }
     // Admission is the commit point. Only now does this request own scene state;
     // a request queued behind another transaction must not mutate the active
     // transaction's diagnostics or viewport reason.
@@ -376,6 +491,68 @@ pub(crate) fn execute_admitted_load_scene(
             });
         }
     });
+}
+
+/// Publish the current authored document into a Twin stage only after the
+/// coordinator admits its scene transition. Queued or duplicate requests do
+/// not mutate the source used by a mounted scene.
+fn refresh_doc_backed_scene_source(
+    path: &str,
+    registry: Option<&DocumentRegistry<UsdDocument>>,
+    mut backed: Option<&mut lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
+    asset_server: &AssetServer,
+) -> Result<(), String> {
+    let Some((name, rel)) = lunco_assets_core::parse_twin_uri(path) else {
+        return Ok(());
+    };
+    let Some(backed) = backed.as_deref_mut() else {
+        return Ok(());
+    };
+    let Some(doc) = backed.doc_for(name, rel) else {
+        return Ok(());
+    };
+    let registry =
+        registry.ok_or_else(|| "the doc-backed USD registry is unavailable".to_owned())?;
+    let document = registry
+        .host(doc)
+        .ok_or_else(|| format!("doc-backed USD document {doc} is unavailable"))?
+        .document();
+    if document.parse_error().is_some() {
+        return Err(format!(
+            "USD source for `{path}` is invalid; replace it with a valid source before loading"
+        ));
+    }
+    let Some(recipe) = document.authoring_recipe().cloned() else {
+        return Ok(());
+    };
+    if recipe.root_id != path {
+        return Err(format!(
+            "prepared source recipe `{}` does not match scene `{path}`",
+            recipe.root_id
+        ));
+    }
+    let root_bytes = recipe
+        .bytes
+        .get(path)
+        .cloned()
+        .ok_or_else(|| format!("prepared source recipe for `{path}` has no root bytes"))?;
+    let generation = document.generation();
+    let roots = roots
+        .ok_or_else(|| "Twin asset roots are unavailable for the doc-backed scene".to_owned())?;
+    backed
+        .publish_stage_input(
+            doc,
+            roots,
+            asset_server,
+            lunco_usd_document::document::DocumentStageInput {
+                recipe,
+                root_bytes: std::sync::Arc::new(root_bytes),
+            },
+        )
+        .map_err(|error| format!("could not prepare current USD source for `{path}`: {error}"))?;
+    backed.mark_overlay_synced(doc, generation);
+    Ok(())
 }
 
 /// Refresh the active doc-backed Twin from its source file before the shared

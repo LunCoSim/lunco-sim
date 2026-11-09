@@ -15,19 +15,16 @@
 # See `rover_easy.usda` for the tier ladder, and for why grip and torque are
 # authored per wheel rather than on this prim.
 def Xform "RoverMedium" (
-    doc = "Medium rover (Standard) — rocker-bogie chassis, neutral centre of mass, moderate power. Tips if you cross the fall-line carelessly; rewards a planned line. The default tier."
+    doc = "Standard rover profile. Worn tires (μ=1.0), 0.4 N·m motor stall torque, and the shared rocker-bogie chassis. Compare with Hauler to isolate tire friction."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
 )
 {
     uniform bool lunco:spawnable = true
 
-    # Handling, per wheel. `worn` tires: μ=1.0 ⇒ slip limit atan(1.0)=45.0°. Tuned
-    # against the SURVEYED site (summer_space_school, real Apollo 15 crater), whose
-    # ways in run 19.8° on the ДЗЗ route, 25.5° on the naive straight line, and
-    # 31.1° up the steepest SECTOR (N) — so this rover holds every route with
-    # margin; the bearing you pick stops deciding survival (see the 2026-07-31
-    # brief: tiers differ by Energy/Heat/Data budgets, not slope).
+    # Handling, per wheel. `worn` tires: μ=1.0 ⇒ idealized slip limit atan(1.0)=45.0°.
+    # The built-in profiles share this chassis and compare authored tire friction
+    # and motor stall torque.
     #
     # Motor torque is sized against the tire: τ_cone = μ·N·r per wheel
     # (N = 532 kg·g_moon/6 ≈ 143.6 N, r = 0.4 m ⇒ medium cone 57 N·m). The

@@ -1,13 +1,10 @@
 //! B3 — Slopes & Tip-Over (Basic tutorial track).
 //!
-//! The tip-over lesson, on the deliberately top-heavy Hauler. Two truths a driver
-//! must feel: (1) a borderline grade is climbable straight up the fall-line but
-//! (2) steering ACROSS it rolls a high-centre-of-mass rover. The student is
-//! coached to first make it lean on purpose, use the recovery control if it rolls,
-//! then climb it properly. Completion is possess → feel more than 15 degrees of
-//! tilt → enter the top marker's authored waypoint trigger; recovery is coached
-//! when needed but is not a completion condition. Tilt is read with `is_tipped` /
-//! `tilt_deg` (prelude, off `world_rotation`).
+//! The low-grip Hauler lets learners explore two effects: a straight climb can
+//! follow a grade, while a cross-slope turn can increase rollover risk. Completion
+//! checks a 15-degree lean and arrival at the top marker; a full rollover and
+//! recovery are not required. Tilt is read with `tilt_deg` (prelude, from
+//! `world_rotation`).
 
 fn simulation_dependencies(me, ctx) {
     let rover = find_path("/SlopeTest/Rover");
@@ -22,23 +19,18 @@ fn on_start(me, ctx) {
     // The optional world is selected by the catalog and mounted by the generic
     // launcher before this runs.
     focus_panel("sandbox_inspector");
-    spotlight("panel.sandbox_inspector", "Select the Hauler and read its mass and centre of mass.");
+    spotlight("panel.sandbox_inspector", "Select Rover at the base of the slope, then expand RockerL in Entities.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
-    hint("Select the Hauler. Read its mass and centre of mass in Inspector, then click Possess.");
+    hint("In Entities, select Rover at the base of the slope; it uses the Hauler profile. Expand RockerL and inspect Wheel_FL's tire selection and Motor_FL's stall torque. Reselect the Rover, then click Possess. The rover profiles share a chassis and centre of mass; Hauler has lower-grip tires than Standard.");
 }
 
 fn b3_possessed(me) {
-    hint("Drive onto the grade and steer across it until the Hauler leans.\n\nIf it tips, click Recover to put it back on its wheels.");
+    hint("Drive onto the grade and watch the Hauler lean. Try a slow cross-slope turn to see how its grip affects the response. If it tips, click Recover to put it back on its wheels.");
 }
 
 fn b3_edge_felt(me) {
     clear_spotlight();
-    let msg = if is_tipped(find("/SlopeTest/Rover"), 15.0) {
-        "The Hauler tipped. Click Recover, then continue."
-    } else {
-        "The Hauler is near its limit. Keep going until it leans past 15°."
-    };
-    notify_kind(msg, "warn");
+    notify_kind("The Hauler leaned past 15°. Recover it if it has rolled, then continue.", "warn");
     hint("Now point straight up the fall-line. Use small inputs and climb to the marker.");
 }
 
@@ -61,12 +53,8 @@ fn b3_autopilot_possess(me) {
     notify_kind(`[debug] tilt at start: ${tilt_deg(find("/SlopeTest/Rover"))}°`, "info");
 }
 
-fn b3_cross_grade(me) {
+fn b3_approach_grade(me) {
     nav_to(find("/SlopeTest/Rover"), world_pos(find("/SlopeTest/Marker")), 0.55, 5.0)
-}
-
-fn b3_cross_grade_done(me) {
-    tilt_deg(find("/SlopeTest/Rover")) > 15.0
 }
 
 fn b3_climb(me) {
@@ -90,11 +78,10 @@ fn mission(me, ctx) {
             done: Fn("b3_controlled"),
             on_complete: Fn("b3_possessed"),
         }),
-        // Key this on TILT, not on a completed roll: 15° is reachable by steering
-        // across the grade, while requiring a full tip-over would punish a careful
-        // driver and make the objective impossible to complete safely.
+        // Key this on observed lean rather than a completed roll, so a careful
+        // driver can complete the lesson without fully rolling the rover.
         objective("feel_the_edge", #{
-            text: "Steer across the grade until the Hauler leans past 15°",
+            text: "Drive onto the grade and observe the Hauler lean past 15°",
             requires: ["possess"],
             done: Fn("b3_tilted"),
             dwell: 0.3,
@@ -131,10 +118,10 @@ fn task(me, ctx) {
         wait(1.0),
         once(|m| b3_autopilot_possess(m)),
         wait(0.5),
-        // Cross the grade first so the debug run satisfies `feel_the_edge` — the
-        // demo must exercise the same objective chain a student does, or CI proves
-        // a path nobody takes.
-        step(|m| b3_cross_grade(m), |m| b3_cross_grade_done(m)),
+        // The unattended driver approaches the marker and meets the same tilt
+        // threshold before arrival. It does not exercise the optional cross-slope
+        // steering maneuver suggested to learners.
+        step(|m| b3_approach_grade(m), |m| b3_tilted(m)),
         // The task event is scoped to this lesson's authored Trigger Sensor.
         act_until_event(
             |m| b3_climb(m),

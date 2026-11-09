@@ -22,6 +22,7 @@ mod live_consume;
 mod native_assets;
 mod native_references;
 pub mod scene;
+pub use scene_runtime::SceneSourceRepairReady;
 mod scene_runtime;
 mod twin_projection;
 
@@ -52,6 +53,10 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.add_observer(scene::on_scene_transition_completed);
         app.add_observer(scene::on_scene_transition_failed);
         app.add_observer(scene_runtime::clear_scene_on_twin_closed);
+        app.init_resource::<scene_runtime::FailedTwinSceneRequestState>();
+        app.add_observer(scene_runtime::remember_failed_twin_scene_request);
+        app.add_observer(scene_runtime::clear_failed_twin_scene_request);
+        app.add_observer(scene_runtime::announce_repaired_twin_scene);
         app.add_systems(
             lunco_core::SceneTeardown,
             twin_projection::reset_scene_projection_state,

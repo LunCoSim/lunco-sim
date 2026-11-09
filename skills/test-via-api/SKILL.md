@@ -218,6 +218,14 @@ scenario, not a Rust test with a multiline USDA string. The
 whole-source replacement, and the preview's projected-generation lifecycle
 through the production editor runner. Keep Rust coverage for the focused
 USD-to-render-intent mapping mechanism, where the mapping itself is the subject.
+When the current root cannot compose, exercise recovery with a single root
+`ReplaceSource`: the command owner prepares dependencies from the candidate,
+validates the candidate composition, and rejects invalid replacements before
+generation changes. Save successful edits through `SaveDocument` and read the
+document back through the API. A valid replacement must leave a failed scene
+stopped and publish an actionable Recent Events entry; only its explicit Load
+Scene action may start a new transition. Verify that composed document queries
+report the failed stage until that action completes.
 The material-edit gate also adds and removes a primitive in two leases of one
 document. Framing reads actual projected mesh bounds, so a native USD edit alone
 cannot satisfy that gate while stale or missing preview entities remain.
@@ -250,10 +258,10 @@ terrain, and vehicle callers.
 For terminal runtime-fault recovery, verify the two owners separately and then
 the lifecycle seam. `RuntimeFaults` must pause `Time<Physics>` with a zero delta
 while leaving `Time<Virtual>` available for diagnostics and teardown. The bad
-scene is not repaired or resumed. `SceneTeardown` clears only the outgoing
+scene itself is never resumed in place. `SceneTeardown` clears only the outgoing
 scene's terminal fault and `PhysicsHolds::SAFETY_FAILURE`; the physics owner
 also resets scene-owned holds, deliberate-step debt, and the physics clock
-before replacement admission. The focused regression names are
+before a user-requested replacement transition. The focused regression names are
 `terminal_runtime_fault_pauses_physics_until_cleared` in `lunco-physics` and
 `fault_then_scene_reload_can_admit_a_replacement_runtime` in `lunco-usd-sim`.
 
@@ -264,7 +272,9 @@ process cannot prove same-process recovery. Use a lifecycle test or a live API
 session that explicitly submits teardown,
 loads the replacement, and checks the new scene's admission/status. Do not add
 an automatic repair, retry, process restart, or fault-clearing fallback to make
-the invalid scene continue.
+the invalid scene continue. A validated user `ReplaceSource` followed by the
+explicit Recent Events Load Scene action is a new scene transition, not an
+in-place resume.
 
 Scene, render, and editor acceptance runs are isolated by default and use a
 fresh production process. Their launchers keep settings in memory and disable

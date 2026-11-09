@@ -24,7 +24,7 @@ def Xform "PythonBalloon" (
     float inputs:height.connect = </PythonBalloon.outputs:position_y>
     float inputs:velocity
     float inputs:velocity.connect = </PythonBalloon.outputs:velocity_y>
-    float inputs:gravity
+    double inputs:gravity
     float inputs:gravity.connect = </PythonBalloon/Environment.outputs:gravity_accel>
     def Xform "Environment" (
         prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>

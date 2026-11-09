@@ -1,6 +1,6 @@
 # 03 — Cosim: when a Model flies physics
 
-> **Pair with:** the *Cosim — Model meets Physics* in-app lesson (luncosim 🎓 menu).
+> **Pair with:** the *Model Meets Physics* in-app lesson (LunCoSim 🎓 menu).
 > **Reference:** [Co-Simulation Domain](../architecture/22-domain-cosim.md) ·
 > [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) ·
 > [inspect-simulation](../../skills/inspect-simulation/SKILL.md)

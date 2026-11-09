@@ -1,4 +1,4 @@
-//! Cosim — when a Model flies physics. A coach-mark tour over the lander scene.
+//! Model Meets Physics — when a Model flies physics. A coach-mark tour over the lander scene.
 //!
 //! The lander in `lander_ops.usda` is CO-SIMULATED: a Modelica model
 //! (`models/Lander.mo`) holds the guidance law, and a `SimConnection` pipes its
@@ -48,7 +48,7 @@ fn on_start(me, ctx) {
     // points at a live cosim-flown lander without opening a scene itself.
     this.i = 0;
     coach_step(steps(), 0);
-    notify_kind("Tutorial: Cosim — Model meets Physics", "info");
+    notify_kind("Tutorial: Model Meets Physics", "info");
 }
 
 fn on_event(me, evt, ctx) {
