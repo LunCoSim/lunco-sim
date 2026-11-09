@@ -27,7 +27,6 @@ pub struct FmuLimits {
     pub max_instances: usize,
     pub max_archive_bytes: usize,
     pub max_unpacked_bytes: u64,
-    pub max_event_iterations: usize,
 }
 impl Default for FmuLimits {
     fn default() -> Self {
@@ -35,7 +34,6 @@ impl Default for FmuLimits {
             max_instances: 32,
             max_archive_bytes: 64 * 1024 * 1024,
             max_unpacked_bytes: 256 * 1024 * 1024,
-            max_event_iterations: 1000,
         }
     }
 }
@@ -336,7 +334,6 @@ fn worker(rx: Receiver<Work>, tx: Sender<Reply>) {
                         &parameters,
                         ticks as f64 * SECS_PER_TICK,
                         limits.max_unpacked_bytes,
-                        limits.max_event_iterations,
                         &mut fatal_registry,
                     )?;
                     if !lease.load(Ordering::Acquire) {

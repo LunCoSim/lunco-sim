@@ -28,7 +28,7 @@ fn admitted(me) {
     this.checks += [
         t_true(get(this.decay, "x") == 1.0, "FMU initialization publishes the real continuous state"),
         t_true(get(this.bounce, "h") == 1.0 && get(this.bounce, "v") == 0.0,
-            "Event Mode initialization publishes the real ball state"),
+            "FMU initialization publishes the ball state with internal event handling"),
         t_true(get(this.decay, "FmuParticipant.source_revision") != 0,
             "admission retains the exact archive revision"),
         t_true(get(this.decay, "FmuParticipant.fmu_can_restore_state"),

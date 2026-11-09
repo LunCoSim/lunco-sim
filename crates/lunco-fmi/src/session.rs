@@ -33,14 +33,10 @@ pub(crate) struct Session {
     _resources: tempfile::TempDir,
     inputs: BTreeMap<String, u32>,
     outputs: BTreeMap<String, u32>,
-    event_mode: bool,
-    variable_step: bool,
-    next_event_time: Option<f64>,
     input_values: BTreeMap<String, f64>,
     time: f64,
     communication_step: f64,
     time_unit: lunco_engineering_values::Unit,
-    max_event_iterations: usize,
     fatal: Rc<Cell<bool>>,
     contracts: lunco_port_core::ScalarPortContracts,
 }
@@ -86,14 +82,10 @@ impl Session {
         parameters: &Values,
         communication_step: f64,
         max_unpacked_bytes: u64,
-        max_event_iterations: usize,
         fatal_registry: &mut FatalRegistry,
     ) -> Result<(Self, Description), String> {
-        if !communication_step.is_finite() || communication_step <= 0.0 || max_event_iterations == 0
-        {
-            return Err(
-                "FMU admission requires a positive interval and event-iteration bound".into(),
-            );
+        if !communication_step.is_finite() || communication_step <= 0.0 {
+            return Err("FMU admission requires a positive communication interval".into());
         }
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
         let mut unpacked = 0_u64;
@@ -256,8 +248,6 @@ impl Session {
                     .collect(),
             );
         }
-        let event_mode = cs.hasEventMode;
-        let variable_step = cs.canHandleVariableCommunicationStepSize;
         let rollback = cs.canGetAndSetFMUState;
         let fatal = fatal_registry
             .entry((md.instantiationToken.clone(), cs.modelIdentifier.clone()))
@@ -296,6 +286,9 @@ impl Session {
             .to_str()
             .ok_or("FMU resource path is not UTF-8")?;
         let resource_path = CString::new(resource_path).map_err(|e| e.to_string())?;
+        // The master exposes integer-tick communication points only. It declines
+        // Event Mode and early return so no intermediate result can bypass the
+        // shared participant synchronization boundary.
         let instance = unsafe {
             library.fmi3InstantiateCoSimulation(
                 instance_name.as_ptr(),
@@ -303,8 +296,8 @@ impl Session {
                 resource_path.as_ptr(),
                 false,
                 false,
-                event_mode,
-                true,
+                false,
+                false,
                 ptr::null(),
                 0,
                 ptr::null_mut(),
@@ -322,14 +315,10 @@ impl Session {
             _resources: resources,
             inputs,
             outputs,
-            event_mode,
-            variable_step,
-            next_event_time: None,
             input_values: BTreeMap::new(),
             time: native_start,
             communication_step,
             time_unit,
-            max_event_iterations,
             fatal,
             contracts: contracts.clone(),
         };
@@ -347,9 +336,6 @@ impl Session {
         })?;
         session.set_named(&session.inputs.clone(), initial_inputs)?;
         session.check(unsafe { session.binding.fmi3ExitInitializationMode(session.instance) })?;
-        if event_mode {
-            session.finish_event()?;
-        }
         let initial = session.read_named(&session.inputs.clone())?;
         session.input_values = initial.iter().cloned().collect();
         let result = session.read_outputs()?;
@@ -451,43 +437,6 @@ impl Session {
         self.read_named(&self.outputs.clone())
     }
 
-    fn finish_event(&mut self) -> Result<(), String> {
-        for _ in 0..self.max_event_iterations {
-            let (mut more, mut terminate, mut nominals, mut states, mut next_defined, mut next) =
-                (false, false, false, false, false, 0.0);
-            self.check(unsafe {
-                self.binding.fmi3UpdateDiscreteStates(
-                    self.instance,
-                    &mut more,
-                    &mut terminate,
-                    &mut nominals,
-                    &mut states,
-                    &mut next_defined,
-                    &mut next,
-                )
-            })?;
-            if terminate {
-                self.check(unsafe { self.binding.fmi3Terminate(self.instance) })?;
-                return Err("FMU requested termination during event iteration".into());
-            }
-            if more {
-                continue;
-            }
-            self.next_event_time = if next_defined {
-                if !next.is_finite() || next <= self.time {
-                    return Err(
-                        "FMU nextEventTime must be finite and later than its current time".into(),
-                    );
-                }
-                Some(next)
-            } else {
-                None
-            };
-            return self.check(unsafe { self.binding.fmi3EnterStepMode(self.instance) });
-        }
-        Err("FMU event iteration exceeded its configured bound".into())
-    }
-
     pub(crate) fn time(&self) -> Result<f64, String> {
         self.time_unit.to_si(self.time).map_err(|e| e.to_string())
     }
@@ -521,82 +470,45 @@ impl Session {
                 changed.push((name.clone(), *value));
             }
         }
-        // A held input change is a discontinuity. If Event Mode is in use,
-        // perform that transaction there before returning to Step Mode.
+        // Inputs change only at the admitted communication point. The importer
+        // does not use FMI Event Mode; the FMU handles internal events itself.
         if !changed.is_empty() {
-            if self.event_mode {
-                self.check(unsafe { self.binding.fmi3EnterEventMode(self.instance) })?;
-            }
             self.set_named(&self.inputs.clone(), &changed)?;
-            if self.event_mode {
-                self.finish_event()?;
-            }
             self.input_values.extend(changed);
         }
-        // Step Mode outputs are computed by doStep, not by set/get iteration.
-        // Early returns and events stay private until the full endpoint commits.
-        // The grid defines the requested horizon. Each native call resumes
-        // at the preceding lastSuccessfulTime to preserve the FMU's actual clock.
-        let mut current = self.time;
-        for _ in 0..self.max_event_iterations {
-            let (mut event, mut terminate, mut early, mut last) = (false, false, false, f64::NAN);
-            let endpoint = self
-                .next_event_time
-                .filter(|time| *time < stop)
-                .unwrap_or(stop);
-            if endpoint <= current {
-                return Err("FMU pending time event is not after the current point".into());
-            }
-            let duration = if !self.variable_step && close(current, start) && endpoint == stop {
-                self.communication_step
-            } else {
-                endpoint - current
-            };
-            if !self.variable_step && !close(duration, self.communication_step) {
-                return Err("FMU cannot handle the variable interval required by its early return/time event".into());
-            }
-            self.check(unsafe {
-                self.binding.fmi3DoStep(
-                    self.instance,
-                    current,
-                    duration,
-                    true,
-                    &mut event,
-                    &mut terminate,
-                    &mut early,
-                    &mut last,
-                )
-            })?;
-            if terminate {
-                self.check(unsafe { self.binding.fmi3Terminate(self.instance) })?;
-                return Err("FMU requested simulation termination".into());
-            }
-            if !last.is_finite() || last < current || (last > endpoint && !close(last, endpoint)) {
-                return Err("FMU returned an invalid lastSuccessfulTime".into());
-            }
-            self.time = last;
-            let time_event = self
-                .next_event_time
-                .is_some_and(|time| last >= time || close(last, time));
-            if event || time_event {
-                if !self.event_mode {
-                    return Err("FMU requested an undeclared Event Mode".into());
-                }
-                self.check(unsafe { self.binding.fmi3EnterEventMode(self.instance) })?;
-                self.finish_event()?;
-            }
-            if close(last, stop) {
-                return self.read_outputs();
-            }
-            if (!early && !close(last, endpoint))
-                || last >= stop
-                || (last == current && !event && !time_event)
-            {
-                return Err("FMU early return did not make valid time/event progress".into());
-            }
-            current = last;
+        // This fixed-communication-point importer declines Event Mode and early
+        // return. An FMU that cannot finish the admitted interval has no result
+        // the co-simulation master can safely publish.
+        let (mut event, mut terminate, mut early, mut last) = (false, false, false, f64::NAN);
+        self.check(unsafe {
+            self.binding.fmi3DoStep(
+                self.instance,
+                start,
+                self.communication_step,
+                true,
+                &mut event,
+                &mut terminate,
+                &mut early,
+                &mut last,
+            )
+        })?;
+        if terminate {
+            self.check(unsafe { self.binding.fmi3Terminate(self.instance) })?;
+            return Err("FMU requested simulation termination".into());
         }
-        Err("FMU communication interval exceeded its event/early-return bound".into())
+        if event {
+            return Err("FMU requested Event Mode from an importer that does not use it".into());
+        }
+        if early {
+            return Err("FMU returned early although early return was not admitted".into());
+        }
+        if !last.is_finite() || !close(last, stop) {
+            return Err(format!(
+                "FMU returned endpoint {last:.12}, expected communication point {stop:.12}"
+            ));
+        }
+        self.time = last;
+        self.read_outputs()
     }
 }
 

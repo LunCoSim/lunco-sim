@@ -108,11 +108,14 @@ Native external FMI 3 Co-Simulation import belongs to
 headless/windowed simulation composition. `LoadFmu` admits bounded archives
 as scene-owned participants on one native worker. Scalar Float64 samples use
 the existing `SimComponent` backend. Integer communication ticks consume the
-same master admission as physics and Modelica; native timestamps and Event
-Mode/early-return transactions are validated before publication through
-`SimulationCompletions`. Inputs are held over each explicit communication
-interval. Output dependencies and declared state-restoration capabilities are
-retained as facts; they do not constitute an implicit algebraic-loop solver.
+same master admission as physics and Modelica; native timestamps and exact
+communication endpoints are validated before publication through
+`SimulationCompletions`. This fixed-tick importer declines FMI Event Mode and
+early return, so the FMU handles internal events and an early endpoint request
+faults instead of being hidden inside the worker. Inputs are held over each
+explicit communication interval. Output dependencies and declared
+state-restoration capabilities are retained as facts; they do not constitute
+an implicit algebraic-loop solver.
 Modelica and external FMUs publish engineering facts through
 `lunco-port-core::ScalarPortContracts`. Source admission owns conversion into
 that immutable live contract; Modelica provenance remains in
@@ -861,9 +864,17 @@ native Modelica and FMI 3 Co-Simulation backends share these master invariants:
 
 `lunco-fmi` loads and validates `modelDescription.xml`, preserves value
 references and scalar engineering contracts, and runs the FMI 3 Co-Simulation
-lifecycle on its native worker. `fmi3DoStep` can return before the requested
-communication point; early returns and Event Mode iteration remain private
-until the interval has completed. See the [FMI 3.0.2 specification](https://fmi-standard.org/docs/3.0.2/).
+lifecycle on its native worker. The importer declines Event Mode and early
+return; FMUs handle internal events. The importer requires `lastSuccessfulTime`
+to match the requested communication point within its timestamp tolerance.
+FMI permits that value to deviate from the requested endpoint even when
+`earlyReturn` is false; the owner faults such a response because the current
+master cannot synchronize all participants at the reported time. An early
+return or event-handling response also faults because the current master cannot
+synchronize participants at an intermediate time. Supporting those FMI
+features requires a master-visible
+intermediate communication point that reschedules the complete due participant
+set. See the [FMI 3.0.2 specification](https://fmi-standard.org/docs/3.0.2/).
 
 The FMU adapter uses the existing port/connection boundary and conservative
 scheduler. FMI Model Exchange requires a separate solver integration and is

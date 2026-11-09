@@ -545,9 +545,11 @@ pub struct ModelicaResult {
     pub loaded_source_root_namespaces: Vec<String>,
     #[serde(default)]
     pub loaded_source_root_sources: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
-    /// Exact source snapshot from the admitted operation, for authoring queries.
+    /// Parsed documents from the exact source snapshot accepted by the worker.
+    /// The authoring mirror consumes these documents without parsing source on
+    /// the page thread or repeating worker preparation.
     #[serde(default)]
-    pub loaded_source_root_files: Vec<(String, String)>,
+    pub loaded_source_root_documents: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     /// Source-set unload acknowledgement from the Modelica worker.
     #[serde(default)]
     pub unloaded_source_root_id: Option<String>,
@@ -611,7 +613,7 @@ impl Default for ModelicaResult {
             loaded_source_root_id: None,
             loaded_source_root_namespaces: Vec::new(),
             loaded_source_root_sources: Vec::new(),
-            loaded_source_root_files: Vec::new(),
+            loaded_source_root_documents: Vec::new(),
             unloaded_source_root_id: None,
             source_root_operation_id: None,
             compile_diagnostics: Vec::new(),

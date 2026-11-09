@@ -4,8 +4,8 @@ use super::super::projection::{
     ProjectedScene, project_scene, projection_relevant_source_hash, target_unit_instance,
 };
 use super::super::{
-    CanvasDiagramState, DiagramProjectionLimits, ProjectionTask, active_doc_from_world_ctx,
-    decorations, render_target_ctx,
+    CanvasDiagramState, DiagramProjectionLimits, ProjectionDependencyWait, ProjectionOutcome,
+    ProjectionTask, active_doc_from_world_ctx, decorations, render_target_ctx,
 };
 use crate::model_tabs::ModelTabs;
 use crate::ui::document_context::ModelicaDocuments;
@@ -30,6 +30,22 @@ pub(crate) fn poll_and_swap_projection(
     let docstate = state.get_mut_for_render(render_tab_id, active_doc);
     let is_initial_projection = docstate.last_seen_gen == 0;
 
+    if docstate.projection_wait.as_ref().is_some_and(|wait| {
+        Some(wait.doc) != active_doc || Some(wait.generation) != current_gen_for_deadline
+    }) {
+        docstate.projection_wait = None;
+        docstate.projection_error = None;
+        docstate.force_reproject = true;
+    }
+
+    if let Some(wait) = docstate.projection_wait.as_ref() {
+        let remaining = wait.deadline.saturating_sub(wait.started_at.elapsed());
+        if !remaining.is_zero() {
+            ui.ctx()
+                .request_repaint_after(remaining.min(std::time::Duration::from_millis(250)));
+        }
+    }
+
     let timed_out = docstate
         .projection_task
         .as_ref()
@@ -52,6 +68,22 @@ pub(crate) fn poll_and_swap_projection(
         if let Some(g) = current_gen_for_deadline {
             docstate.last_seen_gen = g;
         }
+    }
+
+    let dependency_wait_timed_out = docstate
+        .projection_wait
+        .as_ref()
+        .is_some_and(|wait| wait.started_at.elapsed() > wait.deadline);
+    if dependency_wait_timed_out {
+        if let Some(wait) = docstate.projection_wait.take() {
+            let error = format!(
+                "Modelica source roots did not become available before the diagram projection deadline: {}",
+                wait.roots.join(", ")
+            );
+            bevy::log::warn!("[CanvasDiagram] {error}");
+            docstate.projection_error = Some(error);
+        }
+        ui.ctx().request_repaint();
     }
 
     if docstate.projection_task.as_ref().is_some_and(|task| {
@@ -88,7 +120,125 @@ pub(crate) fn poll_and_swap_projection(
 
     if let Some((r#gen, task_doc, target, source_hash, projected)) = done_task {
         let projected = match projected {
-            Ok(projected) => projected,
+            Ok(ProjectionOutcome::Ready(projected)) => projected,
+            Ok(ProjectionOutcome::WaitingForSourceRoots(roots)) => {
+                let Some(handle) = crate::engine_resource::global_engine_handle() else {
+                    docstate.projection_error = Some(
+                        "the shared Modelica engine is unavailable while resolving source dependencies"
+                            .to_owned(),
+                    );
+                    docstate.projection_task = None;
+                    ui.ctx().request_repaint();
+                    return;
+                };
+                let unresolved_roots = if let Some(mut engine) = handle.try_lock() {
+                    roots
+                        .into_iter()
+                        .filter(|root| !engine.has_class(root))
+                        .collect::<Vec<_>>()
+                } else {
+                    roots
+                };
+                let admission_result = ctx
+                    .resource_scope::<lunco_modelica_source_roots::SourceRootRegistry, _>(
+                        |ctx, registry| {
+                            let Some(channels) =
+                                ctx.resource::<lunco_modelica_runtime::ModelicaChannels>()
+                            else {
+                                return Err("Modelica worker channel is unavailable".to_owned());
+                            };
+                            lunco_modelica_source_roots::admit_compile_roots(
+                                registry,
+                                unresolved_roots.iter().cloned(),
+                                channels,
+                            )
+                        },
+                    );
+                let Some(admission_result) = admission_result else {
+                    docstate.projection_task = None;
+                    docstate.projection_wait = None;
+                    docstate.projection_error =
+                        Some("Modelica source-root registry is unavailable".to_owned());
+                    ui.ctx().request_repaint();
+                    return;
+                };
+                let admitted_roots = match admission_result {
+                    Ok(roots) => roots,
+                    Err(error) => {
+                        docstate.projection_task = None;
+                        docstate.projection_wait = None;
+                        docstate.projection_error = Some(format!(
+                            "Modelica source dependencies could not be admitted: {error}"
+                        ));
+                        ui.ctx().request_repaint();
+                        return;
+                    }
+                };
+                let mirror_failures = handle.try_lock().map(|engine| {
+                    admitted_roots
+                        .iter()
+                        .filter_map(|root| {
+                            engine
+                                .admitted_source_set_failure(root)
+                                .map(|error| format!("{root}: {error}"))
+                        })
+                        .collect::<Vec<_>>()
+                });
+                if let Some(failures) = mirror_failures.filter(|failures| !failures.is_empty()) {
+                    docstate.projection_task = None;
+                    docstate.projection_wait = None;
+                    docstate.projection_error = Some(format!(
+                        "Modelica authoring source mirrors failed: {}",
+                        failures.join("; ")
+                    ));
+                    ui.ctx().request_repaint();
+                    return;
+                }
+                let pending_roots = unresolved_roots;
+                if pending_roots.is_empty() {
+                    docstate.projection_task = None;
+                    docstate.projection_wait = None;
+                    docstate.force_reproject = true;
+                    ui.ctx().request_repaint();
+                    return;
+                }
+                let deadline = ctx
+                    .resource::<DiagramProjectionLimits>()
+                    .map(|limits| limits.max_duration)
+                    .unwrap_or(std::time::Duration::from_secs(60));
+                let label = format!("Waiting for Modelica sources: {}", pending_roots.join(", "));
+                let busy =
+                    ctx.resource_scope::<lunco_status_core::status_bus::StatusBus, _>(|_, bus| {
+                        bus.begin(
+                            lunco_status_core::status_bus::BusyScope::Document(task_doc.0),
+                            "projection",
+                            label,
+                        )
+                    });
+                docstate.projection_task = None;
+                docstate.projection_error = None;
+                docstate.last_seen_gen = r#gen;
+                docstate.last_seen_target = target.clone();
+                docstate.last_seen_source_hash = source_hash;
+                docstate.projection_wait = busy.map(|busy| {
+                    ProjectionDependencyWait::new(
+                        task_doc,
+                        r#gen,
+                        target.clone(),
+                        source_hash,
+                        pending_roots,
+                        deadline,
+                        busy,
+                    )
+                });
+                if docstate.projection_wait.is_none() {
+                    docstate.projection_error = Some(
+                        "status reporting is unavailable while Modelica sources load".to_owned(),
+                    );
+                }
+                ui.ctx().request_repaint();
+                return;
+            }
             Err(error) => {
                 bevy::log::error!(
                     "[CanvasDiagram] projection failed for target {:?}: {}",
@@ -96,6 +246,7 @@ pub(crate) fn poll_and_swap_projection(
                     error
                 );
                 docstate.projection_task = None;
+                docstate.projection_wait = None;
                 docstate.target_unit_instance = None;
                 docstate.projection_error = Some(error);
                 docstate.canvas.scene = Scene::new();
@@ -119,6 +270,7 @@ pub(crate) fn poll_and_swap_projection(
             docstate.canvas.scene.node_count(),
         );
         docstate.projection_task = None;
+        docstate.projection_wait = None;
         docstate.target_unit_instance = projected_target_unit_instance;
         docstate.projection_error = None;
         let preserved_origins: std::collections::HashSet<String> = docstate
@@ -264,6 +416,29 @@ pub(crate) fn trigger_projection_if_needed(
         .and_then(|r| r.host(doc_id))
         .map(|h| h.document().source_arc())
         .unwrap_or_else(|| std::sync::Arc::<str>::from(""));
+    let current_source_hash = projection_relevant_source_hash(&current_source);
+    let live_target = render_target_ctx(ctx)
+        .filter(|(d, _)| *d == doc_id)
+        .and_then(|(_, drilled)| drilled)
+        .or_else(|| {
+            ctx.resource::<ModelTabs>()
+                .and_then(|t| t.drilled_class_for_doc(doc_id))
+        })
+        .or_else(|| crate::ui::context::default_simulation_class(ctx, doc_id));
+
+    {
+        let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
+        if docstate.projection_wait.as_ref().is_some_and(|wait| {
+            wait.doc != doc_id
+                || wait.generation != r#gen
+                || wait.target != live_target
+                || wait.source_hash != current_source_hash
+        }) {
+            docstate.projection_wait = None;
+            docstate.projection_error = None;
+            docstate.force_reproject = true;
+        }
+    }
 
     let needs_project = {
         let docstate = state.get_for_render(render_tab_id, Some(doc_id));
@@ -276,14 +451,6 @@ pub(crate) fn trigger_projection_if_needed(
             None => state.has_entry(doc_id),
         };
         let gen_advanced = r#gen != docstate.last_seen_gen && r#gen > docstate.canvas_acked_gen;
-        let live_target = render_target_ctx(ctx)
-            .filter(|(d, _)| *d == doc_id)
-            .and_then(|(_, drilled)| drilled)
-            .or_else(|| {
-                ctx.resource::<ModelTabs>()
-                    .and_then(|t| t.drilled_class_for_doc(doc_id))
-            })
-            .or_else(|| crate::ui::context::default_simulation_class(ctx, doc_id));
         let target_changed = live_target != docstate.last_seen_target;
         let ast_stale = ctx
             .resource::<ModelicaDocuments>()
@@ -309,19 +476,17 @@ pub(crate) fn trigger_projection_if_needed(
                 || target_changed
                 || forced
                 || (!ast_stale && gen_advanced && {
-                    let new_hash = projection_relevant_source_hash(&current_source);
-                    new_hash != docstate.last_seen_source_hash
+                    current_source_hash != docstate.last_seen_source_hash
                 }))
     };
 
     if needs_project {
         spawn_projection_task(ctx, state, doc_id, r#gen, render_tab_id);
     } else {
-        let new_hash = projection_relevant_source_hash(&current_source);
         let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
         if r#gen != docstate.last_seen_gen
             && r#gen > docstate.canvas_acked_gen
-            && new_hash == docstate.last_seen_source_hash
+            && current_source_hash == docstate.last_seen_source_hash
         {
             docstate.last_seen_gen = r#gen;
         }
@@ -406,6 +571,7 @@ fn spawn_projection_task(
             docstate.last_seen_gen = 0;
         }
         docstate.projection_error = None;
+        docstate.projection_wait = None;
 
         let bg_handle = docstate.background_diagram.clone();
         let diag =
@@ -477,10 +643,10 @@ fn spawn_projection_task(
             async move {
                 use std::sync::atomic::Ordering;
                 if cancel_for_task.load(Ordering::Relaxed) {
-                    return Ok(ProjectedScene {
+                    return Ok(ProjectionOutcome::Ready(ProjectedScene {
                         scene: Scene::new(),
                         target_unit_instance: None,
-                    });
+                    }));
                 }
                 bevy::tasks::futures_lite::future::yield_now().await;
                 let requested = target_for_log
@@ -496,14 +662,25 @@ fn spawn_projection_task(
                 })?;
                 let handle = crate::engine_resource::global_engine_handle()
                     .ok_or_else(|| "the shared Modelica engine is unavailable".to_owned())?;
-                let snapshot = match handle
-                    .lock()
-                    .diagram_snapshot(&target, crate::diagram::DiagramScope::ComponentGraph)
-                {
+                let snapshot_result = {
+                    let mut engine = handle.lock();
+                    engine.diagram_snapshot(&target, crate::diagram::DiagramScope::ComponentGraph)
+                };
+                let snapshot = match snapshot_result {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
-                        for root in rumoca_compile::compile::source_root_dependencies(&ast_arc) {
-                            let _ = handle.ensure_source_root_async(&root);
+                        let roots = rumoca_compile::compile::source_root_dependencies(&ast_arc)
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        let waiting = {
+                            let mut engine = handle.lock();
+                            roots
+                                .into_iter()
+                                .filter(|root| !engine.has_class(root))
+                                .collect::<Vec<_>>()
+                        };
+                        if !waiting.is_empty() {
+                            return Ok(ProjectionOutcome::WaitingForSourceRoots(waiting));
                         }
                         return Err(error);
                     }
@@ -542,10 +719,10 @@ fn spawn_projection_task(
                         &resident_sources,
                     )?;
                 }
-                Ok(ProjectedScene {
+                Ok(ProjectionOutcome::Ready(ProjectedScene {
                     scene,
                     target_unit_instance: unit_instance,
-                })
+                }))
             },
         )
     });

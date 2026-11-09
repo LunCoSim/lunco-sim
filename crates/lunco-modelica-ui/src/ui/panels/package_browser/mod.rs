@@ -155,16 +155,17 @@ fn refresh_bundled_tree(cache: &mut PackageTreeCache, source: &str) {
     );
 }
 
-/// Re-project open diagrams after any bundled source root lands in the shared
-/// engine. Generated LunCo classes and source library use the same resolver path.
-pub fn on_source_root_became_ready(
-    trigger: On<crate::engine_resource::SourceRootBecameReady>,
+/// Re-project open diagrams after a source-root lifecycle change. A completed
+/// load retries deferred projections; a failed load lets the projection owner
+/// publish the terminal diagnostic.
+pub fn on_source_root_changed(
+    trigger: On<crate::engine_resource::SourceRootChanged>,
     canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
 ) {
     if let Some(mut canvas) = canvas {
         canvas.request_reproject_all();
         bevy::log::debug!(
-            "[PackageBrowser] source root `{}` ready: reprojected open diagrams",
+            "[PackageBrowser] source root `{}` changed: reprojected open diagrams",
             trigger.event().root
         );
     }

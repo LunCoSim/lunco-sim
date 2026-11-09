@@ -41,10 +41,15 @@ pause through the typed command/authority boundary, including from presentation
 programs.
 The adapter retains and validates native `lastSuccessfulTime`;
 it never substitutes the requested endpoint for the FMU's returned time.
-Early returns, input discontinuities and Event Mode iterations remain private
-until the requested communication interval completes. Work does not advance
-the master clock: `SimulationProgress` holds subsequent complete cycles until
-accepted results arrive through `SimulationCompletions`.
+The importer sets `eventModeUsed=false` and `earlyReturnAllowed=false`. The FMU
+handles its internal events; each `doStep` must return at the requested
+communication point within the importer's timestamp tolerance. FMI also permits
+`lastSuccessfulTime` to differ from the requested endpoint when `earlyReturn`
+is false; this fixed-tick importer cannot synchronize other participants at
+that reported time, so it faults that transaction. A reported early return or
+request for Event Mode is also a participant fault. Work does not advance the master clock:
+`SimulationProgress` holds subsequent complete cycles until accepted results
+arrive through `SimulationCompletions`.
 The native headless pacer waits on the core runtime's shared
 `SimulationCompletionSources`, which observes readiness without consuming a
 receipt. Worker leases retire those registrations; spurious readiness cannot
@@ -67,9 +72,9 @@ declared capability; it does not claim that an implicit master iteration has
 been implemented. A coupled implicit algorithm requires state restoration and
 repeated `doStep` transactions at the owning master boundary.
 
-Archive and unpacked-byte limits, instance capacity, bounded queues and
-event-iteration limits are owned by `FmuLimits`. Admission uses the shared
-asynchronous work budget. Source bytes receive an immutable archive revision.
+Archive and unpacked-byte limits, instance capacity and bounded queues are owned
+by `FmuLimits`. Admission uses the shared asynchronous work budget. Source bytes
+receive an immutable archive revision.
 `SceneOwned` entities own cancellation leases; generational entity identities
 fence late completions. Retired instances are freed on the worker before their
 extracted resources. A disconnected worker fails outstanding transactions and

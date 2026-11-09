@@ -276,10 +276,11 @@ pub struct PreparedSourceRoot {
 }
 
 impl PreparedSourceRoot {
-    /// Exact immutable input admitted by this operation. Presentation sessions
-    /// consume this snapshot instead of rediscovering dependencies on disk.
-    pub fn source_files(&self) -> Vec<(String, String)> {
-        self.files.clone()
+    /// Parsed syntax paired with the exact source snapshot accepted during
+    /// preparation. Consumers can reuse this representation without parsing
+    /// the source again.
+    pub fn parsed_documents(&self) -> Vec<rumoca_compile::compile::ParsedSourceDocument> {
+        self.parsed.clone()
     }
 
     /// Stable source-root owner identity carried into the session commit.

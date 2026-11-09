@@ -45,7 +45,7 @@ pub(super) struct SourceRootCommit {
     pub root_id: String,
     pub namespaces: Vec<String>,
     pub sources: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
-    pub files: Vec<(String, String)>,
+    pub documents: Vec<rumoca_compile::compile::ParsedSourceDocument>,
     pub error: Option<String>,
     pub inserted_file_count: usize,
     pub parsed_file_count: usize,
@@ -493,14 +493,14 @@ fn install_source_root(
             root_id,
             namespaces: Vec::new(),
             sources: Vec::new(),
-            files: Vec::new(),
+            documents: Vec::new(),
             error: Some(format!("Rumoca compiler actor faulted: {error}")),
             inserted_file_count: 0,
             parsed_file_count: 0,
             library_revision: 0,
         };
     }
-    let files = prepared.source_files();
+    let documents = prepared.parsed_documents();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         compiler
             .get_or_insert_with(ModelicaCompiler::new)
@@ -517,7 +517,11 @@ fn install_source_root(
             }
             SourceRootCommit {
                 root_id: root_id.clone(),
-                files: if error.is_none() { files } else { Vec::new() },
+                documents: if error.is_none() {
+                    documents
+                } else {
+                    Vec::new()
+                },
                 sources: if error.is_none() {
                     compiler.source_root_source_facts(&root_id)
                 } else {
@@ -544,7 +548,7 @@ fn install_source_root(
                 root_id: root_id.clone(),
                 namespaces: Vec::new(),
                 sources: Vec::new(),
-                files: Vec::new(),
+                documents: Vec::new(),
                 error: Some(fault),
                 inserted_file_count: 0,
                 parsed_file_count: 0,

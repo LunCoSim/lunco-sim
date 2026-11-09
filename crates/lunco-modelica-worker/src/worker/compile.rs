@@ -1080,6 +1080,7 @@ mod tests {
             .add_message::<ModelicaSessionStarted>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
             .init_resource::<CosimLag>()
+            .init_resource::<super::super::ModelicaResponseBacklog>()
             .insert_resource(lunco_core_runtime::SimTick(3))
             .add_systems(First, super::super::handle_modelica_responses)
             .add_systems(Update, dispatch_modelica_compile_requests)
@@ -1274,6 +1275,7 @@ mod tests {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
             .add_message::<ModelicaSessionStarted>()
+            .init_resource::<super::super::ModelicaResponseBacklog>()
             .add_systems(Update, super::super::handle_modelica_responses);
         let (tx, _commands) = crossbeam_channel::unbounded();
         let (results, rx) = crossbeam_channel::unbounded();
