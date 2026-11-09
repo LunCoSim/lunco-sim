@@ -1911,7 +1911,7 @@ fn dispatch_admitted_modelica_sources(
                 src.interface.required_source_roots.iter().cloned(),
                 &channels,
             ),
-            None if src.interface.required_source_roots.is_empty() => Ok(()),
+            None if src.interface.required_source_roots.is_empty() => Ok(Vec::new()),
             None => Err("Modelica source-root registry is not installed".to_owned()),
         };
         let dispatch_error = admission_error

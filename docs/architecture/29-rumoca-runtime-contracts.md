@@ -402,6 +402,15 @@ source without a per-component file loader. The production
 `modelica_class_compile.rhai` gate covers qualified and default run targets
 inside an authored `within` namespace and an imported unit alias.
 
+Diagram projection uses the same Rumoca dependency query. Missing roots are
+resolved and admitted through `lunco-modelica-source-roots`, which owns their
+registration, operation ordering, and worker dispatch. The canvas keeps its
+last committed scene and waits for the authoring engine's typed source-root
+lifecycle event. A ready root starts projection from the current document
+snapshot, and a worker-load or authoring-mirror failure is shown as a projection
+diagnostic. The projection path does not rediscover files or load a second copy
+of a root.
+
 Plain package/type/function documents have no automatic simulation target.
 An explicit class selection or a runnable model/block/class is required.
 USD source admission rejects a missing target before sending worker compilation

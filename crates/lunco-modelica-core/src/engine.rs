@@ -79,18 +79,16 @@ pub struct ModelicaEngine {
     /// Each result owns the exact syntax and diagnostics for its spawn
     /// generation. Draining moves that result without copying the session AST.
     completed: Vec<(DocumentId, lunco_modelica_document::SyntaxCache)>,
-    /// Bundled source roots currently being parsed by the async loader.
-    pending_source_roots: HashSet<String>,
-    /// Roots completed since the last Bevy adapter drain.
-    completed_source_roots: Vec<String>,
-    /// Bundled roots whose source could not produce any parsed definitions.
-    /// This is terminal for the current engine lifetime so a resolver does not
-    /// spin in `Loading` forever after a malformed packaged asset.
-    failed_source_roots: HashMap<String, String>,
+    /// Source-root state changes since the last Bevy adapter drain.
+    changed_source_roots: Vec<String>,
     /// Complete parsed source sets installed through the session source-set
     /// boundary. This is distinct from class lookup: a single lazily loaded
     /// document must not masquerade as a complete library installation.
     installed_source_sets: HashSet<String>,
+    /// Failures while mirroring a worker-accepted source set into the
+    /// authoring session. Kept by source-set identity so namespace aliases
+    /// resolve through the source-root registry before reporting the failure.
+    failed_source_sets: HashMap<String, String>,
 }
 
 impl Default for ModelicaEngine {
@@ -107,10 +105,9 @@ impl ModelicaEngine {
             icon_cache: lunco_modelica_ast::source_memo::SourceMemo::default(),
             pending: HashSet::new(),
             completed: Vec::new(),
-            pending_source_roots: HashSet::new(),
-            completed_source_roots: Vec::new(),
-            failed_source_roots: HashMap::new(),
+            changed_source_roots: Vec::new(),
             installed_source_sets: HashSet::new(),
+            failed_source_sets: HashMap::new(),
         }
     }
 
@@ -190,7 +187,7 @@ impl ModelicaEngine {
     /// Called while the engine mutex is held when the async-sync wakeup latch
     /// is cleared.
     pub(crate) fn has_completed_work(&self) -> bool {
-        !self.completed.is_empty() || !self.completed_source_roots.is_empty()
+        !self.completed.is_empty() || !self.changed_source_roots.is_empty()
     }
 
     /// Install a strict AST under `doc_id`'s session URI without
@@ -381,110 +378,58 @@ impl ModelicaEngine {
     /// Mirror one compiler-admitted source operation into the authoring session.
     /// A complete named set can be replaced or retired without leaving sibling
     /// declarations behind. Open document overlays keep their existing owner.
+    /// An admitted install that produces no declarations is terminal and is
+    /// recorded against the source-set identity for projection diagnostics.
     pub fn update_admitted_source_set(
         &mut self,
         id: &str,
         files: Option<Vec<rumoca_compile::compile::ParsedSourceDocument>>,
-    ) {
+    ) -> Result<(), String> {
         match files {
             Some(files) => {
-                self.replace_in_memory_source_set(
+                let inserted = self.replace_in_memory_source_set(
                     id,
                     rumoca_compile::compile::SourceRootKind::DurableExternal,
                     files,
                 );
+                if inserted == 0 {
+                    let error = format!(
+                        "Modelica source set `{id}` installed no declarations in the authoring session"
+                    );
+                    self.fail_admitted_source_set(id, error.clone());
+                    return Err(error);
+                }
+                self.failed_source_sets.remove(id);
             }
             None => {
                 self.session.remove_source_set(id);
                 self.installed_source_sets.remove(id);
+                self.failed_source_sets.remove(id);
                 lunco_modelica_ast::source_memo::invalidate_source_memos();
             }
         }
-        self.completed_source_roots.push(id.to_owned());
+        self.changed_source_roots.push(id.to_owned());
+        Ok(())
     }
 
-    /// Reserve a bundled source root for asynchronous loading. The caller
-    /// performs the package read and parse off the update thread, then calls
-    /// [`Self::finish_source_root_load`].
-    pub fn begin_source_root_load(&mut self, root: &str) -> bool {
-        if self.source_set_installed(root)
-            || self.has_class(root)
-            || self.pending_source_roots.contains(root)
-            || self.failed_source_roots.contains_key(root)
-        {
-            return false;
-        }
-        self.pending_source_roots.insert(root.to_string())
-    }
-
-    /// Install an asynchronously parsed source root and publish one generic
-    /// completion revision. The lock is held only for the pre-parsed session
-    /// insertion; package I/O and rumoca parsing happen before this method.
-    pub fn finish_source_root_load(
-        &mut self,
-        root: &str,
-        files: Vec<rumoca_compile::compile::ParsedSourceDocument>,
-        diagnostics: Vec<String>,
-    ) -> usize {
-        self.pending_source_roots.remove(root);
-        if !diagnostics.is_empty() {
-            self.failed_source_roots.insert(
-                root.to_string(),
-                format!(
-                    "source root `{root}` has invalid Modelica members: {}",
-                    diagnostics.join("; ")
-                ),
-            );
-            return 0;
-        }
-        let count = self.load_parsed_library_files(files);
-        if count > 0 {
-            self.installed_source_sets.insert(root.to_string());
-            self.failed_source_roots.remove(root);
-            self.completed_source_roots.push(root.to_string());
-        } else {
-            self.failed_source_roots.insert(
-                root.to_string(),
-                format!("no Modelica source definitions could be loaded for `{root}`"),
-            );
-        }
-        count
-    }
-
-    /// Complete a requested root from an admitted immutable source set.
-    pub fn finish_resident_source_root(&mut self, root: &str) -> bool {
-        self.pending_source_roots.remove(root);
-        if self.has_class(root) {
-            self.installed_source_sets.insert(root.to_owned());
-            self.failed_source_roots.remove(root);
-            self.completed_source_roots.push(root.to_owned());
-            true
-        } else {
-            self.failed_source_roots.insert(
-                root.to_owned(),
-                format!("source root `{root}` is not declared in the installed source library"),
-            );
-            false
-        }
-    }
-
-    /// Return the terminal loading error for a bundled source root, if any.
-    pub fn source_root_failure(&self, root: &str) -> Option<&str> {
-        self.failed_source_roots.get(root).map(String::as_str)
-    }
-
-    fn load_parsed_library_files(
-        &mut self,
-        files: Vec<rumoca_compile::compile::ParsedSourceDocument>,
-    ) -> usize {
-        let count = files.len();
-        self.session.add_in_memory_parsed_batch(files);
+    /// Retire a source-set mirror that could not be reconstructed from the
+    /// worker-accepted source snapshot, and publish that terminal condition.
+    pub fn fail_admitted_source_set(&mut self, id: &str, error: String) {
+        self.session.remove_source_set(id);
+        self.installed_source_sets.remove(id);
         lunco_modelica_ast::source_memo::invalidate_source_memos();
-        count
+        self.failed_source_sets.insert(id.to_owned(), error);
+        self.changed_source_roots.push(id.to_owned());
     }
 
-    pub fn drain_completed_source_roots(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.completed_source_roots)
+    /// Return a terminal authoring-session mirror failure for one registered
+    /// source-set identity.
+    pub fn admitted_source_set_failure(&self, id: &str) -> Option<&str> {
+        self.failed_source_sets.get(id).map(String::as_str)
+    }
+
+    pub fn drain_changed_source_roots(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.changed_source_roots)
     }
 
     /// Inheritance-merged component members for a fully-qualified
@@ -709,120 +654,63 @@ mod tests {
         use rumoca_compile::compile::ParsedSourceDocument;
         let file = |uri: &str, source: &str| ParsedSourceDocument::parse(uri, source).unwrap();
         let mut engine = ModelicaEngine::new();
-        engine.update_admitted_source_set(
-            "application:models",
-            Some(vec![file(
-                "support.mo",
-                "model Support Real x; end Support;",
-            )]),
-        );
-        engine.update_admitted_source_set(
-            "twin:1:models",
-            Some(vec![file(
-                "plant.mo",
-                "model Plant Support support; end Plant;",
-            )]),
-        );
+        engine
+            .update_admitted_source_set(
+                "application:models",
+                Some(vec![file(
+                    "support.mo",
+                    "model Support Real x; end Support;",
+                )]),
+            )
+            .expect("parsed support source set installs");
+        engine
+            .update_admitted_source_set(
+                "twin:1:models",
+                Some(vec![file(
+                    "plant.mo",
+                    "model Plant Support support; end Plant;",
+                )]),
+            )
+            .expect("parsed plant source set installs");
         assert!(
             engine
                 .diagram_snapshot("Plant", crate::diagram::DiagramScope::ComponentGraph)
                 .is_ok()
         );
-        engine.update_admitted_source_set(
-            "twin:1:models",
-            Some(vec![file(
-                "replacement.mo",
-                "model Replacement Support support; end Replacement;",
-            )]),
-        );
+        engine
+            .update_admitted_source_set(
+                "twin:1:models",
+                Some(vec![file(
+                    "replacement.mo",
+                    "model Replacement Support support; end Replacement;",
+                )]),
+            )
+            .expect("replacement source set installs");
         assert!(!engine.has_class("Plant"));
         assert!(engine.has_class("Replacement"));
-        engine.update_admitted_source_set("twin:1:models", None);
+        engine
+            .fail_admitted_source_set("twin:1:models", "authoring-session parse failed".to_owned());
+        assert!(!engine.has_class("Replacement"));
+        assert_eq!(
+            engine.admitted_source_set_failure("twin:1:models"),
+            Some("authoring-session parse failed")
+        );
+        engine
+            .update_admitted_source_set(
+                "twin:1:models",
+                Some(vec![file(
+                    "replacement.mo",
+                    "model Replacement Support support; end Replacement;",
+                )]),
+            )
+            .expect("restored source set installs");
+        assert!(engine.has_class("Replacement"));
+        assert_eq!(engine.admitted_source_set_failure("twin:1:models"), None);
+        engine
+            .update_admitted_source_set("twin:1:models", None)
+            .expect("source set retires");
         assert!(!engine.has_class("Replacement"));
         assert!(engine.has_class("Support"));
-    }
-
-    #[test]
-    fn async_source_root_reservation_deduplicates_and_publishes_completion() {
-        let mut engine = ModelicaEngine::new();
-        assert!(engine.begin_source_root_load("DemoRoot"));
-        assert!(!engine.begin_source_root_load("DemoRoot"));
-        let files = vec![(
-            "DemoRoot/Base.mo".to_string(),
-            "within DemoRoot; model Base\n  Real x;\nend Base;\n".to_string(),
-        )];
-        let parsed = files
-            .into_iter()
-            .map(|(uri, source)| {
-                rumoca_compile::compile::ParsedSourceDocument::parse(uri, source)
-                    .expect("bundled source parses")
-            })
-            .collect();
-        assert!(engine.finish_source_root_load("DemoRoot", parsed, Vec::new()) > 0);
-        assert_eq!(engine.drain_completed_source_roots(), vec!["DemoRoot"]);
-        assert!(!engine.begin_source_root_load("DemoRoot"));
-    }
-
-    #[test]
-    fn failed_async_library_root_is_terminal_and_not_loading_forever() {
-        let mut engine = ModelicaEngine::new();
-        assert!(engine.begin_source_root_load("BrokenRoot"));
-        assert_eq!(
-            engine.finish_source_root_load("BrokenRoot", Vec::new(), Vec::new()),
-            0
-        );
-        assert!(
-            engine
-                .source_root_failure("BrokenRoot")
-                .is_some_and(|message| message.contains("no Modelica source definitions"))
-        );
-        assert!(!engine.begin_source_root_load("BrokenRoot"));
-    }
-
-    #[test]
-    fn source_library_roots_complete_from_the_admitted_session() {
-        let mut engine = ModelicaEngine::new();
-        assert!(engine.begin_source_root_load("Library"));
-        let document = rumoca_compile::compile::ParsedSourceDocument::parse("library.mo", "package Library connector Data=input Real; model Device Data demand; end Device; end Library;").unwrap();
-        engine.replace_in_memory_source_set(
-            "source-bundle",
-            rumoca_compile::compile::SourceRootKind::DurableExternal,
-            vec![document],
-        );
-        assert!(engine.finish_resident_source_root("Library"));
-        assert_eq!(engine.drain_completed_source_roots(), vec!["Library"]);
-        assert!(!engine.begin_source_root_load("Library"));
-        let snapshot = engine
-            .diagram_snapshot(
-                "Library.Device",
-                crate::diagram::DiagramScope::ComponentGraph,
-            )
-            .unwrap();
-        assert_eq!(snapshot.members[0].type_name, "Library.Data");
-        assert!(engine.begin_source_root_load("Missing"));
-        assert!(!engine.finish_resident_source_root("Missing"));
-        assert!(engine.source_root_failure("Missing").is_some());
-        assert!(engine.drain_completed_source_roots().is_empty());
-    }
-
-    #[test]
-    fn async_library_root_parse_diagnostics_are_terminal_and_visible() {
-        let mut engine = ModelicaEngine::new();
-        assert!(engine.begin_source_root_load("BrokenRoot"));
-        assert_eq!(
-            engine.finish_source_root_load(
-                "BrokenRoot",
-                Vec::new(),
-                vec!["Broken.mo: invalid declaration".into()],
-            ),
-            0
-        );
-        assert!(
-            engine
-                .source_root_failure("BrokenRoot")
-                .is_some_and(|message| message.contains("Broken.mo"))
-        );
-        assert!(!engine.begin_source_root_load("BrokenRoot"));
     }
 
     #[test]

@@ -766,6 +766,7 @@ Unclassified direct port events remain outside this stream.
 |---|---|---|
 | USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation; dependent-stage document layers compose directly to shared `Sdf Data` for the live patch, then changed bytes and the future-mount plan are prepared at background priority; simulation topology classification runs from an exact canonical recipe snapshot through shared bounded admission | Check source revisions, operation/revision, and target-plan identity; mutate the live, thread-affine stage and publish ECS projection in stable scene order. USD simulation topology holds its mounted root's exact progress key until a current-generation index is committed; an active dependent-stage refresh holds only through the live patch and ECS handoff |
 | Modelica | Source I/O, declaration/interface extraction, parsing/lowering, solver construction, and requested numerical step | Check model generation/session/step; publish outputs and propagate ports at the fixed co-simulation boundary |
+| FMI | Archive I/O, model-description validation, native instance initialization, and each serialized `fmi3DoStep` on the participant worker | Check the participant lease and exact communication interval; validate native status and endpoint before publishing outputs through `SimulationCompletions` |
 | SysML | Source-set I/O, parse, resolve, typed analysis, and requirement report preparation | Publish only the current source revision; verification that reads live simulation values consumes the committed tick snapshot |
 | Rhai | Parse file-backed `.rhai` assets in Bevy's async asset-loading tasks; prepare inline roots and immutable compile artifacts through shared admission | Publish canonical source/AST revisions; validate and commit the dependency closure; evaluate imported module bodies, top-level initialization, and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |
 | Physics | Preparation that does not read or mutate live solver state | Kinematics, contact solving, integration, and authoritative writes remain within the fixed physics schedule |
@@ -776,6 +777,48 @@ Twin/scene generation, owner identity, source revision, and operation/step id.
 The receiver rejects stale or out-of-order results at the owner. It does not
 retry by polling, substitute a default, or infer a new identity from completion
 time.
+
+`AsyncWorkAdmission` owns bounded scheduling for independent preparation and
+queued external transports. It is not the executor or clock owner for stateful
+simulation participants. Modelica and FMI workers keep their bounded actor
+channels and thread-affine sessions; their typed requests retain session and
+step/communication identities. The participant owner holds the exact
+`SimulationProgress` key while an accepted transaction is outstanding, then
+validates and publishes its result through `SimulationCompletions`. A shared
+preparation queue must not reorder stateful calls or let worker completion
+advance `SimTick`.
+
+Modelica diagram projection asks Rumoca for unresolved source roots after its
+immutable snapshot reports missing declarations. `lunco-modelica-source-roots`
+resolves each namespace to its registered source-set owner and dispatches the
+load through the Modelica worker's ordered channel. The worker owns file
+preparation and compiler-session installation, then returns the exact parsed
+documents accepted by that operation. The authoring engine mirrors those
+documents through `AsyncWorkAdmission` under the same source-root operation
+lease; source text is never parsed a second time on the page. If shared
+admission is full or the per-root commit gate is busy, one worker response
+remains at the head of the response stream with its exact result, update, and
+optional lease. It retries after shared capacity or source-operation revisions
+change. The operation revision is sampled before each nonblocking lock attempt,
+and reservations and gate releases advance it even for stale or retired
+operations, so a release cannot be missed between contention and deferral.
+Later worker results stay
+ordered behind it. Response handling uses
+nonblocking source-operation locks, so an in-progress mirror cannot stall the
+simulation schedule.
+Native mirrors enter the bounded worker queue. Browser mirrors hold an
+external-work permit for the cooperative page-thread task's lifetime; the
+Rumoca authoring session remains page-owned, so moving that session and its
+readers to the Modelica Web Worker remains TODO. Admission limits concurrent
+ownership but does not offload the browser commit. Neither path runs without
+shared admission or adds a second queue. Typed source-root changes wake
+projection. Terminal admission failures enter the engine's wakeable,
+operation-fenced failure queue, so the worker-response system never waits on
+the engine mutex.
+The canvas retains its last committed scene while it waits, retries from the
+current document snapshot after a ready event, and surfaces worker-load and
+authoring-mirror failures.
+Projection does not rediscover files or load a second copy of a root.
 
 Document startup captures codec-correct root bytes and separate runtime/view
 session opinions on its preparation worker. The Twin projection lease owns
@@ -1031,9 +1074,12 @@ for the exact current generation and origin URI. `InspectSysmlDocument`
 distinguishes pending, ready, and failed states, and editor verification treats
 pending as retryable. This analysis remains editor-only and never holds
 simulation progress. Terrain cover preparation and native tile-mesh baking use
-shared admission. Remaining USD and Modelica library preparation remain
-owner-local or synchronous. On wasm, native admission rejects CPU work until a
-Web Worker transport exists; terrain cover preparation remains explicit and
+shared admission. Editor-requested Modelica roots use the existing ordered
+source-root worker pipeline and typed lifecycle events; their browser
+authoring-session mirror remains a cooperative page task as described above.
+Other USD preparation keeps its current owner-specific transport or explicit
+synchronous host path. On wasm, native admission rejects CPU work until a Web
+Worker transport exists; terrain cover preparation remains explicit and
 synchronous on that host, and tile bakes retain their explicit browser cache
 path.
 

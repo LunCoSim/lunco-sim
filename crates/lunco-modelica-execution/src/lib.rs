@@ -63,6 +63,7 @@ impl Plugin for ModelicaExecutionPlugin {
             .resource_mut::<lunco_core_runtime::SimulationCompletionSources>()
             .register(&rx_initialization);
         app.init_resource::<lunco_modelica_runtime::ModelicaCacheLimits>();
+        app.init_resource::<lunco_modelica_worker::worker::ModelicaResponseBacklog>();
         let cache_limits = *app
             .world()
             .resource::<lunco_modelica_runtime::ModelicaCacheLimits>();

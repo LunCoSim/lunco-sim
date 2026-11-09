@@ -1461,13 +1461,15 @@ fn report_source_root_unload_dispatch_failure(
 /// Admit the known source roots required by a compile before that compile is
 /// sent to the worker. Root requests and compile requests share one ordered
 /// channel; the worker holds compilation until all admitted root preparations
-/// have committed. Unknown or failed roots are terminal here instead of
-/// falling through to synchronous compiler-side discovery.
+/// have committed. The return value contains the registered source-set
+/// identities admitted for those namespaces. Unknown or failed roots are
+/// terminal here instead of falling through to synchronous compiler-side
+/// discovery.
 pub fn admit_compile_roots(
     registry: &mut SourceRootRegistry,
     roots: impl IntoIterator<Item = String>,
     channels: &ModelicaChannels,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let roots = roots
         .into_iter()
         .map(|namespace| registry.resolve_source_root(&namespace))
@@ -1480,8 +1482,8 @@ pub fn admit_compile_roots(
             return Err(format!("Modelica source root `{id}` failed: {error}"));
         }
     }
-    for id in roots {
-        ensure_loaded(registry, &id, channels);
+    for id in &roots {
+        ensure_loaded(registry, id, channels);
         match registry.state(&id) {
             Some(LoadState::Ready | LoadState::Loading { .. }) => {}
             Some(LoadState::Failed(error)) => {
@@ -1499,7 +1501,7 @@ pub fn admit_compile_roots(
             }
         }
     }
-    Ok(())
+    Ok(roots.into_iter().collect())
 }
 
 /// Classify Rumoca’s source dependency facts against the registry and log

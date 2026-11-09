@@ -1,5 +1,91 @@
 use super::*;
 
+struct DeferredSourceRootResult {
+    result: ModelicaResult,
+    lease: Option<lunco_modelica_core::engine_resource::SourceRootOperationLease>,
+    update: lunco_modelica_core::engine_resource::SourceRootMirrorUpdate,
+    capacity_revision: u64,
+    operation_revision: u64,
+    wait_for_capacity: bool,
+}
+
+/// Holds one worker response while its authoring mirror waits for shared
+/// admission or a nonblocking source-operation lease. It stays ahead of later
+/// worker results until its exact mirror update can proceed.
+#[derive(Resource, Default)]
+pub struct ModelicaResponseBacklog {
+    pending_source_root: Option<DeferredSourceRootResult>,
+}
+
+fn source_root_result_is_stale(
+    result: &ModelicaResult,
+    roots: Option<&lunco_modelica_source_roots::SourceRootRegistry>,
+) -> bool {
+    if let (Some(root_id), Some(operation_id)) = (
+        result.loaded_source_root_id.as_ref(),
+        result.source_root_operation_id,
+    ) {
+        return !roots.is_some_and(|roots| {
+            roots
+                .roots
+                .get(root_id)
+                .is_some_and(|root| root.operation_id == operation_id)
+        });
+    }
+    if let (Some(root_id), Some(operation_id)) = (
+        result.unloaded_source_root_id.as_ref(),
+        result.source_root_operation_id,
+    ) {
+        return roots
+            .and_then(|roots| roots.roots.get(root_id))
+            .is_some_and(|root| root.operation_id > operation_id);
+    }
+    false
+}
+
+fn loaded_source_root_mirror_update(
+    result: &mut ModelicaResult,
+) -> lunco_modelica_core::engine_resource::SourceRootMirrorUpdate {
+    match result.error.clone() {
+        Some(error) => lunco_modelica_core::engine_resource::SourceRootMirrorUpdate::Fail(error),
+        None => lunco_modelica_core::engine_resource::SourceRootMirrorUpdate::Install(
+            std::sync::Arc::new(std::mem::take(&mut result.loaded_source_root_documents)),
+        ),
+    }
+}
+
+fn reserve_source_root_operation_with_revision(
+    handle: &lunco_modelica_core::engine_resource::ModelicaEngineHandle,
+    root: &str,
+    operation: u64,
+) -> (
+    u64,
+    Result<
+        lunco_modelica_core::engine_resource::SourceRootOperationLease,
+        lunco_modelica_core::engine_resource::SourceRootOperationReservationError,
+    >,
+) {
+    // Sampling first ensures a release between this read and a Busy result is
+    // visible when the deferred response compares revisions on its next run.
+    let revision = handle.source_operation_revision();
+    let reservation = handle.reserve_source_root_operation(root, operation);
+    (revision, reservation)
+}
+
+fn release_source_root_operation_with_revision(
+    handle: &lunco_modelica_core::engine_resource::ModelicaEngineHandle,
+    lease: &lunco_modelica_core::engine_resource::SourceRootOperationLease,
+) -> (
+    u64,
+    Result<(), lunco_modelica_core::engine_resource::SourceRootOperationReservationError>,
+) {
+    // Keep the pre-attempt revision with Busy so a gate release cannot be
+    // missed between the nonblocking lock attempt and response deferral.
+    let revision = handle.source_operation_revision();
+    let release = handle.try_release_source_root_operation(lease);
+    (revision, release)
+}
+
 /// Tears the model down on the worker when its `ModelicaModel` component goes away, so a
 /// despawned entity does not leave a `SimulationSession` alive in the worker thread.
 /// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
@@ -815,6 +901,8 @@ pub fn handle_modelica_responses(
     // installation; retained state stays owned by shared telemetry.
     mut session_starts: MessageWriter<ModelicaSessionStarted>,
     source_context: (
+        ResMut<ModelicaResponseBacklog>,
+        Option<ResMut<lunco_core_runtime::AsyncWorkAdmission>>,
         Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
         Option<Res<lunco_modelica_core::engine_resource::ModelicaEngineHandle>>,
     ),
@@ -823,7 +911,7 @@ pub fn handle_modelica_responses(
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
-    let (source_roots, authoring) = source_context;
+    let (mut response_backlog, mut admission, source_roots, authoring) = source_context;
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let mut compile_states = compile_states;
@@ -831,22 +919,68 @@ pub fn handle_modelica_responses(
     let mut faults = faults;
     let mut step_diagnostics = step_diagnostics;
     let mut transport_failure = None;
+    let mut deferred_result = response_backlog.pending_source_root.take();
     loop {
-        let mut result = match channels.rx.try_recv() {
-            Ok(result) => result,
-            Err(crossbeam_channel::TryRecvError::Empty) => break,
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                if worker_failure
-                    .as_ref()
-                    .is_some_and(|failure| failure.0.is_none())
+        let (mut result, mut mirror_lease, mut mirror_update) = if let Some(deferred) =
+            deferred_result.take()
+        {
+            if source_root_result_is_stale(&deferred.result, source_roots.as_deref()) {
+                if let (Some(handle), Some(lease)) = (authoring.as_deref(), deferred.lease.as_ref())
                 {
-                    transport_failure =
-                        Some("Modelica worker result channel disconnected".to_owned());
+                    let (operation_revision, release) =
+                        release_source_root_operation_with_revision(handle, lease);
+                    if release.is_err() {
+                        let capacity_revision = admission
+                            .as_deref()
+                            .map_or(deferred.capacity_revision, |admission| {
+                                admission.capacity_revision()
+                            });
+                        response_backlog.pending_source_root = Some(DeferredSourceRootResult {
+                            capacity_revision,
+                            operation_revision,
+                            wait_for_capacity: false,
+                            ..deferred
+                        });
+                        return;
+                    }
                 }
-                break;
+                bevy::log::debug!(
+                    "[source-roots] discarded deferred stale source-root result operation={:?}",
+                    deferred.result.source_root_operation_id,
+                );
+                continue;
             }
+            let capacity_changed = admission
+                .as_deref()
+                .map_or(deferred.wait_for_capacity, |admission| {
+                    admission.capacity_revision() != deferred.capacity_revision
+                });
+            let operation_changed = authoring.as_deref().is_some_and(|handle| {
+                handle.source_operation_revision() != deferred.operation_revision
+            });
+            if !capacity_changed && !operation_changed {
+                response_backlog.pending_source_root = Some(deferred);
+                return;
+            }
+            (deferred.result, deferred.lease, Some(deferred.update))
+        } else {
+            let result = match channels.rx.try_recv() {
+                Ok(result) => result,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    if worker_failure
+                        .as_ref()
+                        .is_some_and(|failure| failure.0.is_none())
+                    {
+                        transport_failure =
+                            Some("Modelica worker result channel disconnected".to_owned());
+                    }
+                    break;
+                }
+            };
+            (result, None, None)
         };
-        if let Some(error) = result.worker_failure {
+        if let Some(error) = result.worker_failure.take() {
             transport_failure = Some(error);
             break;
         }
@@ -856,11 +990,169 @@ pub fn handle_modelica_responses(
         {
             continue;
         }
-        if let Some(root_id) = result.unloaded_source_root_id.as_ref() {
-            if let (Some(handle), Some(operation)) =
-                (authoring.as_deref(), result.source_root_operation_id)
-            {
-                handle.update_admitted_source_root_async(root_id.clone(), operation, None);
+        let source_root_id = result
+            .loaded_source_root_id
+            .as_deref()
+            .or(result.unloaded_source_root_id.as_deref());
+        let invalid_source_root_response = if let Some(root_id) = source_root_id {
+            if result.source_root_operation_id.is_none() {
+                Some(format!(
+                    "Modelica source-root response for `{root_id}` omitted its operation identity"
+                ))
+            } else if source_roots.is_none() {
+                Some(format!(
+                    "Modelica source-root response for `{root_id}` arrived without its registry owner"
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(detail) = invalid_source_root_response {
+            bevy::log::error!("[source-roots] {detail}");
+            notices.write(ModelicaNotice {
+                level: NoticeLevel::Error,
+                text: detail.clone(),
+            });
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "modelica-source-root-response-invalid",
+                    None,
+                    "Modelica source-root worker",
+                    detail,
+                );
+            }
+            continue;
+        }
+        if let Some(root_id) = result.unloaded_source_root_id.clone() {
+            if source_root_result_is_stale(&result, source_roots.as_deref()) {
+                bevy::log::debug!(
+                    "[source-roots] discarded stale unload result `{root_id}` operation={:?}",
+                    result.source_root_operation_id
+                );
+                continue;
+            }
+            if let (Some(handle), Some(operation), Some(admission)) = (
+                authoring.as_deref(),
+                result.source_root_operation_id,
+                admission.as_deref_mut(),
+            ) {
+                let update = mirror_update.take().unwrap_or(
+                    lunco_modelica_core::engine_resource::SourceRootMirrorUpdate::Retire,
+                );
+                let capacity_revision = admission.capacity_revision();
+                let lease = match mirror_lease.take() {
+                    Some(lease) => Some(lease),
+                    None => {
+                        let (operation_revision, reservation) =
+                            reserve_source_root_operation_with_revision(
+                                handle, &root_id, operation,
+                            );
+                        match reservation {
+                            Ok(lease) => Some(lease),
+                            Err(
+                                lunco_modelica_core::engine_resource::SourceRootOperationReservationError::Busy,
+                            ) => {
+                                response_backlog.pending_source_root = Some(DeferredSourceRootResult {
+                                    result,
+                                    lease: None,
+                                    update,
+                                    capacity_revision,
+                                    operation_revision,
+                                    wait_for_capacity: false,
+                                });
+                                break;
+                            }
+                            Err(
+                                lunco_modelica_core::engine_resource::SourceRootOperationReservationError::Stale,
+                            ) => None,
+                        }
+                    }
+                };
+                if let Some(lease) = lease {
+                    if let Err(error) = handle.update_admitted_source_root_async(
+                        lease.clone(),
+                        update.clone(),
+                        admission,
+                    ) {
+                        if error == lunco_core_runtime::AsyncWorkRejection::QueueFull {
+                            response_backlog.pending_source_root = Some(DeferredSourceRootResult {
+                                result,
+                                lease: Some(lease),
+                                update,
+                                capacity_revision,
+                                operation_revision: handle.source_operation_revision(),
+                                wait_for_capacity: true,
+                            });
+                            break;
+                        }
+                        let detail = format!(
+                            "Modelica source-root mirror retirement for `{root_id}` was not admitted: {error:?}"
+                        );
+                        handle.fail_admitted_source_root(&lease, detail.clone());
+                        bevy::log::error!("[source-roots] {detail}");
+                        notices.write(ModelicaNotice {
+                            level: NoticeLevel::Error,
+                            text: detail.clone(),
+                        });
+                        if let Some(faults) = faults.as_deref_mut() {
+                            faults.raise(
+                                "modelica-source-root-mirror-retirement-failed",
+                                None,
+                                "Modelica source-root registry",
+                                detail,
+                            );
+                        }
+                    }
+                }
+            } else if let Some(handle) = authoring.as_deref() {
+                let detail =
+                    "shared Modelica async admission is unavailable during source-root retirement";
+                if let Some(operation) = result.source_root_operation_id {
+                    let update = mirror_update.take().unwrap_or(
+                        lunco_modelica_core::engine_resource::SourceRootMirrorUpdate::Retire,
+                    );
+                    let lease = match mirror_lease.take() {
+                        Some(lease) => Some(lease),
+                        None => {
+                            let (operation_revision, reservation) =
+                                reserve_source_root_operation_with_revision(
+                                    handle, &root_id, operation,
+                                );
+                            match reservation {
+                                Ok(lease) => Some(lease),
+                                Err(
+                                    lunco_modelica_core::engine_resource::SourceRootOperationReservationError::Busy,
+                                ) => {
+                                    response_backlog.pending_source_root = Some(DeferredSourceRootResult {
+                                        result,
+                                        lease: None,
+                                        update,
+                                        capacity_revision: 0,
+                                        operation_revision,
+                                        wait_for_capacity: false,
+                                    });
+                                    break;
+                                }
+                                Err(
+                                    lunco_modelica_core::engine_resource::SourceRootOperationReservationError::Stale,
+                                ) => None,
+                            }
+                        }
+                    };
+                    if let Some(lease) = lease {
+                        handle.fail_admitted_source_root(&lease, detail.to_owned());
+                    }
+                }
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "modelica-source-root-mirror-retirement-failed",
+                        None,
+                        "Modelica source-root registry",
+                        detail,
+                    );
+                }
             }
             if let Some(error) = result.error.as_ref() {
                 let detail = format!(
@@ -887,28 +1179,128 @@ pub fn handle_modelica_responses(
         // circuit before any of the sim-result handling below
         // (which keys on `result.entity` — LoadSourceRoot uses
         // `Entity::PLACEHOLDER`).
-        if let Some(root_id) = result.loaded_source_root_id.as_ref() {
+        if let Some(root_id) = result.loaded_source_root_id.clone() {
             if let Some(roots) = source_roots.as_deref_mut() {
                 if let Some(operation_id) = result.source_root_operation_id {
+                    let current_operation = roots
+                        .roots
+                        .get(&root_id)
+                        .is_some_and(|root| root.operation_id == operation_id);
+                    if !current_operation {
+                        if let (Some(handle), Some(lease)) =
+                            (authoring.as_deref(), mirror_lease.as_ref())
+                        {
+                            let (operation_revision, release) =
+                                release_source_root_operation_with_revision(handle, lease);
+                            let capacity_revision = admission
+                                .as_deref()
+                                .map_or(0, |admission| admission.capacity_revision());
+                            if release.is_err() {
+                                let update = mirror_update.take().unwrap_or_else(|| {
+                                    loaded_source_root_mirror_update(&mut result)
+                                });
+                                response_backlog.pending_source_root =
+                                    Some(DeferredSourceRootResult {
+                                        result,
+                                        lease: mirror_lease,
+                                        update,
+                                        capacity_revision,
+                                        operation_revision,
+                                        wait_for_capacity: false,
+                                    });
+                                break;
+                            }
+                        }
+                        bevy::log::debug!(
+                            "[source-roots] ignored stale `{root_id}` load result operation={operation_id}"
+                        );
+                        continue;
+                    }
+                    if let Some(handle) = authoring.as_deref() {
+                        let update = mirror_update
+                            .take()
+                            .unwrap_or_else(|| loaded_source_root_mirror_update(&mut result));
+                        let capacity_revision = admission
+                            .as_deref()
+                            .map_or(0, |admission| admission.capacity_revision());
+                        let lease = match mirror_lease.take() {
+                            Some(lease) => Some(lease),
+                            None => {
+                                let (operation_revision, reservation) =
+                                    reserve_source_root_operation_with_revision(
+                                        handle,
+                                        &root_id,
+                                        operation_id,
+                                    );
+                                match reservation {
+                                    Ok(lease) => Some(lease),
+                                    Err(
+                                        lunco_modelica_core::engine_resource::SourceRootOperationReservationError::Busy,
+                                    ) => {
+                                        response_backlog.pending_source_root = Some(DeferredSourceRootResult {
+                                            result,
+                                            lease: None,
+                                            update,
+                                            capacity_revision,
+                                            operation_revision,
+                                            wait_for_capacity: false,
+                                        });
+                                        break;
+                                    }
+                                    Err(
+                                        lunco_modelica_core::engine_resource::SourceRootOperationReservationError::Stale,
+                                    ) => None,
+                                }
+                            }
+                        };
+                        let Some(lease) = lease else {
+                            bevy::log::debug!(
+                                "[source-roots] ignored stale authoring mirror `{root_id}` operation={operation_id}"
+                            );
+                            continue;
+                        };
+                        let admitted = if let Some(admission) = admission.as_deref_mut() {
+                            handle.update_admitted_source_root_async(
+                                lease.clone(),
+                                update.clone(),
+                                admission,
+                            )
+                        } else {
+                            Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable)
+                        };
+                        if let Err(error) = admitted {
+                            if error == lunco_core_runtime::AsyncWorkRejection::QueueFull {
+                                response_backlog.pending_source_root =
+                                    Some(DeferredSourceRootResult {
+                                        result,
+                                        lease: Some(lease),
+                                        update,
+                                        capacity_revision,
+                                        operation_revision: handle.source_operation_revision(),
+                                        wait_for_capacity: true,
+                                    });
+                                break;
+                            }
+                            let detail = format!(
+                                "Modelica authoring source mirror `{root_id}` was not admitted: {error:?}"
+                            );
+                            result.error = Some(detail.clone());
+                            handle.fail_admitted_source_root(&lease, detail.clone());
+                            bevy::log::error!("[source-roots] {detail}");
+                            notices.write(ModelicaNotice {
+                                level: NoticeLevel::Error,
+                                text: detail.clone(),
+                            });
+                        }
+                    }
                     if roots.complete_load(
-                        root_id,
+                        &root_id,
                         operation_id,
                         result.loaded_source_root_namespaces.clone(),
                         result.loaded_source_root_sources.clone(),
                         result.error.clone(),
                     ) {
-                        if let Some(handle) = authoring.as_deref() {
-                            let files = result
-                                .error
-                                .is_none()
-                                .then(|| std::mem::take(&mut result.loaded_source_root_files));
-                            handle.update_admitted_source_root_async(
-                                root_id.clone(),
-                                operation_id,
-                                files,
-                            );
-                        }
-                        match roots.state(root_id) {
+                        match roots.state(&root_id) {
                             Some(lunco_modelica_source_roots::LoadState::Ready) => {
                                 bevy::log::info!(
                                     "[source-roots] `{}` is now Ready namespaces={:?}",
@@ -1891,6 +2283,7 @@ mod compile_fault_tests {
         app.add_message::<ModelicaNotice>()
             .add_message::<ModelicaSessionStarted>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<ModelicaResponseBacklog>()
             .add_systems(First, handle_modelica_responses);
         let (results, received) = crossbeam_channel::unbounded();
         let (commands, _requests) = crossbeam_channel::unbounded();
@@ -2093,6 +2486,7 @@ mod compile_fault_tests {
                 .init_resource::<lunco_core::RuntimeFaults>()
                 .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
                 .init_resource::<lunco_core_runtime::SimulationBarrier>()
+                .init_resource::<ModelicaResponseBacklog>()
                 .add_systems(First, handle_modelica_responses);
             let (tx_result, rx_result) = crossbeam_channel::unbounded();
             let (tx_command, _rx_command) = crossbeam_channel::unbounded();
@@ -2214,6 +2608,7 @@ mod compile_fault_tests {
         app.add_message::<ModelicaNotice>()
             .add_message::<ModelicaSessionStarted>()
             .init_resource::<lunco_core::RuntimeFaults>()
+            .init_resource::<ModelicaResponseBacklog>()
             .add_systems(
                 First,
                 (
@@ -2303,6 +2698,7 @@ mod compile_fault_tests {
         app.add_message::<ModelicaNotice>()
             .add_message::<ModelicaSessionStarted>()
             .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+            .init_resource::<ModelicaResponseBacklog>()
             .add_systems(First, handle_modelica_responses);
         let document = lunco_doc::DocumentId::new(1);
         app.world_mut()
@@ -2535,6 +2931,7 @@ mod compile_fault_tests {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
             .add_message::<ModelicaSessionStarted>()
+            .init_resource::<ModelicaResponseBacklog>()
             .add_systems(First, handle_modelica_responses);
         let (results, received) = crossbeam_channel::unbounded();
         let (commands, _requests) = crossbeam_channel::unbounded();
@@ -2632,6 +3029,7 @@ mod compile_fault_tests {
         let mut app = App::new();
         app.add_message::<ModelicaNotice>()
             .add_message::<ModelicaSessionStarted>()
+            .init_resource::<ModelicaResponseBacklog>()
             .add_systems(First, handle_modelica_responses);
 
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
@@ -2757,6 +3155,7 @@ mod compile_fault_tests {
             .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .init_resource::<lunco_core_runtime::SimulationBarrier>()
             .init_resource::<lunco_core::RuntimeFaults>()
+            .init_resource::<ModelicaResponseBacklog>()
             .add_systems(First, handle_modelica_responses);
 
         let (tx_result, rx_result) = crossbeam_channel::unbounded();
@@ -2891,7 +3290,8 @@ mod compile_fault_tests {
             })
             .unwrap();
 
-        app.add_systems(First, handle_modelica_responses);
+        app.init_resource::<ModelicaResponseBacklog>()
+            .add_systems(First, handle_modelica_responses);
         app.add_systems(
             Update,
             (request_modelica_compiles, capture_compile_requests).chain(),
@@ -3015,6 +3415,7 @@ mod document_runtime_owner_tests {
             .add_message::<ModelicaSessionStarted>()
             .add_observer(on_remove_modelica)
             .add_observer(retire_closed_twin_models)
+            .init_resource::<ModelicaResponseBacklog>()
             .add_systems(First, handle_modelica_responses);
         let (tx, rx) = crossbeam_channel::unbounded();
         let (results, result_rx) = crossbeam_channel::unbounded();

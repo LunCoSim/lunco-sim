@@ -77,7 +77,48 @@ pub struct ModelicaEngineHandle {
     sync_wakeup: Arc<AtomicBool>,
     /// Monotonic admission leases. Parsing never holds the engine lock, and a
     /// delayed load cannot reinstall a root after a newer replacement/unload.
-    source_operations: Arc<Mutex<HashMap<String, Arc<AtomicU64>>>>,
+    source_operations: Arc<Mutex<HashMap<String, Arc<SourceRootOperationState>>>>,
+    /// Progress revision for nonblocking response owners waiting on
+    /// source-operation locks rather than shared worker capacity.
+    source_operation_revision: Arc<AtomicU64>,
+    /// Terminal source-mirror failures waiting for the engine sync owner to
+    /// apply them without blocking a Bevy response system on the engine lock.
+    pending_source_root_failures: Arc<Mutex<HashMap<String, (SourceRootOperationLease, String)>>>,
+}
+
+struct SourceRootOperationState {
+    operation: AtomicU64,
+    active: AtomicBool,
+    commit: Mutex<()>,
+}
+
+/// Lease for one source-root operation accepted by the worker owner.
+#[derive(Clone)]
+pub struct SourceRootOperationLease {
+    root: String,
+    operation: u64,
+    state: Arc<SourceRootOperationState>,
+}
+
+/// A source-root response either advances its operation lease or is deferred
+/// until the current mirror releases the per-root commit gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRootOperationReservationError {
+    Busy,
+    Stale,
+}
+
+/// A compiler-worker source-root completion mirrored into the authoring
+/// session. The source registry owns admission; this describes only the
+/// mirror operation that the engine must apply.
+#[derive(Clone)]
+pub enum SourceRootMirrorUpdate {
+    /// Replace the complete source set with worker-prepared syntax.
+    Install(Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>),
+    /// Remove a source set whose registry owner was retired.
+    Retire,
+    /// Publish a worker or authoring-mirror failure for this source set.
+    Fail(String),
 }
 
 impl Default for ModelicaEngineHandle {
@@ -86,54 +127,291 @@ impl Default for ModelicaEngineHandle {
             engine: Arc::new(Mutex::new(ModelicaEngine::new())),
             sync_wakeup: Arc::new(AtomicBool::new(false)),
             source_operations: Arc::default(),
+            source_operation_revision: Arc::new(AtomicU64::new(0)),
+            pending_source_root_failures: Arc::default(),
         }
     }
 }
 
+fn recover_source_operation_lock<T>(poisoned: std::sync::PoisonError<T>) -> T {
+    bevy::log::warn_once!(
+        "a Modelica source-operation lock was poisoned by a prior panic; continuing with its retained state"
+    );
+    poisoned.into_inner()
+}
+
+fn source_root_mirror_work_key(root: &str, operation: u64) -> lunco_core_runtime::AsyncWorkKey {
+    lunco_core_runtime::AsyncWorkKey::new(
+        lunco_core_runtime::AsyncWorkKind::ModelicaLibraryPreparation,
+        0, // The authoring engine and its source registry are application scoped.
+        u128::from(lunco_hash::fnv1a64(root.as_bytes())),
+        0,
+        operation,
+    )
+}
+
 impl ModelicaEngineHandle {
-    fn reserve_source_operation(&self, root: &str, operation: u64) -> Option<Arc<AtomicU64>> {
+    fn reserve_source_operation(
+        &self,
+        root: &str,
+        operation: u64,
+    ) -> Result<SourceRootOperationLease, SourceRootOperationReservationError> {
+        let mut operations = match self.source_operations.try_lock() {
+            Ok(operations) => operations,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(SourceRootOperationReservationError::Busy);
+            }
+            Err(std::sync::TryLockError::Poisoned(error)) => recover_source_operation_lock(error),
+        };
+        let state = operations.entry(root.to_owned()).or_insert_with(|| {
+            Arc::new(SourceRootOperationState {
+                operation: AtomicU64::new(0),
+                active: AtomicBool::new(false),
+                commit: Mutex::new(()),
+            })
+        });
+        let commit = match state.commit.try_lock() {
+            Ok(commit) => commit,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(SourceRootOperationReservationError::Busy);
+            }
+            Err(std::sync::TryLockError::Poisoned(error)) => recover_source_operation_lock(error),
+        };
+        if operation <= state.operation.load(Ordering::Acquire) {
+            drop(commit);
+            drop(operations);
+            self.note_source_operation_change();
+            return Err(SourceRootOperationReservationError::Stale);
+        }
+        state.operation.store(operation, Ordering::Release);
+        state.active.store(true, Ordering::Release);
+        let lease = SourceRootOperationLease {
+            root: root.to_owned(),
+            operation,
+            state: state.clone(),
+        };
+        drop(commit);
+        drop(operations);
+        self.note_source_operation_change();
+        Ok(lease)
+    }
+
+    /// Reserve a source-root operation without waiting on the response thread.
+    /// The caller retains its worker result and retries `Busy` after shared
+    /// capacity or source-operation revisions change. A `Stale` operation must
+    /// be discarded.
+    pub fn reserve_source_root_operation(
+        &self,
+        root: &str,
+        operation: u64,
+    ) -> Result<SourceRootOperationLease, SourceRootOperationReservationError> {
+        self.reserve_source_operation(root, operation)
+    }
+
+    /// Release a response-owned lease without waiting on a mirror commit.
+    /// `Busy` means the response owner must retain the result and retry after
+    /// the source-operation revision changes.
+    pub fn try_release_source_root_operation(
+        &self,
+        lease: &SourceRootOperationLease,
+    ) -> Result<(), SourceRootOperationReservationError> {
+        let mut operations = match self.source_operations.try_lock() {
+            Ok(operations) => operations,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(SourceRootOperationReservationError::Busy);
+            }
+            Err(std::sync::TryLockError::Poisoned(error)) => recover_source_operation_lock(error),
+        };
+        let Some(state) = operations.get(&lease.root).cloned() else {
+            drop(operations);
+            self.note_source_operation_change();
+            return Ok(());
+        };
+        if state.operation.load(Ordering::Acquire) != lease.operation {
+            drop(operations);
+            self.note_source_operation_change();
+            return Ok(());
+        }
+        let commit = match state.commit.try_lock() {
+            Ok(commit) => commit,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(SourceRootOperationReservationError::Busy);
+            }
+            Err(std::sync::TryLockError::Poisoned(error)) => recover_source_operation_lock(error),
+        };
+        state.active.store(false, Ordering::Release);
+        operations.remove(&lease.root);
+        drop(commit);
+        drop(operations);
+        self.note_source_operation_change();
+        Ok(())
+    }
+
+    /// Release an operation lease after the admitted mirror retires its root.
+    fn release_source_root_operation(&self, lease: &SourceRootOperationLease) {
+        self.release_retired_source_operation(&lease.root, lease.operation);
+    }
+
+    fn release_retired_source_operation(&self, root: &str, operation: u64) {
         let mut operations = self
             .source_operations
             .lock()
             .expect("source operation mutex poisoned");
-        let current = operations.entry(root.to_owned()).or_default();
-        if operation <= current.load(Ordering::Acquire) {
-            return None;
+        if let Some(state) = operations.get(root).cloned() {
+            let _commit = state
+                .commit
+                .lock()
+                .expect("source operation commit mutex poisoned");
+            if state.operation.load(Ordering::Acquire) == operation {
+                state.active.store(false, Ordering::Release);
+                operations.remove(root);
+            }
         }
-        current.store(operation, Ordering::Release);
-        Some(current.clone())
+        drop(operations);
+        self.note_source_operation_change();
+    }
+
+    /// Progress revision observed by the Modelica worker response backlog when
+    /// a source-operation lock, rather than shared worker capacity, delayed it.
+    /// Advances on operation reservations and gate releases, including stale
+    /// or already-retired operations.
+    pub fn source_operation_revision(&self) -> u64 {
+        self.source_operation_revision.load(Ordering::Acquire)
+    }
+
+    fn note_source_operation_change(&self) {
+        self.source_operation_revision
+            .fetch_add(1, Ordering::Release);
     }
 
     /// Consume the exact snapshot whose compiler acknowledgement the source
     /// registry accepted. This is declaration projection, never a second disk
-    /// discovery or runtime compile. `None` retires that scoped source set.
+    /// discovery or runtime compile. The operation id fences an older mirror
+    /// completion from replacing or reviving a newer source set.
     pub fn update_admitted_source_root_async(
         &self,
-        root: String,
-        operation: u64,
-        sources: Option<Vec<(String, String)>>,
-    ) {
-        let Some(lease) = self.reserve_source_operation(&root, operation) else {
-            return;
-        };
+        lease: SourceRootOperationLease,
+        update: SourceRootMirrorUpdate,
+        admission: &mut lunco_core_runtime::AsyncWorkAdmission,
+    ) -> Result<(), lunco_core_runtime::AsyncWorkRejection> {
+        let root = lease.root.clone();
+        let operation = lease.operation;
+        let retires_lease = matches!(&update, SourceRootMirrorUpdate::Retire);
+        let key = source_root_mirror_work_key(&root, operation);
         let handle = self.clone();
-        bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-            let parsed = sources.map(|sources| sources.into_iter().map(|(uri, source)| {
-                rumoca_compile::compile::ParsedSourceDocument::parse(uri, source)
-                    .map_err(|error| format!("{error:?}"))
-            }).collect::<Result<Vec<_>, _>>());
+        let work = move || {
+            let outcome = match update {
+                SourceRootMirrorUpdate::Install(documents) => Ok(Some(
+                    Arc::try_unwrap(documents).unwrap_or_else(|documents| (*documents).clone()),
+                )),
+                SourceRootMirrorUpdate::Retire => Ok(None),
+                SourceRootMirrorUpdate::Fail(error) => Err(error),
+            };
             let mut engine = handle.lock();
-            if lease.load(Ordering::Acquire) != operation { return; }
-            match parsed {
-                Some(Ok(files)) => engine.update_admitted_source_set(&root, Some(files)),
-                None => engine.update_admitted_source_set(&root, None),
-                Some(Err(error)) => {
-                    engine.update_admitted_source_set(&root, None);
-                    bevy::log::error!("Modelica admitted source snapshot `{root}` could not be projected: {error}");
+            let commit = lease
+                .state
+                .commit
+                .lock()
+                .expect("source operation commit mutex poisoned");
+            if !lease.state.active.load(Ordering::Acquire)
+                || lease.state.operation.load(Ordering::Acquire) != lease.operation
+            {
+                drop(commit);
+                drop(engine);
+                handle.note_source_operation_change();
+                return;
+            }
+            match outcome {
+                Ok(Some(files)) => {
+                    if let Err(error) = engine.update_admitted_source_set(&root, Some(files)) {
+                        bevy::log::error!("Modelica authoring mirror for `{root}` failed: {error}");
+                    }
+                }
+                Ok(None) => {
+                    if let Err(error) = engine.update_admitted_source_set(&root, None) {
+                        bevy::log::error!(
+                            "Modelica authoring mirror retirement for `{root}` failed: {error}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    bevy::log::error!(
+                        "Modelica admitted source snapshot `{root}` could not be projected: {error}"
+                    );
+                    engine.fail_admitted_source_set(&root, error);
                 }
             }
+            if retires_lease {
+                lease.state.active.store(false, Ordering::Release);
+            }
+            drop(engine);
+            drop(commit);
+            if retires_lease {
+                handle.release_source_root_operation(&lease);
+            } else {
+                handle.note_source_operation_change();
+            }
             handle.wake_sync();
-        }).detach();
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            admission.submit(
+                lunco_core_runtime::AsyncWorkPriority::Interactive,
+                key,
+                work,
+            )
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // TODO(wasm): move this authoring-session commit and its readers to
+            // the Modelica Web Worker. AsyncComputeTaskPool is cooperative on
+            // the page thread; shared admission bounds ownership but does not
+            // offload update_admitted_source_set.
+            let permit = admission
+                .admit_external(lunco_core_runtime::AsyncWorkPriority::Interactive, key)?;
+            let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get() else {
+                return Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable);
+            };
+            pool.spawn(async move {
+                let _permit = permit;
+                work();
+            })
+            .detach();
+            Ok(())
+        }
+    }
+
+    /// Queue a terminal authoring mirror failure for the engine sync owner.
+    /// This boundary never waits for the engine mutex.
+    pub fn fail_admitted_source_root(&self, lease: &SourceRootOperationLease, error: String) {
+        self.pending_source_root_failures
+            .lock()
+            .expect("source root failure queue poisoned")
+            .insert(lease.root.clone(), (lease.clone(), error));
+        self.wake_sync();
+    }
+
+    fn apply_pending_source_root_failures(&self, engine: &mut ModelicaEngine) {
+        let failures = std::mem::take(
+            &mut *self
+                .pending_source_root_failures
+                .lock()
+                .expect("source root failure queue poisoned"),
+        );
+        for (root, (lease, error)) in failures {
+            let commit = lease
+                .state
+                .commit
+                .lock()
+                .expect("source operation commit mutex poisoned");
+            if lease.state.active.load(Ordering::Acquire)
+                && lease.state.operation.load(Ordering::Acquire) == lease.operation
+            {
+                engine.fail_admitted_source_set(&root, error);
+            }
+            drop(commit);
+            self.note_source_operation_change();
+        }
     }
 
     /// Lock the engine for a query. Panics if the mutex is poisoned
@@ -160,8 +438,8 @@ impl ModelicaEngineHandle {
         self.sync_wakeup.load(Ordering::Acquire)
     }
 
-    /// Publish a wakeup after changing one of the engine completion queues.
-    /// Callers hold the engine mutex while invoking this method.
+    /// Keep the adapter awake after a producer publishes engine work or a
+    /// deferred source-root failure.
     #[inline]
     fn wake_sync(&self) {
         self.sync_wakeup.store(true, Ordering::Release);
@@ -175,7 +453,12 @@ impl ModelicaEngineHandle {
         let Some(engine) = self.try_lock() else {
             return;
         };
-        if !engine.has_completed_work() {
+        let source_root_failures_empty = self
+            .pending_source_root_failures
+            .lock()
+            .expect("source root failure queue poisoned")
+            .is_empty();
+        if !engine.has_completed_work() && source_root_failures_empty {
             self.sync_wakeup.store(false, Ordering::Release);
         }
     }
@@ -193,107 +476,6 @@ impl ModelicaEngineHandle {
     ) -> Option<lunco_modelica_ast::annotations::Icon> {
         let mut engine = self.engine.try_lock().ok()?;
         engine.cached_icon_for(qualified).flatten()
-    }
-
-    /// Schedule admission from bundled packages or the installed source library.
-    ///
-    /// The reservation is deliberately made inside the worker, rather than
-    /// before spawning it. A projection, parse install, or source library bootstrap may
-    /// be using the engine when a generated document first requests its
-    /// library; waiting for that mutex on the update thread was the second
-    /// source of apparent "projection stalls" after the recursive projection
-    /// lock was fixed. Duplicate requests are harmless: the first worker
-    /// reserves the root and the others observe the pending/resident state.
-    ///
-    /// Returns `true` when a worker was scheduled. Completion is published by
-    /// `SourceRootBecameReady`; the return value is not a readiness claim.
-    pub fn ensure_source_root_async(&self, root: &str) -> bool {
-        let root = root.to_string();
-        let handle = self.clone();
-        bevy::tasks::AsyncComputeTaskPool::get()
-            .spawn(async move {
-                {
-                    let mut engine = handle.lock();
-                    if !engine.begin_source_root_load(&root) {
-                        return;
-                    }
-                }
-                bevy::log::info!("[ModelicaLibrary] loading source root `{root}` asynchronously");
-                let is_bundled = match lunco_assets_runtime::models::package_roots() {
-                    Ok(roots) => roots.iter().any(|candidate| candidate == &root),
-                    Err(error) => {
-                        bevy::log::error!("[ModelicaLibrary] package inventory failed: {error}");
-                        handle
-                            .lock()
-                            .finish_source_root_load(&root, Vec::new(), vec![error]);
-                        handle.wake_sync();
-                        return;
-                    }
-                };
-                if !is_bundled {
-                    // The source-library owner decodes its retained source/AST
-                    // bundle outside the engine lock. Install that complete set
-                    // once, so inherited members see the same namespace.
-                    let bundle =
-                        lunco_modelica_library::source_library::parsed_source_bundle().cloned();
-                    let mut engine = handle.lock();
-                    if let Some(bundle) = bundle {
-                        if !engine.source_set_installed("source-bundle") && !bundle.is_empty() {
-                            engine.replace_in_memory_source_set(
-                                "source-bundle",
-                                rumoca_compile::compile::SourceRootKind::DurableExternal,
-                                (*bundle).clone(),
-                            );
-                        }
-                    }
-                    let ready = engine.finish_resident_source_root(&root);
-                    if !ready {
-                        bevy::log::warn!(
-                            "[ModelicaLibrary] {}",
-                            engine
-                                .source_root_failure(&root)
-                                .unwrap_or("source root admission failed")
-                        );
-                    }
-                    handle.wake_sync();
-                    return;
-                }
-                let (parsed, diagnostics) = match lunco_assets_runtime::models::package_files(&root)
-                {
-                    Ok(files) => {
-                        let mut parsed = Vec::with_capacity(files.len());
-                        let mut diagnostics = Vec::new();
-                        for (uri, source) in files {
-                            match rumoca_compile::compile::ParsedSourceDocument::parse(
-                                uri.clone(),
-                                source,
-                            ) {
-                                Ok(document) => parsed.push(document),
-                                Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
-                            }
-                        }
-                        (parsed, diagnostics)
-                    }
-                    Err(error) => (Vec::new(), vec![error]),
-                };
-                let mut engine = handle.lock();
-                let count = engine.finish_source_root_load(&root, parsed, diagnostics);
-                handle.wake_sync();
-                if count > 0 {
-                    bevy::log::info!(
-                        "[ModelicaLibrary] source root `{root}` ready: {count} parsed document(s)"
-                    );
-                } else {
-                    bevy::log::warn!(
-                        "[ModelicaLibrary] {}",
-                        engine
-                            .source_root_failure(&root)
-                            .unwrap_or("source root admission failed")
-                    );
-                }
-            })
-            .detach();
-        true
     }
 
     /// Mark a doc as pending-parse and return its URI without spawning
@@ -560,14 +742,15 @@ pub fn drive_engine_sync(
     #[cfg(target_arch = "wasm32")] admission: Res<lunco_core_runtime::AsyncWorkAdmission>,
     #[cfg(target_arch = "wasm32")] worker_bridge: Res<ModelicaWorkerBridge>,
 ) {
-    let completed_roots = {
+    let changed_roots = {
         let Some(mut engine) = handle.try_lock() else {
             return;
         };
-        engine.drain_completed_source_roots()
+        handle.apply_pending_source_root_failures(&mut engine);
+        engine.drain_changed_source_roots()
     };
-    for root in completed_roots {
-        commands.trigger(SourceRootBecameReady { root });
+    for root in changed_roots {
+        commands.trigger(SourceRootChanged { root });
     }
     // Editor focus supplies interactive demand; scene demand is resolved below
     // from the participant's exact document link in every host.
@@ -1079,30 +1262,153 @@ impl Plugin for ModelicaEnginePlugin {
 mod tests {
     use super::*;
 
+    fn lease_is_current(lease: &SourceRootOperationLease) -> bool {
+        let _commit = lease.state.commit.lock().unwrap();
+        lease.state.active.load(Ordering::Acquire)
+            && lease.state.operation.load(Ordering::Acquire) == lease.operation
+    }
+
     #[test]
     fn admitted_source_operations_fence_delayed_loads_and_duplicates() {
         let handle = ModelicaEngineHandle::default();
         let old_load = handle.reserve_source_operation("twin:1:models", 7).unwrap();
-        assert!(
-            handle
-                .reserve_source_operation("twin:1:models", 7)
-                .is_none()
-        );
+        assert!(handle.reserve_source_operation("twin:1:models", 7).is_err());
         let unload = handle.reserve_source_operation("twin:1:models", 8).unwrap();
-        assert_eq!(old_load.load(Ordering::Acquire), 8);
-        assert_eq!(unload.load(Ordering::Acquire), 8);
+        assert_eq!(old_load.state.operation.load(Ordering::Acquire), 8);
+        assert_eq!(unload.state.operation.load(Ordering::Acquire), 8);
+        assert!(!lease_is_current(&old_load));
+        assert!(lease_is_current(&unload));
+        assert!(handle.reserve_source_operation("twin:1:models", 6).is_err());
+        handle.release_retired_source_operation("twin:1:models", 8);
+        assert!(!lease_is_current(&unload));
         assert!(
-            handle
-                .reserve_source_operation("twin:1:models", 6)
-                .is_none()
+            !handle
+                .source_operations
+                .lock()
+                .unwrap()
+                .contains_key("twin:1:models")
         );
+        let next_load = handle.reserve_source_operation("twin:1:models", 9).unwrap();
+        assert_eq!(old_load.state.operation.load(Ordering::Acquire), 8);
+        assert_eq!(next_load.state.operation.load(Ordering::Acquire), 9);
+        assert!(lease_is_current(&next_load));
+        handle.release_source_root_operation(&unload);
+        assert!(lease_is_current(&next_load));
         // A second Twin's clock and source owner are independent.
-        assert!(
-            handle
-                .reserve_source_operation("twin:2:models", 1)
-                .is_some()
+        assert!(handle.reserve_source_operation("twin:2:models", 1).is_ok());
+        assert_eq!(unload.state.operation.load(Ordering::Acquire), 8);
+    }
+
+    #[test]
+    fn source_root_mirror_retries_the_same_lease_after_shared_queue_pressure() {
+        let handle = ModelicaEngineHandle::default();
+        let mut admission = lunco_core_runtime::AsyncWorkAdmission::default();
+        admission.set_limits(1, 1).unwrap();
+        let blocker = lunco_core_runtime::AsyncWorkKey::new(
+            lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+            1,
+            1,
+            1,
+            1,
         );
-        assert_eq!(unload.load(Ordering::Acquire), 8);
+        admission
+            .submit(
+                lunco_core_runtime::AsyncWorkPriority::Background,
+                blocker,
+                || {},
+            )
+            .unwrap();
+
+        let lease = handle
+            .reserve_source_root_operation("twin:7:models", 7)
+            .unwrap();
+        let update = SourceRootMirrorUpdate::Install(std::sync::Arc::new(vec![
+            rumoca_compile::compile::ParsedSourceDocument::parse("One.mo", "model One end One;")
+                .unwrap(),
+        ]));
+        assert_eq!(
+            handle
+                .update_admitted_source_root_async(lease.clone(), update.clone(), &mut admission,),
+            Err(lunco_core_runtime::AsyncWorkRejection::QueueFull)
+        );
+        assert!(lease_is_current(&lease));
+
+        assert!(admission.cancel_queued(blocker));
+        handle
+            .update_admitted_source_root_async(lease, update, &mut admission)
+            .unwrap();
+        let mirror = source_root_mirror_work_key("twin:7:models", 7);
+        assert!(admission.cancel_queued(mirror));
+
+        let retire_lease = handle
+            .reserve_source_root_operation("twin:7:models", 8)
+            .unwrap();
+        let blocker = lunco_core_runtime::AsyncWorkKey::new(
+            lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+            1,
+            2,
+            1,
+            2,
+        );
+        admission
+            .submit(
+                lunco_core_runtime::AsyncWorkPriority::Background,
+                blocker,
+                || {},
+            )
+            .unwrap();
+        let retire = source_root_mirror_work_key("twin:7:models", 8);
+        assert_eq!(
+            handle.update_admitted_source_root_async(
+                retire_lease.clone(),
+                SourceRootMirrorUpdate::Retire,
+                &mut admission,
+            ),
+            Err(lunco_core_runtime::AsyncWorkRejection::QueueFull)
+        );
+        assert!(lease_is_current(&retire_lease));
+        assert!(admission.cancel_queued(blocker));
+        handle
+            .update_admitted_source_root_async(
+                retire_lease.clone(),
+                SourceRootMirrorUpdate::Retire,
+                &mut admission,
+            )
+            .unwrap();
+        assert!(lease_is_current(&retire_lease));
+        assert!(admission.cancel_queued(retire));
+        handle.release_source_root_operation(&retire_lease);
+        assert!(!lease_is_current(&retire_lease));
+    }
+
+    #[test]
+    fn source_root_mirror_failure_is_applied_by_the_engine_sync_owner() {
+        let handle = ModelicaEngineHandle::default();
+        let stale_lease = handle
+            .reserve_source_root_operation("twin:9:models", 9)
+            .unwrap();
+        handle.fail_admitted_source_root(
+            &stale_lease,
+            "shared async admission is unavailable".to_owned(),
+        );
+        let current_lease = handle
+            .reserve_source_root_operation("twin:9:models", 10)
+            .unwrap();
+        assert!(handle.sync_wakeup_pending());
+
+        let mut engine = handle.lock();
+        assert_eq!(engine.admitted_source_set_failure("twin:9:models"), None);
+        handle.apply_pending_source_root_failures(&mut engine);
+        assert_eq!(engine.admitted_source_set_failure("twin:9:models"), None);
+        handle.fail_admitted_source_root(
+            &current_lease,
+            "current mirror admission failed".to_owned(),
+        );
+        handle.apply_pending_source_root_failures(&mut engine);
+        assert_eq!(
+            engine.admitted_source_set_failure("twin:9:models"),
+            Some("current mirror admission failed")
+        );
     }
 
     #[test]
@@ -1351,10 +1657,11 @@ struct SourceBundleBootstrapTask(Option<bevy::tasks::Task<usize>>);
 #[derive(Event, Clone, Debug)]
 pub struct SourceBundleBecameReady;
 
-/// Generic source-root completion. The UI uses the same re-projection seam
-/// for source library, LunCo, and future bundled libraries.
+/// Generic source-root lifecycle change. The UI uses one re-projection seam for
+/// successful loads, terminal failures, and replacement or retirement of
+/// admitted source sets.
 #[derive(Event, Clone, Debug)]
-pub struct SourceRootBecameReady {
+pub struct SourceRootChanged {
     pub root: String,
 }
 
