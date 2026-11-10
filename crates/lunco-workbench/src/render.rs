@@ -1028,6 +1028,10 @@ pub(crate) fn render_help_menu(
             }
         }
     });
+    ui.hyperlink_to(
+        "LunCoSim documentation",
+        "https://luncosim.github.io/luncosim-docs/#current-status",
+    );
     ui.separator();
     if let Some(identity) = world.get_resource::<lunco_core::BuildIdentity>() {
         ui.label(format!(

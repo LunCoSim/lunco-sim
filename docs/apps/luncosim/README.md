@@ -43,9 +43,11 @@ Choose a task from the title-bar tabs or **View → Perspectives**:
 - **Editor** edits one explicit USD document in an isolated preview.
 - **Lunica** opens Modelica diagrams, equations, compilation and experiments.
 
-Optional panels live in the corresponding **View** submenus. **Help →
-Perspective help** explains the selected workflow; **View → Reset Layout**
-restores its authored default. Switching tasks preserves the Twin and simulation.
+Optional panels live in the corresponding **View** submenus. The **Help →
+LunCoSim documentation** link opens the [published guide](https://luncosim.github.io/luncosim-docs/#current-status).
+**Help → Perspective help** explains the selected workflow; **View → Reset
+Layout** restores its authored default. Switching tasks preserves the Twin and
+simulation.
 
 Perspectives are assembled by Rhai over the installed capabilities. A Twin may
 ship its own task presets; follow [Twin perspectives](../../tutorials/05-twin-perspectives.md).

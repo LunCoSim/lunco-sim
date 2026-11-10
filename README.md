@@ -19,6 +19,7 @@ can inspect, parameters you can change, and telemetry you can follow.
 
 [**Download LunCoSim**](https://github.com/LunCoSim/lunco-sim/releases)
 · [**Documentation**](https://luncosim.github.io/luncosim-docs/)
+· [**Current status**](https://luncosim.github.io/luncosim-docs/#current-status)
 · [Tutorials](docs/tutorials/README.md)
 · [Watch demos](https://www.youtube.com/@LunCoSim)
 · [Join the community](https://discord.gg/A6U3GdvQum)
@@ -66,7 +67,8 @@ For Windows startup diagnostics, see the
 
 LunCoSim is under active development. Model coverage and maturity vary;
 engineering conclusions need validation for their intended use. Check the
-[feature status](specs/README.md) and [known limitations](docs/reviews/README.md).
+[current project status](https://luncosim.github.io/luncosim-docs/#current-status),
+[feature status](specs/README.md), and [known limitations](docs/reviews/README.md).
 
 ## Build with us
 
