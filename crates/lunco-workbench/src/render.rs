@@ -1509,10 +1509,8 @@ pub(crate) fn render_status_bar_inner(
         .get_resource::<CurrentScenePath>()
         .map(|s| s.0.clone())
         .unwrap_or_default();
-    let scene_visible = !scene_name.is_empty()
-        && world
-            .get_resource::<lunco_workspace::WorkspaceResource>()
-            .is_some_and(|workspace| workspace.active_twin.is_some());
+    let scene_label = loaded_scene_display_name(world, &scene_name, &scene_path);
+    let scene_visible = !scene_label.is_empty();
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
     let recent_events_width = status_popup_width(ui.ctx().content_rect().width());
     let mut status_action = None;
@@ -1533,12 +1531,24 @@ pub(crate) fn render_status_bar_inner(
             },
             required_perf_width,
             net_active,
-            scene_visible,
         );
         let right_reserve = right_widths.total();
-
-        let status_width =
-            status_bar_notification_width(bar_width, right_reserve, recent_events_width);
+        let scene_left_width = if scene_visible {
+            STATUS_BAR_SCENE_MAX_WIDTH.min((bar_width * 0.22).max(0.0))
+        } else {
+            0.0
+        };
+        let scene_left_gap = if scene_visible {
+            STATUS_BAR_SEPARATOR_RESERVE
+        } else {
+            0.0
+        };
+        let notification_width = status_bar_notification_width(
+            bar_width,
+            right_reserve + scene_left_width + scene_left_gap,
+            recent_events_width,
+        );
+        let status_width = notification_width + scene_left_width + scene_left_gap;
 
         // The status message scope on the left
         let latest_attention = latest
@@ -1548,7 +1558,7 @@ pub(crate) fn render_status_bar_inner(
         let mut history_clicked = false;
         let response = ui
             .allocate_ui_with_layout(
-                egui::vec2(status_width, 18.0),
+                egui::vec2(notification_width, 18.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     if let StatusBarNotificationSnapshot::Event(l) = &notification {
@@ -1660,6 +1670,32 @@ pub(crate) fn render_status_bar_inner(
                 "Click to view recent status events"
             });
 
+        let mut scene_response = None;
+        if scene_visible {
+            ui.separator();
+            let response = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(scene_left_width, 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add_sized(
+                            [scene_left_width, 18.0],
+                            egui::Label::new(egui::RichText::new(&scene_label).small())
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        )
+                    },
+                )
+                .inner
+                .on_hover_text(format!(
+                    "Loaded scene: {scene_label}\nClick to show the full path"
+                ));
+            if response.clicked() {
+                egui::Popup::toggle_id(ui.ctx(), scene_popup_id);
+            }
+            scene_response = Some(response);
+        }
+
         // Keep the notification compact without pulling the right-hand
         // controls away from the edge of the status bar. Mark the end of the
         // clickable notification before the spacer so the alignment gap
@@ -1702,28 +1738,7 @@ pub(crate) fn render_status_bar_inner(
 
         let popup_width = recent_events_width;
 
-        if scene_visible {
-            ui.separator();
-            let scene_response = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(right_widths.scene, 18.0),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.add_sized(
-                            [right_widths.scene, 18.0],
-                            egui::Label::new(egui::RichText::new("Scene").small())
-                                .truncate()
-                                .sense(egui::Sense::click()),
-                        )
-                    },
-                )
-                .inner
-                .on_hover_text(format!(
-                    "Loaded scene: {scene_name}\nClick to show the full path"
-                ));
-            if scene_response.clicked() {
-                egui::Popup::toggle_id(ui.ctx(), scene_popup_id);
-            }
+        if let Some(scene_response) = scene_response {
             if !scene_path.is_empty() {
                 egui::Popup::from_response(&scene_response)
                     .id(scene_popup_id)
@@ -1742,10 +1757,6 @@ pub(crate) fn render_status_bar_inner(
         }
 
         ui.separator();
-
-        if scene_visible && perf_enabled {
-            ui.add_space(STATUS_BAR_SCENE_PERF_GAP);
-        }
 
         render_net_chip(ui, world, theme, right_widths.net);
 
@@ -2328,14 +2339,12 @@ const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.36;
 const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 168.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
-const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 64.0;
-const STATUS_BAR_SCENE_PERF_GAP: f32 = 24.0;
+const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 180.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_EDGE_INSET: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct StatusBarRightWidths {
-    scene: f32,
     net: f32,
     perf: f32,
     overhead: f32,
@@ -2343,7 +2352,7 @@ struct StatusBarRightWidths {
 
 impl StatusBarRightWidths {
     fn total(self) -> f32 {
-        self.scene + self.net + self.perf + self.overhead
+        self.net + self.perf + self.overhead
     }
 }
 
@@ -2428,6 +2437,28 @@ fn status_bar_notification_width(
     available.min(proportional.min(STATUS_BAR_NOTIFICATION_MAX_WIDTH))
 }
 
+fn loaded_scene_display_name(world: &World, scene_name: &str, scene_path: &str) -> String {
+    let authored_name = world
+        .get_resource::<lunco_core::SceneMountState>()
+        .and_then(|mount| mount.active_root())
+        .and_then(|root| world.get::<lunco_core::markers::Callsign>(root))
+        .map(|callsign| callsign.0.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    authored_name
+        .or_else(|| {
+            (!scene_name.is_empty() && scene_name != "Scene").then(|| scene_name.to_owned())
+        })
+        .or_else(|| {
+            std::path::Path::new(scene_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
+}
+
 /// Keep every right-hand status control inside the width reserved from the
 /// left status scope. On compact windows the controls shrink together and
 /// truncate their low-priority text instead of colliding with one another.
@@ -2436,29 +2467,16 @@ fn status_bar_right_widths(
     desired_perf_width: f32,
     required_perf_width: f32,
     net_active: bool,
-    scene_visible: bool,
 ) -> StatusBarRightWidths {
-    let separator_count =
-        2.0 + if scene_visible { 1.0 } else { 0.0 } + if net_active { 1.0 } else { 0.0 };
-    let scene_perf_gap = if scene_visible && desired_perf_width > 0.0 {
-        STATUS_BAR_SCENE_PERF_GAP
-    } else {
-        0.0
-    };
-    let overhead =
-        STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE + scene_perf_gap;
-    let scene = if scene_visible {
-        STATUS_BAR_SCENE_MAX_WIDTH
-    } else {
-        0.0
-    };
+    let separator_count = 2.0 + if net_active { 1.0 } else { 0.0 };
+    let overhead = STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE;
     let net = if net_active {
         STATUS_BAR_NET_MAX_WIDTH
     } else {
         0.0
     };
     let perf = desired_perf_width;
-    let max_controls = scene + net + perf;
+    let max_controls = net + perf;
     let budget = (available_width - STATUS_BAR_MIN_SCOPE_WIDTH - overhead).max(0.0);
     let perf_proportional = if max_controls > 0.0 {
         (budget * perf / max_controls).min(perf)
@@ -2472,7 +2490,7 @@ fn status_bar_right_widths(
     } else {
         0.0
     };
-    let other_controls = scene + net;
+    let other_controls = net;
     let other_scale = if other_controls > 0.0 {
         ((budget - perf).max(0.0) / other_controls).min(1.0)
     } else {
@@ -2480,7 +2498,6 @@ fn status_bar_right_widths(
     };
 
     StatusBarRightWidths {
-        scene: scene * other_scale,
         net: net * other_scale,
         perf,
         overhead,
@@ -3678,14 +3695,12 @@ mod tests {
 
     #[test]
     fn status_bar_right_controls_fit_the_reserved_compact_width() {
-        let compact = status_bar_right_widths(960.0, 540.0, 450.0, true, true);
+        let compact = status_bar_right_widths(960.0, 540.0, 450.0, true);
         assert!(compact.total() <= 912.0);
-        assert!(compact.scene <= STATUS_BAR_SCENE_MAX_WIDTH);
         assert!(compact.net <= STATUS_BAR_NET_MAX_WIDTH);
         assert!(compact.perf <= 540.0);
 
-        let wide = status_bar_right_widths(1600.0, 540.0, 450.0, true, true);
-        assert_eq!(wide.scene, STATUS_BAR_SCENE_MAX_WIDTH);
+        let wide = status_bar_right_widths(1600.0, 540.0, 450.0, true);
         assert_eq!(wide.net, STATUS_BAR_NET_MAX_WIDTH);
         assert_eq!(wide.perf, 540.0);
     }
@@ -3737,7 +3752,7 @@ mod tests {
 
     #[test]
     fn status_bar_right_controls_prioritize_readable_perf_metrics() {
-        let compact = status_bar_right_widths(960.0, 540.0, 450.0, true, true);
+        let compact = status_bar_right_widths(960.0, 540.0, 450.0, true);
 
         assert!(compact.perf >= 450.0);
         assert!(compact.total() <= 912.0);

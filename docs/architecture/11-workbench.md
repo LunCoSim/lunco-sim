@@ -219,8 +219,10 @@ private dock layout.
    tight, it shortens the metric text and scales it to remain on one row; its
    rolling raw frame-time samples come from the shared
    `EngineHealthSnapshot`, so the graph remains live before a Twin is active.
-   The loaded-scene chip appears only while a Twin is active, and the metric
-   line uses one formatter in both states. Active progress entries use the same StatusBus reader
+   The loaded-scene name appears beside recent status events on the left, only
+   while a Twin is active; it uses the authored USD display name when present
+   and the filename otherwise. The metric line stays at the right edge. Active
+   progress entries use the same StatusBus reader
    while they belong on the visible surface. Consecutive identical discrete snapshots
    are coalesced by StatusBus before the renderers read them. Warning and error rows
    copy the unmodified message without depending on the window width; attention rows
@@ -919,8 +921,8 @@ restart:
   geometry**) → one shared `<OS config dir>/lunco/settings.json` via `lunco-settings`
   (§9b). No new file per feature.
 - **Per-project volatile UI state** (active perspective, open-document
-  list, dock arrangements, per-editor presentation views, and positions of
-  authored draggable runtime windows) → **global storage keyed by
+  list, dock arrangements, per-editor presentation views, camera feeds,
+  telemetry graph selections, and their window positions and sizes) → **global storage keyed by
   a hash of the project path**, *not* written into the Twin folder:
   `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
@@ -928,7 +930,26 @@ restart:
   read or written only while a Twin is active. With no active Twin, the host
   uses its startup windows and does not load or save a shared no-folder
   session.
-The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). The `lunco-workbench-state` crate owns volatile per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies only the layout-provider adapter used for dock capture and restore. Snapshot reads, file refreshes, serialization, and writes run on Bevy's task pool through the existing `lunco-storage` boundary, so disk work does not block the UI thread. Shutdown waits for an in-flight workspace write before honoring `AppExit`. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
+`Settings → Project → Restore cameras and graphs` controls runtime view
+restoration; it defaults on and is stored in the project's
+`.lunco/settings.json` under `ui.restore_view_state`. Typed view snapshots are
+kept per loaded scene path, so moving between scenes in a project retains each
+scene's camera source/resolution and window geometry, plus graph signal
+selections and window geometry. Capture waits until scene transitions finish,
+so teardown cannot replace the outgoing scene's layout with empty state.
+Restore keeps unmatched scene snapshots queued, then waits for the matching
+scene to mount and graph sources to publish. The
+`lunco-workbench-window` crate restores global `WindowGeometry` settings before
+the main `Window` is created. The `lunco-workbench-state` crate owns volatile
+per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies
+the dock adapter and the UI host supplies the typed camera/graph adapter.
+Snapshot reads, serialization, and writes run on Bevy's task pool through the
+existing `lunco-storage` boundary, so disk work does not block the UI thread.
+Shutdown waits for an in-flight workspace write before honoring `AppExit`.
+Runtime-authored `window` surfaces that declare `draggable` store only their
+validated logical top-left override there; the manifest remains the default
+geometry and visibility authority, and stale surface ids are discarded during
+manifest reconciliation.
 
 An explicit host launch may provide a one-shot
 `lunco-workbench-state::WorkspaceStateRestorePolicy` initial perspective. The

@@ -45,7 +45,10 @@ pub mod view;
 pub mod viz;
 #[cfg(feature = "ui")]
 pub use ui::graph_hud::{
-    CreateGraphHud, RemoveGraphHud, SetGraphHud, draw_graph_hud, graph_hud_menu_ui,
+    CreateGraphHud, GraphHudSnapshot, RemoveGraphHud, SetGraphHud, draw_graph_hud,
+    graph_hud_menu_ui, workspace_ids as graph_hud_workspace_ids,
+    workspace_revision as graph_hud_workspace_revision,
+    workspace_snapshots as graph_hud_workspace_snapshots,
 };
 #[cfg(feature = "ui")]
 pub use ui::signal_grid::{ConfigureSignalGrid, SignalGridEntry};

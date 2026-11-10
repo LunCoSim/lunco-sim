@@ -147,6 +147,12 @@ Dependency planning runs before required inputs are ready. Restrict it to
 identity discovery and declarations; read source facts in top-level
 initialization or `on_start`. For source-selected entities discovered there,
 call `track_entity_read(id)` or `track_entity_write(id)` before access.
+When the source entity identifies the owning scene but its USD document is not
+attached yet, use `find_path_in_stage(me, path)` to resolve another live
+identity in that same scene mount; editor preview projections are excluded. Use
+`find_path_in_document(doc_id, path)` when the document identity is available.
+`find_path(path)` returns the first exact live path match, so use a scoped
+lookup when the same stage path can be mounted more than once.
 
 All active Modelica entities share the fixed-step barrier. Declarations grant
 scenario access without changing clock membership. Required input

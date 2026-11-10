@@ -2579,6 +2579,17 @@ fn build_world_engine_base(
     engine.register_fn("find_path", |path: ImmutableString| -> i64 {
         usd_bridge::find_path(path.as_str())
     });
+    // Resolve a path within the exact stage that owns a source entity. Stage
+    // identity is available before a document association is attached.
+    engine.register_fn(
+        "find_path_in_stage",
+        |source_gid: i64, path: ImmutableString| -> i64 {
+            if source_gid <= 0 {
+                return -1;
+            }
+            usd_bridge::find_path_in_stage(source_gid as u64, path.as_str())
+        },
+    );
     // Resolve a USD path within its owning document's live stage. USD paths
     // are not globally unique across concurrently mounted documents.
     engine.register_fn(

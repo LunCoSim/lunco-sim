@@ -6,8 +6,8 @@ use lunco_twin::TwinSettingValue;
 use lunco_workbench_widgets::{UiIcon, icon_button, text_editor};
 use lunco_workspace::{
     PhysicsEscapeGuardSettings, ResetTwinSetting, SceneLoadingCli, SceneLoadingSettings,
-    SetProjectPhysicsEscapeGuard, SetProjectSceneLoading, SetTwinSetting, TwinClosed, TwinId,
-    TwinSettingInput, WorkspaceResource,
+    SetProjectPhysicsEscapeGuard, SetProjectSceneLoading, SetProjectViewStateRestoration,
+    SetTwinSetting, TwinClosed, TwinId, TwinSettingInput, WorkspaceResource,
 };
 
 use crate::{MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot, WorkbenchMenuRegistry};
@@ -234,6 +234,10 @@ fn render_project_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
         ui.label("Project physics settings are unavailable.");
         return;
     };
+    let Some(project_ui) = workspace.project_ui_settings(id).cloned() else {
+        ui.label("Project UI settings are unavailable.");
+        return;
+    };
     let twin_physics = lunco_workspace::twin_physics_escape_guard_setting(twin.manifest.as_ref());
     let pending = workspace.project_settings_pending(id);
     let error = workspace.project_settings_error(id).map(str::to_owned);
@@ -303,6 +307,37 @@ fn render_project_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     if let Some(error) = error.as_deref() {
         ui.label(format!("Could not save project setting: {error}"));
     }
+    ui.separator();
+    let restore_selected = match project_ui.restore_view_state {
+        None => "On (default)",
+        Some(true) => "On",
+        Some(false) => "Off",
+    };
+    let mut restore_view_state = project_ui.restore_view_state;
+    let restore_changed = ui
+        .add_enabled_ui(!pending, |ui| {
+            crate::render::settings_choice_menu(
+                ui,
+                format!("Restore cameras and graphs: {restore_selected}"),
+                &mut restore_view_state,
+                [
+                    (None, "On (default)".into()),
+                    (Some(true), "On".into()),
+                    (Some(false), "Off".into()),
+                ],
+            )
+        })
+        .inner;
+    if restore_changed {
+        ctx.trigger_command(
+            SetProjectViewStateRestoration {
+                twin: id.raw(),
+                value: restore_view_state,
+            },
+            local_user(),
+        );
+    }
+    ui.label("Camera views, telemetry graphs, and their window layouts are restored for this project by default.");
     ui.separator();
     ui.label("Finite world escape containment");
     let Some(system_physics) = ctx.resource::<PhysicsEscapeGuardSettings>() else {

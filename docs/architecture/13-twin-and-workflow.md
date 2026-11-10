@@ -418,6 +418,25 @@ current workspace. `SetProjectSceneLoading` writes or removes the project
 override; `GetSceneLoadingSettings` reports the scopes, the next-open decision,
 the admitted decision, and the runtime scene override.
 
+#### Runtime view restoration
+
+`ui.restore_view_state` is a project-local override in the same file. It
+defaults to `true`; **Settings → Project → Restore cameras and graphs** can
+turn it off or return it to the default. The toggle controls whether scenes in
+the project restore camera feeds, selected graph channels, and window
+sizes/positions. Each scene has its own view snapshot. Those snapshots remain
+personal workspace state in the user's project-keyed workspace store, not in
+USD or the shared Twin. Scene switching retains unmatched snapshots; capture
+runs after the scene transition commits so teardown cannot save an empty layout
+under the outgoing scene path.
+
+```json
+{ "ui": { "restore_view_state": false } }
+```
+
+A malformed `ui` preference is logged and uses the default without blocking
+the authored scene from opening.
+
 #### Finite-world physics escape containment
 
 Finite-world escape containment defaults to `false`, so dynamic objects can

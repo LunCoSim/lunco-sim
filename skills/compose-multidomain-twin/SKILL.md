@@ -371,9 +371,10 @@ External live-session `SetModelInput`, external API/direct/non-Simulation Rhai
 bounded session queue and reach that port at their admitted fixed tick. External `SetPorts` callers
 supply a stable producer id; Twin Rhai uses its actor identity. Local Modelica
 canvas and port-inspector inputs use the local session id. Simulation-clock
-Rhai writes remain derived behavior. Co-simulation retains Twin/Simulation
-Rhai setpoints separately from controller writes: controller holds take
-precedence while active, and authored program setpoints remain underneath them.
+Rhai writes remain derived behavior. Co-simulation retains Twin/Lifecycle and
+Twin/Simulation Rhai setpoints separately from controller writes: controller
+holds take precedence while active, and authored program setpoints remain
+underneath them.
 External `ReleasePort` and `ReleaseControl` commands use the same stable
 producer and fixed-tick admission contract. `ReleaseControl` clears local
 setpoint holds without writing replacement values. `ControlAuthorityChanged`
@@ -389,8 +390,9 @@ owner. On a generated Modelica root that also carries
 wins for names it declares; the generic bridge mirrors those accepted values
 into `ModelicaModel.inputs`. Other propagated model inputs remain on
 `SimComponent.inputs`. A direct `ModelicaModel.inputs` write is clobbered within
-one frame. Simulation-clock Rhai writes remain derived from deterministic
-scenario evaluation and are applied by that evaluation pass.
+one frame. Twin Lifecycle setpoints enter the ordered fixed-tick queue with
+authored-program ownership; Simulation-clock Rhai writes remain derived from
+deterministic scenario evaluation and are applied by that evaluation pass.
 
 Use `SimulateIntent` for a held semantic control and
 `SimulateIntentEdge`/Rhai `intent_pulse` for a discrete transition. The latter

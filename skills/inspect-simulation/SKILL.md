@@ -177,9 +177,11 @@ nonzero producer id for the same external caller, then re-read. Use
 `ReleasePort` / `ReleaseControl` with the same producer id when releasing a
 live hold to return an input to authored wiring. Apply a safe state with
 explicit named `SetPorts` values and keep that hold active while it is wanted.
-Controller holds outrank Twin/Simulation program setpoints at the actual input
-commit, including inputs without wires. A lower-priority program command can be
-accepted and retained without replacing the current controlled value. All held
+Controller holds outrank Twin Lifecycle/Simulation program setpoints at the
+actual input commit, including inputs without wires. Lifecycle stop setpoints
+retain program ownership through their ordered fixed-tick admission. A
+lower-priority program command can be accepted and retained without replacing
+the current controlled value. All held
 targets require unique nonzero `GlobalEntityId` values; missing or duplicate
 identity reports `cosim-held-input-identity-invalid` before exchange writes. Held
 inputs are levels: an unwired `force_x`, `torque_z`, or `force_command` continues

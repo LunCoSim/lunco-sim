@@ -69,6 +69,79 @@ pub trait WorkspaceStateLayoutProvider: Send + Sync + 'static {
     );
 }
 
+/// Typed snapshot of one camera view's user-visible configuration.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct WorkspaceCameraViewState {
+    pub id: u64,
+    pub source: Option<u64>,
+    pub label: String,
+    pub width: u32,
+    pub height: u32,
+    pub match_window: bool,
+    #[serde(default)]
+    pub position: Option<[f32; 2]>,
+    #[serde(default)]
+    pub size: Option<[f32; 2]>,
+}
+
+/// Typed signal selection in one persisted graph view.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct WorkspaceGraphSignalState {
+    pub target: u64,
+    pub signal: String,
+    pub caption: String,
+}
+
+/// Typed snapshot of one graph HUD's selection and window geometry.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct WorkspaceGraphViewState {
+    pub id: u64,
+    pub visible: bool,
+    pub columns: u32,
+    pub signals: Vec<WorkspaceGraphSignalState>,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub position: Option<[f32; 2]>,
+}
+
+/// Runtime-owned camera and graph views for one loaded scene.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct WorkspaceRuntimeViewSnapshot {
+    pub scene_path: String,
+    #[serde(default)]
+    pub camera_views: Vec<WorkspaceCameraViewState>,
+    #[serde(default)]
+    pub graph_views: Vec<WorkspaceGraphViewState>,
+}
+
+/// Application adapter for runtime UI state that belongs in the per-project
+/// workspace snapshot. Domain UI owners provide this without making the state
+/// crate depend on camera, telemetry, or rendering packages.
+pub trait WorkspaceStateViewProvider: Send + Sync + 'static {
+    /// Cheap change signal; this is read every frame before snapshot capture.
+    fn revision(&self, world: &World) -> u64;
+    /// Capture the current scene's view state, or `None` when unavailable.
+    fn capture(&self, world: &World) -> Option<WorkspaceRuntimeViewSnapshot>;
+    /// Queue or apply restored snapshots after their owning scenes are ready.
+    fn restore(&self, world: &mut World, snapshots: Vec<WorkspaceRuntimeViewSnapshot>);
+}
+
+#[derive(Resource, Default)]
+struct ViewProvider(Option<std::sync::Arc<dyn WorkspaceStateViewProvider>>);
+
+#[derive(Resource, Default)]
+struct SavedRuntimeViewSnapshots(Vec<WorkspaceRuntimeViewSnapshot>);
+
+/// Register the host's typed runtime-view adapter after installing
+/// [`WorkspaceStatePlugin`].
+pub fn install_workspace_state_view_provider(
+    app: &mut App,
+    provider: impl WorkspaceStateViewProvider,
+) {
+    app.insert_resource(ViewProvider(Some(std::sync::Arc::new(provider))));
+}
+
 #[derive(Resource)]
 struct LayoutProvider(std::sync::Arc<dyn WorkspaceStateLayoutProvider>);
 
@@ -518,6 +591,10 @@ pub struct WorkspaceState {
     /// stable surface identity. Missing entries use manifest defaults.
     #[serde(default)]
     pub runtime_surface_layouts: HashMap<String, RuntimeSurfaceLayout>,
+    /// Camera and graph windows keyed by their loaded scene path, when the
+    /// host supplies a runtime-view adapter and project restoration is enabled.
+    #[serde(default)]
+    pub runtime_views: Vec<WorkspaceRuntimeViewSnapshot>,
 }
 
 /// Current serialized workspace-state format.
@@ -533,6 +610,7 @@ impl Default for WorkspaceState {
             active_document: None,
             docks: HashMap::new(),
             runtime_surface_layouts: HashMap::new(),
+            runtime_views: Vec::new(),
         }
     }
 }
@@ -796,6 +874,49 @@ fn capture_documents(world: &mut World) -> Vec<(u64, DocumentSnapshot)> {
     out
 }
 
+fn runtime_view_revision(world: &World) -> u64 {
+    world
+        .get_resource::<ViewProvider>()
+        .and_then(|provider| provider.0.as_ref())
+        .map_or(0, |provider| provider.revision(world))
+}
+
+fn capture_runtime_views(world: &mut World) -> Vec<WorkspaceRuntimeViewSnapshot> {
+    let current = world
+        .get_resource::<ViewProvider>()
+        .and_then(|provider| provider.0.as_ref())
+        .and_then(|provider| provider.capture(world));
+    let mut saved = world.resource_mut::<SavedRuntimeViewSnapshots>();
+    if let Some(current) = current {
+        upsert_runtime_view_snapshot(&mut saved.0, current);
+    }
+    saved.0.clone()
+}
+
+fn upsert_runtime_view_snapshot(
+    snapshots: &mut Vec<WorkspaceRuntimeViewSnapshot>,
+    snapshot: WorkspaceRuntimeViewSnapshot,
+) {
+    if let Some(existing) = snapshots
+        .iter_mut()
+        .find(|existing| existing.scene_path == snapshot.scene_path)
+    {
+        *existing = snapshot;
+    } else {
+        snapshots.push(snapshot);
+    }
+}
+
+fn restore_runtime_views(world: &mut World, snapshots: Vec<WorkspaceRuntimeViewSnapshot>) {
+    world.resource_mut::<SavedRuntimeViewSnapshots>().0 = snapshots.clone();
+    let provider = world
+        .get_resource::<ViewProvider>()
+        .and_then(|provider| provider.0.clone());
+    if let Some(provider) = provider {
+        provider.restore(world, snapshots);
+    }
+}
+
 /// Fold of every codec's `revision` — changes when any open buffer or
 /// the open set changes. Cheap (no buffer clones).
 fn session_revision(world: &mut World) -> u64 {
@@ -849,12 +970,14 @@ fn gate_value(world: &mut World) -> Option<u64> {
     });
     let twin = fnv1a64(twin_root.to_string_lossy().as_bytes());
     let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().revision();
+    let runtime_views = runtime_view_revision(world);
     Some(
         docs.wrapping_add(persp)
             .wrapping_add(twin)
             .wrapping_add(active)
             .wrapping_add(dock)
-            .wrapping_add(runtime_surface_layouts),
+            .wrapping_add(runtime_surface_layouts)
+            .wrapping_add(runtime_views),
     )
 }
 
@@ -910,6 +1033,7 @@ fn build_state(world: &mut World) -> Option<WorkspaceState> {
         HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
     let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().as_map().clone();
+    let runtime_views = capture_runtime_views(world);
     Some(WorkspaceState {
         schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
         twin_root,
@@ -918,6 +1042,7 @@ fn build_state(world: &mut World) -> Option<WorkspaceState> {
         active_document,
         docks,
         runtime_surface_layouts,
+        runtime_views,
     })
 }
 
@@ -1061,6 +1186,7 @@ fn poll_workspace_restore(world: &mut World) {
         };
         let Some((state, json)) = loaded else {
             world.resource_mut::<RuntimeSurfaceLayouts>().clear();
+            restore_runtime_views(world, Vec::new());
             let authored = active
                 .and_then(|id| world.resource::<WorkspaceResource>().twin(id))
                 .and_then(|twin| twin.manifest.as_ref())
@@ -1151,6 +1277,7 @@ fn apply_workspace_state(
     state: WorkspaceState,
     initial_perspective: Option<String>,
 ) {
+    restore_runtime_views(world, state.runtime_views.clone());
     world
         .resource_mut::<RuntimeSurfaceLayouts>()
         .replace(state.runtime_surface_layouts.clone());
@@ -1418,7 +1545,9 @@ impl Plugin for WorkspaceStatePlugin {
             .init_resource::<PendingWorkspaceRestore>()
             .init_resource::<PendingWorkspaceSave>()
             .init_resource::<AppliedTwin>()
+            .init_resource::<SavedRuntimeViewSnapshots>()
             .init_resource::<WorkspaceStateRestorePolicy>()
+            .init_resource::<ViewProvider>()
             .init_resource::<RuntimeSurfaceLayouts>()
             .init_resource::<DocumentSessionRegistry>()
             .add_observer(clear_runtime_surface_layouts_on_twin_closed)
@@ -1434,6 +1563,7 @@ fn clear_runtime_surface_layouts_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     mut layouts: ResMut<RuntimeSurfaceLayouts>,
     mut pending: ResMut<PendingWorkspaceRestore>,
+    mut runtime_views: ResMut<SavedRuntimeViewSnapshots>,
 ) {
     if pending
         .0
@@ -1444,6 +1574,7 @@ fn clear_runtime_surface_layouts_on_twin_closed(
     }
     if trigger.event().was_active {
         layouts.clear();
+        runtime_views.0.clear();
     }
 }
 
@@ -1589,11 +1720,64 @@ mod tests {
             active_document: Some(0),
             docks: HashMap::new(),
             runtime_surface_layouts: HashMap::new(),
+            runtime_views: vec![
+                WorkspaceRuntimeViewSnapshot {
+                    scene_path: "scenes/regular_traverse.usda".into(),
+                    camera_views: vec![WorkspaceCameraViewState {
+                        id: 2,
+                        source: Some(42),
+                        label: "StereoLeft".into(),
+                        width: 960,
+                        height: 540,
+                        match_window: false,
+                        position: Some([24.0, 36.0]),
+                        size: Some([480.0, 280.0]),
+                    }],
+                    graph_views: vec![WorkspaceGraphViewState {
+                        id: 3,
+                        visible: true,
+                        columns: 2,
+                        signals: vec![WorkspaceGraphSignalState {
+                            target: 84,
+                            signal: "vehicle.speed".into(),
+                            caption: "Speed".into(),
+                        }],
+                        width: 640.0,
+                        height: 360.0,
+                        position: Some([120.0, 80.0]),
+                    }],
+                },
+                WorkspaceRuntimeViewSnapshot {
+                    scene_path: "scenes/rover_workshop.usda".into(),
+                    camera_views: Vec::new(),
+                    graph_views: Vec::new(),
+                },
+            ],
         };
         state.save().unwrap();
 
         let loaded = WorkspaceState::load(&root).expect("round-trips");
         assert_eq!(loaded, state);
+        let views = &loaded.runtime_views;
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].scene_path, "scenes/regular_traverse.usda");
+        assert_eq!(views[0].camera_views[0].source, Some(42));
+        assert_eq!(views[0].camera_views[0].position, Some([24.0, 36.0]));
+        assert_eq!(views[0].graph_views[0].signals[0].signal, "vehicle.speed");
+        assert_eq!(views[0].graph_views[0].position, Some([120.0, 80.0]));
+        assert!(views[1].camera_views.is_empty());
+
+        let mut snapshots = views.clone();
+        upsert_runtime_view_snapshot(
+            &mut snapshots,
+            WorkspaceRuntimeViewSnapshot {
+                scene_path: "scenes/regular_traverse.usda".into(),
+                camera_views: Vec::new(),
+                graph_views: Vec::new(),
+            },
+        );
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots[0].camera_views.is_empty());
 
         // Tamper the stored root → load must reject it.
         let path = workspace_state_path(&root);
@@ -1641,6 +1825,7 @@ mod tests {
                 ),
             ]),
             runtime_surface_layouts: HashMap::new(),
+            runtime_views: Vec::new(),
         };
         let json = serde_json::to_string(&state).unwrap();
         let back: WorkspaceState = serde_json::from_str(&json).unwrap();

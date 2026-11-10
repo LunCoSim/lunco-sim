@@ -48,6 +48,7 @@ pub mod recents;
 pub mod rename;
 pub mod scene_settings;
 pub mod session;
+pub mod ui_settings;
 
 pub use open::{ResetTwinSetting, SetTwinSetting, TwinSettingInput};
 pub use physics_escape_settings::{
@@ -59,11 +60,13 @@ pub use recents::Recents;
 pub use scene_settings::{
     ProjectSceneSettings, SceneLoadingCli, SceneLoadingDecision, SceneLoadingSettings,
     SceneLoadingSource, SetProjectPhysicsEscapeGuard, SetProjectSceneLoading,
+    SetProjectViewStateRestoration,
 };
 pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded, TwinClosed,
     UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
+pub use ui_settings::ProjectUiSettings;
 
 pub use lunco_doc::{DocumentId, DocumentOrigin};
 pub use lunco_storage::StorageHandle;
@@ -477,6 +480,8 @@ pub struct Workspace {
     /// Local finite-world escape settings captured for each admitted open.
     project_physics_escape_settings:
         std::collections::BTreeMap<TwinId, ProjectPhysicsEscapeSettings>,
+    /// Local runtime-view persistence settings captured for this Twin.
+    project_ui_settings: std::collections::BTreeMap<TwinId, ProjectUiSettings>,
     scene_loading_decisions: std::collections::BTreeMap<TwinId, SceneLoadingDecision>,
     project_settings_pending: std::collections::BTreeSet<TwinId>,
     project_settings_errors: std::collections::BTreeMap<TwinId, String>,
@@ -541,6 +546,7 @@ impl Workspace {
         self.scene_overrides.remove(&id);
         self.project_scene_settings.remove(&id);
         self.project_physics_escape_settings.remove(&id);
+        self.project_ui_settings.remove(&id);
         self.scene_loading_decisions.remove(&id);
         self.project_settings_pending.remove(&id);
         self.project_settings_errors.remove(&id);
@@ -579,6 +585,11 @@ impl Workspace {
         id: TwinId,
     ) -> Option<&ProjectPhysicsEscapeSettings> {
         self.project_physics_escape_settings.get(&id)
+    }
+
+    /// Local runtime-view persistence setting loaded for this Twin.
+    pub fn project_ui_settings(&self, id: TwinId) -> Option<&ProjectUiSettings> {
+        self.project_ui_settings.get(&id)
     }
 
     /// Automatic-loading decision captured when this Twin was opened.
