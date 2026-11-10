@@ -25,7 +25,8 @@ pub struct SignalGridEntry {
     pub caption: String,
 }
 
-/// Compose 1–64 measured scalar channels as independent native line plots.
+/// Compose 1–64 active scalar channels as independent native line plots.
+/// An admitted channel with no samples yet renders its native waiting state.
 /// Prepare first, inspect the returned plot identities with InspectSignalGrid,
 /// then use ConfigureLinePlot for each plot's existing appearance settings.
 #[Command(default)]
@@ -133,15 +134,12 @@ pub(super) fn configure_signal_grid(
             if !signals.is_active(&source) {
                 return Err(format!("`{}` has no active publisher", entry.signal));
             }
-            let history = signals.scalar_history(&source).ok_or_else(|| {
-                format!(
-                    "measured scalar `{}` is unavailable on {}",
+            if signals.scalar_history(&source).is_none() {
+                return Err(format!(
+                    "active scalar recorder `{}` is unavailable on {}",
                     entry.signal,
                     entry.target_gid.get()
-                )
-            })?;
-            if history.is_empty() {
-                return Err(format!("`{}` has no measured samples", entry.signal));
+                ));
             }
             let meta = signals.meta(&source);
             let caption = if entry.caption.trim().is_empty() {
@@ -350,6 +348,46 @@ register_commands!(on_configure_signal_grid);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_core::GlobalEntityId;
+
+    #[test]
+    fn active_scalar_with_empty_history_can_be_configured() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        let owner_gid = GlobalEntityId::from_raw(42);
+        let mut entities = lunco_api::registry::ApiEntityRegistry::default();
+        entities.assign(owner, owner_gid);
+        let signal = SignalRef::new(owner, "late_sensor");
+        let mut signals = SignalRegistry::default();
+        signals.admit_scalar(&signal, 8, 1).unwrap();
+        assert_eq!(signals.scalar_history(&signal).unwrap().len(), 0);
+
+        let mut plots = VisualizationRegistry::default();
+        let mut grids = SignalGrids::default();
+        configure_signal_grid(
+            &ConfigureSignalGrid {
+                grid: 7,
+                title: "Waiting channel".into(),
+                columns: 1,
+                signals: vec![SignalGridEntry {
+                    target_gid: owner_gid,
+                    signal: "late_sensor".into(),
+                    caption: "Late sensor".into(),
+                }],
+                sync_time_axes: None,
+            },
+            &entities,
+            &signals,
+            &mut plots,
+            &mut grids,
+        )
+        .unwrap();
+
+        let plot_ids = grids.plots(7).unwrap();
+        assert_eq!(plot_ids.len(), 1);
+        assert_eq!(plots.get(plot_ids[0]).unwrap().inputs[0].source, signal);
+    }
+
     #[test]
     fn grid_cells_do_not_overlap_and_fill_four_and_sixty_channel_views() {
         let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));

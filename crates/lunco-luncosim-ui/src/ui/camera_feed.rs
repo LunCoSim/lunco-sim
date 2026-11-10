@@ -1,4 +1,5 @@
 //! Independent camera windows over the capture owner's live render targets.
+use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
 use lunco_capture::camera_feed::{
@@ -28,6 +29,7 @@ pub(super) fn install(app: &mut App) {
     register_all_commands(app);
     app.mark_client_local::<ShowCameraImageSettings>();
     app.init_resource::<PendingRuntimeViewRestore>()
+        .init_resource::<SignalDescriptorRestoreCursor>()
         .add_systems(Update, restore_pending_runtime_views)
         .add_observer(reset_runtime_view_restore_after_transition)
         .add_observer(clear_runtime_view_restore_on_twin_closed);
@@ -51,13 +53,27 @@ fn reset_runtime_view_restore_after_transition(
         pending.progress_scene_path = None;
         pending.cameras_restored = false;
         pending.graphs_restored.clear();
+        pending.graph_retry_requested = true;
     }
 }
 
+#[derive(Resource, Default)]
+struct SignalDescriptorRestoreCursor(MessageCursor<lunco_viz::SignalDescriptorsChanged>);
+
+fn signal_descriptors_changed(world: &mut World) -> bool {
+    world.resource_scope(|world, mut cursor: Mut<SignalDescriptorRestoreCursor>| {
+        world
+            .get_resource::<Messages<lunco_viz::SignalDescriptorsChanged>>()
+            .is_some_and(|messages| cursor.0.read(messages).next().is_some())
+    })
+}
+
 fn restore_pending_runtime_views(world: &mut World) {
+    let signal_descriptors_changed = signal_descriptors_changed(world);
     let Some(mut pending) = world.resource_mut::<PendingRuntimeViewRestore>().0.take() else {
         return;
     };
+    let mut retry_graphs = pending.take_graph_retry(signal_descriptors_changed);
     if world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .is_some_and(|scene| scene.active().is_some() || scene.has_admitted())
@@ -77,6 +93,7 @@ fn restore_pending_runtime_views(world: &mut World) {
         pending.progress_scene_path = None;
         pending.cameras_restored = false;
         pending.graphs_restored.clear();
+        pending.graph_retry_requested = false;
         world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
         return;
     };
@@ -84,6 +101,7 @@ fn restore_pending_runtime_views(world: &mut World) {
         .get_resource::<lunco_core::SceneMountState>()
         .is_some_and(|mount| mount.active_root().is_some())
     {
+        pending.graph_retry_requested = true;
         world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
         return;
     }
@@ -92,6 +110,7 @@ fn restore_pending_runtime_views(world: &mut World) {
         pending.progress_scene_path = Some(current_path.to_owned());
         pending.cameras_restored = false;
         pending.graphs_restored.clear();
+        retry_graphs = true;
     }
 
     if !pending.cameras_restored {
@@ -99,12 +118,26 @@ fn restore_pending_runtime_views(world: &mut World) {
         pending.cameras_restored = true;
     }
 
-    for view in &snapshot.graph_views {
-        if pending.graphs_restored.contains(&view.id) || !graph_view_sources_ready(world, view) {
-            continue;
+    if retry_graphs {
+        for view in &snapshot.graph_views {
+            if pending.graphs_restored.contains(&view.id) {
+                continue;
+            }
+            match graph_view_sources_readiness(world, view) {
+                GraphViewSourcesReadiness::Ready => {
+                    restore_graph_view(world, view);
+                    pending.graphs_restored.insert(view.id);
+                }
+                GraphViewSourcesReadiness::Waiting => {}
+                GraphViewSourcesReadiness::Invalid(reason) => {
+                    warn!(
+                        "[workspace-view-state] graph view {} cannot be restored: {}; leaving that view closed",
+                        view.id, reason
+                    );
+                    pending.graphs_restored.insert(view.id);
+                }
+            }
         }
-        restore_graph_view(world, view);
-        pending.graphs_restored.insert(view.id);
     }
 
     world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
@@ -203,23 +236,52 @@ fn restore_camera_views(world: &mut World, views: &[WorkspaceCameraViewState]) {
     }
 }
 
-fn graph_view_sources_ready(world: &World, view: &WorkspaceGraphViewState) -> bool {
+enum GraphViewSourcesReadiness {
+    Ready,
+    Waiting,
+    Invalid(String),
+}
+
+fn graph_view_sources_readiness(
+    world: &World,
+    view: &WorkspaceGraphViewState,
+) -> GraphViewSourcesReadiness {
     let Some(entities) = world.get_resource::<lunco_api::registry::ApiEntityRegistry>() else {
-        return false;
+        return GraphViewSourcesReadiness::Waiting;
     };
     let Some(signals) = world.get_resource::<lunco_viz::SignalRegistry>() else {
-        return false;
+        return GraphViewSourcesReadiness::Waiting;
     };
-    view.signals.iter().all(|signal| {
-        let Some(entity) = entities.resolve(&GlobalEntityId::from_raw(signal.target)) else {
-            return false;
+    for signal in &view.signals {
+        let target = GlobalEntityId::from_raw(signal.target);
+        let Some(entity) = entities.resolve(&target) else {
+            return GraphViewSourcesReadiness::Invalid(format!(
+                "owner {} is unavailable",
+                target.get()
+            ));
         };
         let source = lunco_viz::SignalRef::new(entity, signal.signal.clone());
-        signals.is_active(&source)
-            && signals
-                .scalar_history(&source)
-                .is_some_and(|history| !history.is_empty())
-    })
+        match signals.signal_type(&source) {
+            None => return GraphViewSourcesReadiness::Waiting,
+            Some(lunco_viz::SignalType::Scalar) if !signals.is_active(&source) => {
+                return GraphViewSourcesReadiness::Invalid(format!(
+                    "scalar channel `{}` has no active publisher",
+                    signal.signal
+                ));
+            }
+            Some(lunco_viz::SignalType::Scalar) if signals.scalar_history(&source).is_some() => {}
+            Some(lunco_viz::SignalType::Scalar) => {
+                return GraphViewSourcesReadiness::Waiting;
+            }
+            Some(_) => {
+                return GraphViewSourcesReadiness::Invalid(format!(
+                    "channel `{}` is not scalar",
+                    signal.signal
+                ));
+            }
+        }
+    }
+    GraphViewSourcesReadiness::Ready
 }
 
 fn restore_graph_view(world: &mut World, view: &WorkspaceGraphViewState) {
@@ -312,6 +374,15 @@ struct PendingRuntimeViews {
     progress_scene_path: Option<String>,
     cameras_restored: bool,
     graphs_restored: std::collections::BTreeSet<u64>,
+    graph_retry_requested: bool,
+}
+
+impl PendingRuntimeViews {
+    fn take_graph_retry(&mut self, signal_descriptors_changed: bool) -> bool {
+        let retry = self.graph_retry_requested || signal_descriptors_changed;
+        self.graph_retry_requested = false;
+        retry
+    }
 }
 
 struct RuntimeViewStateProvider;
@@ -425,6 +496,7 @@ impl WorkspaceStateViewProvider for RuntimeViewStateProvider {
                 progress_scene_path: None,
                 cameras_restored: false,
                 graphs_restored: std::collections::BTreeSet::new(),
+                graph_retry_requested: true,
             });
     }
 }
@@ -805,4 +877,91 @@ fn image_controls(
         return false;
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph_view(target: u64, signal: &str) -> WorkspaceGraphViewState {
+        WorkspaceGraphViewState {
+            id: 9,
+            visible: true,
+            columns: 1,
+            signals: vec![WorkspaceGraphSignalState {
+                target,
+                signal: signal.into(),
+                caption: signal.into(),
+            }],
+            width: 480.0,
+            height: 320.0,
+            position: Some([24.0, 32.0]),
+        }
+    }
+
+    #[test]
+    fn graph_restore_accepts_an_admitted_empty_scalar_and_rejects_retired_sources() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        let owner_gid = GlobalEntityId::from_raw(42);
+        let signal = lunco_viz::SignalRef::new(owner, "late_sensor");
+        let mut entities = lunco_api::registry::ApiEntityRegistry::default();
+        entities.assign(owner, owner_gid);
+        let mut signals = lunco_viz::SignalRegistry::default();
+        signals.admit_scalar(&signal, 8, 1).unwrap();
+        assert_eq!(signals.scalar_history(&signal).unwrap().len(), 0);
+        world.insert_resource(entities);
+        world.insert_resource(signals);
+
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(42, "late_sensor")),
+            GraphViewSourcesReadiness::Ready
+        ));
+
+        world
+            .resource_mut::<lunco_viz::SignalRegistry>()
+            .deactivate_signal(&signal);
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(42, "late_sensor")),
+            GraphViewSourcesReadiness::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn graph_restore_waits_for_unpublished_signals_and_reports_missing_owners() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        let owner_gid = GlobalEntityId::from_raw(42);
+        let mut entities = lunco_api::registry::ApiEntityRegistry::default();
+        entities.assign(owner, owner_gid);
+        world.insert_resource(entities);
+        world.insert_resource(lunco_viz::SignalRegistry::default());
+
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(42, "late_sensor")),
+            GraphViewSourcesReadiness::Waiting
+        ));
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(404, "late_sensor")),
+            GraphViewSourcesReadiness::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn graph_restore_retries_only_after_a_request_or_signal_descriptor_change() {
+        let mut pending = PendingRuntimeViews {
+            snapshots: Vec::new(),
+            progress_scene_path: None,
+            cameras_restored: false,
+            graphs_restored: Default::default(),
+            graph_retry_requested: true,
+        };
+
+        assert!(pending.take_graph_retry(false));
+        assert!(!pending.take_graph_retry(false));
+        assert!(pending.take_graph_retry(true));
+        assert!(!pending.take_graph_retry(false));
+        pending.graph_retry_requested = true;
+        assert!(pending.take_graph_retry(false));
+    }
 }

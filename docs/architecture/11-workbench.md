@@ -938,7 +938,10 @@ scene's camera source/resolution and window geometry, plus graph signal
 selections and window geometry. Capture waits until scene transitions finish,
 so teardown cannot replace the outgoing scene's layout with empty state.
 Restore keeps unmatched scene snapshots queued, then waits for the matching
-scene to mount and graph sources to publish. The
+scene to mount and graph sources to publish. Pending graph selections are
+rechecked on signal descriptor changes; admitted scalar channels can open before
+their first sample and display the plot's waiting state. Retired or invalid
+owners are logged and left closed. The
 `lunco-workbench-window` crate restores global `WindowGeometry` settings before
 the main `Window` is created. The `lunco-workbench-state` crate owns volatile
 per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies

@@ -95,12 +95,16 @@ edge, including in justified parents. Truncate names and bound indentation on
 narrow panels; keep numeric cells on one line.
 
 For small multiples, use `ConfigureSignalGrid` with an explicit source, signal
-and caption for every cell. Discover active sampled channels through
+and caption for every cell. Discover active scalar channels through
 `ListTelemetryChannels`; inspect allocated plot ids with `InspectSignalGrid`.
 Style them through `ConfigureLinePlot`, then reveal registered instance kind
 `signal_grid` in a dock or floating host. The shared grid supports up to 64
 channels and reuses native plots, rather than adding an alternate renderer or
 duplicating telemetry. A few cells support explanation; dense views show scope.
+An admitted channel can be plotted before its first sample; its native plot
+shows the waiting-for-telemetry state. Restored graphs retry unresolved signal
+selections on descriptor changes rather than scanning them every frame, and
+retired or invalid sources are logged and left closed.
 Time-series grids share their native X viewport and cursor by default. A
 late-starting sensor or an idle channel therefore stays aligned with the other
 measurements. Y scales and units remain independent; phase-space X bindings
