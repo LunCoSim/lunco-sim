@@ -398,10 +398,6 @@ fn invoke_policy(
                 ("name", HookValue::str(entry.name.clone())),
                 ("recommended", HookValue::Bool(entry.recommended)),
                 (
-                    "download_on_start",
-                    HookValue::Bool(entry.spec.download_on_start),
-                ),
-                (
                     "required_for_scene",
                     HookValue::Bool(requirements.is_some_and(|r| r.ids.contains(&entry.id))),
                 ),

@@ -19,7 +19,8 @@ fn verify_runtime_download_catalog() {
     }
     checks.push(t_true(earth && moon,"planetary imagery remains in the downloadable catalog"));
     checks.push(t_true(font,"the application fallback font is listed in the downloadable catalog"));
-    checks.push(t_true(font_state!="missing","the fallback font's startup download has been admitted"));
+    checks.push(t_true(font_state=="missing" || font_state=="installed",
+        "a missing fallback font remains available for explicit download without startup work"));
     t_report(checks);
 }
 

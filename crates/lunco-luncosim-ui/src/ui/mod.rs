@@ -1702,7 +1702,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
         );
         ui.label(
             egui::RichText::new(
-                "Scene assets download when needed. DejaVu Sans downloads on first start if missing.",
+                "Scene assets download when needed. DejaVu Sans ships with native and web builds.",
             )
             .weak(),
         );

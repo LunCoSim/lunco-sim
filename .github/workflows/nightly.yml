@@ -64,6 +64,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify nightly version generation
         run: python3 -m unittest scripts.tests.test_nightly_release_contract.NightlyReleaseContractTests.test_version_generation_rejects_failed_or_missing_metadata
+      - name: Verify runtime font bundle targets
+        run: python3 -m unittest scripts.tests.test_asset_bundle_contract
       - id: metadata
         env:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}

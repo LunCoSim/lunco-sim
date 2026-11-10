@@ -263,13 +263,6 @@ An unknown or undiscovered scope rejects explicitly; a discovered empty scope
 may return no entries. `RequestDataset` and `CancelDataset` return terminal
 command results for invalid identities or states.
 
-Native engine manifests may set `download_on_start = true` for app-owned runtime
-dependencies. After the complete engine manifest scan, the provisioning owner
-requests each opted-in asset once when its delivered file is missing. A failed
-or cancelled request waits for an explicit retry or the next application
-launch. Twin manifests cannot set this policy, and package-only build inputs
-cannot appear in the runtime catalog.
-
 The provisioning worker reports discrete download, preparation, cancellation,
 completion, and failure transitions through shared telemetry. The worker also
 publishes routine phases to the optional renderer-independent `StatusBus` for

@@ -138,14 +138,11 @@ Verify a valid native filename with URI characters and a rejected foreign or
 retired mount through the production consumer; do not register an unrestricted
 `file:` source or enable unapproved paths to make a fixture load.
 
-Anything the cache fallback can serve is DECLARED in an `Assets.toml`. Most
-entries download only on explicit request (Settings ▸ Data & libraries, the
+Anything the cache fallback can serve is DECLARED in an `Assets.toml`. Runtime
+downloads begin only on explicit request (Settings ▸ Data & libraries, the
 Twin Browser Files section's Twin assets rows, or the `lunco-assets` CLI).
-An app-owned engine-manifest asset may set `download_on_start = true` to queue
-one native-startup request after the complete engine catalog scan when its
-delivered file is missing. A failed or cancelled startup request waits for an
-explicit retry or the next application launch; Twin manifests cannot set this
-policy. The browser rows are only a view of
+Bundle targets declare build-time delivery for packaged runtime dependencies.
+The browser rows are only a view of
 `lunco_assets_datasets::DatasetRegistry`; they must emit its typed
 request/cancel commands and never create a second downloader or parse cache
 paths. The optional `lunco-assets` package composes native workers from
@@ -358,11 +355,11 @@ There is no standalone regenerate command.
 
 Binary runtime assets are staged by the manifest-declared bundle target as part
 of the same build. Add or change the `bundle` field on the authoritative
-`Assets.toml` entry, then rebuild; do not add a second shell list.
-DejaVu Sans has bundle targets for offline use and
-`download_on_start = true` so native startup can recover a missing copy. It is
-also visible in Settings for manual retry. Planetary imagery, external models,
-and source libraries remain user-requested downloads and have no bundle target.
+`Assets.toml` entry, then rebuild; do not add a second shell list. DejaVu Sans
+has targets for both applications' native and web builds, is included in those
+packages for offline use, and remains available in Settings for explicit retry.
+Planetary imagery, external models, and source libraries remain user-requested
+downloads and have no bundle target.
 Other package-only entries must name a bundle and cannot be recommended. The
 staging command validates the declared raw/processed artifact before copying
 it, so a missing or incomplete asset fails the build instead of becoming a
