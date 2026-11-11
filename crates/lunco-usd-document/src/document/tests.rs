@@ -3565,19 +3565,18 @@ fn native_binary_layer_roundtrip_and_export_rejection() {
 }
 
 #[test]
-fn native_writer_rejection_preserves_unchanged_authored_source() {
+fn native_writer_roundtrips_inheritance() {
     let source = "#usda 1.0\nclass \"Base\" {}\ndef Xform \"Derived\" (inherits = </Base>) {}\n";
     let mut document = UsdDocument::new(DocumentId::new(13), source);
     assert_eq!(document.export_bytes("usda").unwrap(), source.as_bytes());
     document.authored_source = None;
-    assert!(
-        document
-            .export_bytes("usda")
-            .unwrap_err()
-            .to_string()
-            .contains("inheritPaths")
-    );
-    assert!(document.source().is_err());
+    let bytes = document.export_bytes("usda").unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(text.contains("inherits = </Base>"));
+    assert!(!text.contains("inheritPaths"));
+    let restored = UsdDocument::new(DocumentId::new(16), text);
+    assert!(same_layer_data(document.data(), restored.data()));
+    assert!(document.source().is_ok());
 }
 
 #[test]
@@ -3608,8 +3607,11 @@ fn native_binary_inheritance_does_not_require_text_export() {
         restored.data(),
         &sdf::Data::from_abstract(layer.data()).unwrap()
     ));
-    assert!(restored.source().is_err());
-    assert!(restored.export_bytes("usda").is_err());
+    assert!(restored.source().is_ok());
+    let text = restored.export_bytes("usda").unwrap();
+    let text = std::str::from_utf8(&text).unwrap();
+    let reread = UsdDocument::new(DocumentId::new(17), text);
+    assert!(same_layer_data(restored.data(), reread.data()));
 }
 
 #[test]
