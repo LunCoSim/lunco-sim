@@ -23,6 +23,9 @@ use lunco_camera_core::follow_policy::{FollowFacts as F, FollowPlan, resolve_fol
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct FollowPolicyContext<'w, 's> {
+    terrain: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
+    active_frame: Option<Res<'w, lunco_spatial::ActivePhysicsFrame>>,
+    collision_settings: Res<'w, lunco_avatar_policy::AvatarCollisionSettings>,
     subjects: Query<
         'w,
         's,
@@ -237,7 +240,58 @@ pub(crate) fn spring_arm_system(
                 continue;
             }
         };
+        // Terrain physics colliders only cover the contact ring. Resolve the
+        // camera boom against the analytic DEM in its active physics frame as
+        // well, including terrain beyond the streamed collider footprint.
+        let terrain_frame = if policy.terrain.has_terrain() {
+            if !policy.collision_settings.radius_m.is_finite()
+                || policy.collision_settings.radius_m <= 0.0
+            {
+                policy.report(Some(
+                    "camera collision radius must be positive and finite".into(),
+                ));
+                continue;
+            }
+            if policy.terrain.surface_key().is_none() {
+                policy.report(Some(
+                    "terrain camera collision has no terrain in the active frame".into(),
+                ));
+                continue;
+            }
+            let Some(frame) = policy.active_frame.as_deref() else {
+                policy.report(Some("terrain camera collision has no active frame".into()));
+                continue;
+            };
+            let Some(transform) = lunco_spatial::coords::grid_transform_between_grids(
+                child_of.0, frame.0, &q_parents, &q_grids, &q_spatial,
+            ) else {
+                policy.report(Some(
+                    "terrain camera collision cannot resolve its grid frame".into(),
+                ));
+                continue;
+            };
+            Some(transform)
+        } else {
+            None
+        };
         policy.report(None);
+        let terrain_hit = |origin: DVec3, delta: DVec3, clearance: f64| -> Option<f64> {
+            let transform = terrain_frame?;
+            let length = delta.length();
+            if !length.is_finite() || length <= f64::EPSILON {
+                return None;
+            }
+            let direction = transform.transform_vector(delta / length);
+            policy
+                .terrain
+                .raycast_with_clearance(
+                    GridPos(transform.transform_position(origin)),
+                    Dir3::new(direction.as_vec3()).ok()?,
+                    length,
+                    clearance,
+                )
+                .map(|hit| hit.distance)
+        };
         // Angles narrow only at the render quaternion boundary.
         let yaw = plan.yaw.rem_euclid(std::f64::consts::TAU) as f32;
         let pitch = plan.pitch as f32;
@@ -295,7 +349,7 @@ pub(crate) fn spring_arm_system(
         // The focus offset itself may cross a ceiling. Resolve it from the
         // subject center before casting the camera boom, with the same filter.
         let focus_length = vertical_offset.length();
-        let focus_offset = spatial_query
+        let focus_hit = spatial_query
             .as_ref()
             .and_then(|query| {
                 query.cast_ray_in_grid(
@@ -307,7 +361,13 @@ pub(crate) fn spring_arm_system(
                     filter,
                 )
             })
-            .map(|hit| vertical_offset * ((f64::from(hit.distance) - 0.1).max(0.0) / focus_length))
+            .map(|hit| f64::from(hit.distance));
+        let focus_hit = focus_hit
+            .into_iter()
+            .chain(terrain_hit(target_pos, vertical_offset, 0.0))
+            .reduce(f64::min);
+        let focus_offset = focus_hit
+            .map(|distance| vertical_offset * ((distance - 0.1).max(0.0) / focus_length))
             .unwrap_or(vertical_offset);
         let ray_origin = target_pos + focus_offset;
         let desired_pos = ray_origin + offset;
@@ -327,8 +387,17 @@ pub(crate) fn spring_arm_system(
         };
 
         let desired_len = ray_len;
-        let target_len = match hit {
-            Some(hit_data) => ((f64::from(hit_data.distance) - 0.5).min(desired_len)).max(0.0),
+        let hit_distance = hit
+            .map(|hit| f64::from(hit.distance))
+            .into_iter()
+            .chain(terrain_hit(
+                ray_origin,
+                offset,
+                policy.collision_settings.radius_m,
+            ))
+            .reduce(f64::min);
+        let target_len = match hit_distance {
+            Some(distance) => ((distance - 0.5).min(desired_len)).max(0.0),
             None => desired_len,
         };
         let Some(current_pos) =
