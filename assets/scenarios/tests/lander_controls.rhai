@@ -2,6 +2,7 @@
 // The scenario drives the possessed production lander through SimulateIntent,
 // then reads the same command ports consumed by the Modelica/Avian path. It
 // does not duplicate RCS physics or alter the authored control profile.
+import "lunco://scripting/policy/runtime_ui_surface.rhai" as runtime_ui_policy;
 
 const ROOT = "/LanderControlsTest";
 const EPS = 0.0001;
@@ -11,7 +12,7 @@ const GRAVITY_TOLERANCE = 0.05;
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path(ROOT + "/Lander")],
        entity_reads: [find_path(ROOT + "/Avatar"), find_path(ROOT + "/Lander/Environment")], entity_writes: [],
-       query_reads: ["SceneCameraAudit"], required_inputs: [] }
+       query_reads: ["SceneCameraAudit", "ReadExposures"], required_inputs: [] }
 }
 
 fn near(actual, expected) {
@@ -56,6 +57,12 @@ fn component_present(target, component) {
     get(target, component) != ()
 }
 
+fn vehicle_control_hud() {
+    let result = query("ReadExposures", #{surface: "vehicle-control-left"});
+    if result == () || result.surfaces == () { return (); }
+    result.surfaces["vehicle-control-left"]
+}
+
 fn has_no_render_camera(audit) {
     if audit == () || audit.candidates == () { return false; }
     for candidate in audit.candidates {
@@ -66,8 +73,10 @@ fn has_no_render_camera(audit) {
 
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
+    this.hud_wait_elapsed = 0.0;
     this.phase = 0;
     this.done = false;
+    this.hud_phase = "await_hidden";
     this.return_transition_seen = false;
     this.original_return_transition_duration =
         get_setting("CameraInputSettings.orbit_return_transition_duration_s");
@@ -86,31 +95,102 @@ fn on_start(me, ctx) {
     this.acceleration_valid_in_orbit = ();
     this.headless_without_render_camera = has_no_render_camera(
         query("SceneCameraAudit", #{}));
+    this.hud_visibility_checks = [
+        t_true(!runtime_ui_policy::runtime_ui_should_be_visible(#{
+            surface_id: "vehicle-control-left", available: true,
+            visibility_mode: "possessed", control_owner: "none",
+            status: "compiling", simulation_progress: [#{owner: "SceneLifecycle"}],
+        }), "an unpossessed HUD stays hidden during startup preparation"),
+        t_true(!runtime_ui_policy::runtime_ui_should_be_visible(#{
+            surface_id: "vehicle-control-left", available: true,
+            visibility_mode: "possessed", control_owner: "remote",
+            status: "running", simulation_progress: [#{owner: "ModelicaPreparation"}],
+        }), "remote control does not reveal the local HUD during preparation"),
+        t_true(runtime_ui_policy::runtime_ui_should_be_visible(#{
+            surface_id: "vehicle-control-left", available: true,
+            visibility_mode: "possessed", control_owner: "local",
+            status: "compiling", simulation_progress: [#{owner: "TerrainPreparation"}],
+        }), "local possession keeps its HUD visible during preparation"),
+        t_true(runtime_ui_policy::runtime_ui_should_be_visible(#{
+            surface_id: "vehicle-control-left", available: true,
+            visibility_mode: "possessed", control_owner: "local",
+            status: "running", simulation_progress: [],
+        }), "local possession keeps its HUD visible after preparation"),
+        t_true(runtime_ui_policy::runtime_ui_should_be_visible(#{
+            surface_id: "vehicle-control-left", available: true,
+            visibility_mode: "always", control_owner: "none",
+            status: "compiling", simulation_progress: [#{owner: "SceneReferences"}],
+        }), "an available always-mode HUD remains visible during preparation"),
+        t_true(!runtime_ui_policy::runtime_ui_should_be_visible(#{
+            surface_id: "vehicle-control-left", available: false,
+            visibility_mode: "always", control_owner: "none",
+            status: "unavailable", simulation_progress: [],
+        }), "always mode does not reveal a missing subject"),
+    ];
 
     if this.lander < 0 || this.avatar < 0 {
         this.done = true;
-        report_verdict(["production lander or avatar did not compose"],
+        this.hud_visibility_checks.push(t_true(false, "production lander or avatar did not compose"));
+        report_verdict(this.hud_visibility_checks,
                        "LANDER CONTROLS", "LANDER_CONTROLS");
         return;
     }
-    let possessed = cmd("AcquireControl", #{ target: this.lander });
-    if !possessed.ok {
-        this.done = true;
-        report_verdict(["production lander could not be possessed: " + possessed.error],
-                       "LANDER CONTROLS", "LANDER_CONTROLS");
-        return;
-    }
-
-    // Camera behavior is a presentation transaction. Enter the real orbit rig
-    // while keeping the same possession and physics participant, then exercise
-    // the existing control surface through that mode. This catches accidental
-    // camera→control coupling without adding a second physics path.
-    let focused = cmd("FocusTarget", #{ target: this.lander });
-    this.focus_requested = focused.ok;
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
+    this.hud_wait_elapsed += dt();
+    let hud = vehicle_control_hud();
+    if this.hud_phase == "await_hidden" {
+        if this.hud_wait_elapsed > 30.0 {
+            this.done = true;
+            this.hud_visibility_checks.push(t_true(false,
+                "the unpossessed HUD did not publish its initial hidden state"));
+            report_verdict(this.hud_visibility_checks, "LANDER CONTROLS", "LANDER_CONTROLS");
+            return;
+        }
+        if hud == () || hud.state == "pending" { return; }
+        if hud.state != "ready" || hud.visible {
+            this.done = true;
+            this.hud_visibility_checks.push(t_true(false,
+                "the composed unpossessed lander HUD must be ready and hidden"));
+            report_verdict(this.hud_visibility_checks, "LANDER CONTROLS", "LANDER_CONTROLS");
+            return;
+        }
+        this.hud_visibility_checks.push(t_true(!hud.visible,
+            "the composed lander HUD is hidden before local possession"));
+        let possessed = cmd("AcquireControl", #{ target: this.lander });
+        if !possessed.ok {
+            this.done = true;
+            this.hud_visibility_checks.push(t_true(false,
+                "production lander could not be possessed: " + possessed.error));
+            report_verdict(this.hud_visibility_checks, "LANDER CONTROLS", "LANDER_CONTROLS");
+            return;
+        }
+        this.hud_wait_elapsed = 0.0;
+        this.hud_phase = "await_visible";
+        return;
+    }
+    if this.hud_phase == "await_visible" {
+        if this.hud_wait_elapsed > 30.0 {
+            this.done = true;
+            this.hud_visibility_checks.push(t_true(false,
+                "local possession did not publish the lander HUD as visible"));
+            report_verdict(this.hud_visibility_checks, "LANDER CONTROLS", "LANDER_CONTROLS");
+            return;
+        }
+        if hud == () || hud.state == "pending" { return; }
+        if hud.state != "ready" || !hud.visible { return; }
+        this.hud_visibility_checks.push(t_true(hud.visible,
+            "local possession reveals the composed lander HUD"));
+        // Camera behavior is a presentation transaction. Enter the real orbit
+        // rig while keeping the same possession and physics participant, then
+        // exercise controls through that mode.
+        let focused = cmd("FocusTarget", #{ target: this.lander });
+        this.focus_requested = focused.ok;
+        this.hud_phase = "running";
+        return;
+    }
     this.elapsed += dt();
     if this.elapsed < 0.25 { return; }
     this.elapsed = 0.0;
@@ -171,7 +251,7 @@ fn on_tick(me, ctx) {
         let gravity_y = output_port(this.environment, "gravity_y");
         let acceleration_valid = output_port(this.lander, "acceleration_valid");
         let profile_ok = this.camera_follow == "Orbit";
-        let checks = [
+        let checks = this.hud_visibility_checks + [
             t_true(profile_ok, "lander controls do not select the stable orbit camera"),
             t_true(this.orbit_entered,
                 "FocusTarget did not enter the exclusive OrbitCamera mode"),

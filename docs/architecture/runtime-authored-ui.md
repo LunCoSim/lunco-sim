@@ -90,11 +90,12 @@ visible status wording, while the typed producer remains domain-neutral.
 The vessel status shows `WAITING FOR TERRAIN` while required ground is held,
 including while a download awaits user action. Changes to these holds
 invalidate surface properties through the existing
-exposure refresh path, so the built-in Rhai visibility policy can temporarily
-show an authored surface during scene, terrain, script, or Modelica preparation
-before possession and before the first physics step. Once preparation clears,
-the authored `possessed` or `always` mode controls visibility again; neither
-Rust exposure code nor the HUI template adds a second visibility rule.
+exposure refresh path. Preparation updates status content but does not reveal
+an unpossessed scene surface. The built-in Rhai policy shows an available
+surface only when its authored mode permits it: `possessed` requires local
+control, while `always` remains visible when its subject is available.
+Explicitly possessed HUDs therefore remain visible through preparation, and
+the default unpossessed HUD stays hidden at startup.
 
 The application dataset surface uses the existing `assets.provision` hook,
 declared by `lunco-core-session` and installed by application/Twin policy.
