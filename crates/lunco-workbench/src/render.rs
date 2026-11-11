@@ -3374,6 +3374,8 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
              camera moves away, preventing fine-to-coarse-to-fine flicker. \
              Persisted to the shared LunCoSim settings file.",
         );
+        ui.checkbox(&mut settings.show_streaming_events, "Record terrain streaming in Recent Events")
+            .on_hover_text("Record completed terrain streaming updates in Recent Events. Live progress and warnings remain visible.");
         if settings != original {
             ctx.set_resource(settings);
         }

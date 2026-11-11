@@ -9107,6 +9107,7 @@ dependencies = [
  "lunco-environment",
  "lunco-modelica-runtime",
  "lunco-render",
+ "lunco-settings",
  "lunco-status-core",
  "lunco-terrain-surface",
  "lunco-time",

@@ -37,6 +37,7 @@ impl Plugin for TerrainSurfacePlugin {
             .0 = true;
         lunco_settings::ensure_download_settings(app);
         app.register_settings_section::<lunco_settings::TerrainSettings>();
+        app.register_type::<lunco_settings::TerrainSettings>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::georef::FlatSiteSurface>();
         // Terrain layer realization uses this shared quality setting in GUI
