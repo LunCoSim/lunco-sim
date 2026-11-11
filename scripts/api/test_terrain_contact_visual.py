@@ -83,7 +83,13 @@ def main():
                 code = f'let d=query("QueryUsdPrim", #{{path:{route_path}}}).doc_id; print(find_path_in_document(d,waypoint_editor::ribbon_geometry_path({route_path})));'
                 curve_id = int(rhai(code)['stdout'].strip())
                 if curve_id > 0:
-                    view = execute('InspectUsdCurveView', doc_id=doc_id, entity_id=curve_id)
+                    try:
+                        view = execute('InspectUsdCurveView', doc_id=doc_id, entity_id=curve_id)
+                    except RuntimeError as error:
+                        if 'HTTP 404' not in str(error) or 'has no build result' not in str(error):
+                            raise
+                        time.sleep(.15)
+                        continue
                     if view['state'] == 'failed':
                         raise RuntimeError(view)
                     if view['state'] == 'ready' and view['displayed_surface_binding_count'] > 0:
@@ -103,6 +109,17 @@ def main():
                          'contacts': status['contacts'], 'camera_cover': status['camera_cover'], 'performance': execute('EnginePerformance')})
             (out / 'validation.json').write_text(json.dumps(cohort, indent=2))
             assert_render_log_clean(log)
+        # The route's presentation is published by its running scenario. Wait
+        # for the scene to mount before starting time so scene activation cannot
+        # overwrite the transport request.
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            if int(rhai(f'find_path({json.dumps(args.route_path)})')['stdout'].strip()) > 0:
+                break
+            time.sleep(.2)
+        else:
+            raise RuntimeError('route scene did not mount')
+        execute('SetTimeTransport', playing=True)
         phase('initial', False)
         body = json.dumps(args.body_path)
         body_id = int(rhai(f'print(find_path({body}));')['stdout'].strip())

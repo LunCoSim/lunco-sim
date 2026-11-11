@@ -714,12 +714,16 @@ No separate sensor telemetry machinery exists.
 struct TelemetrySettings {          // impl SettingsSection, KEY = "telemetry"
     default_rate_hz: f64,           // 5.0 — the semantic default for omitted channel rates
     default_retention: usize,       // 1500 samples — five minutes at 5 Hz
-    max_channels: usize,            // 8192 live channels by default; backpressure guard
+    max_channels: usize,            // 12288 live channels by default; backpressure guard
     max_sample_deliveries_per_update: usize, // 1024 callbacks per app frame by default
     enabled: bool,
     default_deadband: TelemetryDeadband,
 }
 ```
+
+At the default retention, filling all 12,288 histories costs approximately
+281 MiB for scalar samples. Histories grow as samples arrive. An explicitly
+persisted `max_channels` remains authoritative, including a lower user limit.
 
 The resolution rules are deliberately narrow:
 
