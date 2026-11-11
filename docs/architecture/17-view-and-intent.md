@@ -459,7 +459,13 @@ Free-flight and surface movement are kinematic camera motion and use the shared
 BigSpace/Avian collision contract described in
 [`45-big-space-correct-usage.md`](45-big-space-correct-usage.md#physics-boundary).
 The avatar is not given a second authored USD body or collider; its capsule
-query consumes the standard stage colliders. Traversal is disabled unless the
+query consumes the standard stage colliders. Where an analytic DEM is present,
+the movement owner also checks a conservative swept-capsule enclosure against
+the composed terrain's certified height bounds, including beyond the physical
+collider ring. An unavailable enclosure or exhausted terrain-query budget holds
+movement. When lateral travel meets a conservative enclosure, the avatar may
+lift through the same collider and terrain checks before retrying that travel;
+an upward escape remains available. Traversal is disabled unless the
 active Twin explicitly sets `avatar.allow_through_soil = true` through the
 existing generic Twin-settings command.
 

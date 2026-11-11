@@ -288,6 +288,100 @@ impl GridSurfaceQuery<'_, '_> {
         Some(TerrainSurfaceSnapshot { frame, terrains })
     }
 
+    /// Conservatively check a swept upright capsule against composed DEMs.
+    /// Inputs are in the active physics frame. An indeterminate or over-budget
+    /// enclosure is an error, so a movement owner can hold the proposed motion.
+    pub fn capsule_sweep_clear(
+        &self,
+        start: DVec3,
+        end: DVec3,
+        up: DVec3,
+        radius: f64,
+        half_segment: f64,
+        max_cells: usize,
+    ) -> Result<bool, String> {
+        if !start.is_finite()
+            || !end.is_finite()
+            || !up.is_finite()
+            || (up.length_squared() - 1.0).abs() > 1e-6
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !half_segment.is_finite()
+            || half_segment < 0.0
+            || max_cells == 0
+        {
+            return Err("invalid terrain capsule sweep".into());
+        }
+        let (frame, _) = self.frame().ok_or("terrain sweep has no active frame")?;
+        let mut visited = 0usize;
+        let mut matched = 0usize;
+        for (_, terrain, pose) in self.terrains.iter() {
+            if pose.frame != frame {
+                continue;
+            }
+            matched += 1;
+            let inverse = pose.rotation.inverse();
+            let a = inverse * (start - pose.position);
+            let b = inverse * (end - pose.position);
+            let axis = inverse * up;
+            let delta = b - a;
+            // Straight upward motion cannot deepen any existing overlap.
+            if delta.y > 0.0 && delta.x.abs() < 1e-10 && delta.z.abs() < 1e-10 {
+                continue;
+            }
+            let ex = radius + half_segment * axis.x.abs();
+            let ez = radius + half_segment * axis.z.abs();
+            let bottom = a.y.min(b.y) - radius - half_segment * axis.y.abs();
+            let half = f64::from(terrain.0.half_extent());
+            let x0 = (a.x.min(b.x) - ex).max(-half);
+            let x1 = (a.x.max(b.x) + ex).min(half);
+            let z0 = (a.z.min(b.z) - ez).max(-half);
+            let z1 = (a.z.max(b.z) + ez).min(half);
+            if x0 > x1 || z0 > z1 {
+                continue;
+            }
+            let resolution = terrain.0.base_resolution();
+            let spacing = f64::from(terrain.0.spacing());
+            let index = |coordinate: f64| {
+                (((coordinate + half) / spacing).floor() as usize).min(resolution - 2)
+            };
+            let (ix0, ix1, iz0, iz1) = (index(x0), index(x1), index(z0), index(z1));
+            let count = (ix1 - ix0 + 1)
+                .checked_mul(iz1 - iz0 + 1)
+                .ok_or("terrain capsule sweep exceeds its work budget")?;
+            visited = visited
+                .checked_add(count)
+                .ok_or("terrain capsule sweep exceeds its work budget")?;
+            if visited > max_cells {
+                return Err("terrain capsule sweep exceeds its work budget".into());
+            }
+            for z in iz0..=iz1 {
+                for x in ix0..=ix1 {
+                    let cell_x = -half + x as f64 * spacing;
+                    let cell_z = -half + z as f64 * spacing;
+                    let end_x = if x == resolution - 2 {
+                        half
+                    } else {
+                        cell_x + spacing
+                    };
+                    let end_z = if z == resolution - 2 {
+                        half
+                    } else {
+                        cell_z + spacing
+                    };
+                    let rect = [x0.max(cell_x), z0.max(cell_z), x1.min(end_x), z1.min(end_z)];
+                    if terrain.0.height_bounds_in_cell([x, z], rect)?[1] > bottom {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        if self.all_terrains.iter().count() != matched {
+            return Err("terrain sweep has an unresolved terrain in the active frame".into());
+        }
+        Ok(true)
+    }
+
     /// Interpret an annotation query in its owning terrain's local plane.
     pub fn terrain_local_point(
         &self,
@@ -359,6 +453,13 @@ impl GridSurfaceQuery<'_, '_> {
                 eps,
             )
         })
+    }
+
+    /// Terrain-local up in the active physics frame for an identified surface.
+    pub fn terrain_up(&self, terrain: Entity) -> Option<DVec3> {
+        let (frame, _) = self.frame()?;
+        let (_, _, pose) = self.terrains.get(terrain).ok()?;
+        (pose.frame == frame).then(|| pose.rotation * DVec3::Y)
     }
 
     /// Slope angle under a grid-absolute point, in radians.
@@ -656,6 +757,73 @@ mod tests {
 
     fn world_with_terrain(elevation: f64) -> (App, Entity) {
         world_with_oracle(flat_dem_at(elevation, 500.0))
+    }
+
+    #[test]
+    fn swept_capsule_bounds_narrow_relief_and_budget() {
+        let oracle = Arc::new(SurfaceOracle::new(
+            Arc::new(HeightGrid::new_flat(9, 4.0)),
+            vec![crate::oracle::HeightContribution {
+                modifier: Arc::new(lunco_terrain_core::BrushModifier::new(
+                    [0.125, 0.0],
+                    0.02,
+                    2.0,
+                )),
+                content_key: 1,
+            }],
+        ));
+        let (mut app, _) = world_with_oracle(oracle);
+        let system = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            let a = DVec3::new(-3.0, 1.0, 0.0);
+            let b = DVec3::new(1.0, 1.0, 0.0);
+            (
+                q.capsule_sweep_clear(a, b, DVec3::Y, 0.1, 0.0, 100),
+                q.capsule_sweep_clear(
+                    a + DVec3::Y * 3.0,
+                    b + DVec3::Y * 3.0,
+                    DVec3::Y,
+                    0.1,
+                    0.0,
+                    100,
+                ),
+                q.capsule_sweep_clear(a, b, DVec3::Y, 0.1, 0.0, 1),
+                q.capsule_sweep_clear(DVec3::ZERO, DVec3::Y, DVec3::Y, 0.1, 0.0, 100),
+            )
+        });
+        let (blocked, clear, limited, escape) = app.world_mut().run_system(system).unwrap();
+        assert_eq!(blocked, Ok(false));
+        assert_eq!(clear, Ok(true));
+        assert!(limited.is_err());
+        assert_eq!(escape, Ok(true));
+    }
+
+    #[test]
+    fn swept_capsule_uses_rotated_terrain_frame() {
+        let (mut app, terrain) = world_with_terrain(0.0);
+        let rotation = Quat::from_rotation_z(0.4);
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(Transform::from_rotation(rotation));
+        let project = app
+            .world_mut()
+            .register_system(update_terrain_physics_frame_poses);
+        app.world_mut().run_system(project).unwrap();
+        let up = rotation.as_dquat() * DVec3::Y;
+        let sys = app.world_mut().register_system(move |q: GridSurfaceQuery| {
+            q.capsule_sweep_clear(up * 2.0, up * 0.5, up, 0.3, 0.4, 16)
+        });
+        assert_eq!(app.world_mut().run_system(sys).unwrap(), Ok(false));
+    }
+
+    #[test]
+    fn swept_capsule_refuses_an_unresolved_terrain() {
+        let (mut app, _) = world_with_terrain(0.0);
+        app.world_mut()
+            .spawn(DemHeightField(flat_dem_at(0.0, 10.0)));
+        let system = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            q.capsule_sweep_clear(DVec3::Y * 10.0, DVec3::Y * 9.0, DVec3::Y, 0.3, 0.4, 16)
+        });
+        assert!(app.world_mut().run_system(system).unwrap().is_err());
     }
 
     #[test]

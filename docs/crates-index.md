@@ -549,6 +549,8 @@ reuse bounded surface-revision-scoped cell enclosures; selected equipment
 proxies use the physics owner’s f64 shape BVH. See the
 [physical illumination contract](architecture/terrain-layered-rendering.md) for
 USD sampling, optical collections, required inputs and Modelica consumers.
+The same composed terrain bounds certify free-camera capsule movement beyond
+the physical collider ring.
 
 **`lunco-terrain-bake`**
 The pure (bevy/avian-free) DEM bake pipeline, factored out of `lunco-terrain-surface` so the SAME code runs on native and in a browser Web Worker: GeoTIFF decode → native crop → optional coarse-preview resample → crater stamp → `HeightGrid` (`bake_grid`/`finish_bake`), plus the serializable `DemBakeJob`/`StampSpec`. On native `lunco-terrain-surface` calls it inside an `AsyncComputeTaskPool` task; on wasm — where that pool runs on the page's main thread and the ~40 MB decode + crater stamp froze the tab — it dispatches to the `dem_worker` companion binary over `lunco-worker-transport`, which decodes once then streams a coarse preview (`COARSE_RES`) and then the full native grid back (coarse-then-full progressive). Only the avian collider + Bevy mesh derive stays in `lunco-terrain-surface`, where those types live.

@@ -343,6 +343,11 @@ ring does not cover a long boom. A policy can choose offsets and easing
 per vessel without a Rust vessel-type dispatch. See
 [the camera follow contract](../../docs/architecture/camera-follow-policy.md).
 
+Free-flight movement and scroll transit also bound the swept avatar capsule
+against the composed terrain in the active physics frame. Unknown terrain
+enclosures or an exhausted work budget hold movement; they do not certify an
+empty path. The Twin's explicit through-soil opt-out retains its existing owner.
+
 Verify changes with physics held: live distance/height/angle/mode updates,
 invalid-batch rejection without partial mutation, policy fault/diagnostic/recovery,
 and unchanged simulation tick. Exercise the native switch-mode intent (default V)

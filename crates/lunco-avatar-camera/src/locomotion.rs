@@ -54,6 +54,8 @@ pub(crate) fn move_avatar_with_collision(
     active_frame: Option<Entity>,
     move_and_slide: Option<&MoveAndSlide<'_, '_>>,
     collision_settings: &AvatarCollisionSettings,
+    terrain: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
+    terrain_budget: Option<usize>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
@@ -118,7 +120,7 @@ pub(crate) fn move_avatar_with_collision(
     ));
     let mut filter = SpatialQueryFilter::from_excluded_entities([avatar]);
     filter.mask = avian3d::prelude::LayerMask(!NON_PHYSICAL_QUERY_LAYERS);
-    let output = move_and_slide.move_and_slide(
+    let mut output = move_and_slide.move_and_slide(
         &shape,
         physics_position,
         shape_rotation.as_quat(),
@@ -130,6 +132,74 @@ pub(crate) fn move_avatar_with_collision(
     );
     if !output.position.is_finite() {
         return None;
+    }
+    if terrain.has_terrain() {
+        match terrain.capsule_sweep_clear(
+            physics_position,
+            output.position,
+            physics_up,
+            collision_settings.radius_m,
+            collision_settings.capsule_length_m * 0.5,
+            terrain_budget?,
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                // A conservative enclosure can meet rising ground even though
+                // a lateral step is possible. Lift through the same physics
+                // collision path first; the next interaction step retries the
+                // requested lateral motion from that certified position.
+                let Some(sample) = terrain.sample_surface(
+                    lunco_spatial::coords::GridPos(physics_position),
+                    collision_settings.radius_m,
+                ) else {
+                    return Some(source_position);
+                };
+                let Some(up) = terrain.terrain_up(sample.terrain) else {
+                    return None;
+                };
+                let lateral = physics_delta - up * physics_delta.dot(up);
+                if lateral.length_squared() <= f64::EPSILON {
+                    return Some(source_position);
+                }
+                let lift = lateral.length().min(collision_settings.radius_m);
+                let lift_velocity = up * (lift / delta_secs);
+                if !lunco_physics::avian_backend_vector_is_valid(lift_velocity) {
+                    return None;
+                }
+                output = move_and_slide.move_and_slide(
+                    &shape,
+                    physics_position,
+                    shape_rotation.as_quat(),
+                    lift_velocity.as_vec3(),
+                    delta_time,
+                    &MoveAndSlideConfig::default(),
+                    &filter,
+                    |_| MoveAndSlideHitResponse::Accept,
+                );
+                if !output.position.is_finite() {
+                    return None;
+                }
+                match terrain.capsule_sweep_clear(
+                    physics_position,
+                    output.position,
+                    physics_up,
+                    collision_settings.radius_m,
+                    collision_settings.capsule_length_m * 0.5,
+                    terrain_budget?,
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => return Some(source_position),
+                    Err(error) => {
+                        warn_once!("[avatar] terrain collision cannot certify lift: {error}");
+                        return None;
+                    }
+                }
+            }
+            Err(error) => {
+                warn_once!("[avatar] terrain collision cannot certify movement: {error}");
+                return None;
+            }
+        }
     }
     let result = physics_to_source.transform_position(output.position);
     result.is_finite().then_some(result)
@@ -187,6 +257,8 @@ pub(crate) fn apply_fly(
     active_frame: Option<Res<ActivePhysicsFrame>>,
     move_and_slide: Option<MoveAndSlide<'_, '_>>,
     collision_settings: Res<AvatarCollisionSettings>,
+    terrain: lunco_terrain_surface::GridSurfaceQuery,
+    terrain_budget: Option<Res<lunco_terrain_surface::SurfaceOcclusionBudget>>,
     workspace: Option<Res<WorkspaceResource>>,
     mut policy_error: Local<Option<String>>,
 ) {
@@ -266,6 +338,8 @@ pub(crate) fn apply_fly(
                 active_frame.as_deref().map(|frame| frame.0),
                 move_and_slide.as_ref(),
                 &collision_settings,
+                &terrain,
+                terrain_budget.as_deref().map(|budget| budget.max_intervals),
                 &q_parents,
                 &q_grids,
                 &q_spatial,

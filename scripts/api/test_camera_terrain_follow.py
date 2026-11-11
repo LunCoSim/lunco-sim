@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a followed camera against terrain beyond the physics collider ring."""
+"""Check followed and free-flight cameras beyond the terrain collider ring."""
 from __future__ import annotations
 
 import argparse
@@ -55,13 +55,23 @@ def main():
         execute('SetTimeTransport', playing=False)
         run_authored_scenario(session, 'lunco://scenarios/tests/camera_terrain_follow.rhai',
                               title='CAMERA TERRAIN FOLLOW', check_count=8, timeout_s=90)
+        avatar = int(execute('RunRhai', code=f'print(find_path({json.dumps(args.camera_path)}));')['stdout'].strip())
+        if avatar <= 0:
+            raise RuntimeError('local avatar is unavailable')
+        execute('SetCameraFollow', distance_m=120.0, height_m=30.0, yaw_rad=0.0, pitch_rad=0.0)
+        time.sleep(5)
+        execute('ReleaseControlSource', source=avatar)
+        time.sleep(2)
+        run_authored_scenario(session, 'lunco://scenarios/tests/camera_freeflight_terrain.rhai',
+                              title='CAMERA FREEFLIGHT TERRAIN', check_count=6,
+                              params={'avatar_path': args.camera_path}, timeout_s=90)
         diagnostics = execute('RuntimeDiagnostics')
         if diagnostics['errors'] or diagnostics['warnings']:
             raise RuntimeError(f'runtime diagnostics: {diagnostics}')
         assert_render_log_clean(log)
     if port_is_open(args.port):
         raise RuntimeError('owned API port was not released')
-    print('PASS camera terrain follow with owned Exit', flush=True)
+    print('PASS camera terrain follow and free flight with owned Exit', flush=True)
 
 
 if __name__ == '__main__':
