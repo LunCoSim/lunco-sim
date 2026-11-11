@@ -124,10 +124,12 @@ fn replace_shadow_pass<M, N>(
     schedule.add_systems(instrumented);
 }
 
-/// Install the bounded directional clear and optional shadow diagnostics after
-/// native plugins have built their complete render schedule.
+/// Install optional shadow diagnostics after native plugins build their schedule.
 fn install_shadow_passes(app: &mut App) {
     let diagnostics_enabled = app.is_plugin_added::<RenderDiagnosticsPlugin>();
+    if !diagnostics_enabled {
+        return;
+    }
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
     };
@@ -135,19 +137,6 @@ fn install_shadow_passes(app: &mut App) {
     render_app
         .world_mut()
         .schedule_scope(Core3d, |world, schedule| {
-            if !diagnostics_enabled {
-                replace_shadow_pass(
-                    world,
-                    schedule,
-                    per_view_shadow_pass::<EARLY_SHADOW_PASS>,
-                    crate::shadow_receiver_crop::clear_receiver_shadow_rects
-                        .pipe(per_view_shadow_pass::<EARLY_SHADOW_PASS>)
-                        .after(early_prepass_build_indirect_parameters)
-                        .before(early_downsample_depth)
-                        .before(per_view_shadow_pass::<LATE_SHADOW_PASS>),
-                );
-                return;
-            }
             // Native system-local edges are removed with the system. Reapply PBR's
             // shadow-pass contract as well as retaining its implicit delegate sets.
             replace_shadow_pass(
@@ -155,7 +144,6 @@ fn install_shadow_passes(app: &mut App) {
                 schedule,
                 per_view_shadow_pass::<EARLY_SHADOW_PASS>,
                 begin_camera_shadow_span::<EARLY_SHADOW_PASS>
-                    .pipe(crate::shadow_receiver_crop::clear_receiver_shadow_rects)
                     .pipe(per_view_shadow_pass::<EARLY_SHADOW_PASS>)
                     .pipe(end_shadow_span::<false, EARLY_SHADOW_PASS>)
                     .after(early_prepass_build_indirect_parameters)
@@ -174,9 +162,6 @@ fn install_shadow_passes(app: &mut App) {
                     .before(Core3dSystems::MainPass),
             );
         });
-    if !diagnostics_enabled {
-        return;
-    }
     for label in [Core3d.intern(), SharedShadowView.intern()] {
         render_app
             .world_mut()

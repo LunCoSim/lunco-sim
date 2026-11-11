@@ -216,31 +216,10 @@ operation alone. The probe is removed, source hashes and runtime diagnostics
 pass, owned API/Tracy ports 6158/8230 are closed, and the normal executable is
 restored. This diagnostic is not a product FPS result.
 
-The bounded-clear implementation uses the same proven receiver rectangle for a
-depth-only clear before native directional rasterization. The temporary
-`fps-20261106/bounded-clear-direct-ab/` control changed only the clear method,
-leaving the raster crop enabled in all phases. Native / bounded / native /
-bounded / native shadow GPU means were 6.2532 / 4.1870 / 6.2510 / 4.2083 /
-6.2678 ms; all five 2560×1360 scene viewports matched exactly. The final
-pipeline-pinned build's separate Tracy capture `bounded-clear-pinned-tracy/`
-measured 4.2078 ms paused and 4.1982 ms playing. The control was removed.
-
-The final normal build `c5e68dc93cf9c182703b39b1ce931c2901569722eb08d0e802cd9e662e37569f`
-passes `bounded-clear-pinned-fixture/`: native/bounded pixel equality after
-camera moves in both directions, unbounded-material retirement, 24 authored
-checks and camera teardown. `bounded-clear-verified-fixture/` additionally uses
-transient USD intent to remove all fixture casters, verifies the native cascade
-lists are empty, compares bounded/full pixels, and restores the casters. All
-four lists change from two casters to zero and back; removing the casters changes
-13,450 image pixels while the empty bounded/full images remain identical.
-`bounded-clear-shared-pinned/` passes four authored
-point/spot controls. In `bounded-clear-pinned-normal/`, pooled full and bounded
-windows measure 52.7085 and 58.3826 FPS, with median/p95 frame times 18.6494 /
-22.5959 and 16.9248 / 19.6919 ms. The comparison includes the existing raster
-crop as well as the clear. GPU SM means are 2525/2518/2528/2432/2507 MHz
-across A0/B0/A1/B1/A2; all frames and the worst 34.0625 ms bounded frame are
-retained. Physics advances 614–619 ticks per window, source hashes match and
-diagnostics are clear. The 100 and 150 FPS targets remain unmet.
+Native shadow attachments clear the complete map before receiver-bounded
+draws. Measure the current clear and raster costs together on the production
+scene; prior measurements of a different clear path do not establish current
+performance. The 100 and 150 FPS targets remain unmet.
 
 Initial normal cross-process crop windows show roughly 51.8→54.2–54.6 FPS but
 worse tails. Typed registration removes an unnecessary exclusive-world access;

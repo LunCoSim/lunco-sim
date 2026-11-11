@@ -25,6 +25,8 @@ use crate::{
 /// a point-mass estimate or treating an unavailable measurement as zero.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DynamicJointIslandMass {
+    /// Identity shared by the currently connected dynamic bodies.
+    pub island: Entity,
     /// Total mass of every dynamic body connected through active joints.
     pub mass_kg: Option<f64>,
     /// Number of dynamic bodies represented by the mass sample.
@@ -139,6 +141,7 @@ pub fn aggregate_dynamic_joint_island_masses(
                 }
             });
         let sample = DynamicJointIslandMass {
+            island: members[0],
             mass_kg: total_mass,
             body_count: members.len(),
         };
@@ -338,7 +341,9 @@ mod tests {
         for body in [lander, leg, payload] {
             assert_eq!(masses[&body].mass_kg, Some(2_630.0));
             assert_eq!(masses[&body].body_count, 3);
+            assert_eq!(masses[&body].island, masses[&lander].island);
         }
+        assert_ne!(masses[&independent_body].island, masses[&lander].island);
         assert_eq!(masses[&independent_body].mass_kg, Some(75.0));
         assert_eq!(masses[&independent_body].body_count, 1);
     }

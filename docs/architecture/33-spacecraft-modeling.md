@@ -514,6 +514,13 @@ The shared tire owner retains the support identity and applies an equal and
 opposite tangential force to dynamic supports at that same point. Both native
 accumulators must be available before either side is changed. Static and
 kinematic supports retain their prescribed motion.
+For a braked, locked physical wheel, the tire owner distributes the current
+dynamic joint-island mass over all its loaded external contacts and applies
+the Coulomb- and brake-limited static hold using velocity relative to each
+support. The normal-load share carries island gravity, while the velocity
+correction uses the contacted wheel body's measured mass. Contacts within the
+same joint island do not support that island.
+The locked-patch force replaces the slip-curve force and supplies its own heat.
 The same completed native contact graph supplies generic `contact_force`; there
 is one contact impulse owner.
 Completed samples survive an admission hold and retire with the scene.

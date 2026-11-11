@@ -44,7 +44,8 @@ lifetime, so restart the owned app for performance acceptance after shader
 editing. Inspect camera `DirectionalShadowRaster` facts through typed reflection;
 these describe projected admission, not GPU acceptance. Run
 `scripts/api/test_shadow_receiver_crop.py --port <free-port> --output <dir>`
-for Rhai admission, negative source, pixel and retirement checks.
+for Rhai admission, negative source, pixel and retirement checks. Native shadow
+attachments clear the full map; receiver bounds restrict draws, not clearing.
 
 Editor inspection uses a neutral studio rig, camera-local ambient fill and one
 view-sized shadow cascade. Verify those cameras separately from physical scene
@@ -220,6 +221,8 @@ GPU acceptance still require the rendered fixture and a clean process log.
    Bevy's PBR diffuse-occlusion input, not in authored albedo or direct-sun
    multiplication. If broad terrain colour patches match a low-frequency AO
    map, inspect that channel routing before touching assets or exposure.
+   The continuation must apply the same authored-versus-derived AO transfer
+   as the site surface before fading its contribution into the globe.
    For tile-shaped holes with a fully resident/prepared cover, inspect native GPU
    output-buffer stride before changing material lighting. `UninitBufferVec`
    allocates by `ShaderSize::SHADER_SIZE`, not Rust `size_of`; enhanced-determinism

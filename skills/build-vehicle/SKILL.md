@@ -145,6 +145,10 @@ The wheel projector binds the authored Modelica shaft torque and measured speed
 to that joint; it does not construct a second hinge. A raycast wheel has no
 native wheel hinge and applies its tire/contact result through its body mount.
 Keep exactly one suspension and tangential-contact owner for each realization.
+For a locked jointed wheel using the shared tire, parking hold uses the active
+joint-island mass and all loaded external contacts; its force replaces the
+slip-curve force and remains bounded by the authored grip and brake torque.
+Its velocity correction uses the contacted wheel body's measured mass.
 Motors, reductions, efficiency laws and thermal networks are authored higher
 level components, not wheel-core defaults.
 
