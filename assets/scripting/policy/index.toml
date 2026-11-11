@@ -91,6 +91,12 @@ entry = "asset_download_prepare"
 skip_when_hook_unavailable = true
 
 [[policies]]
+hook = "artifact.cache.policy"
+source = "artifact_cache.rhai"
+entry = "artifact_cache_policy"
+deterministic = true
+
+[[policies]]
 hook = "render.quality_profile"
 source = "render_quality_profiles.rhai"
 entry = "render_quality_profile"

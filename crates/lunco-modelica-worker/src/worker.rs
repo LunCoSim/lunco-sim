@@ -2173,8 +2173,19 @@ fn compile_shared(
         identity.update(name.as_bytes());
     }
     let binding_schema = identity.finish();
-    let mut artifact =
-        if let Some(artifact) = artifacts.compatible_variant(&binding_schema, &parameters) {
+    let shared_key = shared_compile_hash(model_name, unit, doc_uri, library_gen, &parameters);
+    let mut artifact = if let Some(artifact) =
+        artifacts.compatible_variant(&binding_schema, &parameters)
+    {
+        let decision = lunco_assets_core::cache_policy::artifact_cache_decision(
+            "modelica_compiled",
+            modelica_cache_scope(doc_uri),
+            doc_uri,
+            &format!("{shared_key:016x}"),
+            true,
+            false,
+        )?;
+        if decision == lunco_assets_core::cache_policy::ArtifactCacheDecision::Reuse {
             artifact
         } else {
             compile_bound_variant(
@@ -2186,8 +2197,22 @@ fn compile_shared(
                 library_gen,
                 &parameters,
                 binding_schema,
+                true,
             )?
-        };
+        }
+    } else {
+        compile_bound_variant(
+            artifacts,
+            compiler,
+            model_name,
+            unit,
+            doc_uri,
+            library_gen,
+            &parameters,
+            binding_schema,
+            false,
+        )?
+    };
     ModelicaCompiler::validate_parameter_bindings(&artifact.compiled.dae, &parameters)?;
     artifact.authored_bindings = ModelicaCompiler::admit_authored_bindings_from_checked_dae(
         &artifact.compiled.dae,
@@ -2203,6 +2228,14 @@ fn compile_shared(
         &parameters,
     )?));
     Ok(artifact)
+}
+
+fn modelica_cache_scope(doc_uri: &str) -> &'static str {
+    if doc_uri.starts_with("twin://") {
+        "twin"
+    } else {
+        "application"
+    }
 }
 
 /// Merge scalar values with the latter transaction taking precedence. A wired
@@ -2225,6 +2258,7 @@ fn compile_bound_variant(
     library_gen: u64,
     numeric: &[(String, f64)],
     binding_schema: lunco_hash::content::Cid,
+    force_rebuild: bool,
 ) -> Result<CompiledModelArtifact, String> {
     let key = shared_compile_hash(model_name, unit, doc_uri, library_gen, numeric);
     log::debug!(
@@ -2243,26 +2277,54 @@ fn compile_bound_variant(
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(disk_key) = &disk_key {
-        let started = web_time::Instant::now();
-        let _span = bevy::log::info_span!("modelica_compiled_artifact_lookup").entered();
-        match artifacts.load_disk(disk_key, numeric) {
-            Ok(Some(artifact)) if artifact.binding_schema == binding_schema => {
-                log::info!(
-                    "[modelica-runtime] strict compiled artifact for `{model_name}`: cache=disk-hit lookup={:?}",
-                    started.elapsed()
-                );
-                artifacts.insert(key, artifact.clone());
-                return Ok(artifact);
+    let mut policy_evaluated = false;
+    if !force_rebuild {
+        if let Some(disk_key) = &disk_key {
+            let started = web_time::Instant::now();
+            let _span = bevy::log::info_span!("modelica_compiled_artifact_lookup").entered();
+            match artifacts.load_disk(disk_key, numeric) {
+                Ok(Some(artifact)) if artifact.binding_schema == binding_schema => {
+                    let decision = lunco_assets_core::cache_policy::artifact_cache_decision(
+                        "modelica_compiled",
+                        modelica_cache_scope(doc_uri),
+                        doc_uri,
+                        &format!("{key:016x}"),
+                        true,
+                        false,
+                    )?;
+                    policy_evaluated = true;
+                    if decision == lunco_assets_core::cache_policy::ArtifactCacheDecision::Reuse {
+                        log::info!(
+                            "[modelica-runtime] strict compiled artifact for `{model_name}`: cache=disk-hit lookup={:?}",
+                            started.elapsed()
+                        );
+                        artifacts.insert(key, artifact.clone());
+                        return Ok(artifact);
+                    }
+                }
+                Ok(Some(_)) => log::warn!(
+                    "[modelica-runtime] compiled artifact binding schema rejected for `{model_name}`"
+                ),
+                Ok(None) => {}
+                Err(error) => log::warn!(
+                    "[modelica-runtime] compiled artifact cache rejected for `{model_name}`: {error}"
+                ),
             }
-            Ok(Some(_)) => log::warn!(
-                "[modelica-runtime] compiled artifact binding schema rejected for `{model_name}`"
-            ),
-            Ok(None) => {}
-            Err(error) => log::warn!(
-                "[modelica-runtime] compiled artifact cache rejected for `{model_name}`: {error}"
-            ),
         }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let policy_evaluated = false;
+    if !force_rebuild && !policy_evaluated {
+        // This call also gives a Twin policy a chance to observe a genuine
+        // cache miss; the Rust freshness fence below still forces compilation.
+        let _ = lunco_assets_core::cache_policy::artifact_cache_decision(
+            "modelica_compiled",
+            modelica_cache_scope(doc_uri),
+            doc_uri,
+            &format!("{key:016x}"),
+            false,
+            false,
+        )?;
     }
     let outcome = if unit.extras.is_empty() {
         compiler.compile_str_after_source_root_admission(model_name, &unit.source, doc_uri, numeric)
