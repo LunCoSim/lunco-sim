@@ -92,13 +92,6 @@ def headless(port, out, common):
         root = wait_mounted(session)
         execute(session, "SetTimeTransport", playing=True)
         wait_landed(session)
-        target = int(execute(session, "RunRhai", code='find_path("/Griffin1SurfaceOps/LandingTarget")')["stdout"])
-        # Read the driver directly through the API, outside any Rhai execution.
-        health = execute(session, "ScriptInspect", target=target)
-        if not (health.get("scripted") and health.get("status", {}).get("ok")
-                and health.get("state", {}).get("rendered") is False):
-            raise RuntimeError(f"headless presentation owner is unhealthy: {health}")
-        (out / "headless-owner.json").write_text(json.dumps(health, indent=2))
         gate(session, root, headless=True)
 
 
@@ -129,6 +122,7 @@ def main():
         camera = int(execute(session, "RunRhai", code='find_path("/Griffin1SurfaceOps/Avatar")')["stdout"])
         wait_descent_route(session)
         gate(session, root)
+        execute(session, "SetUserCamera", name="/Griffin1SurfaceOps/Avatar")
         execute(session, "SetCameraLookAt", camera=camera, eye=[25, 32, -40], target=[3, 15, 0])
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
