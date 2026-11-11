@@ -245,6 +245,9 @@ private dock layout.
    transition is admitted or active. This prevents camera-driven terrain streaming from
    reopening the scene-loading notice after the scene has loaded. Completion removes the
    compact notice; an expanded history popup remains open until the user closes it.
+   The persisted Terrain setting “Record terrain streaming in Recent Events” is off
+   by default. It controls completed streaming messages; live progress and warning
+   events remain available regardless of the setting.
    The notice and the history popup never stack.
 
 Modelica file opening, duplication, and library drill-in hold document-scoped

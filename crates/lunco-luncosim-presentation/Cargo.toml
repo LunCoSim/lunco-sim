@@ -16,6 +16,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-render = { path = "../lunco-render" }
+lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-time = { path = "../lunco-time" }
