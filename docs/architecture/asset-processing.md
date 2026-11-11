@@ -93,6 +93,47 @@ DEM artifacts retain f64 values through processing and float64 storage.
 
 ## Dynamic code
 
+### Content-cache policy
+
+Rust owns artifact keys and freshness for processed assets and compiled
+Modelica DAEs. The optional deterministic
+`artifact.cache.policy(facts: Map) -> Map` hook chooses `action = "reuse"` or
+`action = "rebuild"` for one artifact. Facts include the artifact kind, owner
+scope, portable logical id, cache key, and whether an exact valid hit exists.
+The application policy reuses exact hits. A Twin can replace this hook in its
+`scope = "twin"` policy manifest to rebuild selected assets more often, while
+the Rust owner still rejects attempts to reuse a missing or stale key. Explicit
+`assets::rebuild` always wins over policy. Rebuilt processed assets publish
+through the existing atomic transaction, keeping the last good artifact
+visible until a replacement succeeds.
+
+The same hook is used for the compiled Modelica artifact cache. A `.mo` edit or
+changed declared source dependency produces a new content key and recompiles;
+the Twin policy can also force regeneration of an exact compiled hit. Modelica
+source files remain authored Twin assets, while compiled DAEs remain in the
+shared machine cache because they are compiler- and platform-specific outputs.
+
+For example, a Twin may replace the default policy with a targeted rule:
+
+```rhai
+fn griffin_cache_policy(facts) {
+    if facts.scope == "twin"
+        && facts.artifact_kind == "processed_asset"
+        && facts.logical_id == "cache/textures/griffin_landing_pad.png" {
+        return #{ action: "rebuild", reason: "refresh the pad presentation bake" };
+    }
+    if facts.cache_hit {
+        return #{ action: "reuse", reason: "content key matches" };
+    }
+    #{ action: "rebuild", reason: "content key changed" }
+}
+```
+
+The hook is evaluated by the worker at the cache boundary, outside the
+simulation tick. Rebuilds do not block rendering or mutate a live simulation
+participant; Modelica source replacement follows its existing compiled-source
+admission and lifecycle boundary.
+
 `pipeline.files` maps input names to portable authored paths. These are resolved
 through the same owner roots as other assets, read on the worker, hashed and
 copied into a per-job snapshot. Code retains its relative directory layout.

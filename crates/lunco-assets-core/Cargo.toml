@@ -8,6 +8,7 @@ description = "Lightweight LunCoSim asset identity, resolution, storage, and sha
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin" }

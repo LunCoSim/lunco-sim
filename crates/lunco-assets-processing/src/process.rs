@@ -256,6 +256,11 @@ pub fn process_asset_with_registry(
             twin_root,
             control,
             registry,
+            if twin_root.is_some() {
+                "twin"
+            } else {
+                "application"
+            },
         );
     }
     if process.pipeline.is_some() {
@@ -263,7 +268,18 @@ pub fn process_asset_with_registry(
             "only kind=\"pipeline\" can declare pipeline settings".into(),
         ));
     }
-    process_asset_to(source_path, process, &output_path, control, registry)
+    process_asset_to(
+        source_path,
+        process,
+        &output_path,
+        control,
+        registry,
+        if twin_root.is_some() {
+            "twin"
+        } else {
+            "application"
+        },
+    )
 }
 
 /// The body of [`process_asset`] once its output path is known.
@@ -273,6 +289,7 @@ fn process_asset_to(
     output_path: &Path,
     control: &ProcessControl,
     registry: &ProcessorRegistry,
+    cache_scope: &str,
 ) -> Result<(), std::io::Error> {
     control.check()?;
     let output_path = output_path.to_path_buf();
@@ -294,6 +311,9 @@ fn process_asset_to(
         &key,
         processor.sidecars,
         control,
+        "processed_asset",
+        cache_scope,
+        &format!("{}/{}", process.output_root, process.output),
         |stage_output| (processor.run)(source_path, stage_output, process, control),
     )
 }
@@ -305,13 +325,25 @@ pub(crate) fn transaction(
     key: &str,
     sidecars: &[&str],
     control: &ProcessControl,
+    artifact_kind: &str,
+    cache_scope: &str,
+    logical_id: &str,
     run: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    if !control.force
+    let cache_hit = !control.force
         && std::fs::read_to_string(bake_stamp_path(output_path, process))
             .is_ok_and(|s| s.trim() == key)
-        && processed_output_present(output_path, process, None)
-    {
+        && processed_output_present(output_path, process, None);
+    let decision = lunco_assets_core::cache_policy::artifact_cache_decision(
+        artifact_kind,
+        cache_scope,
+        logical_id,
+        key,
+        cache_hit,
+        control.force,
+    )
+    .map_err(io_err)?;
+    if decision == lunco_assets_core::cache_policy::ArtifactCacheDecision::Reuse && cache_hit {
         println!(
             "  ✓ up-to-date (bake key match) → {}",
             output_path.display()

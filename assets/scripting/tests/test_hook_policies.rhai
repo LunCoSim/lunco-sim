@@ -32,6 +32,63 @@ checks.push(t_true(camera.parameters.len() == 1
 checks.push(t_true(camera.output == "string",
     "hook output type is reflected"));
 
+let cache_policy_hook = ();
+for hook in hooks {
+    if hook.id == "artifact.cache.policy" { cache_policy_hook = hook; }
+}
+checks.push(t_true(cache_policy_hook != ()
+        && cache_policy_hook.declared == true
+        && cache_policy_hook.deterministic == true
+        && cache_policy_hook.required == false
+        && cache_policy_hook.installable == true
+        && cache_policy_hook.parameters.len() == 1
+        && cache_policy_hook.parameters[0].name == "facts"
+        && cache_policy_hook.parameters[0].type == "map"
+        && cache_policy_hook.output == "map",
+    "artifact cache exposes an optional deterministic Twin-installable policy"));
+let cache_hit = invoke_hook("artifact.cache.policy", [#{
+    artifact_kind: "processed_asset",
+    scope: "application",
+    logical_id: "cache/textures/griffin_landing_pad.png",
+    cache_key: "abc123",
+    cache_hit: true,
+}]);
+let cache_miss = invoke_hook("artifact.cache.policy", [#{
+    artifact_kind: "modelica_compiled",
+    scope: "twin",
+    logical_id: "twin://example/model.mo",
+    cache_key: "def456",
+    cache_hit: false,
+}]);
+checks.push(t_true(cache_hit.ok && cache_hit.value.action == "reuse"
+        && cache_miss.ok && cache_miss.value.action == "rebuild",
+    "application cache policy reuses exact hits and rebuilds misses"));
+let twin_cache_policy = bind_policy(
+    "artifact.cache.policy",
+    "griffin_cache_policy",
+    `fn griffin_cache_policy(facts) {
+        if facts.scope == "twin" && facts.artifact_kind == "processed_asset"
+            && facts.logical_id == "cache/textures/griffin_landing_pad.png" {
+            return #{action: "rebuild", reason: "refresh the landing pad bake"};
+        }
+        if facts.cache_hit { return #{action: "reuse"}; }
+        #{action: "rebuild"}
+    }`,
+);
+let twin_cache_hit = invoke_hook("artifact.cache.policy", [#{
+    artifact_kind: "processed_asset",
+    scope: "twin",
+    logical_id: "cache/textures/griffin_landing_pad.png",
+    cache_key: "abc123",
+    cache_hit: true,
+}]);
+checks.push(t_true(twin_cache_policy.ok && twin_cache_hit.ok
+        && twin_cache_hit.value.action == "rebuild",
+    "a Twin can replace the default and rebuild its selected exact cache hit"));
+let cache_policy_removed = unbind_policy("artifact.cache.policy");
+checks.push(t_true(cache_policy_removed.ok,
+    "the cache-policy test restores the installed application policy"));
+
 let scene_avatar = ();
 for hook in hooks {
     if hook.id == "camera.scene_avatar" { scene_avatar = hook; }

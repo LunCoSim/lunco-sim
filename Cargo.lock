@@ -8052,6 +8052,7 @@ dependencies = [
  "futures-lite",
  "js-sys",
  "lunco-assets-path",
+ "lunco-hooks",
  "lunco-settings",
  "lunco-storage",
  "lunco-twin",

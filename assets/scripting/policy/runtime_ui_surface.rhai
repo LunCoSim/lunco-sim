@@ -116,18 +116,10 @@ fn camera_ui_properties(facts) {
             group: camera.group,
         });
     }
-    if facts.avatar_available {
-        items.push(#{
-            key: "__avatar__",
-            label: "Observe avatar",
-            action: "camera.observe.avatar",
-            group: "Scene views",
-        });
-    }
     if facts.director_available {
         items.push(#{
             key: "__director__",
-            label: "Resume authored director",
+            label: "Follow scene camera",
             action: "camera.resume.director",
             group: "Scene views",
         });
