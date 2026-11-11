@@ -14,7 +14,7 @@ use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::ModelicaWorkbenchPlugin;
 use lunco_usd_bevy_camera::camera_switch::{
-    CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector,
+    CameraSelectionStatus, ObserveAvatar,
 };
 use lunco_workbench_core::presentation::{ViewportPlaceholder, ViewportPlaceholderAction};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
@@ -1110,9 +1110,6 @@ fn reset_runtime_ui_dropdowns_on_twin_closed(
 /// Labels for the native Camera menu remain authored camera-domain commands.
 /// The in-scene dropdown below is generic and reads its option records from the
 /// runtime exposure snapshot.
-const CAMERA_OBSERVE_AVATAR: &str = "Observe avatar";
-const CAMERA_RESUME_DIRECTOR: &str = "Resume authored director";
-
 fn runtime_ui_dropdown_options(
     ui: &mut egui::Ui,
     exposure: &lunco_exposure_core::ExposureSurface,
@@ -1371,26 +1368,7 @@ fn register_camera_menu(world: &mut World) {
     };
     menus.register_custom_menu("Camera", |ui, ctx| {
         let state = ctx.resource::<CameraSelectionStatus>().cloned();
-        ui.label("Presentation");
-        if let Some(state) = &state {
-            let active = state.active_name.as_deref().unwrap_or("none");
-            let owner = match state.owner {
-                CameraSelectionOwner::None => "none",
-                CameraSelectionOwner::Director => "director",
-                CameraSelectionOwner::User => "operator",
-                CameraSelectionOwner::Policy => "policy",
-                CameraSelectionOwner::Generated => "generated",
-            };
-            ui.label(format!("Active: {active}  ·  Owner: {owner}"));
-            if state.avatar_available && ui.button(CAMERA_OBSERVE_AVATAR).clicked() {
-                ctx.trigger(ObserveAvatar {});
-                ui.close();
-            }
-            if state.director_available && ui.button(CAMERA_RESUME_DIRECTOR).clicked() {
-                ctx.trigger(ResumeCameraDirector {});
-                ui.close();
-            }
-            ui.separator();
+        if state.is_some() {
             let dropdown = ctx
                 .resource::<runtime_ui::RuntimeUiManifestState>()
                 .and_then(|state| state.manifest())

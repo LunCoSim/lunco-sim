@@ -46,6 +46,8 @@
 use std::path::{Path, PathBuf};
 
 pub mod asset_path;
+/// Authored policy seam for reusing or rebuilding content-addressed artifacts.
+pub mod cache_policy;
 pub mod closure;
 /// `lunco://` asset source — the engine asset *library*. Resolves `assets/`
 /// first, then the download cache, so a logical `lunco://` address covers both

@@ -81,6 +81,7 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
         let mut sleeping = 0usize;
         let mut colliders = 0usize;
         let mut joints = 0usize;
+        let mut native_joint_components = 0usize;
         let mut sensors = 0usize;
         let mut joint_links = 0usize;
         let mut pending_joints = 0usize;
@@ -107,6 +108,12 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             }
             if entity.contains::<lunco_physics::PhysicsJointLink>() {
                 joint_links += 1;
+            }
+            // JointGraphPlugin also admits custom EntityConstraint types. Count
+            // every registered native identity separately from the built-in
+            // joint types below so graph parity checks include those constraints.
+            if entity.contains::<avian3d::dynamics::joints::joint_graph::JointComponentId>() {
+                native_joint_components += 1;
             }
             if entity.contains::<lunco_physics::PhysicsJointPending>() {
                 pending_joints += 1;
@@ -209,6 +216,7 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             "colliders": colliders,
             "sensors": sensors,
             "joints": joints,
+            "native_joint_components": native_joint_components,
             "joint_links": joint_links,
             "joint_graph_edges": joint_graph_edges,
             "contact_graph_edges": contact_graph.edges.edge_count(),

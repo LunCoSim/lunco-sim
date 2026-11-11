@@ -82,6 +82,7 @@ pub(crate) fn process(
     owner: Option<&Path>,
     control: &ProcessControl,
     registry: &ProcessorRegistry,
+    cache_scope: &str,
 ) -> std::io::Result<()> {
     let declared = config
         .pipeline
@@ -180,156 +181,166 @@ pub(crate) fn process(
             .bytes(),
     );
     let key = pipeline::digest(&identity);
-    crate::process::transaction(output, config, &key, &[], control, |stage| {
-        std::fs::create_dir_all(stage)?;
-        let work = stage.join(".work");
-        std::fs::create_dir(&work)?;
-        let snapshot = work.join("inputs");
-        std::fs::create_dir(&snapshot)?;
-        let raw_parents: std::collections::BTreeSet<_> = paths
-            .iter()
-            .filter(|(id, _)| !declared.files.contains_key(*id))
-            .map(|(_, path)| {
-                path.parent()
-                    .ok_or_else(|| invalid("raw input has no parent"))
-            })
-            .collect::<std::io::Result<_>>()?;
-        let raw_parents: BTreeMap<_, _> = raw_parents
-            .into_iter()
-            .enumerate()
-            .map(|(index, path)| (path, index))
-            .collect();
-        let mut values = BTreeMap::new();
-        for (id, path) in &paths {
-            let copy = if let Some(relative) = declared.files.get(id) {
-                match lunco_assets_core::parse_lunco_uri(relative) {
-                    Some(relative) => snapshot.join("engine").join(relative),
-                    None => snapshot.join("authored").join(relative),
-                }
-            } else {
-                let parent = path
-                    .parent()
-                    .ok_or_else(|| invalid("raw input has no parent"))?;
-                let group = raw_parents
-                    .get(parent)
-                    .ok_or_else(|| invalid("raw input parent is not admitted"))?;
-                snapshot.join("raw").join(group.to_string()).join(
-                    path.file_name()
-                        .ok_or_else(|| invalid("pipeline input has no filename"))?,
-                )
-            };
-            if let Some(directory) = copy.parent() {
-                std::fs::create_dir_all(directory)?;
-            }
-            std::fs::copy(path, &copy)?;
-            values.insert(id.clone(), copy);
-        }
-        if pipeline::input_digests(&values)? != input_hashes {
-            return Err(invalid(
-                "pipeline input changed while capturing its snapshot",
-            ));
-        }
-        let snapshots = values.clone();
-        let mut executed_steps = Vec::new();
-        for step in &effective.steps {
-            control.check()?;
-            let input = values
-                .get(&step.input)
-                .ok_or_else(|| invalid(format!("missing step input '{}'", step.input)))?;
-            let target = work.join(&step.output);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let cfg = effective.step_config(config, step)?;
-            println!("  pipeline step {} ({})", step.id, step.kind);
-            control.report_step(&format!("{} ({})", step.id, step.kind));
-            let run = || -> std::io::Result<()> {
-                if step.kind == "external" {
-                    external(input, &target, &cfg, &values, &work, control)?;
-                } else if step.kind == "shader" {
-                    #[cfg(feature = "shader-processing")]
-                    crate::shader::process(input, &target, &cfg, &values, control)?;
-                    #[cfg(not(feature = "shader-processing"))]
-                    return Err(invalid(
-                        "shader step requires the native shader-processing feature",
-                    ));
-                } else if step.kind == "modelica" {
-                    #[cfg(feature = "modelica-processing")]
-                    crate::modelica::process(input, &target, &cfg, &values, control)?;
-                    #[cfg(not(feature = "modelica-processing"))]
-                    return Err(invalid(
-                        "modelica step requires the native modelica-processing feature",
-                    ));
+    crate::process::transaction(
+        output,
+        config,
+        &key,
+        &[],
+        control,
+        "processed_asset",
+        cache_scope,
+        &format!("{}/{}", config.output_root, config.output),
+        |stage| {
+            std::fs::create_dir_all(stage)?;
+            let work = stage.join(".work");
+            std::fs::create_dir(&work)?;
+            let snapshot = work.join("inputs");
+            std::fs::create_dir(&snapshot)?;
+            let raw_parents: std::collections::BTreeSet<_> = paths
+                .iter()
+                .filter(|(id, _)| !declared.files.contains_key(*id))
+                .map(|(_, path)| {
+                    path.parent()
+                        .ok_or_else(|| invalid("raw input has no parent"))
+                })
+                .collect::<std::io::Result<_>>()?;
+            let raw_parents: BTreeMap<_, _> = raw_parents
+                .into_iter()
+                .enumerate()
+                .map(|(index, path)| (path, index))
+                .collect();
+            let mut values = BTreeMap::new();
+            for (id, path) in &paths {
+                let copy = if let Some(relative) = declared.files.get(id) {
+                    match lunco_assets_core::parse_lunco_uri(relative) {
+                        Some(relative) => snapshot.join("engine").join(relative),
+                        None => snapshot.join("authored").join(relative),
+                    }
                 } else {
-                    let processor = registry.get(&step.kind).ok_or_else(|| {
-                        invalid(format!("unregistered pipeline operation '{}'", step.kind))
-                    })?;
-                    (processor.run)(input, &target, &cfg, control)?;
+                    let parent = path
+                        .parent()
+                        .ok_or_else(|| invalid("raw input has no parent"))?;
+                    let group = raw_parents
+                        .get(parent)
+                        .ok_or_else(|| invalid("raw input parent is not admitted"))?;
+                    snapshot.join("raw").join(group.to_string()).join(
+                        path.file_name()
+                            .ok_or_else(|| invalid("pipeline input has no filename"))?,
+                    )
+                };
+                if let Some(directory) = copy.parent() {
+                    std::fs::create_dir_all(directory)?;
                 }
-                Ok(())
-            };
-            run().map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!("pipeline step '{}' ({}): {e}", step.id, step.kind),
-                )
-            })?;
-            if !target.exists() {
-                return Err(invalid(format!("step '{}' produced no output", step.id)));
+                std::fs::copy(path, &copy)?;
+                values.insert(id.clone(), copy);
             }
-            values.insert(step.id.clone(), target);
-            executed_steps.push(pipeline::ExecutedStep {
-                id: step.id.clone(),
-                input: step.input.clone(),
-                config: cfg,
-            });
-        }
-        let mut artifacts = Vec::new();
-        for artifact in &effective.artifacts {
-            control.check()?;
-            let base = values
-                .get(&artifact.from)
-                .ok_or_else(|| invalid("artifact producer is unavailable"))?;
-            let file = match &artifact.source {
-                Some(relative) => confined_file(base, Path::new(relative))?,
-                None => confined_file(
-                    &work,
-                    base.strip_prefix(&work)
-                        .map_err(|_| invalid("artifact output escaped scratch ownership"))?,
-                )?,
-            };
-            validate_artifact(&file, artifact)?;
-            let destination = stage.join(&artifact.path);
-            if let Some(parent) = destination.parent() {
-                std::fs::create_dir_all(parent)?;
+            if pipeline::input_digests(&values)? != input_hashes {
+                return Err(invalid(
+                    "pipeline input changed while capturing its snapshot",
+                ));
             }
-            std::fs::copy(&file, &destination)?;
-            artifacts.push(ArtifactDigest {
-                path: artifact.path.clone(),
-                sha256: pipeline::digest(&std::fs::read(destination)?),
-            });
-        }
-        // Sources may be edited by another operation while this worker is running.
-        if pipeline::input_digests(&paths)? != input_hashes
-            || pipeline::input_digests(&snapshots)? != input_hashes
-        {
-            return Err(invalid(
-                "pipeline inputs changed during processing; result was not published",
-            ));
-        }
-        std::fs::remove_dir_all(&work)?;
-        let receipt = PipelineReceipt {
-            declaration,
-            inputs: input_hashes,
-            steps: executed_steps,
-            artifacts,
-        };
-        std::fs::write(
-            stage.join(pipeline::RECEIPT),
-            toml::to_string(&receipt).map_err(|e| invalid(e.to_string()))?,
-        )?;
-        Ok(())
-    })
+            let snapshots = values.clone();
+            let mut executed_steps = Vec::new();
+            for step in &effective.steps {
+                control.check()?;
+                let input = values
+                    .get(&step.input)
+                    .ok_or_else(|| invalid(format!("missing step input '{}'", step.input)))?;
+                let target = work.join(&step.output);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let cfg = effective.step_config(config, step)?;
+                println!("  pipeline step {} ({})", step.id, step.kind);
+                control.report_step(&format!("{} ({})", step.id, step.kind));
+                let run = || -> std::io::Result<()> {
+                    if step.kind == "external" {
+                        external(input, &target, &cfg, &values, &work, control)?;
+                    } else if step.kind == "shader" {
+                        #[cfg(feature = "shader-processing")]
+                        crate::shader::process(input, &target, &cfg, &values, control)?;
+                        #[cfg(not(feature = "shader-processing"))]
+                        return Err(invalid(
+                            "shader step requires the native shader-processing feature",
+                        ));
+                    } else if step.kind == "modelica" {
+                        #[cfg(feature = "modelica-processing")]
+                        crate::modelica::process(input, &target, &cfg, &values, control)?;
+                        #[cfg(not(feature = "modelica-processing"))]
+                        return Err(invalid(
+                            "modelica step requires the native modelica-processing feature",
+                        ));
+                    } else {
+                        let processor = registry.get(&step.kind).ok_or_else(|| {
+                            invalid(format!("unregistered pipeline operation '{}'", step.kind))
+                        })?;
+                        (processor.run)(input, &target, &cfg, control)?;
+                    }
+                    Ok(())
+                };
+                run().map_err(|e| {
+                    std::io::Error::new(
+                        e.kind(),
+                        format!("pipeline step '{}' ({}): {e}", step.id, step.kind),
+                    )
+                })?;
+                if !target.exists() {
+                    return Err(invalid(format!("step '{}' produced no output", step.id)));
+                }
+                values.insert(step.id.clone(), target);
+                executed_steps.push(pipeline::ExecutedStep {
+                    id: step.id.clone(),
+                    input: step.input.clone(),
+                    config: cfg,
+                });
+            }
+            let mut artifacts = Vec::new();
+            for artifact in &effective.artifacts {
+                control.check()?;
+                let base = values
+                    .get(&artifact.from)
+                    .ok_or_else(|| invalid("artifact producer is unavailable"))?;
+                let file = match &artifact.source {
+                    Some(relative) => confined_file(base, Path::new(relative))?,
+                    None => confined_file(
+                        &work,
+                        base.strip_prefix(&work)
+                            .map_err(|_| invalid("artifact output escaped scratch ownership"))?,
+                    )?,
+                };
+                validate_artifact(&file, artifact)?;
+                let destination = stage.join(&artifact.path);
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(&file, &destination)?;
+                artifacts.push(ArtifactDigest {
+                    path: artifact.path.clone(),
+                    sha256: pipeline::digest(&std::fs::read(destination)?),
+                });
+            }
+            // Sources may be edited by another operation while this worker is running.
+            if pipeline::input_digests(&paths)? != input_hashes
+                || pipeline::input_digests(&snapshots)? != input_hashes
+            {
+                return Err(invalid(
+                    "pipeline inputs changed during processing; result was not published",
+                ));
+            }
+            std::fs::remove_dir_all(&work)?;
+            let receipt = PipelineReceipt {
+                declaration,
+                inputs: input_hashes,
+                steps: executed_steps,
+                artifacts,
+            };
+            std::fs::write(
+                stage.join(pipeline::RECEIPT),
+                toml::to_string(&receipt).map_err(|e| invalid(e.to_string()))?,
+            )?;
+            Ok(())
+        },
+    )
 }
 
 fn confined_file(root: &Path, relative: &Path) -> std::io::Result<PathBuf> {
