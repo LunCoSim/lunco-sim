@@ -337,7 +337,9 @@ not rebind possession. `camera.follow` exposes subject identity, authored follow
 mode, grid-frame orientation, body-frame motion, rig settings and obstruction
 facts to a Twin-scoped Rhai policy. Return presentation decisions, including
 interpolation weights, rather than writing private spatial state. Rust retains
-frame conversion and collision ownership. A policy can choose offsets and easing
+frame conversion and collision ownership. The spring arm checks both scene
+colliders and the analytic DEM in the active physics frame, since the collider
+ring does not cover a long boom. A policy can choose offsets and easing
 per vessel without a Rust vessel-type dispatch. See
 [the camera follow contract](../../docs/architecture/camera-follow-policy.md).
 

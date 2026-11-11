@@ -42,10 +42,10 @@ use std::sync::Arc;
 
 use crate::oracle::DemHeightField;
 
-/// A terrain surface hit: the point ON the surface, in the grid frame.
+/// A terrain surface or clearance-surface hit in the active grid frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceHit {
-    /// Point on the terrain surface in [`Self::frame`].
+    /// Point on the requested surface in [`Self::frame`].
     pub point: GridPos,
     /// Concrete BigSpace frame in which [`Self::point`] is expressed.
     pub frame: Entity,
@@ -390,7 +390,19 @@ impl GridSurfaceQuery<'_, '_> {
         direction: Dir3,
         max_distance: f64,
     ) -> Option<SurfaceHit> {
-        if !origin.0.is_finite() {
+        self.raycast_with_clearance(origin, direction, max_distance, 0.0)
+    }
+
+    /// Raycast against the surface offset along each terrain's local up axis.
+    /// The returned point lies on that offset surface in the active frame.
+    pub fn raycast_with_clearance(
+        &self,
+        origin: GridPos,
+        direction: Dir3,
+        max_distance: f64,
+        clearance: f64,
+    ) -> Option<SurfaceHit> {
+        if !origin.0.is_finite() || !clearance.is_finite() || clearance < 0.0 {
             return None;
         }
         let (frame, _) = self.frame()?;
@@ -402,14 +414,14 @@ impl GridSurfaceQuery<'_, '_> {
             }
             let (terrain_position, terrain_rotation) = (pose.position, pose.rotation);
             let inverse = terrain_rotation.inverse();
-            let local_origin = inverse * (origin.0 - terrain_position);
+            let local_origin = inverse * (origin.0 - terrain_position) - DVec3::Y * clearance;
             let local_direction = inverse * frame_direction;
             let Some(local_point) =
                 crate::oracle::raycast_surface(&hf.0, local_origin, local_direction, max_distance)
             else {
                 continue;
             };
-            let point = terrain_position + terrain_rotation * local_point;
+            let point = terrain_position + terrain_rotation * (local_point + DVec3::Y * clearance);
             let distance = (point - origin.0).length();
             if best.is_none_or(|b| distance < b.distance) {
                 best = Some(SurfaceHit {
@@ -694,6 +706,32 @@ mod tests {
 
         assert!((sample.point.0.y - 3.5).abs() < 1.0e-6);
         assert!((sample.normal - DVec3::new(-0.5, 1.0, 0.0).normalize()).length() < 1.0e-6);
+    }
+
+    #[test]
+    fn clearance_cast_uses_the_terrain_local_up_axis() {
+        let (mut app, terrain) = world_with_terrain(0.0);
+        let rotation = Quat::from_rotation_z(0.4);
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(Transform::from_rotation(rotation));
+        let project = app
+            .world_mut()
+            .register_system(update_terrain_physics_frame_poses);
+        app.world_mut().run_system(project).unwrap();
+        let up = rotation.as_dquat() * DVec3::Y;
+        let origin = GridPos(up * 10.0);
+        let direction = Dir3::new((-up).as_vec3()).unwrap();
+        let sys = app.world_mut().register_system(move |q: GridSurfaceQuery| {
+            q.raycast_with_clearance(origin, direction, 20.0, 0.5)
+        });
+        let hit = app
+            .world_mut()
+            .run_system(sys)
+            .unwrap()
+            .expect("offset terrain hit");
+        assert!((hit.distance - 9.5).abs() < 0.001);
+        assert!((hit.point.0 - up * 0.5).length() < 0.001);
     }
 
     #[test]

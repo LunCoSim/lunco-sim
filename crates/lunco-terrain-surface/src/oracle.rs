@@ -422,7 +422,10 @@ pub fn raycast_surface(
         }
         // Fine near the camera (sub-metre relief matters at cursor range),
         // coarsening with distance; capped so distant rims aren't skipped.
-        t += (0.25 + t * 0.02).min(6.0);
+        if t >= max_t {
+            break;
+        }
+        t = (t + (0.25 + t * 0.02).min(6.0)).min(max_t);
     }
     None
 }
@@ -555,6 +558,15 @@ mod tests {
         let a = SurfaceOracle::new(flat(5, 10.0), vec![crater_contribution()]);
         let b = SurfaceOracle::new(flat(5, 10.0), vec![crater_contribution()]);
         assert_eq!(a.content_key(), b.content_key());
+    }
+
+    #[test]
+    fn raycast_surface_checks_the_end_of_a_short_segment() {
+        let oracle = SurfaceOracle::bare(flat(5, 10.0));
+        let hit = raycast_surface(&oracle, DVec3::new(0.0, 0.1, 0.0), DVec3::NEG_Y, 0.2)
+            .expect("the surface crossing near the segment end must be detected");
+        assert!(hit.y.abs() < 1e-6);
+        assert!(raycast_surface(&oracle, DVec3::new(0.0, 0.1, 0.0), DVec3::NEG_Y, 0.05).is_none());
     }
 
     #[test]

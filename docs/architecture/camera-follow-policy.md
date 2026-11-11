@@ -34,10 +34,16 @@ existing orbital rig, mounted cameras, and subject-binding transactions remain
 the owners of their respective camera modes; this seam tunes the spring arm.
 
 The native solver checks the focus offset and boom against scene collision,
-excluding the followed articulated assembly. It retracts before committing a
-pose beyond an obstruction and eases outward recovery. A policy cannot disable
-that safety. The existing ray query is a point-boom check, not a camera-frustum
-sweep; narrow near-plane clipping still requires separate visual acceptance.
+excluding the followed articulated assembly. It also checks the analytic DEM
+in the active physics frame, because physical terrain colliders are streamed
+only around contact bodies. The DEM boom check reserves the avatar collision
+radius along the terrain's local up axis, even for shallow approaches. The nearest physics or
+terrain hit retracts the boom before pose publication; recovery eases outward.
+A policy cannot disable that safety. The terrain query is a sampled ray, not a
+camera-frustum sweep; narrow ridges and near-plane clipping still require
+separate visual acceptance.
+`scripts/api/test_camera_terrain_follow.py` runs the production scene and
+checks clearance continuously while a long boom turns through eight directions.
 
 An absent optional policy retains the authored rig. A registered callback fault,
 unknown field, invalid mode, non-finite number or out-of-range weight holds the
