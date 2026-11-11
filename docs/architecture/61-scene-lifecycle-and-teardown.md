@@ -506,6 +506,9 @@ continuations, so the authoritative stage outcome is retained until the
 projection queues are empty. The workbench reports the
 indeterminate loading/projecting phase, and a clear transaction reports
 unloading, rather than presenting a partially projected scene as ready.
+Changes to graphics quality do not release a prim awaiting its stage. A prim
+already queued for projection remains queued while invalid quality settings are
+corrected.
 
 Authored control and program projection use the same composed reader contract:
 the prepared projection plan supplies facts before the live canonical stage is
@@ -521,6 +524,10 @@ overlay and submit `LoadScene`. Referenced stage assets use the same event
 boundary before their reference is authored onto a live stage. This keeps source
 bytes in the asset pipeline and removes frame-count timeouts, per-frame load-state
 polls, and main-thread filesystem reads from scene admission.
+On a Twin restart, the refreshed document source is published before the
+outgoing canonical stage is retired. The replacement mount reads the refreshed
+asset and opens a new canonical stage, so disposable view edits from the old
+scene cannot enter the replacement hierarchy.
 
 After admission, document edits wake the single `twin_projection` owner through
 `DocumentChanged`; stage lifecycle events wake it when an edit is waiting for a

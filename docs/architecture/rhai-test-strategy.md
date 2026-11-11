@@ -269,6 +269,9 @@ recipes and their acceptance scenes stay in the owning Twin.
    support assets and are omitted from the root test catalog. The runner
    classifies each included test's execution domain from its source's top-level
    literal `TEST_KIND` constant.
+   Discovery inspects composed program bindings without admitting the scene's
+   physical conventions, so a support fixture can intentionally contain invalid
+   runtime units. Composition and source errors remain discovery failures.
    Discovery mounts the scene's owning Twin and uses the runtime's composed
    asset identifiers and prepared search-path resolver. Search paths prefer
    the contributing layer, then the Twin root; explicit `./` paths stay bound

@@ -10,7 +10,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
+import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_authored_normal_weight, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
 
 //!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
@@ -417,16 +417,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             clamp(mat.site_weight_ao, 0.0, 1.0) * site_material_weight,
         );
     }
-    // The DEM map owns the landform band, independently of the grain band.
+    // Preserve mesh relief finer than an authored normal raster's texels.
     // Recover the detail's tangent slope around the geometric normal, then
-    // project it onto the selected landform normal. A full-weight DEM must not
-    // erase grain or inherit camera-dependent tile-normal interpolation.
+    // project it onto the selected landform normal without erasing grain.
+    let geometric_n = normalize(in.world_normal);
+    let normal_variation = length(fwidth(geometric_n));
     @if((VERTEX_UVS_A)) if (map_weight_normal > 0.0) {
         let n_baked = dem_normal_to_world(
             map_n.xyz, in.instance_index);
-        let geometric_n = normalize(in.world_normal);
         let detail_slope = geometric_n - n / max(dot(n, geometric_n), 1e-4);
-        let landform_n = normalize(mix(geometric_n, n_baked, map_weight_normal));
+        let normal_size = textureDimensions(normal_tex);
+        let normal_texel_m = 2.0 * mat.terrain_half_extent
+            / f32(min(normal_size.x, normal_size.y));
+        let authored_weight = terrain_authored_normal_weight(
+            map_weight_normal, mat.terrain_geometry_on, pw / normal_texel_m, normal_variation);
+        let landform_weight = select(map_weight_normal, authored_weight, mat.authored_normal_on > 0.5);
+        let landform_n = normalize(mix(geometric_n, n_baked, landform_weight));
         let landform_slope = detail_slope - landform_n * dot(detail_slope, landform_n);
         n = normalize(landform_n - landform_slope);
     }

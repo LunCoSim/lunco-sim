@@ -1520,6 +1520,9 @@ The whole-simulation guarantee remains open because:
    the typed terminal event and checks that `SceneLoadInFlight`, the failed-load
    marker, active transition, mount root, progress hold, and projected prims
    are gone before accepting the scenario's verdict.
+   A terminal runtime fault is accepted on this path only when its kind,
+   subject and diagnostic match the declared failure and observed transition;
+   unrelated faults remain failures.
    Scene tests pump materialization, participant compilation, and physical
    admission with a zero-duration manual clock. Compilation publishes each
    Modelica solver's initialized time-zero state; preparation does not run a

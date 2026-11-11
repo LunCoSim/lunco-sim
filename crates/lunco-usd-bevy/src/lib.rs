@@ -281,15 +281,6 @@ impl Plugin for UsdVisualPlugin {
                         .run_if(point_instancer_structure_changed)
                         .after(drain_usd_projection)
                         .in_set(UsdVisualProjectionSet),
-                    retry_awaiting_usd_visuals_after_quality_change
-                        .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
-                        // A quality update can coincide with the asset-loaded
-                        // event that drains the same awaiting queue.  The
-                        // loaded-stage projection is authoritative for that
-                        // frame; let its deferred marker land before the
-                        // quality retry observes the queue, otherwise one
-                        // prim can be instantiated twice.
-                        .after(sync_usd_visuals),
                     // The other half of the same queue: `sync_usd_visuals` drains
                     // prims whose stage arrived, this one drains prims whose stage
                     // never will. Both must exist or the queue has an outcome it
@@ -2761,58 +2752,6 @@ fn prune_primitive_mesh_requests(
         > 0;
     if retired_readers || retired_assets {
         primitives.prune();
-    }
-}
-
-/// Retry USD prims that were deliberately parked because Graphics settings were
-/// invalid. The settings UI rejects such values before insertion, but scripts,
-/// tests, and a host may still mutate the resource directly. A corrected value
-/// is therefore a complete recovery event; requiring a scene reload here would
-/// turn a rejected edit into a lifecycle leak.
-fn retry_awaiting_usd_visuals_after_quality_change(
-    q: Query<
-        (Entity, &UsdPrimPath),
-        (
-            With<UsdSceneAwaitingStage>,
-            Without<UsdSceneProjectionQueued>,
-            Without<UsdSceneProjected>,
-            Without<UsdSceneProjectionFailed>,
-        ),
-    >,
-    q_child_of: Query<&ChildOf>,
-    q_scene_root: Query<(), With<UsdSceneRoot>>,
-    q_entities: Query<Entity>,
-    mount_state: Res<lunco_core::SceneMountState>,
-    q_preview_only: Query<(), With<UsdPreviewOnly>>,
-    mut commands: Commands,
-    stages: Res<Assets<UsdStageAsset>>,
-    quality: Res<lunco_render::RenderingQualitySettings>,
-) {
-    if let Err(reason) = quality.validated_profile() {
-        warn!(
-            "[usd-bevy] invalid Graphics quality; USD visual projection remains parked: {reason}"
-        );
-        return;
-    }
-
-    for (entity, prim_path) in &q {
-        if stages.get(&prim_path.stage_handle).is_none() {
-            continue;
-        }
-        let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
-        let stale_mount = match scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities)
-        {
-            Ok(Some(root)) => !mount_state.contains_root(root),
-            Ok(None) => false,
-            Err(_) => true,
-        };
-        if !preview_only && stale_mount {
-            continue;
-        }
-
-        // Quality changes only release the queue. The bounded projection pass
-        // remains the sole owner of USD reads and mesh/material generation.
-        commands.entity(entity).try_insert(UsdSceneProjectionQueued);
     }
 }
 

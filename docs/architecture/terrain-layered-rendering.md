@@ -128,7 +128,15 @@ inverse-transpose maps a local normal to world space; the reverse mapping uses
 the transpose of the mesh's local-to-world linear transform. This preserves the
 normal direction under nonuniform scale as well as rotation. The
 `terrain_normal_transform` GPU fixture checks that round trip on a rotated,
-nonuniformly scaled mesh.
+nonuniformly scaled mesh. It also verifies the authored-normal transition:
+when streamed terrain is resolved below the authored normal texture's texel
+size, geometric normals retain relief that the raster cannot represent. The
+authored normal weight transitions smoothly back as the pixel footprint grows;
+the texel size comes from the bound texture dimensions and terrain extent.
+Rapid per-pixel geometric-normal variation receives a bounded blend toward the
+raster to reduce shimmer while retaining at least half the geometric normal
+contribution. This does not change the authored normal weight on non-terrain
+geometry.
 
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.
@@ -908,7 +916,25 @@ Remaining work, in dependency order:
 ### Mesh inspection
 
 `TerrainLodStatus.stream` reports selected-cover fulfilment and render-resource
-publication. Its `derived` object reads `TerrainDerivedStatus` directly:
+publication. A completed asynchronous cover can advance during camera motion;
+terrain generation, source, contact footprint, camera identity, and quality
+must still match before it is admitted. The next selection follows the current
+camera pose. The cover selector biases its continuous near-detail region toward
+the ground at the centre of the active camera view, while reserving
+the physics-contact cover. The selection ray samples a visual band at the
+cover's camera-position quantum, so sub-quantum terrain detail does not move
+the focus; rendered geometry and physics retain their own surface bands. When
+the camera is within the near-detail distance of the terrain, it also reserves
+the camera's finest patch and its edge and
+diagonal neighbours. The exact requested patch stays selected through the
+configured three-dimensional retention band without requesting new detail outside
+the radius. Previously requested nodes can remain while a camera is just beyond
+the DEM edge, and expire as it moves away. Retention is scoped to the camera and
+terrain source. The bias is bounded so
+the near-detail region still contains the camera's ground point. The bias vanishes continuously as clearance
+reaches that distance, and also fades as the ground hit approaches the finite
+reach; a view with no ground hit uses the camera focus. Its `derived` object
+reads `TerrainDerivedStatus` directly:
 `active`, `ready`, `total`, and `pending` describe the optional surface/normal-map
 lifecycle. A fully prepared quality measurement requires no pending stream or
 derived work, a resident selected cover, and `derived.ready == derived.total`.

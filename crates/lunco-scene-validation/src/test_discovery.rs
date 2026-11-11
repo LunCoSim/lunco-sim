@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_usd_bevy_core::program;
 #[cfg(not(target_arch = "wasm32"))]
-use lunco_usd_bevy_stage::{UsdReadObject, UsdStageProjectionPlan};
+use lunco_usd_bevy_stage::{UsdRead, UsdReadObject, canonical::CanonicalStage};
 
 /// The Rhai constant read by the test discovery pass.
 pub const TEST_KIND_CONST: &str = "TEST_KIND";
@@ -214,13 +214,33 @@ fn discover_scene_test(
             Some(&roots.read_scope(&authority)?),
             limits,
         )?;
-        let mut view = UsdStageProjectionPlan::from_recipe(&recipe)?;
-        view.prepare_native_asset_paths(Some(origin.clone()), Some(roots));
-        Ok((view, origin, assets_root))
+        // Discovery reads program bindings, not runtime geometry. A support
+        // fixture may deliberately contain invalid runtime units and must still
+        // be inspectable without admitting it as a simulation stage.
+        let mut stage = CanonicalStage::from_recipe(&recipe)?;
+        let view = stage.view();
+        let references = lunco_usd_bevy_stage::native_paths::native_references_for_prims(
+            &view,
+            UsdRead::prim_paths(&view),
+        );
+        let paths = lunco_assets_core::asset_path::PreparedAssetPaths::prepare_on_worker(
+            references,
+            Some(origin.clone()),
+            Some(roots),
+        );
+        stage.set_native_asset_paths(std::sync::Arc::new(paths));
+        Ok((stage, origin, assets_root))
     };
-    let (view, origin, assets_root) = prepare()
+    let (stage, origin, assets_root) = prepare()
         .map_err(|error| format!("{}: cannot prepare scene: {error}", scene_path.display()))?;
-    classify_scene_programs(&view, &origin, roots, assets_root.as_deref(), scene_path).map(|kind| {
+    classify_scene_programs(
+        &stage.view(),
+        &origin,
+        roots,
+        assets_root.as_deref(),
+        scene_path,
+    )
+    .map(|kind| {
         kind.map(|kind| SceneTest {
             scene_path: scene_path.to_path_buf(),
             kind,
@@ -347,6 +367,21 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     use super::scene_paths;
     use super::{SceneTestKind, classify_rhai_source};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn discovery_inspects_support_layers_with_invalid_runtime_units() {
+        let root = tempfile::tempdir().unwrap();
+        let scene = root.path().join("tests/invalid_units.usda");
+        lunco_storage::write_file_sync(
+            &scene,
+            b"#usda 1.0\n(kilogramsPerUnit = 0.001)\ndef Xform \"Root\" {}\n",
+        )
+        .unwrap();
+        let result = super::discover_scene_test(&scene, &lunco_assets_core::TwinRoots::default())
+            .expect("discovery can read a support layer without admitting its units");
+        assert!(result.is_none());
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

@@ -177,7 +177,14 @@ GPU acceptance still require the rendered fixture and a clean process log.
    views; a whole-stack cutoff can hide resolvable grain while leaving blobs.
    Relief remaps have continuous slopes at their clipping thresholds. The
    DEM normal-map weight selects the landform band without erasing the grain
-   tangent slope; use full weight when the measured map owns those slopes.
+   tangent slope. For authored normal rasters on streamed terrain, the pixel
+   footprint and actual texture dimensions fade the raster normal out where
+   the mesh resolves finer relief, and back in as the view becomes coarser.
+   Rapid per-pixel mesh-normal variation blends partially toward the raster;
+   verify small-motion stability and retained crater rims together.
+   Check crater rims and LOD motion at the authored map's texel scale as well
+   as far-view landforms; an authored weight of one must not flatten geometry
+   below the raster resolution.
    The layered material allows filtered `micro_albedo` grain only below an authored
    raster's texel size; broad procedural colour is suppressed by raster weight.
    Check the clump, micro and fine colour bands independently: each reuses its
@@ -198,9 +205,17 @@ GPU acceptance still require the rendered fixture and a clean process log.
    resident cover can still leave the active camera outside the DEM crop, where
    the near-field detail floor cannot refine the viewed ground. Verify the
    camera's terrain-local position against the authored DEM window before
-   raising LOD budgets. For the `overzoom` layer, density zero disables
-   synthetic craterlets and leaves only FBM relief; choose feature radii and
-   density with High tile spacing in mind.
+   raising LOD budgets. The cover selector biases the continuous near-detail region
+   toward the centre-view ground hit, sampled at the cover-position quantum so
+   finer crater detail cannot jitter the focus. A camera within the near-detail radius
+   reserves its finest patch and edge and diagonal neighbours during movement.
+   On exit, only already-requested nodes within the three-dimensional retention
+   band remain, including near a DEM edge; a replacement camera or terrain
+   source cannot inherit them.
+   Compare settled views and camera pans, including the horizon, and check both
+   camera coverage and frame time before changing that selection. For the
+   `overzoom` layer, density zero disables synthetic craterlets and leaves only
+   FBM relief; choose feature radii and density with High tile spacing in mind.
    Treat packed surface-map AO as indirect-light visibility: it belongs in
    Bevy's PBR diffuse-occlusion input, not in authored albedo or direct-sun
    multiplication. If broad terrain colour patches match a low-frequency AO
@@ -233,12 +248,17 @@ GPU acceptance still require the rendered fixture and a clean process log.
    2 cm negative case, route texture bindings on new contact tiles, physical
    wheel marks after driving, and reduced graphics settings. Inspect its driving
    captures and performance reads; another active simulator can affect timing.
+   For scene replacement during a graphics-quality change, run
+   `scripts/api/test_terrain_restart_quality.py --scene <scene> --port <free-port>
+   --output <evidence>`. Its retained Rhai observer checks two replacements and
+   the ready, pinned physical cover after each one.
 4. Compare a settled frame sequence, not one screenshot. Fast color changes
    usually indicate changing inputs, repeated derived bakes, missing asset
    readiness, or unstable lighting—not a reason to clamp the image in a
    shader. Find the owner and gate the work by asset/revision events. Camera-
    driven terrain cover selection runs at 30 Hz wall-clock cadence and uses
-   shared bounded background admission on native visual hosts. The owner fences
+   shared bounded background admission on native visual hosts; changes to the
+   contact footprint and other admission inputs wake it immediately. The owner fences
    and commits current results in `Update`; tile-mesh bake admission still uses
    its per-terrain queue. Offline capture lockstep bypasses the cadence and runs
    selection synchronously for each captured frame. Profile remaining frame

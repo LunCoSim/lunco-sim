@@ -572,6 +572,7 @@ pub(crate) fn on_restart_scene_refresh_active_document(
     mut backed: Option<ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     twins: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     assets: Option<Res<Assets<UsdStageAsset>>>,
+    mut canonical: Option<NonSendMut<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
     role: Option<Res<lunco_core_session::NetworkRole>>,
 ) {
     let lunco_core::SceneTransition::Restart { reset_document, .. } = &trigger.event().transition
@@ -588,11 +589,14 @@ pub(crate) fn on_restart_scene_refresh_active_document(
     else {
         return;
     };
-    let Some(stage_path) = q_usd
-        .iter()
-        .find(|(_, is_root)| *is_root)
-        .and_then(|(prim, _)| asset_server.get_path(prim.stage_handle.id()))
-        .map(|path| path.to_string())
+    let Some((stage_id, stage_path)) =
+        q_usd
+            .iter()
+            .find(|(_, is_root)| *is_root)
+            .and_then(|(prim, _)| {
+                let id = prim.stage_handle.id();
+                asset_server.get_path(id).map(|path| (id, path.to_string()))
+            })
     else {
         return;
     };
@@ -678,6 +682,10 @@ pub(crate) fn on_restart_scene_refresh_active_document(
         &dependencies,
     ) {
         warn!("[restart-scene] could not publish the refreshed Twin sources: {error}");
+        return;
+    }
+    if let Some(stages) = canonical.as_deref_mut() {
+        stages.retire(stage_id);
     }
 }
 

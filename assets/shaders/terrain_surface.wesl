@@ -115,6 +115,22 @@ fn map_weights(r: f32) -> vec3<f32> {
     return vec3(w_normal, 1.0, 1.0);
 }
 
+// A normal raster cannot describe geometric relief below its own texel size.
+// When the image resolves that relief, retain the mesh normal and transition
+// smoothly to the authored raster as its texels become smaller than a pixel.
+// Non-terrain materials retain the authored weight at every footprint.
+fn terrain_authored_normal_weight(
+    weight: f32, geometry_on: f32, footprint: f32, normal_variation: f32,
+) -> f32 {
+    let raster_weight = smoothstep(0.75, 2.25, footprint);
+    // Rapid normal variation within a pixel is unstable under camera motion.
+    // Attenuate it against the lower-frequency raster, while retaining at
+    // least half of the geometric contribution at resolvable footprints.
+    let filtered_weight = 0.5 * smoothstep(0.02, 0.15, normal_variation);
+    return weight * mix(1.0, max(raster_weight, filtered_weight),
+        select(0.0, 1.0, geometry_on > 0.5));
+}
+
 /// Resolve one terrain material's map roles from the shared CPU source contract.
 ///
 /// The streamed CDLOD and static-mesh paths must make the same decision when a
