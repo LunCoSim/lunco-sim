@@ -275,23 +275,31 @@ pub(crate) fn spring_arm_system(
             None
         };
         policy.report(None);
-        let terrain_hit = |origin: DVec3, delta: DVec3, clearance: f64| -> Option<f64> {
-            let transform = terrain_frame?;
-            let length = delta.length();
-            if !length.is_finite() || length <= f64::EPSILON {
-                return None;
-            }
-            let direction = transform.transform_vector(delta / length);
-            policy
-                .terrain
-                .raycast_with_clearance(
-                    GridPos(transform.transform_position(origin)),
-                    Dir3::new(direction.as_vec3()).ok()?,
-                    length,
-                    clearance,
-                )
-                .map(|hit| hit.distance)
-        };
+        let terrain_hit =
+            |origin: DVec3, delta: DVec3, clearance: f64| -> Result<Option<f64>, String> {
+                let Some(transform) = terrain_frame else {
+                    return Ok(None);
+                };
+                let length = delta.length();
+                if !length.is_finite() {
+                    return Err("camera terrain ray has an invalid segment".into());
+                }
+                if length <= f64::EPSILON {
+                    return Ok(None);
+                }
+                let direction = transform.transform_vector(delta / length);
+                let direction = Dir3::new(direction.as_vec3())
+                    .map_err(|_| "camera terrain ray has an invalid direction")?;
+                Ok(policy
+                    .terrain
+                    .raycast_with_clearance(
+                        GridPos(transform.transform_position(origin)),
+                        direction,
+                        length,
+                        clearance,
+                    )?
+                    .map(|hit| hit.distance))
+            };
         // Angles narrow only at the render quaternion boundary.
         let yaw = plan.yaw.rem_euclid(std::f64::consts::TAU) as f32;
         let pitch = plan.pitch as f32;
@@ -349,6 +357,13 @@ pub(crate) fn spring_arm_system(
         // The focus offset itself may cross a ceiling. Resolve it from the
         // subject center before casting the camera boom, with the same filter.
         let focus_length = vertical_offset.length();
+        let terrain_focus_hit = match terrain_hit(target_pos, vertical_offset, 0.0) {
+            Ok(hit) => hit,
+            Err(error) => {
+                policy.report(Some(format!("camera terrain focus query failed: {error}")));
+                continue;
+            }
+        };
         let focus_hit = spatial_query
             .as_ref()
             .and_then(|query| {
@@ -364,7 +379,7 @@ pub(crate) fn spring_arm_system(
             .map(|hit| f64::from(hit.distance));
         let focus_hit = focus_hit
             .into_iter()
-            .chain(terrain_hit(target_pos, vertical_offset, 0.0))
+            .chain(terrain_focus_hit)
             .reduce(f64::min);
         let focus_offset = focus_hit
             .map(|distance| vertical_offset * ((distance - 0.1).max(0.0) / focus_length))
@@ -387,14 +402,18 @@ pub(crate) fn spring_arm_system(
         };
 
         let desired_len = ray_len;
+        let terrain_boom_hit =
+            match terrain_hit(ray_origin, offset, policy.collision_settings.radius_m) {
+                Ok(hit) => hit,
+                Err(error) => {
+                    policy.report(Some(format!("camera terrain boom query failed: {error}")));
+                    continue;
+                }
+            };
         let hit_distance = hit
             .map(|hit| f64::from(hit.distance))
             .into_iter()
-            .chain(terrain_hit(
-                ray_origin,
-                offset,
-                policy.collision_settings.radius_m,
-            ))
+            .chain(terrain_boom_hit)
             .reduce(f64::min);
         let target_len = match hit_distance {
             Some(distance) => ((distance - 0.5).min(desired_len)).max(0.0),

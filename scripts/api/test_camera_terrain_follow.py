@@ -55,6 +55,8 @@ def main():
         execute('SetTimeTransport', playing=False)
         run_authored_scenario(session, 'lunco://scenarios/tests/camera_terrain_follow.rhai',
                               title='CAMERA TERRAIN FOLLOW', check_count=8, timeout_s=90)
+        run_authored_scenario(session, 'lunco://scenarios/tests/camera_rapid_terrain_motion.rhai',
+                              title='CAMERA RAPID TERRAIN MOTION', check_count=5, timeout_s=90)
         avatar = int(execute('RunRhai', code=f'print(find_path({json.dumps(args.camera_path)}));')['stdout'].strip())
         if avatar <= 0:
             raise RuntimeError('local avatar is unavailable')

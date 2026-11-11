@@ -542,9 +542,10 @@ pub(crate) fn update_links(
                 && above_mask(elev_b, b.min_elevation_deg)
                 && occluded_by.is_none();
             // Terrain relief (a rille rim / hill between the endpoints) shadows the
-            // link. March the DEM in the site-local frame — `SolarFramePose::local`
-            // IS the terrain oracle frame (see `pose.rs`). Skipped when the analytic
-            // body check already severs, and cheap when no terrain is loaded.
+            // link. The pair sweep uses its bounded sampled query in the site-local
+            // frame — `SolarFramePose::local` IS the terrain oracle frame (see
+            // `pose.rs`). Skipped when the analytic body check already severs, and
+            // cheap when no terrain is loaded.
             let terrain_blocked = cheap_ok && terrain_blocks(a.pose.local, b.pose.local, &terrains);
             // Authored geometry between the endpoints (a wall, a habitat). Skipped
             // once something cheaper already severs — the verdict is the same and
@@ -845,11 +846,10 @@ pub fn node_label(class: Option<&str>, name: Option<&Name>, e: Entity) -> String
 }
 
 /// Does any DEM's relief block the segment `a→b` (both grid-absolute, the frame
-/// [`SolarFramePose::local`] is in)? The single-ray `los_hit` kernel over each
-/// oracle, mirroring `TerrainRaycastProvider`. The march is capped to the terrain
+/// [`SolarFramePose::local`] is in)? The scheduled pair sweep uses the generic
+/// sampled `los_hit` kernel over each oracle. Its segment is capped to the terrain
 /// footprint (`±half_extent`) because terrain can only occlude within its own
-/// extent — this keeps the step at the DEM sample pitch even for a
-/// surface↔satellite segment (otherwise millions of metres of empty march).
+/// extent — this bounds work even for a surface↔satellite segment.
 ///
 /// `terrains` carries each DEM's grid-absolute pose (see the frame note on
 /// [`update_links`]). Scale is not composed: DEM surfaces are authored unscaled,

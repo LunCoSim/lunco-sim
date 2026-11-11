@@ -345,26 +345,84 @@ static NON_FINITE_REPORTED: std::sync::atomic::AtomicBool =
 /// As [`NON_FINITE_REPORTED`], for the absurd-magnitude report.
 static ABSURD_REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// First intersection of a ray with the composed surface, in TERRAIN-LOCAL
-/// space (heights along +Y over local `(x, z)`); `None` when the ray never
-/// crosses the surface inside the DEM footprint within `max_t` metres.
+const MAX_SURFACE_RAY_CELL_VISITS: usize = 16_384;
+const MAX_SURFACE_RAY_SUBDIVISIONS: usize = 32_768;
+const MAX_SURFACE_RAY_SUBDIVISION_DEPTH: u8 = 48;
+const SURFACE_RAY_DISTANCE_TOLERANCE_M: f64 = 0.005;
+
+/// First intersection of a ray with the composed surface in terrain-local
+/// coordinates. Raster cells are visited front-to-back. Conservative composed
+/// height bounds reject clear intervals; possible intersections are subdivided
+/// until bracketed or bounded to millimetre-scale distance. An unavailable
+/// modifier bound or exhausted work budget is an error, not a false miss.
 ///
-/// Adaptive march (step grows with distance, capped) with a bisection refine on
-/// the bracketing interval, so cursor-scale queries cost a few hundred oracle
-/// samples worst case. This is the ground-truth pick for UI ghosts: physics
-/// colliders only exist in the ring near dynamic bodies and are band-limited
-/// below the drawn micro-relief, so a collider raycast either misses open
-/// terrain entirely or reports a surface ABOVE the drawn one — the "cursor
-/// flying over the ground" artifact.
+/// The returned point is on the analytic surface, which is also the ground
+/// truth for editor picking. Render tiles and streamed physics colliders are
+/// consumers of this oracle and need not be resident at the picked location.
 pub fn raycast_surface(
     oracle: &SurfaceOracle,
     origin: bevy::math::DVec3,
     dir: bevy::math::DVec3,
     max_t: f64,
-) -> Option<bevy::math::DVec3> {
+) -> Result<Option<bevy::math::DVec3>, String> {
+    let Some(t) = raycast_surface_distance(oracle, origin, dir, max_t, 0.0)? else {
+        return Ok(None);
+    };
+    let hit = origin + dir * t;
+    Ok(Some(bevy::math::DVec3::new(
+        hit.x,
+        oracle.height_at(hit.x, hit.z),
+        hit.z,
+    )))
+}
+
+/// Distance to the first surface crossing after applying a non-negative height
+/// margin. Used by line-of-sight queries that must not count a surface endpoint
+/// as an occluder.
+pub(crate) fn raycast_surface_distance(
+    oracle: &SurfaceOracle,
+    origin: bevy::math::DVec3,
+    dir: bevy::math::DVec3,
+    max_t: f64,
+    margin: f64,
+) -> Result<Option<f64>, String> {
+    use bevy::math::DVec3;
+
+    if !origin.is_finite()
+        || !dir.is_finite()
+        || (dir.length_squared() - 1.0).abs() > 1e-6
+        || (!max_t.is_finite() && max_t != f64::INFINITY)
+        || max_t <= 0.0
+        || !margin.is_finite()
+        || margin < 0.0
+    {
+        return Err("invalid terrain ray".into());
+    }
     let half = oracle.half_extent() as f64;
-    let inside = |p: bevy::math::DVec3| p.x.abs() <= half && p.z.abs() <= half;
-    let above = |p: bevy::math::DVec3| p.y >= oracle.height_at(p.x, p.z);
+    let spacing = f64::from(oracle.spacing());
+    let resolution = oracle.base_resolution();
+    if resolution < 2 || !spacing.is_finite() || spacing <= 0.0 {
+        return Err("terrain ray has invalid raster geometry".into());
+    }
+    let inside = |p: DVec3| p.x.abs() <= half && p.z.abs() <= half;
+    let above = |t: f64| {
+        let p = origin + dir * t;
+        p.y >= oracle.height_at(p.x, p.z) - margin
+    };
+
+    // A vertical ray stays in one raster cell. Resolve it directly and avoid an
+    // unbounded march when callers request an infinite ray length.
+    if dir.x.abs() <= f64::EPSILON && dir.z.abs() <= f64::EPSILON {
+        if !inside(origin) || dir.y.abs() <= f64::EPSILON {
+            return Ok(None);
+        }
+        let height = oracle.height_at(origin.x, origin.z) - margin;
+        if origin.y < height {
+            return Ok(None);
+        }
+        let t = (height - origin.y) / dir.y;
+        return Ok((t >= 0.0 && t <= max_t).then_some(t));
+    }
 
     // Intersect the ray with the finite DEM footprint before marching. Besides
     // avoiding pointless samples in the empty space before/after a terrain,
@@ -379,55 +437,174 @@ pub fn raycast_surface(
             Some((a.min(b), a.max(b)))
         }
     };
-    let (x_near, x_far) = slab(origin.x, dir.x)?;
-    let (z_near, z_far) = slab(origin.z, dir.z)?;
+    let Some((x_near, x_far)) = slab(origin.x, dir.x) else {
+        return Ok(None);
+    };
+    let Some((z_near, z_far)) = slab(origin.z, dir.z) else {
+        return Ok(None);
+    };
     let mut t = x_near.max(z_near).max(0.0);
     let max_t = x_far.min(z_far).min(max_t);
     if t > max_t {
-        return None;
+        return Ok(None);
     }
-    // `Some(t)` = the last sample inside the footprint AND above the surface —
-    // the near end of a potential bracket. Reset when the ray leaves the
-    // footprint so a re-entry can't bracket across the gap.
-    let mut last_above: Option<f64> = None;
-    while t <= max_t {
-        let p = origin + dir * t;
-        if inside(p) {
-            if above(p) {
-                last_above = Some(t);
-            } else if let Some(t0) = last_above {
-                // Crossing bracketed in [t0, t] — bisect to centimetre scale.
-                let (mut lo, mut hi) = (t0, t);
-                for _ in 0..24 {
-                    let mid = 0.5 * (lo + hi);
-                    if above(origin + dir * mid) {
-                        lo = mid;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                let th = 0.5 * (lo + hi);
-                let hit = origin + dir * th;
-                return Some(bevy::math::DVec3::new(
-                    hit.x,
-                    oracle.height_at(hit.x, hit.z),
-                    hit.z,
-                ));
-            } else {
-                // Started (or re-entered) below the surface — no bracket.
-                return None;
-            }
+    if !inside(origin + dir * t) {
+        return Ok(None);
+    }
+    if !above(t) {
+        return Ok(None);
+    }
+
+    let coordinate = |p: f64| ((p + half) / spacing).clamp(0.0, resolution as f64 - 1.0);
+    let cell_index = |u: f64, step: isize| -> usize {
+        let floor = u.floor();
+        let at_boundary = (u - floor).abs() <= 32.0 * f64::EPSILON * u.abs().max(1.0);
+        let raw = if step < 0 && at_boundary {
+            floor as isize - 1
         } else {
-            last_above = None;
+            floor as isize
+        };
+        raw.clamp(0, resolution as isize - 2) as usize
+    };
+    let step_x = if dir.x > 0.0 {
+        1_isize
+    } else if dir.x < 0.0 {
+        -1
+    } else {
+        0
+    };
+    let step_z = if dir.z > 0.0 {
+        1_isize
+    } else if dir.z < 0.0 {
+        -1
+    } else {
+        0
+    };
+    let at = origin + dir * t;
+    let mut ix = cell_index(coordinate(at.x), step_x);
+    let mut iz = cell_index(coordinate(at.z), step_z);
+    let mut next_x = if step_x == 0 {
+        f64::INFINITY
+    } else {
+        let boundary = -half + (ix + usize::from(step_x > 0)) as f64 * spacing;
+        (boundary - origin.x) / dir.x
+    };
+    let mut next_z = if step_z == 0 {
+        f64::INFINITY
+    } else {
+        let boundary = -half + (iz + usize::from(step_z > 0)) as f64 * spacing;
+        (boundary - origin.z) / dir.z
+    };
+    let delta_x = if step_x == 0 {
+        f64::INFINITY
+    } else {
+        spacing / dir.x.abs()
+    };
+    let delta_z = if step_z == 0 {
+        f64::INFINITY
+    } else {
+        spacing / dir.z.abs()
+    };
+    let mut cells = 0usize;
+    let mut subdivisions = 0usize;
+
+    while t <= max_t {
+        cells += 1;
+        if cells > MAX_SURFACE_RAY_CELL_VISITS {
+            return Err("terrain ray exceeded its raster-cell work budget".into());
         }
-        // Fine near the camera (sub-metre relief matters at cursor range),
-        // coarsening with distance; capped so distant rims aren't skipped.
-        if t >= max_t {
+        let cell_end = next_x.min(next_z).min(max_t);
+        if cell_end > t {
+            // The bounded depth keeps this stack local and allocation-free; a
+            // cursor ray can visit many raster cells in one presentation frame.
+            let mut intervals = [(0.0, 0.0, 0u8); MAX_SURFACE_RAY_SUBDIVISION_DEPTH as usize + 2];
+            let mut interval_count = 1usize;
+            intervals[0] = (t, cell_end, 0);
+            while interval_count > 0 {
+                interval_count -= 1;
+                let (lo, hi, depth) = intervals[interval_count];
+                subdivisions += 1;
+                if subdivisions > MAX_SURFACE_RAY_SUBDIVISIONS {
+                    return Err("terrain ray exceeded its intersection work budget".into());
+                }
+                let p0 = origin + dir * lo;
+                let p1 = origin + dir * hi;
+                let rect = [
+                    p0.x.min(p1.x),
+                    p0.z.min(p1.z),
+                    p0.x.max(p1.x),
+                    p0.z.max(p1.z),
+                ];
+                let bounds = oracle.height_bounds_in_cell([ix, iz], rect)?;
+                let ray_low = p0.y.min(p1.y);
+                let ray_high = p0.y.max(p1.y);
+                let terrain_low = bounds[0] - margin;
+                let terrain_high = bounds[1] - margin;
+                if ray_low > terrain_high || ray_high < terrain_low {
+                    continue;
+                }
+
+                let f0 = p0.y - oracle.height_at(p0.x, p0.z) + margin;
+                let f1 = p1.y - oracle.height_at(p1.x, p1.z) + margin;
+                if f0 >= 0.0 && f1 < 0.0 {
+                    let (mut above_t, mut below_t) = (lo, hi);
+                    for _ in 0..48 {
+                        let mid = 0.5 * (above_t + below_t);
+                        if above(mid) {
+                            above_t = mid;
+                        } else {
+                            below_t = mid;
+                        }
+                    }
+                    return Ok(Some(0.5 * (above_t + below_t)));
+                }
+                if f0 < 0.0 {
+                    // The first in-footprint sample is below terrain; do not
+                    // invent a hit by tracing back through the DEM boundary.
+                    return Ok(None);
+                }
+                let vertical_uncertainty = ray_high - ray_low + bounds[1] - bounds[0];
+                if hi - lo <= SURFACE_RAY_DISTANCE_TOLERANCE_M
+                    && vertical_uncertainty <= SURFACE_RAY_DISTANCE_TOLERANCE_M
+                {
+                    return Ok(Some(0.5 * (lo + hi)));
+                }
+                if depth >= MAX_SURFACE_RAY_SUBDIVISION_DEPTH {
+                    return Err("terrain ray could not certify a grazing intersection".into());
+                }
+
+                let mid = 0.5 * (lo + hi);
+                let child_depth = depth + 1;
+                // LIFO: push the far interval first so the nearest possible
+                // crossing is always resolved before anything behind it.
+                if interval_count + 2 > intervals.len() {
+                    return Err("terrain ray exceeded its subdivision stack".into());
+                }
+                intervals[interval_count] = (mid, hi, child_depth);
+                interval_count += 1;
+                intervals[interval_count] = (lo, mid, child_depth);
+                interval_count += 1;
+            }
+        }
+
+        if cell_end >= max_t {
             break;
         }
-        t = (t + (0.25 + t * 0.02).min(6.0)).min(max_t);
+        let epsilon = 16.0 * f64::EPSILON * cell_end.abs().max(1.0);
+        if next_x <= cell_end + epsilon {
+            ix = ix.checked_add_signed(step_x).unwrap_or(ix);
+            next_x += delta_x;
+        }
+        if next_z <= cell_end + epsilon {
+            iz = iz.checked_add_signed(step_z).unwrap_or(iz);
+            next_z += delta_z;
+        }
+        t = cell_end;
+        if ix >= resolution - 1 || iz >= resolution - 1 {
+            break;
+        }
     }
-    None
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -564,9 +741,14 @@ mod tests {
     fn raycast_surface_checks_the_end_of_a_short_segment() {
         let oracle = SurfaceOracle::bare(flat(5, 10.0));
         let hit = raycast_surface(&oracle, DVec3::new(0.0, 0.1, 0.0), DVec3::NEG_Y, 0.2)
+            .expect("the ray must resolve")
             .expect("the surface crossing near the segment end must be detected");
         assert!(hit.y.abs() < 1e-6);
-        assert!(raycast_surface(&oracle, DVec3::new(0.0, 0.1, 0.0), DVec3::NEG_Y, 0.05).is_none());
+        assert!(
+            raycast_surface(&oracle, DVec3::new(0.0, 0.1, 0.0), DVec3::NEG_Y, 0.05)
+                .expect("the short ray must resolve")
+                .is_none()
+        );
     }
 
     #[test]
@@ -579,8 +761,58 @@ mod tests {
         let direction = DVec3::new(1.0, -0.1, 0.0).normalize();
 
         let hit = raycast_surface(&oracle, origin, direction, f64::INFINITY)
-            .expect("the finite terrain footprint bounds an unbounded ray");
+            .expect("the finite terrain footprint bounds an unbounded ray")
+            .expect("the ray must intersect the DEM");
         assert!(hit.x.abs() < 0.1, "expected centre hit, got {hit:?}");
         assert!(hit.y.abs() < 1e-6, "expected flat ground, got {hit:?}");
+    }
+
+    #[test]
+    fn raycast_surface_does_not_step_over_a_narrow_ridge() {
+        let mut grid = HeightGrid::new_flat(129, 32.0);
+        grid.heights[64 * grid.res + 64] = 4.0;
+        let oracle = SurfaceOracle::bare(Arc::new(grid));
+        let hit = raycast_surface(&oracle, DVec3::new(-20.0, 1.0, 0.0), DVec3::X, 40.0)
+            .expect("bounded cell traversal must resolve the ridge")
+            .expect("the ray must hit the narrow ridge");
+        assert!(
+            hit.x > -1.0 && hit.x < 0.0,
+            "expected near ridge face, got {hit:?}"
+        );
+        assert!(
+            (hit.y - oracle.height_at(hit.x, hit.z)).abs() < 1e-9,
+            "hit must lie on the composed surface, got {hit:?}"
+        );
+    }
+
+    #[test]
+    fn raycast_surface_rejects_invalid_and_uncertifiable_queries() {
+        let base = SurfaceOracle::bare(flat(5, 10.0));
+        let invalid = raycast_surface(&base, DVec3::new(0.0, 1.0, 0.0), DVec3::ZERO, 10.0)
+            .expect_err("a non-unit direction must be rejected");
+        assert!(invalid.contains("invalid terrain ray"), "{invalid}");
+
+        struct UnboundedModifier;
+        impl HeightModifier for UnboundedModifier {
+            fn apply(&self, _x: f64, _z: f64, height: f64) -> f64 {
+                height
+            }
+        }
+
+        let unbounded = SurfaceOracle::new(
+            flat(5, 10.0),
+            vec![HeightContribution {
+                modifier: Arc::new(UnboundedModifier),
+                content_key: 1,
+            }],
+        );
+        let error = raycast_surface(
+            &unbounded,
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(1.0, -1.0, 0.0).normalize(),
+            10.0,
+        )
+        .expect_err("a modifier without height bounds cannot certify a ray");
+        assert!(error.contains("no conservative height bounds"), "{error}");
     }
 }

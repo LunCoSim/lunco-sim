@@ -3046,11 +3046,15 @@ fn terrain_view_focus(oracle: &SurfaceOracle, demand: TerrainVisualDemand) -> [f
     // decision. Filter only the selection ray; geometry and physics still
     // sample their own surface bands.
     let selection_surface = SurfaceBand::visual(TERRAIN_FOCUS_QUANT_M).limited(oracle);
-    let Some(hit) =
-        crate::oracle::raycast_surface(&selection_surface, origin, direction, 2.0 * radius)
-    else {
-        return demand.focus;
-    };
+    let hit =
+        match crate::oracle::raycast_surface(&selection_surface, origin, direction, 2.0 * radius) {
+            Ok(hit) => hit,
+            Err(error) => {
+                warn_once!("terrain view-focus ray could not be certified: {error}");
+                return demand.focus;
+            }
+        };
+    let Some(hit) = hit else { return demand.focus };
     let t = ((2.0 * radius - origin.distance(hit)) / radius).clamp(0.0, 1.0);
     let blend = 0.5 * t * t * (3.0 - 2.0 * t);
     let mut offset = bevy::math::DVec2::new(hit.x - origin.x, hit.z - origin.z) * blend;
@@ -3927,12 +3931,23 @@ pub fn update_lod_tiles(
                     }
                 }
             }
-            if tiles
-                .pending_cover
-                .is_some_and(|(generation, pending_sig, pending_oracle, _)| {
-                    generation != cur_gen || pending_sig != sig || pending_oracle != oracle_key
-                })
+            if let Some((generation, pending_sig, pending_oracle, operation)) = tiles.pending_cover
+                && (generation != cur_gen || pending_sig != sig || pending_oracle != oracle_key)
             {
+                // A queued immutable snapshot cannot be updated in place. Withdraw
+                // it as soon as the camera signature changes so it cannot sit ahead
+                // of the latest view. A dispatched worker remains owner-fenced at
+                // completion.
+                let key = lunco_core_runtime::AsyncWorkKey::new(
+                    lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                    0,
+                    terrain.to_bits() as u128,
+                    pending_sig,
+                    operation,
+                );
+                if cover_work.admission.cancel_queued(key) {
+                    tiles.pending_cover = None;
+                }
                 selection_due = true;
             }
             {
@@ -4045,7 +4060,7 @@ pub fn update_lod_tiles(
                             operation,
                         );
                         match cover_work.admission.submit(
-                            lunco_core_runtime::AsyncWorkPriority::Background,
+                            lunco_core_runtime::AsyncWorkPriority::Interactive,
                             key,
                             job,
                         ) {
@@ -6259,7 +6274,9 @@ mod draw_partition_tests {
             near_detail_hysteresis_m: 12.0,
         };
         let origin = DVec3::new(0.0, 10.0, 0.0);
-        let physical = crate::oracle::raycast_surface(&detailed, origin, direction, 60.0).unwrap();
+        let physical = crate::oracle::raycast_surface(&detailed, origin, direction, 60.0)
+            .unwrap()
+            .unwrap();
         assert!(
             (physical.x - 15.0).abs() > 0.1,
             "fixture must change the physical hit"

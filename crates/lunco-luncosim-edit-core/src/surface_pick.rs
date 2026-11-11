@@ -47,11 +47,11 @@ pub(crate) fn cursor_surface_hit<F>(
     max_distance: f64,
     policy: SurfacePickPolicy,
     mut valid_physics: F,
-) -> Option<CursorSurfaceHit>
+) -> Result<Option<CursorSurfaceHit>, String>
 where
     F: FnMut(Entity) -> bool,
 {
-    let terrain = surface.raycast(origin, direction, max_distance);
+    let terrain = surface.raycast(origin, direction, max_distance)?;
     let physics = match policy {
         SurfacePickPolicy::TerrainFirst if terrain.is_some() => None,
         _ => {
@@ -71,14 +71,14 @@ where
         }
     };
 
-    resolve_cursor_surface(
+    Ok(resolve_cursor_surface(
         origin,
         direction.as_dvec3(),
         terrain,
         physics.map(|hit| f64::from(hit.distance)),
         physics.map(|hit| hit.entity),
         policy,
-    )
+    ))
 }
 
 pub(crate) fn resolve_cursor_surface(

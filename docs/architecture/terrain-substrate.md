@@ -42,6 +42,28 @@ The composed source is the **single source of truth**. Both consumers sample it:
   receiving invented dimensions or a lift. The API path uses the explicit
   position supplied by the caller.
 
+### Ray queries and terrain picking
+
+`GridSurfaceQuery` resolves screen rays against the composed `SurfaceOracle`,
+independent of which visual LOD tiles or physics colliders are resident. The
+oracle visits DEM raster cells front-to-back and uses conservative height
+enclosures for the bicubic base and each analytic modifier. It subdivides only
+intervals that can contain an intersection, so narrow crater rims and ridges
+cannot be skipped by a fixed-distance march. A ray with no DEM in the scene
+returns no terrain hit, allowing physics-only placement to continue.
+
+These queries return either a certified hit/miss or an error when an interval
+needs bounds that a modifier cannot provide, a DEM lacks a complete active-frame
+pose, or the work budget is exhausted. Callers must keep those outcomes distinct:
+follow-camera motion holds its last position and reports the query failure,
+while the spawn preview hides its old marker and the click path refuses to
+place an entity. `TerrainRaycast` uses the same
+intersection kernel. Visual LOD selection may omit its optional forward-focus
+bias when the query cannot be certified; the camera-centered cover and
+physics-support cover remain authoritative. The production camera gate includes
+a rapid-reposition Rhai test that checks clearance, cover readiness, stream
+settling and use of a coarser distant LOD.
+
 The physics product chooses its authored collider lattice; graphics quality
 cannot add physics work or change contact geometry. The visual cover reserves
 that same lattice on the physics ring's support footprint and build-ahead nodes.
@@ -54,8 +76,13 @@ including their parent morph lattice, rather than evaluating extra relief that
 physical contact cannot represent. The ring resolution
 also supplies the streamed visual lattice so parent/child seams stay nested.
 
-The camera cover remains budgeted and is prepared off-thread; contact constraints
-are applied by that same worker after discretionary split/merge work. The worker also reserves the finest tile under every nearby active camera plus
+The camera cover remains budgeted and is prepared off-thread at interactive
+priority because it serves the active viewport. When a new selection cycle
+produces a newer camera demand, its owner withdraws an older queued immutable
+cover request; work already dispatched is fenced at the completion boundary.
+This keeps camera motion from accumulating a backlog of obsolete cover plans.
+Contact constraints are applied by that same worker after discretionary
+split/merge work. The worker also reserves the finest tile under every nearby active camera plus
 its edge neighbours, using the camera's real local clearance and configured
 near-detail radius. It builds the required restricted tree first and reserves
 its split cost before allocating the remaining budget to discretionary camera

@@ -11,11 +11,11 @@
 //! via an `ExecuteCommand` named `TerrainHeight`.
 //!
 //! `TerrainRaycast` is deliberately **domain-free** (docs 10/11): it answers
-//! "does relief block this ray?" over the retained height oracle — reusable by
-//! AI pathing, sensors, spawn placement, camera, and (once antenna positions are
-//! bridged from the solar frame) the comms terrain constraint. It marches the
-//! same [`HeightSource`] the height query samples, so it is collider-independent
-//! and works on the headless server, before any physics tile streams in.
+//! "does relief block this ray?" over the retained surface oracle. Its
+//! conservative raster-cell query is also used by viewport picking and camera
+//! clearance, so all three are independent of collider and visual-LOD residency.
+//! The scheduled comms pair sweep uses the generic sampled `HeightSource` kernel
+//! to bound work across endpoint pairs.
 //!
 //! **Why a dedicated provider instead of `GroundHeight`.** `GroundHeight` casts a
 //! ray straight down against avian colliders — so it only answers once the
@@ -406,7 +406,7 @@ fn parse_point(v: Option<&ApiValue>) -> Option<GridPos> {
     parse_vec3(v).map(GridPos)
 }
 
-/// `TerrainRaycast` — does terrain relief block a ray? Marches the DEM height
+/// `TerrainRaycast` — does terrain relief block a ray? Resolves the composed DEM
 /// oracle in the grid-absolute frame; generic geometry, no physics, no domain.
 ///
 /// params: `{ origin:[x,y,z], target:[x,y,z] }` **or** `{ origin, dir:[x,y,z],
@@ -417,7 +417,8 @@ fn parse_point(v: Option<&ApiValue>) -> Option<GridPos> {
 /// `distance` in metres along the ray, `point` the world-space intercept. A
 /// small vertical margin keeps an endpoint sitting ON the surface from
 /// occluding itself (mirrors `segment_hits_sphere`). `{ hit:false }` when the
-/// ray clears all relief or never crosses a DEM footprint.
+/// ray clears all relief or never crosses a DEM footprint. A modifier without
+/// conservative height bounds produces a query error rather than `{ hit:false }`.
 pub struct TerrainRaycastProvider;
 
 impl ApiQueryProvider for TerrainRaycastProvider {
@@ -507,24 +508,18 @@ impl ApiQueryProvider for TerrainRaycastProvider {
         let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
             q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
 
-        // Nearest intercept across all DEM footprints wins. The march is the pure
-        // `lunco_terrain_core::los_hit` kernel (the single-ray sibling of
-        // `ao_map`); this provider only parses/reports — exactly how
-        // `TerrainHeightProvider` wraps `HeightSource::height_at`. The DEM frame
-        // IS the grid frame (see `TerrainHeight`), so the grid-absolute ray
-        // marches the oracle directly, in f64 (`.0` at the `los_hit` boundary —
-        // the kernel is DEM-frame math), and `distance` is honest metres.
+        // Use the same composed-surface ray query as cursor picking. A bounded
+        // failure is a query error, never an apparent clear ray.
         let mut best: Option<(f64, GridPos, Entity)> = None;
         for (entity, oracle) in terrains {
-            let hit = lunco_terrain_core::los_hit(
-                oracle.as_ref(),
-                [origin.0.x, origin.0.y, origin.0.z],
-                [dir.x, dir.y, dir.z],
-                max,
-                oracle.half_extent() as f64,
-                oracle.spacing().max(0.5) as f64,
-                0.05, // don't let a surface-sitting endpoint self-occlude
-            );
+            let hit =
+                crate::oracle::raycast_surface_distance(oracle.as_ref(), origin.0, dir, max, 0.05)
+                    .map_err(|error| {
+                        ApiQueryError::new(
+                            ApiErrorCode::InternalError,
+                            format!("TerrainRaycast could not certify the surface: {error}"),
+                        )
+                    })?;
             if let Some(t) = hit {
                 if best.is_none_or(|(bt, _, _)| t < bt) {
                     best = Some((t, origin + dir * t, entity));
