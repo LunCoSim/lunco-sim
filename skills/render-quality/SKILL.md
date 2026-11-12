@@ -24,9 +24,13 @@ LOD approaches, consult the source-linked
 
 Check `RuntimeDiagnostics` for producer `render-recovery` before accepting a
 rendered result. `presentation-stopped` rejects graphics evidence even if
-`EnginePerformance` still returns numeric application-frame FPS. The renderer
-preserves the simulation and API through that failure; inspect the native cause
-and available GPU memory rather than changing authored quality automatically.
+`EnginePerformance` still returns numeric application-frame FPS.
+`shadow-resource-degraded` means a shadow-map allocation OOM was recovered by
+reducing that map's effective resolution; the Error remains in Recent Events,
+while the saved Graphics setting stays unchanged. Check both requested and
+effective sizes before accepting quality evidence. Other persistent failures
+stop presentation after the configured grace period; inspect the native cause
+and available GPU memory.
 
 Use a task-owned `LUNCOSIM_CONFIG` directory for visual acceptance so restored
 workbench documents cannot change the fixture. `LUNCOSIM_EPHEMERAL_SETTINGS=1`
@@ -79,13 +83,16 @@ GPU acceptance still require the rendered fixture and a clean process log.
    For regular grain ripples, verify that DEM UVs and their derivatives use
    `terrain_half_extent`, independently of the shadow heightfield's `hf_size`.
    Compare settled frames with procedural relief and native shadow reception
-   isolated separately. High uses 8192-pixel directional maps, a narrow
+   isolated separately. High uses 4096-pixel directional maps, a narrow
    Hardware 2×2 filter, a 0.005 m depth bias and a 2.0-texel normal bias.
    The normal offset must cover the selected filter footprint; test grazing
    sunlight for acne and wheel/ground separation before changing it.
-   The 5 GiB logical ceiling covers all declared caster limits (including
+   The 2 GiB logical ceiling covers all declared caster limits (including
    spot layers at directional-map resolution), not an unconditional GPU
-   allocation. Keep physical solar angle, direction and terrain unchanged.
+   allocation or a measure of free VRAM. Keep physical solar angle, direction
+   and terrain unchanged. On shadow-map OOM, the renderer retries at a lower
+   power-of-two resolution and records the effective size in Recent Events; it
+   does not rewrite the saved setting.
    Balanced retains its smaller budget and smoother filter. Existing custom
    saved values remain authoritative; select High to apply the new defaults.
    Inspect the live light bias as well as the preset: saved Graphics values

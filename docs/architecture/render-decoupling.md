@@ -137,10 +137,22 @@ and `RenderGaveUp` as the `presentation-stopped` error through the existing
 `RuntimeDiagnostics` owner. Render warnings and failures appear in Recent
 Events without a floating viewport banner. API, authoring review and performance consumers read
 that same diagnostic; the renderer does not raise a simulation fault or change
-physics, camera quality or authored settings. A warning is replaced by the
-terminal error, rather than counted twice. Repair removes only this producer's
-findings. Scene teardown resets ordinary recovery; device loss survives that
-boundary and republishes after scene diagnostics clear.
+physics or authored settings. A shadow-map allocation OOM reduces only that
+map's effective runtime resolution by one power of two, retries rendering, and
+publishes an Error in Recent Events describing the requested and effective
+sizes. It repeats down to 64 pixels if necessary. The saved Graphics values and
+authored light state remain intact; changing that map size or retiring the
+scene clears the runtime override. This recovery keeps the viewport and
+workbench available when shadow allocation alone exhausted GPU memory. Other
+persistent render failures still replace their warning with the terminal error
+and stop presentation. Repair removes only this producer's findings. Scene
+teardown resets ordinary recovery; device loss survives that boundary and
+republishes after scene diagnostics clear.
+
+The `render-shadow` exposure reports `directional_map_size` and
+`point_map_size` as the effective live sizes; the corresponding
+`requested_directional_map_size` and `requested_point_map_size` retain the
+saved Graphics values while a runtime override is active.
 
 `EnginePerformance` retains application-frame timings, which can continue while
 presentation has stopped. A numeric FPS alone does not prove rendered output.
@@ -549,7 +561,8 @@ doctrine applied to the last place that dodged it.
 
 `lunco-render` (render-free) and `lunco-materials` (render-free) hold the whole vocabulary.
 `lunco-render-bevy` is the material-binding crate. `lunco-render-recovery` owns the
-render-bound GPU error handler, adapter capability admission, and presentation gate. The
+render-bound GPU error handler, adapter capability admission, transient shadow
+resolution recovery, and presentation gate. The
 GUI-only `lunco-workbench` consumes those capabilities for its rendered shadow-settings
 surface, but neither recovery nor the workbench is reachable from the headless server.
 

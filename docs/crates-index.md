@@ -224,7 +224,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. Parameter drafts follow their explicit document and preview lifetimes, independently of panel paint. It is installed explicitly by windowed composition roots. |
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
 | **`lunco-render`** | Render-free appearance intent, including screen-constant marker sizing and visibility, typed scalar/float texture updates, and graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
-| **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
+| **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, transient shadow-map resolution reduction after allocation OOM, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Uses unmodified Bevy Render with its supported math feature layout; physics feature selection must preserve the renderer's GPU ABI. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`, source-declared volume depth requirements and native prepass lifetime, persistent scalar/float texture GPU uploads, active native CPU/GPU mesh-preparation admission and camera culling, population-gated native point/spot caster visibility, conservative local-light shadow relevance with extracted source intent and shadow-view lifetime cleanup, a native shared-shadow schedule for point/spot roots, conservative source-qualified directional receiver raster bounds, and diagnostics-enabled native shadow GPU spans. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
 
@@ -1425,9 +1425,11 @@ The **only** crate that names `bevy_pbr`. Uses unmodified Bevy Render with its s
 **`lunco-render-recovery`**
 Render-bound resilience for the presentation boundary. It installs the
 uncaptured-error handler, records adapter capabilities and shadow admission
-facts, escalates repeated failures to a terminal presentation gate, and resets
-that state at the explicit scene-teardown boundary. It has no workbench layout,
-panel, Twin, or domain-policy ownership.
+facts, retries shadow allocation failures at lower effective map resolutions
+without rewriting saved Graphics settings, escalates unrecovered failures to a
+terminal presentation gate, and resets recovery state at the explicit
+scene-teardown boundary. It has no workbench layout, panel, Twin, or
+domain-policy ownership.
 
 **`lunco-web`**
 Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco-boot.{js,css}`), `WebReadyPlugin`, which signals the HTML loader once Bevy paints its first frame, and `mountRhaiTool`, which mounts trusted HTML/CSS tool bundles whose actions execute through the existing Rhai bridge.
