@@ -682,13 +682,6 @@ pub fn ensure_directory_sync(path: &Path) -> StorageResult<()> {
     FileStorage::new().ensure_directory_sync(&StorageHandle::File(path.to_path_buf()))
 }
 
-/// Import missing entries from a native directory tree without removing the
-/// source tree or replacing files already present at the destination.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn copy_directory_tree_missing_sync(source: &Path, destination: &Path) -> StorageResult<()> {
-    FileStorage::new().copy_directory_tree_missing_sync(source, destination)
-}
-
 /// Browser counterpart of [`ensure_directory_sync`]. Browser storage has no
 /// native directory tree; writes create their logical keys directly.
 #[cfg(target_arch = "wasm32")]

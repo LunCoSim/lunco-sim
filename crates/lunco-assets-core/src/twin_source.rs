@@ -1022,7 +1022,7 @@ mod tests {
     fn native_resolution_edges_directory_probe_distinguishes_files_from_errors() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("entry"), b"file").unwrap();
-        std::fs::create_dir_all(root.path().join(".cache/entry")).unwrap();
+        std::fs::create_dir_all(crate::twin_cache_dir(root.path()).join("entry")).unwrap();
         std::fs::create_dir(root.path().join("directory")).unwrap();
         let roots = TwinRoots::default();
         let authority = roots.register("probe", root.path()).unwrap();

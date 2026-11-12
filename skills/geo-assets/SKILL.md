@@ -190,6 +190,9 @@ contract; no tutorial script installs the handoff.
 - **Twin cache** — `<TWIN>/.cache`. A Twin's default-owned downloads land
   beside the Twin. `twin://` reads resolve `<twin>/<rel>` first, then
   `<twin>/.cache/<rel>`, then the global cache `<cache>/<rel>`.
+- Runtime code obtains this path from `lunco-assets-core::twin_cache_dir`;
+  manifest ownership is selected by the shared cache contract in
+  [asset resolution](../../docs/architecture/56-asset-resolution-and-cache.md#engine-and-twin-caches).
 - **`shared = true`** on an entry sends its write to the global pool instead
   (`<cache>/sources/<sha256(url)[..16]>/<basename>`) — one download per URL,
   reused by every twin and worktree. Use it when several Twins intentionally

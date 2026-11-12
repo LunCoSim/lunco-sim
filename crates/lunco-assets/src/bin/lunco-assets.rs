@@ -293,7 +293,6 @@ fn process_filtered(
                 .map_err(|e| e.to_string())?;
             let source = lunco_assets_datasets::source_read_path(
                 entry,
-                &entry_cache_root(entry, twin_root),
                 &if twin_root.is_some() {
                     lunco_assets_core::asset_read_roots(&owner)
                 } else {
@@ -345,7 +344,7 @@ fn process_filtered(
             process::process_asset(
                 &source_path,
                 &cfg,
-                &entry_cache_root(entry, twin_root),
+                &entry_owner_cache_root(entry, twin_root),
                 twin_root,
                 &process::ProcessControl::unrestricted()
                     .with_force(force)
@@ -369,10 +368,14 @@ fn process_filtered(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn entry_cache_root(entry: &AssetEntry, twin_root: Option<&std::path::Path>) -> std::path::PathBuf {
-    twin_root
-        .map(|root| lunco_assets_datasets::DatasetScope::twin_cache_root(root, entry.shared))
-        .unwrap_or_else(lunco_assets_core::cache_dir)
+fn entry_owner_cache_root(
+    entry: &AssetEntry,
+    twin_root: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    let local_cache = twin_root
+        .map(lunco_assets_core::twin_cache_dir)
+        .unwrap_or_else(lunco_assets_core::cache_dir);
+    lunco_assets_datasets::dataset_cache_root(&local_cache, entry.shared)
 }
 
 /// Process one engine manifest group (`assets/manifests/<group>.toml`).

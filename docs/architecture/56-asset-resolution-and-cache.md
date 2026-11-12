@@ -88,14 +88,16 @@ There are two runtime cache owners:
 - Twin-owned downloads and derived products use `<twin>/.cache`, so the Twin
   folder can be transferred with its data.
 
-On native platforms, the first default-path lookup imports files missing from
-`~/.lunco/cache` from the previous OS cache through `lunco-storage`. Existing
-destination files remain authoritative because cache timestamps can represent
-recency rather than content freshness. The legacy tree remains available to
-already-running builds. Missing files are hard-linked when possible and copied
-atomically when the paths are on different filesystems. A custom
-`LUNCOSIM_CACHE` override selects its path directly and skips this import unless
-it names the default location.
+On native platforms, the shared cache defaults to `~/.lunco/cache`. Set
+`LUNCOSIM_CACHE` to select another location.
+
+`lunco-assets-core` is the only owner that constructs the global and Twin-local
+cache paths (`cache_dir()` and `twin_cache_dir()`) and their ordered reader
+roots. `lunco-assets-datasets::dataset_cache_root()` is the single selector for
+a declaration's shared or scope-local cache; the engine scope's local base is
+the global cache. Callers pass the scope's local cache base to
+`entry_dest_path()` and dataset processing; they do not construct
+`.cache` paths or choose shared storage independently.
 
 Packaged files are ordinary files under `assets/`, not a third cache root.
 Native and web packers stage only manifest-declared bundle files into that
@@ -481,9 +483,12 @@ then the global cache. `shared = true` selects the global cache as the write
 owner for a reusable product; it does not create a second logical URI or a
 second reader path.
 
-One resolver — `entry_dest_path` — answers this for the CLI downloader, the
-runtime registry and the process step alike, so a file fetched from the app and
-one fetched from a terminal cannot land in different places.
+`dataset_cache_root` selects the cache owner and `entry_dest_path` resolves the
+manifest path under that owner. The CLI downloader, runtime registry and
+processing path use these same functions, so a file fetched from the app and
+one fetched from a terminal cannot land in different places. Raw source reads
+use the shared `lunco-assets-core` ordered roots and the same manifest-relative
+path, without resolving a second filesystem cache path.
 
 A Twin declaration may set `shared = true` for a product deliberately reused by
 multiple Twins. That entry writes to the engine-wide cache and the Twin reader

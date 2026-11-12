@@ -97,6 +97,7 @@ const ENGINE_MODELS_DIR: &str = "models";
 const ENGINE_SCENES_DIR: &str = "scenes";
 const ENGINE_SCENE_TESTS_DIR: &str = "scenes/tests";
 const ENGINE_SHADERS_DIR: &str = "shaders";
+const TWIN_CACHE_DIR_NAME: &str = ".cache";
 
 /// Filename of the runtime asset table of contents.
 pub const ASSET_MANIFEST_FILE_NAME: &str = "manifest.json";
@@ -127,9 +128,7 @@ pub fn asset_manifest_url() -> String {
 /// 2. `<home>/.lunco/cache/` on every native platform.
 ///
 /// If no home directory is resolvable, this function panics with an actionable
-/// message. Existing OS-cache data is imported into this location on first use;
-/// the previous directory remains available to already-running older builds.
-/// A custom `LUNCOSIM_CACHE` bypasses that migration and remains the explicit override.
+/// message. A custom `LUNCOSIM_CACHE` remains the explicit override.
 /// Engine assets have no workspace-local cache. Twin-owned data uses
 /// [`twin_cache_dir`].
 ///
@@ -150,68 +149,22 @@ pub fn cache_dir() -> PathBuf {
     // get a clean Err instead of crashing the page.
     #[cfg(target_arch = "wasm32")]
     {
-        return PathBuf::from(".cache");
+        return PathBuf::from(TWIN_CACHE_DIR_NAME);
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let override_cache = std::env::var_os("LUNCOSIM_CACHE").map(PathBuf::from);
-        if let Some(path) = override_cache.as_ref() {
-            if dirs::home_dir()
-                .as_deref()
-                .is_none_or(|home| path != &global_cache_dir(home))
-            {
-                return path.clone();
-            }
+        if let Some(path) = std::env::var_os("LUNCOSIM_CACHE") {
+            return PathBuf::from(path);
         }
         let home = dirs::home_dir().unwrap_or_else(|| {
             panic!("unable to resolve the home directory; set LUNCOSIM_CACHE explicitly")
         });
-        let cache = global_cache_dir(&home);
-        static LEGACY_CACHE_IMPORT: std::sync::OnceLock<Result<(), String>> =
-            std::sync::OnceLock::new();
-        if let Err(error) = LEGACY_CACHE_IMPORT.get_or_init(|| {
-            let Some(base) = dirs::cache_dir() else {
-                return Ok(());
-            };
-            let legacy = base.join("lunco");
-            if legacy == cache {
-                return Ok(());
-            }
-            migrate_legacy_cache(&legacy, &cache).map_err(|error| error.to_string())
-        }) {
-            panic!(
-                "unable to import the existing asset cache into {}: {error}; set LUNCOSIM_CACHE explicitly to choose a cache location",
-                cache.display()
-            );
-        }
-        cache
+        global_cache_dir(&home)
     }
 }
 
 fn global_cache_dir(home: &Path) -> PathBuf {
     home.join(".lunco").join("cache")
-}
-
-/// Import missing previous OS-cache files into `.lunco/cache` without removing
-/// or overwriting either existing tree. Missing files are hard-linked when
-/// possible and copied across filesystems.
-#[cfg(not(target_arch = "wasm32"))]
-fn migrate_legacy_cache(
-    legacy: &Path,
-    destination: &Path,
-) -> Result<(), lunco_storage::StorageError> {
-    match lunco_storage::entry_kind_file_sync(legacy) {
-        Err(lunco_storage::StorageError::NotFound) => return Ok(()),
-        Err(error) => return Err(error),
-        Ok(lunco_storage::StorageEntryKind::Directory) => {}
-        Ok(kind) => {
-            return Err(lunco_storage::StorageError::Unsupported(format!(
-                "legacy cache root is not a directory: {} ({kind:?})",
-                legacy.display()
-            )));
-        }
-    }
-    lunco_storage::copy_directory_tree_missing_sync(legacy, destination)
 }
 
 /// The directory holding the engine's dataset manifests: `assets/manifests`.
@@ -330,7 +283,7 @@ pub(crate) fn asset_read_roots_with_shared(root: &Path, shared: &Path) -> Vec<Pa
 /// This is the ONE place the layout is decided; the downloader, the
 /// `twin://` reader and the dataset registry all ask here.
 pub fn twin_cache_dir(twin_root: &std::path::Path) -> PathBuf {
-    twin_root.join(".cache")
+    twin_root.join(TWIN_CACHE_DIR_NAME)
 }
 
 /// Cross-platform temp directory for short-lived scratch files (panic
@@ -1157,55 +1110,9 @@ mod tests {
             asset_read_roots_with_shared(twin, Path::new("/home/example/.lunco/cache")),
             vec![
                 PathBuf::from("/workspace/mission"),
-                PathBuf::from("/workspace/mission/.cache"),
+                twin_cache_dir(twin),
                 PathBuf::from("/home/example/.lunco/cache"),
             ]
-        );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn legacy_global_cache_import_preserves_the_old_tree() {
-        let tree = tempfile::tempdir().unwrap();
-        let legacy = tree.path().join("old/lunco");
-        let destination = tree.path().join("home/.lunco/cache");
-        std::fs::create_dir_all(legacy.join("textures")).unwrap();
-        std::fs::write(legacy.join("textures/moon.png"), b"cached texture").unwrap();
-
-        migrate_legacy_cache(&legacy, &destination).unwrap();
-
-        assert!(legacy.join("textures/moon.png").is_file());
-        assert_eq!(
-            std::fs::read(destination.join("textures/moon.png")).unwrap(),
-            b"cached texture"
-        );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn legacy_global_cache_import_merges_missing_files_and_keeps_destination_files() {
-        let tree = tempfile::tempdir().unwrap();
-        let legacy = tree.path().join("old/lunco");
-        let destination = tree.path().join("home/.lunco/cache");
-        std::fs::create_dir_all(legacy.join("textures")).unwrap();
-        std::fs::write(legacy.join("textures/moon.png"), b"legacy texture").unwrap();
-        std::fs::write(legacy.join("textures/earth.png"), b"legacy earth").unwrap();
-        std::fs::create_dir_all(destination.join("textures")).unwrap();
-        std::fs::write(destination.join("textures/moon.png"), b"current texture").unwrap();
-
-        migrate_legacy_cache(&legacy, &destination).unwrap();
-
-        assert_eq!(
-            std::fs::read(destination.join("textures/moon.png")).unwrap(),
-            b"current texture"
-        );
-        assert_eq!(
-            std::fs::read(destination.join("textures/earth.png")).unwrap(),
-            b"legacy earth"
-        );
-        assert_eq!(
-            std::fs::read(legacy.join("textures/moon.png")).unwrap(),
-            b"legacy texture"
         );
     }
 

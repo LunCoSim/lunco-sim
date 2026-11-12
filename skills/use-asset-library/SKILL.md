@@ -119,6 +119,10 @@ use `lunco_assets_core::asset_read_roots()` in `crates/lunco-assets-core/src/lib
 `twin://<assigned-mount>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
 global downloaded product without putting a machine path into USD.
+Runtime code gets the Twin cache path from `lunco-assets-core::twin_cache_dir`
+and manifest cache ownership from `lunco-assets-datasets`; do not join
+`.cache` or choose shared versus local storage at call sites. See the
+[cache ownership contract](../../docs/architecture/56-asset-resolution-and-cache.md#engine-and-twin-caches).
 Authored bytes always win over materialised ones. Schemes are registered in
 `crates/lunco-assets-runtime/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity
