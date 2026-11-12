@@ -183,9 +183,10 @@ def Xform "SandboxScene" (
     {
         float exposure:time = 0.00390625
         uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
-        double3 xformOp:translate = (-30.0, 15.0, -20.0)
+        double3 lunco:cameraLookAt = (0.0, 1.2, 0.0)
+        double3 xformOp:translate = (0.0, 1.7, 35.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 28.0
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
@@ -205,10 +206,10 @@ def Xform "SandboxScene" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
-        double3 xformOp:translate = (-45.0, 25.0, -35.0)
+        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        double3 xformOp:translate = (0.0, 1.7, 100.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float focalLength = 24.0
+        float focalLength = 35.0
         float2 clippingRange = (0.10000000149011612, 100000.0)
     }
     def Xform "Skid_Raycast_1" (
@@ -503,5 +504,53 @@ def Xform "SandboxScene" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.800000011920929, 0.800000011920929, 0.800000011920929)]
         bool physics:collisionEnabled = true
+    }
+    def Camera "AckermannPOV" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        uniform token lunco:cameraRole = "viewport"
+        uniform token lunco:cameraPose = "authored"
+        custom double3 xformOp:translate = (-35.0, 1.7, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (-15.0, 1.3, 10.0)
+        float focalLength = 28.0
+        float2 clippingRange = (0.10000000149011612, 100000.0)
+    }
+    def Camera "SkidPOV" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        uniform token lunco:cameraRole = "viewport"
+        uniform token lunco:cameraPose = "authored"
+        custom double3 xformOp:translate = (0.0, 1.7, -22.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (-15.0, 1.3, -10.0)
+        float focalLength = 28.0
+        float2 clippingRange = (0.10000000149011612, 100000.0)
+    }
+    def Camera "ThermalPOV" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        uniform token lunco:cameraRole = "viewport"
+        uniform token lunco:cameraPose = "authored"
+        custom double3 xformOp:translate = (0.0, 1.7, 15.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (-15.0, 1.3, 0.0)
+        float focalLength = 28.0
+        float2 clippingRange = (0.10000000149011612, 100000.0)
+    }
+    def Camera "GroundOverview" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        uniform token lunco:cameraRole = "viewport"
+        uniform token lunco:cameraPose = "authored"
+        custom double3 xformOp:translate = (0.0, 1.7, 50.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (0.0, 1.2, 0.0)
+        float focalLength = 28.0
+        float2 clippingRange = (0.10000000149011612, 100000.0)
     }
 }
