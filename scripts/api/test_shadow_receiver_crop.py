@@ -106,8 +106,12 @@ def main():
                 maps = [entry for light in audit["shadow_inputs"]["lights"]
                         if light["shadow_maps_enabled"] for entry in light["maps"]
                         if entry["camera_name"] == params["camera_path"]]
-                if maps and all((entry["caster_total"] or 0) > 0 if enabled
-                                else entry["caster_total"] == 0 for entry in maps):
+                totals = [entry["caster_total"] for entry in maps]
+                complete = bool(maps) and all(total is not None for total in totals)
+                restored = any(total > 0 for total in totals) if enabled else all(
+                    total == 0 for total in totals
+                )
+                if complete and restored:
                     return [entry["caster_total"] for entry in maps]
                 time.sleep(.1)
             raise RuntimeError(f"caster transition did not settle: {maps}")
