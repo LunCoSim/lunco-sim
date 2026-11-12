@@ -42,6 +42,31 @@ def workloads():
     return subprocess.check_output(["ps", "-eo", "pid,pcpu,args", "--sort=-pcpu"], text=True).splitlines()[:12]
 
 
+def capture_symbol_state(pid, output, phase):
+    maps_data = Path(f"/proc/{pid}/maps").read_bytes()
+    maps_path = output / f"process-maps-{phase}.txt"
+    maps_path.write_bytes(maps_data)
+    snapshot = {
+        "maps_file": str(maps_path),
+        "maps_sha256": hashlib.sha256(maps_data).hexdigest(),
+        "maps_bytes": len(maps_data),
+    }
+    perf_map_directory = Path(os.environ.get("PERF_BUILDID_DIR", "/tmp"))
+    perf_map_source = perf_map_directory / f"perf-{pid}.map"
+    if perf_map_source.is_file():
+        perf_map_data = perf_map_source.read_bytes()
+        perf_map_path = output / f"perf-{pid}-{phase}.map"
+        perf_map_path.write_bytes(perf_map_data)
+        snapshot.update(
+            perf_map_file=str(perf_map_path),
+            perf_map_sha256=hashlib.sha256(perf_map_data).hexdigest(),
+            perf_map_bytes=len(perf_map_data),
+        )
+    else:
+        raise RuntimeError(f"Cranelift perf map is missing for owned process {pid}")
+    return snapshot
+
+
 def set_owned_pointer_passthrough(pid, window_id):
     """Set only the owned X11 window's input shape; preserve its visible shape."""
     from Xlib import X
@@ -152,6 +177,8 @@ def main():
     source_root = args.source_root.resolve()
     os.environ.update(LUNCOSIM_EPHEMERAL_SETTINGS="1", LUNCOSIM_ISOLATED_RUN="1",
                       LUNCOSIM_CONFIG=str(output / "config"))
+    if args.symbols:
+        os.environ.setdefault("PERF_BUILDID_DIR", "/tmp")
     for flag in ("LUNCO_DIAGNOSTIC_CPU_LIGHT_CLUSTERING", "LUNCO_DIAGNOSTIC_SINGLE_LIGHT_CLUSTER"):
         if os.environ.get(flag):
             parser.error(f"product measurements cannot use {flag}")
@@ -164,6 +191,7 @@ def main():
         "source_before": source_snapshot(source_root), "workloads": workloads(),
         "port": args.port, "tracy_port": args.tracy_port, "twin": str(args.twin.resolve()),
         "physical_root": args.body, "samples": [], "readiness_events": [],
+        "symbol_snapshots": {},
         "open_command": open_command, "open_path": str(open_path),
         "max_load_seconds": args.max_load_seconds,
         "required_camera_size": window_size, "min_fps": args.min_fps,
@@ -315,6 +343,8 @@ def main():
                         receipt.update(usable_s=clear_since, qualified_at_s=now,
                                        source_admitted=source_snapshot(source_root), qualified_workloads=workloads())
                         assert receipt["source_before"] == receipt["source_admitted"], "source changed before measurement"
+                        if args.symbols:
+                            receipt["symbol_snapshots"]["qualified"] = capture_symbol_state(pid, output, "qualified")
                         measurement = time.monotonic()
                         measured_body = body
                         initial_frame = command(session, "EnginePerformance")["frame_sample_count"]
@@ -341,6 +371,8 @@ def main():
                 time.sleep(0.25 if measurement is None else 0.5)
             else:
                 raise RuntimeError("no sustained source-preserved measurement window before timeout")
+            if args.symbols:
+                receipt["symbol_snapshots"]["final"] = capture_symbol_state(pid, output, "final")
             receipt["final_cosim"] = command(session, "CosimStatus", {"include_values": False})
             receipt["final_diagnostics"] = command(session, "RuntimeDiagnostics")
             receipt["final_body_state"] = command(session, "QueryPhysicsState", {"id": body})
@@ -356,9 +388,10 @@ def main():
         assert not any(marker in log for marker in ("[rhai] on_tick() failed", "[rhai] on_start() failed", "[rhai] task leaf failed")), "authored script failed"
         values = sorted(frames.values())
         assert frames and len(frames) == max(frames) - initial_frame, "canonical frame history overran"
-        receipt["frame_summary"] = {"count": len(values), "p50_ms": statistics.median(values),
-                                    "p95_ms": values[min(len(values) - 1, int(.95 * len(values)))],
-                                    "mean_fps": 1000 / statistics.mean(values), "max_ms": max(values)}
+        if args.tracy_port is None:
+            receipt["frame_summary"] = {"count": len(values), "p50_ms": statistics.median(values),
+                                        "p95_ms": values[min(len(values) - 1, int(.95 * len(values)))],
+                                        "mean_fps": 1000 / statistics.mean(values), "max_ms": max(values)}
         receipt["fixed_tick_summary"] = receipt["samples"][-1]["SimulationTimingProfile"]["fixed_tick"]
         if args.min_fps is not None:
             budget = 1000 / args.min_fps
@@ -373,7 +406,10 @@ def main():
                 raise RuntimeError(
                     f"Twin load took {receipt['first_scene_ready_s']:.3f}s; "
                     f"required less than {args.max_load_seconds:.3f}s")
-        print("COMPLETE", receipt["first_scene_ready_s"], receipt["frame_summary"], receipt["fixed_tick_summary"], flush=True)
+        if args.tracy_port is None:
+            print("COMPLETE", receipt["first_scene_ready_s"], receipt["frame_summary"], receipt["fixed_tick_summary"], flush=True)
+        else:
+            print("COMPLETE", receipt["first_scene_ready_s"], "Tracy capture qualified", flush=True)
     except Exception as error:
         receipt["error"] = str(error)
         raise

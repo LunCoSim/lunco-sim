@@ -92,6 +92,10 @@ to improve a timing.
   symbols before launching, retain the exact ELF independently and use its
   recorded native load map. A stripped release ELF leaves Rust attribution
   unresolved even when zone export succeeds.
+  With `--symbols`, `twin_startup.py` records process-map and Cranelift perf-map
+  snapshots at qualification and before exit; receipt paths, sizes and hashes
+  identify each snapshot. The driver defaults `PERF_BUILDID_DIR` to `/tmp` and
+  respects an explicit directory. Resolve samples against the matching window.
   Check the profiler listener and connection against the owned PID with
   `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
   owned app to the next port; pass that port with `tracy-capture -p`. A capture
