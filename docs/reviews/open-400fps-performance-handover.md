@@ -1,15 +1,453 @@
 # High-quality realtime performance handover
 
+## Tracy-only directional receiver culling — 2026-11-08
+
+At the time of these captures, High used an 8192 px directional map, four
+cascades, Hardware 2×2 filter, 0.005 m depth bias, 2.0-texel normal bias, and
+3000 m maximum distance. The active High profile has since changed; use the
+current authored profile for present-day settings. The
+LunCoSim Bevy fork did not already contain receiver-slice culling. Bevy's
+renderer tracking issue identifies cascade-frustum overcoverage and lists
+culling to the camera slice in light space as an optimization
+([issue #12590](https://github.com/bevyengine/bevy/issues/12590)); a separate
+open issue describes an exact silhouette-extrusion approach
+([issue #10397](https://github.com/bevyengine/bevy/issues/10397)).
+
+The LunCoSim fork publishes this receiver-slice culling in branch
+`perf/directional-shadow-receiver-culling` at commit
+`8671dfe743d284f074587862e03bcd3e0b79ecc6`. The patch projects the eight
+corners of each active camera slice into cascade light space, builds their 2D
+convex hull and precomputes its separating axes once per view/cascade. Each
+transformed caster AABB is rejected only when its conservative light-space
+projection is disjoint from that hull. Light-space depth stays unbounded so
+distant upstream casters remain eligible. Filter, normal-bias and half-pixel
+temporal-jitter footprints expand the hull; invalid or unsupported projections,
+`NoFrustumCulling`, Temporal filtering, and PCSS soft shadows use Bevy's native
+culling path. The patch adds 13 focused tests in `bevy_light` for hull
+intersection, padding, jitter and fallback cases.
+
+The earlier A/B/A used a rectangular receiver bound, before the current convex
+hull SAT refinement. It used Griffin surface operations, High/2560×1440, Tracy
+0.14.1 at 1 kHz, the authored `landing_handoff` qualification gate, and matched
+10-second settled windows. A and A2 used the saved stock-Bevy release binary
+`0bd9c31`; B used the Tracy release built with the local Bevy path patch
+`afcc06a`.
+
+| Tracy zone (mean / p95 ms) | Stock A | Patched B | Stock A2 |
+| --- | ---: | ---: | ---: |
+| `lunco_shadow_camera_early` | 4.4194 / 4.9951 | 3.9489 / 4.2660 | 4.2653 / 4.9615 |
+| Nested `per_view_shadow_pass` | 2.9281 / 3.3119 | 2.3831 / 2.5751 | 2.8212 / 3.2827 |
+| `main_opaque_pass_3d` | 2.8133 / 3.1383 | 2.8375 / 3.1570 | 2.7982 / 3.0856 |
+
+Against the two stock runs' mean, the rectangular patch's nested shadow pass
+was 17.1% lower and its early shadow zone 9.1% lower; the opaque zone differed
+by 1.1%. A/B/A final images preserved the long lander shadow at the original
+High settings. These measurements apply to the rectangle implementation only.
+The current hull SAT code has a separate matched bracket below. Captures,
+exports and images are under
+`target/perf/tracy-20261108/directional-shadow-culling-high8k-4c-{a-control,b-patched,a2-control-clean}/`.
+
+The current convex-hull source was built with the production Tracy feature and
+the local `bevy_light` path override, then run on API port 4230 with Tracy port
+8177. The exact Griffin scene passed `landing_handoff`; the admitted Twin source
+hashes stayed unchanged, diagnostics had zero errors and warnings, and both
+first-ready and final images retain the lander and its long shadow. The capture
+is `target/perf/tracy-20261108/hull-custom-4230/capture.tracy` (399,616,775
+bytes); its production ELF SHA256 is
+`53f2b1932b29a5a852dfac5bdd4c34b99fb856bf742ceda5d7bad0b4781f9480`, retained
+as `target/perf/tracy-20261108/hull-custom-4230/luncosim-hull-53f2`. The matching
+Tracy 0.14.1 native sample reader reports a 1,000,000 ns
+sampling period. The settled event window spans 44.041 to 55.187 seconds in the
+capture receipt; these are Tracy zone timings, not whole-frame FPS.
+
+| Tracy zone | Mean / p95 (ms) |
+| --- | ---: |
+| GPU `lunco_shadow_camera_early` | 3.1550 / 3.5451 |
+| GPU nested `per_view_shadow_pass` | 1.6620 / 1.8673 |
+| GPU `main_opaque_pass_3d` | 2.7437 / 3.0344 |
+| CPU `bevy_light::check_dir_light_mesh_visibility` | 0.2306 / 0.2845 |
+
+The workload snapshots show no competing simulator or Cargo build during the
+qualified interval. Desktop processes and the background `sccache` service were
+present. This single capture on application HEAD `32779e0` did not establish a
+before/after gain. A follow-up capture at
+`target/perf/tracy-20261108/hull-custom-4232/` is diagnostic only: a separate
+tutorial simulator used about 178% CPU during that run. The capture, native
+exports, receipt and images for the uncontended single run are under
+`target/perf/tracy-20261108/hull-custom-4230/`. API port 4230 and Tracy port
+8177 were released after that run.
+
+### Matched stock/hull/stock bracket at application HEAD `5ae1388`
+
+The bracket used application HEAD
+`5ae138886e698b5795d6e84054732a7b062d4fb8` and the same working-diff SHA256
+(`c1e3e2a8c84438199e887a1c0cb9c9c5a996ff762b141869e2aa5b8738574f8d`) in all
+three runs, the same Griffin Twin HEAD
+`b97c679581599195940833a25191d3cbaaa6874a`, and unchanged Twin source hashes.
+Stock A and A2 used the pinned stock Bevy release binary (SHA256
+`7b8449f381dbb2278b9b4a4d15c84abc91061a509343bfb23437ff8e5b28ca10`);
+candidate B used the local `../bevy` branch
+`perf/directional-shadow-receiver-culling`, based on `65dd8f4`, with the
+one-file patch diff SHA256
+`557f1ef463032f6c6beee0dd72f9ebc1de8b12442a5530405c09bbe0fbc499f9`
+(candidate binary SHA256
+`6d0b03d78c357bb462eb278fcc984fb50d72f9637c3cc64050df94cfa7d882e5`). The three APIs were 4233,
+4234 and 4235, with Tracy ports 8179, 8180 and 8181. Every run used the same
+release profile, Tracy feature, Tracy 0.14.1 collector at 1 kHz, exact
+`griffin_1_surface_ops.usda` OpenFile scene, `landing_handoff` gate, High
+quality profile and 2560×1440 camera target. No other simulator or Cargo build
+was active in the qualified windows. The measured intervals were 40.239–51.319,
+39.591–50.913 and 38.615–49.468 seconds in each trace, aligned to its OpenFile
+zone and the driver's qualified sample window.
+
+| Tracy zone (mean / p95 ms) | Stock A | Hull B | Stock A2 | B mean vs. stock mean |
+| --- | ---: | ---: | ---: | ---: |
+| GPU `lunco_shadow_camera_early` | 4.695 / 4.993 | 3.325 / 3.546 | 4.635 / 4.990 | −28.7% |
+| GPU nested `per_view_shadow_pass` | 3.111 / 3.306 | 1.750 / 1.867 | 3.068 / 3.303 | −43.3% |
+| GPU `main_opaque_pass_3d` | 2.787 / 2.989 | 2.736 / 2.838 | 2.768 / 2.945 | −1.5% |
+| GPU `early prepass` | 0.586 / 0.617 | 0.575 / 0.600 | 0.577 / 0.610 | −1.2% |
+
+After directional shadow work, the opaque pass is the next-largest GPU zone in
+candidate B at 2.736 / 2.838 ms (mean / p95); the early prepass is 0.575 /
+0.600 ms and bloom is 0.259 / 0.271 ms.
+
+### Opaque shader attribution — 2026-11-09
+
+A diagnostic-only patch in the local `../bevy-020-tracy` checkout adds Tracy
+GPU spans around contiguous opaque mesh draw groups, labeled by fragment shader
+asset path. It does not change rendering behavior. The production release was
+built at application HEAD `1db09023c2c03c0e8e7a40038bf3521179ceb339` with the
+existing worktree diff SHA256
+`f3eea1a46e602b933a601812dfe9fe35d38c41ffc348349ac51c08f149279a3f`; its
+binary SHA256 is
+`eb16140d48d6af42472e647141453501636dd695f4e55fd0d94893d17caf6459`.
+
+The exact Griffin `OpenFile` scene passed `landing_handoff` on API port 4357
+with Tracy 0.14.1 on port 8357 at 1 kHz, High quality, a 2560×1440 target and
+pointer passthrough. The driver qualified a 10.8-second settled window; source
+hashes stayed unchanged and final diagnostics reported zero errors and warnings.
+The capture, receipt, native shader symbols, runtime log and images are under
+`target/perf/opaque-shader-griffin-20261109/`. The first-ready image shows the
+surface before the lander is visible; the final image retains the lander and its
+long shadow. Both owned ports were released.
+
+The capture-wide GPU export contains 1,542 `main_opaque_pass_3d` events
+(2.634 ms median, 4.730 ms p95). The terrain shader group
+`lunco://shaders/terrain_layered.wesl` appears in 1,347 events (2.356 ms median,
+2.691 ms p95); its summed group time is 2,886 ms, about 75% of the opaque-phase
+sum. These spans measure GPU time around draw groups selected by that shader
+asset, not the shader's instruction time in isolation. The capture-wide window
+includes scene loading and settling. During qualification, another simulator
+on API 4199 used about 156% CPU and the existing simulator on API 4155 used
+about 33% CPU, so these figures attribute work but do not support a before/after
+comparison or FPS claim.
+
+The trace points the next investigation at the terrain material's fragment
+work. It does not support removing the Sun or adding a global-illumination
+crate: native shadow culling already reduces the shadow pass, while terrain
+shading is now the largest identified opaque draw group. No terrain rendering
+change has been made from this diagnostic capture.
+
+A matched Tracy A/B/A then evaluated a temporary shader fast path for the
+terrain's `csm_far <= 0` case, moving the per-fragment distance calculation
+behind the active horizon-shadow branch. The candidate was removed after the
+comparison; no rendering change remains. The three 10-second GPU windows were
+aligned to the same settled `OpenFile` marker. Main opaque pass and terrain
+draw-group median / p95 times (ms) were A `2.701 / 4.539` and
+`2.363 / 2.427`, B `2.741 / 4.585` and `2.403 / 2.603`, and A2
+`2.689 / 4.537` and `2.353 / 2.531`. Nested early-shadow times stayed
+comparable: A `1.860 / 3.702`, B `1.852 / 3.675`, A2 `1.863 / 3.694`;
+early-prepass times were A `0.598 / 0.610`, B `0.592 / 0.595`, A2
+`0.591 / 0.602`. Controls A and A2 agree closely; B is slightly slower in
+the terrain group and opaque pass. The branch did not improve the measured
+work, so it is rejected. This is a Tracy-zone result, not an FPS claim or a
+complete explanation of terrain shader cost. Captures and receipts are under
+`target/perf/terrain-blend-distance-ab-20261109/{a-control,b-fast-path,a2-control-clean}/`;
+the first A2 attempt overlapped a sibling Cargo build and is excluded.
+
+The shader-attribution startup log also reports two lit, unscoped scene
+`DistantLight` prims, leaving the intended key light ambiguous. The Twin
+source was not changed; lighting comparisons need authored content with one
+explicitly selected key light before they can support a light-removal decision.
+
+The stock A/A2 early-shadow means differ by 1.3%, and the nested shadow-pass
+means by 1.4%; their p95 values are similarly stable. The hull candidate lowers
+those two GPU zones while the opaque pass remains nearly flat. In CPU Tracy
+zones, `check_dir_light_mesh_visibility` measured 0.204 / 0.262 ms in A,
+0.228 / 0.286 ms in B, and 0.194 / 0.249 ms in A2 (mean / p95). Its
+`system_commands` zone measured 0.354 / 0.540, 0.288 / 0.420 and 0.312 / 0.483
+ms. These are instrumented zone costs, not whole-frame FPS.
+
+All three runs passed the landing handoff, preserved source hashes, and ended
+with structured `RuntimeDiagnostics` at 0 errors / 0 warnings. Visual inspection
+of all three final images shows the same lander, surface and long ground shadow
+at High settings. The startup logs also repeat unresolved authored references
+for `environments/lunar_surface_base.usda`,
+`environments/south_pole_surrogate.usda`, `vehicles/flip_v5.usda` and
+`vehicles/griffin_1.usda`, plus an ambiguous multiple-sun warning. Treat these
+as a shared content limitation: the bracket compares the content that loaded,
+not the missing referenced prims or a fully resolved lighting setup.
+
+The captures, native Tracy CSV exports, receipts and images are under
+`target/perf/tracy-20261108/hull-ab/{stock-a,candidate-b,stock-a2}/`. All API
+and collector ports were released. The bracket used a temporary Cargo path
+override for candidate B. After the bracket, the one-file patch was committed
+and pushed to the LunCoSim Bevy fork as
+`perf/directional-shadow-receiver-culling` at
+`8671dfe743d284f074587862e03bcd3e0b79ecc6`; the app now pins `bevy_shader`,
+`bevy_render`, `bevy_light` and `bevy_pbr` to that revision. The 150 FPS
+objective remains open: the matched Tracy zones establish a shadow-pass
+reduction, not end-to-end FPS.
+
+### Published fork production capture
+
+The locked release build using the published Bevy commit succeeded. Its
+production binary SHA256 is
+`b34b8aeb3c84cb93b9c761e877efe377bd9c9fcc89b6252facde57f56dacb917`. The
+`griffin_1_surface_ops.usda` scene opened through `OpenFile` on API port 4250,
+at High quality and 2560×1440, with Tracy 0.14.1 on port 8200 at 1 kHz. The
+matching native sample reader verified a 1,000,000 ns period across 122,837 CPU
+samples, with zero missing stacks. The authored `landing_handoff` qualification
+passed; the source tree stayed unchanged, final diagnostics had zero errors and
+warnings, and the final image retains the lander and its long ground shadow.
+
+Tracy recorded 11,180,539 zones over 53.16 seconds. The capture is
+`target/perf/tracy-20261108/pinned-8671dfe-api4250/capture.tracy` (95,829,945
+bytes); the matching `tracy-csvexport` exited successfully and parsed 30,553
+GPU-zone events. The receipt, CSV and images are alongside the capture. API
+4250 and collector port 8200 were released. A separate simulator remained
+active during this run (PID 1030428, API 4199; 31.3% CPU in the qualified
+workload snapshot), so this capture verifies the pinned production build and
+Tracy integration but is not a performance comparison. The uncontended matched
+bracket above remains the performance evidence.
+
+### Custom-port Tracy diagnosis — 2026-11-08
+
+The exact Griffin `OpenFile` workload also completed on API port 4253 with the
+matching Tracy 0.14.1 collector on port 8203, High quality, a 2560×1440 camera,
+`landing_handoff`, and pointer passthrough. The release diagnostic binary kept
+`opt-level=3` and thin LTO while retaining symbols (`-C strip=none`); its SHA256
+is `8157789e817ca0294e726662747dd172197856f0135192d640c39c5477f657a5`. The
+exact executable, native maps, ELF metadata, Tracy capture, CPU samples, and
+native CPU/GPU zone exports are under
+`target/perf/tracy-20261108/custom-port-4253-symbols/`.
+
+Tracy recorded 11,616,219 zones over 51.14 seconds. The native sample reader
+verified a 1,000,000 ns period for 127,522 samples, with no missing stacks.
+Static addresses were resolved against this exact ELF and its captured load
+map. The source snapshot remained unchanged; `landing_handoff` passed and final
+runtime diagnostics reported zero errors and warnings. API 4253 and collector
+8203 were released.
+
+Simulator PID 1030428 on API port 4199 remained active at about 20.6% CPU
+during qualification, so use this capture for diagnosis; the uncontended
+bracket above remains the comparison evidence. Tracy's
+capture-wide GPU-zone means / p95 values were 3.003 / 3.554 ms for
+`lunco_shadow_camera_early`, 2.600 / 3.087 ms for `main_opaque_pass_3d`,
+1.612 / 5.741 ms for `main_transparent_pass_3d`, 0.530 / 0.630 ms for `early
+prepass`, and 0.257 / 0.268 ms for bloom. These are individual instrumented
+zones; their values do not sum to frame time or establish end-to-end FPS. The
+first-ready image precedes `landing_handoff`; the final image shows the landed
+vehicle and long shadow.
+
+The Rhai surface projection zone averaged 1.130 ms across 1,582 calls. A
+zone-filtered native sample set contained 1,664 samples in 1,550 projection
+zones; among 1,419 samples resolved to the application ELF, `_mi_page_malloc_zero`
+appeared in 527 stacks. Rhai's sorted-map conversion also appears in the
+resolved stacks (`DedupSortedIter`: 120; `hook_to_dynamic`: 18; key sorting: 28).
+This attributes a substantial part of the hook cost to building Rhai maps from
+complete scalar output facts. The production Griffin policy reads those facts
+with both bracket and dot access, and its contract test removes a field to check
+the missing-output diagnostic; preserve those semantics when addressing this
+cost.
+
+`modelica_integrate_macro_step` averaged 0.188 ms across 30,680 zones. Its
+zone-filtered native samples most often resolved to Rumoca's compiled
+assignment schedule (821 inclusive stack hits), allocator zeroing (451), and
+compiled Jacobian rows (398). The Modelica spans remain scoped candidates; this
+capture establishes no before/after gain for them. The paired result for the
+Rhai map conversion is recorded below.
+
+### Paired Tracy result — Rhai large-map conversion — 2026-11-08
+
+The large-map conversion now collects directly into Rhai's native `BTreeMap`.
+Four interleaved production captures used the same Griffin
+`OpenFile` scene, High quality, 2560×1440 target, 1,000 Hz Tracy sampling, and
+`landing_handoff` qualification. API / Tracy ports were 4257 / 8207 and
+4260 / 8210 for the baseline; 4258 / 8208 and 4259 / 8209 for the candidate.
+Each trace's final ten seconds contained 398 complete
+`exposure_runtime_surface_projection` zones.
+
+The paired baseline means / p95 values were 1.129 / 2.366 ms and 1.242 / 2.529
+ms. Candidate values were 1.058 / 2.187 ms and 1.035 / 2.199 ms. Exact-zone CPU
+samples fell from 453 / 490 to 416 / 412 across the two pairs. Native samples
+resolved against the run ELF show lower `hook_to_dynamic` and allocator-zeroing
+activity with the direct collection path. The existing nested-map conversion
+test confirms duplicate-key, scalar and container behavior.
+
+All four runs passed `landing_handoff`, reported zero runtime diagnostics, and
+released their app and Tracy ports. The receipts and compact exports are under
+`target/perf/tracy-20261108/repeat-abba-*`. This is Tracy-only zone evidence; it
+does not establish an FPS result. The 150 FPS objective remains open.
+
+### Qualified opaque-pass diagnostic — 2026-11-09
+
+The release Tracy binary (`-C strip=none`) has SHA256
+`8527af155fc204050bfb5dcf058dcaa5b7c764b3364d0c6c15bd1ffc1e072b14`, built
+from application HEAD `5ae1388` with working-diff SHA256
+`bbb9ab6a83941feebbbc71669bfc8a056b6b869bf294b6c21d3d4ce052cec397`. It uses
+the pinned LunCoSim Bevy revision `8671dfe` and Twin HEAD
+`b97c679581599195940833a25191d3cbaaa6874a`. The exact Griffin `OpenFile` scene
+ran at High / 2560×1440 on API 4279 with Tracy 0.14.1 on 8219 at 1 kHz. The
+scene became ready at 13.81 s; `landing_handoff` qualified at 41.80 s. The
+admitted Twin source hashes stayed unchanged, final structured diagnostics had
+zero errors and warnings, and both ports and the owned process were released.
+
+The 56.24-second capture contains 12,993,107 zones. Its 378,316,017-byte file
+contains 378,220,955 compressed payload bytes, a six-byte header, and 23,764
+four-byte block lengths; the payload matches the collector's 360.70 MiB report.
+The matching Tracy 0.14.1 CSV exporter parsed the GPU events successfully. In
+trace time 42.0–56.24 s, the native GPU export reports these mean / p95 values:
+
+| GPU zone | Mean / p95 (ms) | Events |
+| --- | ---: | ---: |
+| `lunco_shadow_camera_early` | 3.357 / 3.550 | 641 |
+| Nested `per_view_shadow_pass` | 1.764 / 1.864 | 641 |
+| `main_opaque_pass_3d` | 2.767 / 3.020 | 641 |
+| `early prepass` | 0.628 / 0.656 | 641 |
+| `bloom` | 0.260 / 0.272 | 641 |
+| `main_transparent_pass_3d` | 0.044 / 0.078 | 641 |
+| Nested `procedural_skybox` | 0.00028 / 0.00051 | 12 |
+
+The new app-owned `procedural_skybox` GPU marker shows that the sky draw is
+negligible for this downward-facing landing view. The opaque pass remains a
+useful investigation target, but this capture does not attribute its cost to a
+specific material or draw. The qualified workload snapshot also contains the
+separate simulator on API 4199 at about 12.4% CPU, so this is diagnostic data,
+not an uncontended before/after comparison. Runtime logs report an unresolved
+`vehicles/flip_v5.usda` reference. The two-sun warning fires during projection;
+51.8 ms later the log marks `/Griffin1SurfaceOps/SolarSystem/Earth/Earthshine`
+as a body-fill light. Since that authored fill disables shadows, this startup
+warning does not prove a second steady-state shadow caster. The capture, native GPU
+export, receipt and images are under
+`target/perf/tracy-20261109/opaque-custom-4279/`. No FPS result is inferred.
+
+### Terrain shader A/B/A — 2026-11-09
+
+Three matched Tracy captures isolate the current `lunar_brdf.wesl`,
+`terrain_layered.wesl`, and `terrain_surface.wesl` edits. Candidate A1 is the
+4279 capture above; baseline B used the committed versions of just those three
+shader files on API 4280 / Tracy 8220; candidate A2 restored the working files
+on API 4281 / Tracy 8221. All used the same release ELF, Bevy revision, exact
+Griffin `OpenFile` scene, High / 2560×1440, Tracy 0.14.1 at 1 kHz, and
+`landing_handoff`. Each run preserved the admitted Twin source hashes, passed
+with zero structured diagnostics, and released its process and ports. The
+candidate and baseline shader hashes are recorded in
+`target/perf/tracy-20261109/terrain-shader-abba/`. The qualification times were
+41.803 s, 41.677 s, and 41.303 s for A1, B, and A2. All three trace files pass
+header/block-length framing checks, and all three matching native CSV exports
+completed successfully.
+
+The common 43–53 s trace window gives these GPU-zone means / p95 values:
+
+| GPU zone (ms) | Candidate A1 | Baseline B | Candidate A2 |
+| --- | ---: | ---: | ---: |
+| `main_opaque_pass_3d` | 2.746 / 2.882 | 2.758 / 2.859 | 2.759 / 2.907 |
+| `lunco_shadow_camera_early` | 3.372 / 3.553 | 3.310 / 3.545 | 3.382 / 3.553 |
+| Nested `per_view_shadow_pass` | 1.772 / 1.864 | 1.742 / 1.865 | 1.779 / 1.870 |
+
+The two candidate opaque-pass means average 2.753 ms versus 2.758 ms for the
+baseline (0.2% lower); the candidate p95 is higher, and A2 does not repeat A1's
+small mean difference. Treat this as no demonstrated GPU gain. Final viewport
+images look the same and retain the lander and long shadow; first-ready images
+vary more while scene assets stream. The qualified snapshots show the separate
+4199 simulator at 12.1–12.4% CPU in all three runs. Captures and native GPU
+exports are under `target/perf/tracy-20261109/terrain-shader-abba/` and
+`target/perf/tracy-20261109/opaque-custom-4279/`. This shader bracket does not
+establish an FPS result or explain the opaque pass's per-material cost.
+
+### Opaque draw-category Tracy diagnosis — 2026-11-09
+
+To split the opaque GPU pass, the local Bevy diagnostic added timestamp spans
+around batchable/multidrawable meshes, unbatchable meshes, and non-mesh items.
+The app was built in release mode with Tracy and symbols (`-C strip=none`), using
+the stable 0.20 fork worktree at `8671dfe` for the current simulator dependency
+cohort. The binary SHA256 is
+`8e697d4f8dd7e4e68ee22adea2cc864ad3a1dc355cce0097d97e4f94497b65aa`.
+
+The exact Griffin `OpenFile` scene ran at High / 2560×1440 on API 4340 with
+Tracy 0.14.1 on 8340 at 1 kHz. `landing_handoff` qualified; source hashes
+matched before and after; final diagnostics were 0 errors / 0 warnings; first
+ready and final images were captured and inspected. Both owned ports and the
+app process were released. The 69.4-second capture contains 10,264,789 zones;
+the 385,242,552-byte trace and native GPU export are under
+`target/perf/opaque-phase-griffin-20261109/`. The run used application HEAD
+`5ae1388`, working-diff SHA256
+`70c5d2d86b8aaa76df5e6a7c361ece9ba9feb1198592dfe053a01e3362f3f868`, and Twin
+HEAD `b97c679581599195940833a25191d3cbaaa6874a`.
+
+The 58.0–68.3 s tail contains 287 resolved main-camera pass samples. Values are
+mean / p50 / p95 GPU milliseconds:
+
+| GPU zone | Mean / p50 / p95 (ms) | Events |
+| --- | ---: | ---: |
+| `main_opaque_pass_3d` | 2.958 / 2.697 / 4.550 | 287 |
+| `main_opaque_pass_3d/opaque_phase` | 2.956 / 2.694 / 4.548 | 287 |
+| `.../opaque_phase/batchable_and_multidrawable_meshes` | 2.956 / 2.694 / 4.548 | 287 |
+| `.../opaque_phase/unbatchable_meshes` | 0.0003 / 0.0003 / 0.0003 | 2 |
+| `.../opaque_phase/non_mesh_items` | 0.0003 / 0.0003 / 0.0003 | 7 |
+| `lunco_shadow_camera_early` | 4.137 / 3.530 / 5.530 | 287 |
+| Nested `per_view_shadow_pass` | 2.109 / 1.854 / 3.676 | 287 |
+| `early prepass` | 0.593 / 0.593 / 0.595 | 287 |
+
+The opaque phase's resolved GPU time is almost entirely in batchable and
+multidrawable mesh work; unbatchable and non-mesh records are too sparse to
+support per-frame estimates, and the alpha-mask phase was empty. This narrows
+the next investigation to the visible mesh/material workload; it does not yet
+attribute cost to a particular material or shader. The matching candidate,
+baseline, candidate shader A/B/A found no measurable terrain-shader gain.
+
+This was a diagnostic capture with another LunCoSim session (API 4155) and
+`lunica` (API 4187) active. The elevated p95 values and concurrent GPU workload
+make it unsuitable as an A/B comparison. Do not infer FPS from these Tracy
+zones.
+
+The fork branch `perf/opaque-phase-tracy-diagnostics` is now rebased locally on
+upstream Bevy `main` at `278a32f65e0fbd937551c0573050c25f587c57f8`; its receiver
+culling commit is `eb8f4bb67`. The receiver-culling code and nested timestamp
+markers passed `cargo +1.97.1 check -p bevy_core_pipeline -p bevy_light -j 4`
+in a separate worktree with the matching main workspace. The simulator capture
+still used the stable 0.20 dependency cohort at `8671dfe`; it does not establish
+runtime behavior on latest main. No Bevy branch was pushed.
+
+## Historical unprofiled Griffin baseline — 2026-11-06
+
+The release build at LunCoSim `2bec7e3f45d7b903838abe9f3eb49aa675f948e9`,
+using published Bevy `65dd8f4`, was measured in one owned High/2560×1440
+Griffin session at the fixed landing pose. Alternating paused / playing /
+paused / playing / paused ten-second windows measured 92.61 / 63.47 / 91.09 /
+63.24 / 91.30 mean FPS. The playing windows advanced 614 and 616 ticks at the
+normal eight substeps; paused windows did not advance. This isolates a
+simulation-associated frame limit without attributing it to a specific system.
+The 150 FPS objective remains open even when paused. The source snapshot is
+unchanged across the run, runtime diagnostics have no findings, and the owned
+session and API port exited. GPU monitoring, frame samples, clock snapshots,
+the final image and binary fingerprint are retained in
+`target/perf/fps-20261106/current-main-pause/`. These older measurements are
+historical context. Use a clean uninstrumented run for FPS acceptance and
+separate Tracy captures for timing attribution.
+
 ## Terrain annotations and typed UI facts — 2026-11-06
 
 The shared terrain shader traverses its annotation index once and rejects
 fragments outside conservative leaf and segment bounds. The focused Tracy
 comparison and production image checks are in
 [terrain annotation traversal](terrain-annotation-single-traversal-2026-11-06.md).
-The Rhai hook adapter bulk-builds large typed maps while retaining exact value
-and duplicate-key semantics; its scoped measurements and production checks are
-in [large typed maps](rhai-large-map-conversion-2026-11-06.md). Neither change
-establishes a stable end-to-end FPS gain, and the 150 FPS objective remains open.
+The Rhai hook adapter collects large typed maps directly while retaining exact
+value and duplicate-key semantics; its scoped measurements and production
+checks are in [large typed maps](rhai-large-map-conversion-2026-11-06.md).
+Neither change establishes a stable end-to-end FPS gain, and the 150 FPS
+objective remains open.
 
 ## Directional receiver clear — 2026-11-06
 
