@@ -141,8 +141,9 @@ impl FileStorage {
         Self::default()
     }
 
-    /// Merge a native directory tree into a destination without replacing
-    /// existing entries or removing the source tree.
+    /// Merge a native directory tree without replacing existing entries or
+    /// removing the source tree. Cross-filesystem file copies are staged beside
+    /// their destinations and published only after the complete copy succeeds.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn copy_directory_tree_missing_sync(
         &self,
@@ -156,10 +157,26 @@ impl FileStorage {
                 source.display()
             )));
         }
+        let destination_candidate = canonicalize_or_project(destination)?;
+        if source.starts_with(&destination_candidate) || destination_candidate.starts_with(&source)
+        {
+            return if source == destination_candidate {
+                Ok(())
+            } else {
+                Err(StorageError::Unsupported(
+                    "directory-tree source and destination overlap".into(),
+                ))
+            };
+        }
         self.ensure_directory_sync(&StorageHandle::File(destination.to_path_buf()))?;
         let destination = std::fs::canonicalize(destination)?;
         if source == destination {
             return Ok(());
+        }
+        if source.starts_with(&destination) || destination.starts_with(&source) {
+            return Err(StorageError::Unsupported(
+                "directory-tree source and destination overlap".into(),
+            ));
         }
         copy_directory_tree_missing(self, &source, &destination)
     }
@@ -661,6 +678,41 @@ impl Storage for FileStorage {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn canonicalize_or_project(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let mut candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(&candidate) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    if component == std::ffi::OsStr::new("..") {
+                        resolved.pop();
+                    } else if component != std::ffi::OsStr::new(".") {
+                        resolved.push(component);
+                    }
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = candidate.file_name() else {
+                    return Err(error);
+                };
+                missing.push(name.to_os_string());
+                let Some(parent) = candidate.parent() else {
+                    return Err(error);
+                };
+                candidate = parent.to_path_buf();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn copy_directory_tree_missing(
     storage: &FileStorage,
     source: &std::path::Path,
@@ -728,19 +780,82 @@ fn copy_directory_tree_missing(
                     if path_present(destination)? {
                         return Ok(());
                     }
-                    std::fs::copy(source, destination)
-                        .map(|_| ())
-                        .map_err(|copy_error| {
-                            StorageError::Io(std::io::Error::new(
+                    match atomic_copy_new(source, destination) {
+                        Ok(()) => Ok(()),
+                        Err(_error) if path_present(destination)? => Ok(()),
+                        Err(StorageError::Io(copy_error)) => {
+                            Err(StorageError::Io(std::io::Error::new(
                                 copy_error.kind(),
                                 format!(
                                     "hard-link failed ({link_error}); directory-tree copy failed ({copy_error})"
                                 ),
-                            ))
-                        })
+                            )))
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
             }
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn atomic_copy_new(source: &std::path::Path, destination: &std::path::Path) -> StorageResult<()> {
+    use std::fs::OpenOptions;
+
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cache-import");
+    let (temporary, mut staged_file) = (0..32)
+        .find_map(|_| {
+            let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = destination.with_file_name(format!(
+                ".{file_name}.{}.{}.import",
+                std::process::id(),
+                sequence
+            ));
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => Some(Ok((path, file))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(StorageError::Io(error))),
+            }
+        })
+        .transpose()?
+        .ok_or_else(|| {
+            StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "unable to reserve a directory-tree import staging file",
+            ))
+        })?;
+
+    let cleanup = ImportStage(temporary.clone());
+    let copy_result = (|| {
+        let mut source_file = std::fs::File::open(source)?;
+        std::io::copy(&mut source_file, &mut staged_file)?;
+        staged_file.sync_all()?;
+        Ok::<_, StorageError>(source_file.metadata()?.permissions())
+    })();
+    drop(staged_file);
+    let permissions = copy_result?;
+    std::fs::set_permissions(&temporary, permissions)?;
+    std::fs::hard_link(&temporary, destination)?;
+    drop(cleanup);
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct ImportStage(std::path::PathBuf);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for ImportStage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -1392,5 +1507,89 @@ mod tests {
             std::fs::read_link(current.join("textures/moon-link.png")).unwrap(),
             std::path::PathBuf::from("moon.png")
         );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn directory_tree_import_rejects_overlapping_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("legacy");
+        let nested = legacy.join("imported");
+        std::fs::create_dir_all(&legacy).unwrap();
+
+        let result = FileStorage::new().copy_directory_tree_missing_sync(&legacy, &nested);
+
+        assert!(matches!(result, Err(StorageError::Unsupported(_))));
+        assert!(!nested.exists());
+    }
+
+    #[test]
+    #[cfg(all(not(target_arch = "wasm32"), unix))]
+    fn directory_tree_import_rejects_destination_under_source_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("legacy");
+        let alias = root.path().join("alias");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::os::unix::fs::symlink(&legacy, &alias).unwrap();
+
+        let destination = alias.join("imported");
+        let result = FileStorage::new().copy_directory_tree_missing_sync(&legacy, &destination);
+
+        assert!(matches!(result, Err(StorageError::Unsupported(_))));
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn atomic_directory_tree_copy_publishes_complete_files_and_cleans_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("legacy.bin");
+        let destination = root.path().join("global.bin");
+        std::fs::write(&source, b"complete legacy cache bytes").unwrap();
+
+        atomic_copy_new(&source, &destination).unwrap();
+
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"complete legacy cache bytes"
+        );
+        assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".import")
+        }));
+
+        let conflict = root.path().join("conflict.bin");
+        std::fs::write(&conflict, b"destination wins").unwrap();
+        assert!(matches!(
+            atomic_copy_new(&source, &conflict),
+            Err(StorageError::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(std::fs::read(conflict).unwrap(), b"destination wins");
+        assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".import")
+        }));
+
+        let missing_source = root.path().join("missing.bin");
+        assert!(
+            atomic_copy_new(
+                &missing_source,
+                &root.path().join("missing-destination.bin")
+            )
+            .is_err()
+        );
+        assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".import")
+        }));
     }
 }

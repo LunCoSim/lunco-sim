@@ -93,9 +93,9 @@ On native platforms, the first default-path lookup imports files missing from
 destination files remain authoritative because cache timestamps can represent
 recency rather than content freshness. The legacy tree remains available to
 already-running builds. Missing files are hard-linked when possible and copied
-when the paths are on different filesystems. A custom `LUNCOSIM_CACHE` override
-selects its path directly and skips this import unless it names the default
-location.
+atomically when the paths are on different filesystems. A custom
+`LUNCOSIM_CACHE` override selects its path directly and skips this import unless
+it names the default location.
 
 Packaged files are ordinary files under `assets/`, not a third cache root.
 Native and web packers stage only manifest-declared bundle files into that
