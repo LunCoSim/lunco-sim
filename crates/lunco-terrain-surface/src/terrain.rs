@@ -29,8 +29,7 @@ use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 // heavy GeoTIFF decode; the analytic oracle composition + avian collider + Bevy
 // mesh derive stay here (on the main thread on web — they're cheap).
 use lunco_spatial::{GridAnchor, WorldGrid};
-use lunco_terrain_bake::bake::{crop_centered, resample};
-use lunco_terrain_bake::dem::height_grid_from_geotiff;
+use lunco_terrain_bake::bake::resample;
 #[cfg(target_arch = "wasm32")]
 use lunco_terrain_bake::{BakedGrid, DemBakeJob};
 use lunco_terrain_core::{ANALYTIC_RADIUS_FLOOR_M, MAX_CRATERS_PER_HA};
@@ -249,6 +248,19 @@ pub struct DemTerrainRequest {
     pub collider: crate::collider_ring::TerrainColliderSettings,
 }
 
+/// A required regional DEM and its explicit local-datum registration.
+#[derive(Component, Clone)]
+pub struct RegionalDemRequest {
+    /// Canonical asset directory containing `materials/textures/heightmap.tif`.
+    pub uri: String,
+    /// Width of the transition outside the measured local footprint, metres.
+    pub blend_m: f64,
+    /// Offset applied to regional elevations to express the local vertical datum.
+    pub regional_offset_m: f64,
+    /// Source-proven frame when the retained local artifact does not record it.
+    pub local_frame: Option<lunco_geotiff::LunarFrame>,
+}
+
 /// Retained on a built DEM terrain so its crater layer can be **re-baked live**
 /// (Inspector → `UpdateObstacleFieldSpec`) without re-reading the GeoTIFF: the
 /// cropped native grid BEFORE any craters were stamped. [`crate::derived_layers`]'s
@@ -261,6 +273,8 @@ pub struct DemBaseGrid(
     /// at build time so a live re-stamp reusing this Arc never re-hashes the
     /// multi-million-point grid — the all-analytic stack (the norm) reuses it.
     pub u64,
+    /// Registered continuation retained across local layer recomposition.
+    pub Option<std::sync::Arc<lunco_terrain_bake::regional::RegisteredRegionalSurface>>,
 );
 
 /// Retained build settings a live re-bake needs (whether the static collider or a
@@ -400,9 +414,12 @@ fn cancel_terrain_generation_on_scene_teardown(
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     for entity in &requests {
-        commands
-            .entity(entity)
-            .try_remove::<(DemTerrainRequest, DemBuildTask, DemWorkerJob)>();
+        commands.entity(entity).try_remove::<(
+            DemTerrainRequest,
+            RegionalDemRequest,
+            DemBuildTask,
+            DemWorkerJob,
+        )>();
     }
     *status = TerrainGenStatus::default();
     if let Some(mut holds) = holds {
@@ -917,6 +934,7 @@ struct DemBuild {
     /// on native) — assembly must never re-fold the multi-million-point raster
     /// on the main thread.
     base_key: u64,
+    regional_base: Option<std::sync::Arc<lunco_terrain_bake::regional::RegisteredRegionalSurface>>,
     half_extent: f32,
     /// Tile resolution actually meshed (= native crop res, or the resample target).
     res: usize,
@@ -1008,21 +1026,11 @@ pub struct DemWorkerJob {
     target_res: usize,
     #[cfg(target_arch = "wasm32")]
     pub download_progress: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
-    /// OPFS grid-cache key (hex), filled by the fetch task on a cache MISS so the
-    /// Full worker reply writes the baked grid through; stays `None` on a hit
-    /// (nothing to rewrite). Slot-shared like `download_progress` because the key
-    /// derives from the fetched bytes, which only the detached task sees.
-    #[cfg(target_arch = "wasm32")]
-    cache_key: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Component, Clone)]
 pub struct DemWorkerJob;
-
-/// OPFS namespace for the Full-stage baked DEM grid (web cold-start cache).
-#[cfg(target_arch = "wasm32")]
-const DEM_GRID_CACHE_NS: &str = "terrain/dem-grid";
 
 /// Wire id for a [`DemWorkerJob`]: the entity's index XOR-folded with its
 /// generation. The bare index is NOT an identity — Bevy reuses indices after a
@@ -1077,6 +1085,7 @@ fn dem_build_from_baked(
         oracle: Some(oracle),
         base_grid,
         base_key,
+        regional_base: None,
         half_extent,
         res: baked.res,
         native_res: baked.native_res,
@@ -1221,6 +1230,7 @@ fn start_dem_builds(
         (
             Entity,
             Ref<DemTerrainRequest>,
+            Option<&RegionalDemRequest>,
             Option<&crate::georef::TerrainGeoref>,
             Option<&crate::terrain_layers::TerrainLayerStack>,
         ),
@@ -1229,13 +1239,15 @@ fn start_dem_builds(
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
     settings: Res<lunco_settings::DownloadSettings>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    #[cfg(target_arch = "wasm32")] mut faults: ResMut<lunco_core::RuntimeFaults>,
+    #[cfg(target_arch = "wasm32")] mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     // Parent-body radius for site-anchored scenes — folded LAST over the layer
     // stack so the tangent-plane DEM hugs the body sphere. Georeferenced
     // requests wait one ECS update below, giving the celestial projection a
     // chance to provide it before the async build captures its inputs.
     let curvature_radius = curvature.map(|c| c.radius_m);
-    for (entity, req, georef, stack) in &q {
+    for (entity, req, regional, georef, stack) in &q {
         // A document-backed terrain and its celestial site anchor are projected in
         // the same deferred ECS turn. Give the celestial bridge one update to publish
         // the terrain's body radius before capturing the composition inputs for this
@@ -1247,6 +1259,22 @@ fn start_dem_builds(
             continue;
         }
         let source = req.uri.clone();
+        let regional = regional.cloned();
+        #[cfg(target_arch = "wasm32")]
+        if regional.is_some() {
+            commands
+                .entity(entity)
+                .try_remove::<(DemTerrainRequest, RegionalDemRequest)>();
+            report_dem_build_failed(
+                &mut commands,
+                &mut faults,
+                holds.as_deref_mut(),
+                Some(entity),
+                "Regional terrain preparation requires a paired DEM worker on this platform",
+                DemBuildFailureDisposition::Terminal,
+            );
+            continue;
+        }
         let source_roots = roots.as_deref().cloned();
         let dir = std::path::PathBuf::from(&source);
         // Site identity = the DEM folder name (`terrain/apollo15/` → "apollo15").
@@ -1259,7 +1287,6 @@ fn start_dem_builds(
             .unwrap_or("site")
             .to_string();
         let collider_ring = req.collider_ring;
-        #[cfg(target_arch = "wasm32")]
         let collider = req.collider;
         let lod_viz = req.lod_viz;
         // Captured by-value into the 'static async build task (the query item `req`
@@ -1295,7 +1322,6 @@ fn start_dem_builds(
         if lunco_terrain_bake::worker_client::is_available() {
             let id = dem_worker_job_id(entity);
             let download_progress = std::sync::Arc::new(std::sync::Mutex::new(None));
-            let cache_key = std::sync::Arc::new(std::sync::Mutex::new(None));
             commands.entity(entity).insert(DemWorkerJob {
                 id,
                 source: source.clone(),
@@ -1304,7 +1330,6 @@ fn start_dem_builds(
                 lod_viz,
                 target_res: req.target_res,
                 download_progress: download_progress.clone(),
-                cache_key: cache_key.clone(),
             });
             let job = job.clone();
             AsyncComputeTaskPool::get()
@@ -1369,45 +1394,6 @@ fn start_dem_builds(
                         let _ = tx.send((id, error)); return;
                     }
 
-                    // OPFS grid cache: key = format version + the RAW fetched
-                    // bytes + the job params (content-exact — composes with the
-                    // conditional-revalidation fetch above: a replaced DEM is new
-                    // tif bytes, hence a new key, hence a rebake). On a hit the
-                    // worker is never spawned; the grid is injected through the
-                    // SAME reply queue a Full worker reply uses.
-                    let key =
-                        lunco_terrain_bake::grid_cache_key(site_id.as_bytes(), &tif, &job);
-                    let key_hex = lunco_precompute::key_hex(key);
-                    if let Some(blob) =
-                        lunco_storage::opfs_blob::read(DEM_GRID_CACHE_NS, &key_hex).await
-                    {
-                        if let Some((grid, native_res)) =
-                            lunco_terrain_bake::decode_grid_blob(&blob)
-                        {
-                            let site = site_id.clone();
-                            bevy::log::info!(
-                                "[dem-terrain] OPFS grid-cache hit ({}², key {key_hex}) — skipping worker bake",
-                                grid.res
-                            );
-                            lunco_terrain_bake::worker_client::push_local_reply(
-                                lunco_terrain_bake::worker_client::WorkerReply {
-                                    id,
-                                    stage: lunco_terrain_bake::BakeStage::Full,
-                                    site,
-                                    native_res,
-                                    res: grid.res,
-                                    grid_key: lunco_terrain_bake::grid_content_key(&grid),
-                                    grid: Ok(grid),
-                                },
-                            );
-                            return;
-                        }
-                    }
-                    // Miss: remember the key so the Full reply persists the grid.
-                    if let Ok(mut slot) = cache_key.lock() {
-                        *slot = Some(key_hex);
-                    }
-
                     if let Err(e) =
                         lunco_terrain_bake::worker_client::dispatch(id, &job, &site_id, &tif)
                     {
@@ -1441,27 +1427,73 @@ fn start_dem_builds(
             .map_err(|error| error.to_string())?;
             let tif = read_bytes(&directory, &settings).await?;
             validate_dem_source(&source, source_roots.as_ref())?;
-            let grid = height_grid_from_geotiff(&tif).map_err(|e| e.to_string())?;
+            let (grid, local_geo) = lunco_terrain_bake::dem::height_grid_and_transform(&tif)
+                .map_err(|e| e.to_string())?;
 
             // Crop the playable region at native resolution. The mesh and collider
             // share this surface so visuals and contact agree.
-            let tile = crop_centered(&grid, half_window);
+            let (tile, mut local_geo) = lunco_terrain_bake::bake::crop_centered_with_transform(
+                &grid,
+                local_geo,
+                half_window,
+            );
             let native_res = tile.res;
             // Keep the cropped native grid authoritative. `target_res` is only
             // applied when the static visual mesh is derived below.
             let mut tile = tile;
-            // Same f32 round-trip the worker bake applies in `finish_bake`:
-            // a native-inline peer and a worker/cache peer must produce
-            // bit-identical heights or their collider quantize lattices
-            // diverge (contact divergence between peers).
-            lunco_terrain_bake::quantize_heights_f32(&mut tile);
             let half_extent = tile.half_extent;
             let res = tile.res;
             // Retain the pristine raster base so a live layer edit re-composes off
             // it without re-reading the GeoTIFF. Its content key is folded HERE,
             // off-thread — assembly on the main thread reuses it.
             let base_grid = std::sync::Arc::new(tile.clone());
-            let base_key = lunco_terrain_bake::grid_content_key(&base_grid);
+            let regional_base = if let Some(regional) = &regional {
+                if !collider_ring || !lod_viz {
+                    return Err(
+                        "regional terrain requires streamed visual and collider tiles".into(),
+                    );
+                }
+                if let Some(declared) = regional.local_frame {
+                    if local_geo.frame.is_some_and(|actual| actual != declared) {
+                        return Err("declared local frame conflicts with its DEM".into());
+                    }
+                    local_geo.frame = Some(declared);
+                }
+                let regional_directory = lunco_assets_core::resolve_asset_directory_on_worker(
+                    &regional.uri,
+                    source_roots.as_ref(),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                let regional_tif = read_bytes(&regional_directory, &settings).await?;
+                validate_dem_source(&regional.uri, source_roots.as_ref())?;
+                let (regional_grid, regional_geo) =
+                    lunco_terrain_bake::dem::height_grid_and_transform(&regional_tif)
+                        .map_err(|error| error.to_string())?;
+                collider
+                    .for_expanded_domain(
+                        f64::from(base_grid.half_extent),
+                        f64::from(regional_grid.half_extent),
+                    )
+                    .map_err(str::to_owned)?;
+                Some(std::sync::Arc::new(
+                    lunco_terrain_bake::regional::RegisteredRegionalSurface::new(
+                        base_grid.clone(),
+                        local_geo,
+                        std::sync::Arc::new(regional_grid),
+                        regional_geo,
+                        regional.blend_m,
+                        regional.regional_offset_m,
+                    )
+                    .map_err(str::to_owned)?,
+                ))
+            } else {
+                None
+            };
+            let base_key = regional_base.as_ref().map_or_else(
+                || lunco_terrain_bake::grid_content_key(&base_grid),
+                |regional| regional.content_key(),
+            );
             // Fold any genuinely-rasterising layers into the working grid (most
             // height layers contribute analytically below instead).
             for layer in &layers {
@@ -1483,10 +1515,21 @@ fn start_dem_builds(
                 let datum = base_grid.border_datum();
                 contributions.push(crate::oracle::curvature_contribution(r, datum));
             }
-            let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
-                std::sync::Arc::new(tile),
-                contributions,
-            ));
+            let oracle = if let Some(regional) = &regional_base {
+                let source = if layers.iter().any(|layer| layer.stamps()) {
+                    std::sync::Arc::new(
+                        regional
+                            .with_local_grid(std::sync::Arc::new(tile))
+                            .map_err(str::to_owned)?,
+                    )
+                } else {
+                    regional.clone()
+                };
+                crate::oracle::SurfaceOracle::registered(source, contributions)
+            } else {
+                crate::oracle::SurfaceOracle::new(std::sync::Arc::new(tile), contributions)
+            };
+            let oracle = std::sync::Arc::new(oracle);
             // Static products are derived by the same helper as the web worker
             // path; this task only owns the native bake and its retained base.
             let (collider, mesh) =
@@ -1497,6 +1540,7 @@ fn start_dem_builds(
                 oracle: Some(oracle),
                 base_grid,
                 base_key,
+                regional_base,
                 half_extent,
                 res,
                 native_res,
@@ -1512,7 +1556,12 @@ fn start_dem_builds(
 /// with the web worker path via [`assemble_dem_build`]).
 fn finish_dem_builds(
     mut commands: Commands,
-    mut tasks: Query<(Entity, &mut DemBuildTask, &DemTerrainRequest)>,
+    mut tasks: Query<(
+        Entity,
+        &mut DemBuildTask,
+        &DemTerrainRequest,
+        Option<&RegionalDemRequest>,
+    )>,
     // Optional so the headless server (no render assets) still builds colliders.
     //
     // There is no material store here: the terrain owner already carries its
@@ -1525,18 +1574,24 @@ fn finish_dem_builds(
 ) {
     use bevy::tasks::futures_lite::future;
 
-    for (entity, mut task, req) in &mut tasks {
+    for (entity, mut task, req, regional) in &mut tasks {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
         // Request consumed — drop the task + request marker either way.
         commands
             .entity(entity)
-            .try_remove::<(DemBuildTask, DemTerrainRequest)>();
+            .try_remove::<(DemBuildTask, DemTerrainRequest, RegionalDemRequest)>();
 
         if let Err(error) = validate_dem_source(&req.uri, roots.as_deref()) {
             warn!("[dem-terrain] discarded retired source result: {error}");
             continue;
+        }
+        if let Some(regional) = regional {
+            if let Err(error) = validate_dem_source(&regional.uri, roots.as_deref()) {
+                warn!("[dem-terrain] discarded retired regional source result: {error}");
+                continue;
+            }
         }
         let built = match result {
             Ok(b) => b,
@@ -1559,11 +1614,32 @@ fn finish_dem_builds(
                 continue;
             }
         };
+        let collider = if let Some(oracle) = &built.oracle {
+            match req.collider.for_expanded_domain(
+                f64::from(oracle.half_extent()),
+                f64::from(oracle.domain_half_extent()),
+            ) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    report_dem_build_failed(
+                        &mut commands,
+                        &mut faults,
+                        holds.as_deref_mut(),
+                        Some(entity),
+                        format!("Terrain collider admission failed: {error}"),
+                        DemBuildFailureDisposition::Terminal,
+                    );
+                    continue;
+                }
+            }
+        } else {
+            req.collider
+        };
         assemble_dem_build(
             &mut commands,
             entity,
             req.collider_ring,
-            req.collider,
+            collider,
             req.lod_viz,
             built,
             meshes.as_deref_mut(),
@@ -1603,7 +1679,7 @@ fn assemble_dem_build(
         // Retain the pristine base grid + source settings so the crater layer can be
         // re-baked live from the Inspector (`UpdateObstacleFieldSpec`) without disk I/O.
         e.try_insert((
-            DemBaseGrid(built.base_grid, built.base_key),
+            DemBaseGrid(built.base_grid, built.base_key, built.regional_base),
             DemTerrainSource { collider_ring },
             DemVisualTargetRes(built.visual_target_res),
         ));
@@ -1613,7 +1689,7 @@ fn assemble_dem_build(
         if let Some(oracle) = built.oracle {
             // Read the half-extent before the Arc moves into `DemHeightField` —
             // the collider ring derives its contact lattice from the physics owner.
-            let half_extent = oracle.half_extent() as f64;
+            let half_extent = oracle.domain_half_extent() as f64;
             e.try_insert(crate::oracle::DemHeightField(oracle));
             if lod_viz {
                 e.try_insert((
@@ -1845,16 +1921,6 @@ fn finish_dem_worker(
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
-                // Best-effort OPFS write-through so the NEXT page load skips the
-                // worker (GeoTIFF decode + crater stamp) entirely. The key was
-                // derived from the fetched bytes on the miss path; it's `None` on
-                // a cache hit (nothing to rewrite).
-                if let Some(key_hex) = job.cache_key.lock().ok().and_then(|k| k.clone()) {
-                    let blob = lunco_terrain_bake::encode_grid_blob(&grid, reply.native_res);
-                    wasm_bindgen_futures::spawn_local(async move {
-                        lunco_storage::opfs_blob::write(DEM_GRID_CACHE_NS, &key_hex, &blob).await;
-                    });
-                }
                 // Re-compose the analytic oracle on the worker's full bare grid.
                 let contributions =
                     layer_contributions(stacks.get(entity).ok(), &grid, curvature_radius);
@@ -1873,7 +1939,7 @@ fn finish_dem_worker(
                     let base_key = reply.grid_key;
                     commands
                         .entity(entity)
-                        .try_insert(DemBaseGrid(base.clone(), base_key));
+                        .try_insert(DemBaseGrid(base.clone(), base_key, None));
                     let oracle =
                         std::sync::Arc::new(crate::oracle::SurfaceOracle::new_with_base_key(
                             base,
@@ -2032,7 +2098,7 @@ fn swap_terrain_grid(
         oracle.surface_key(),
         None,
     );
-    let half = oracle.half_extent() as f64;
+    let half = oracle.domain_half_extent() as f64;
     commands.entity(entity).try_insert(surface_change);
     if has_static_mesh {
         if let Some(meshes) = meshes {
@@ -2084,10 +2150,15 @@ fn swap_terrain_grid(
 /// [`finish_dem_restamp`] froze the frame on every static-mesh re-stamp.
 #[derive(Component)]
 pub(crate) struct DemRestampTask(
-    Task<(
-        std::sync::Arc<crate::oracle::SurfaceOracle>,
-        Option<MeshData>,
-    )>,
+    Task<
+        Result<
+            (
+                std::sync::Arc<crate::oracle::SurfaceOracle>,
+                Option<MeshData>,
+            ),
+            String,
+        >,
+    >,
 );
 
 /// Debounce state for the static collider consumer of [`crate::surface_change::TerrainSurfaceChange`].
@@ -2146,6 +2217,7 @@ fn spawn_restamp_task(
 ) {
     let base_grid = base.0.clone();
     let base_key = base.1;
+    let regional_base = base.2.clone();
     let layers: Vec<_> = stack.0.iter().map(|e| e.layer.clone()).collect();
     let task = AsyncComputeTaskPool::get().spawn(async move {
         // Off-thread body → own Tracy zone (per-system spans don't reach here).
@@ -2173,7 +2245,18 @@ fn spawn_restamp_task(
             for layer in &layers {
                 layer.stamp(&mut grid);
             }
-            crate::oracle::SurfaceOracle::new(std::sync::Arc::new(grid), contributions)
+            let grid = std::sync::Arc::new(grid);
+            if let Some(regional) = regional_base {
+                let updated = regional.with_local_grid(grid).map_err(str::to_owned)?;
+                crate::oracle::SurfaceOracle::registered(
+                    std::sync::Arc::new(updated),
+                    contributions,
+                )
+            } else {
+                crate::oracle::SurfaceOracle::new(grid, contributions)
+            }
+        } else if let Some(regional) = regional_base {
+            crate::oracle::SurfaceOracle::registered(regional, contributions)
         } else {
             // Same base Arc → reuse the cached key instead of re-hashing ~10M
             // heights off-thread on every brush stroke.
@@ -2185,7 +2268,7 @@ fn spawn_restamp_task(
         // Streaming terrains skip it (tiles sample the oracle directly).
         let mesh =
             needs_static_mesh.then(|| static_visual_mesh(oracle.as_ref(), visual_target_res));
-        (oracle, mesh)
+        Ok((oracle, mesh))
     });
     commands.entity(entity).try_insert(DemRestampTask(task));
 }
@@ -2383,6 +2466,8 @@ pub(crate) fn finish_dem_restamp(
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
     mut admission: Option<ResMut<lunco_core_runtime::AsyncWorkAdmission>>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     use bevy::tasks::futures_lite::future;
     for (
@@ -2399,10 +2484,24 @@ pub(crate) fn finish_dem_restamp(
         scattered_content,
     ) in &mut tasks
     {
-        let Some((oracle, mesh_data)) = future::block_on(future::poll_once(&mut task.0)) else {
+        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
         commands.entity(entity).try_remove::<DemRestampTask>();
+        let (oracle, mesh_data) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                report_dem_build_failed(
+                    &mut commands,
+                    &mut faults,
+                    holds.as_deref_mut(),
+                    Some(entity),
+                    format!("Terrain recomposition failed: {error}"),
+                    DemBuildFailureDisposition::Terminal,
+                );
+                continue;
+            }
+        };
 
         // The region this re-bake must refresh: `Some` = a bounded edit (only those
         // tiles + no rock re-scatter); `None`/absent = whole terrain.
@@ -2468,7 +2567,7 @@ pub(crate) fn finish_dem_restamp(
             continue;
         }
 
-        let half = oracle.half_extent() as f64;
+        let half = oracle.domain_half_extent() as f64;
         let surface_change = crate::surface_change::TerrainSurfaceChange::next(
             previous_surface_change,
             hf.0.surface_key(),
@@ -3000,7 +3099,7 @@ mod visual_product_tests {
         let terrain = app
             .world_mut()
             .spawn((
-                DemBaseGrid(base, base_key),
+                DemBaseGrid(base, base_key, None),
                 crate::oracle::DemHeightField(oracle.clone()),
                 stack,
                 TerrainScatterContent(fingerprint),

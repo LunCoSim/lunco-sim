@@ -202,7 +202,7 @@ GPU acceptance still require the rendered fixture and a clean process log.
    separately from its maximum shadow distance. Keep sub-DEM synthetic crater
    geometry within the terrain tile's resolved sampling; measured orthophoto
    albedo and footprint-filtered shader detail provide stable close texture.
-   Compare `TerrainLodStatus.focus_wanted` with `focus_resident`: a fully
+   Compare `TerrainLodStatus.stream.focus_wanted` with `focus_resident`: a fully
    resident cover can still leave the active camera outside the DEM crop, where
    the near-field detail floor cannot refine the viewed ground. Verify the
    camera's terrain-local position against the authored DEM window before
@@ -213,6 +213,10 @@ GPU acceptance still require the rendered fixture and a clean process log.
    On exit, only already-requested nodes within the three-dimensional retention
    band remain, including near a DEM edge; a replacement camera or terrain
    source cannot inherit them.
+   Inspect each view's effective maximum depth and metric spacing when a regional
+   domain is present: root extent growth must preserve the local finest spacing.
+   Visual posting counts must be odd so nested parent lattices align. Refused
+   splits are an unsatisfied visual-quality request, not completed detail.
    Compare settled views and camera pans, including the horizon, and check both
    camera coverage and frame time before changing that selection. For the
    `overzoom` layer, density zero disables synthetic craterlets and leaves only
@@ -236,34 +240,31 @@ GPU acceptance still require the rendered fixture and a clean process log.
    run `celestial_terrain_clock.rhai` with the settled probe ID. Preserve physical
    fixed-step semantics and conservative bounds; do not raise quotas or fabricate
    sunlight to hide a traversal/certificate failure.
-   For wheels moving over visually flat ground, inspect
-   `TerrainLodStatus.contacts`: every physics support/build-ahead node must have a ready, drawn and pinned
-   visual cover, including finer descendants. A newly committed cover must
-   publish changed resident material pins before entering the idle path;
-   resident mesh readiness alone is insufficient. Check `camera_cover` as well:
-   a nearby camera reserves its finest local patch independently of the bodies. The visual support cover uses the authored physical
-   lattice even when camera depth or discretionary tile budget is smaller. Do
-   not reduce collider detail or increase a global graphics preset to conceal
-   this mismatch. Run `scripts/api/test_terrain_contact_visual.py --scene <scene>
-   --body-path <body> --route-path <route> --port <free-port> --output <evidence>`.
-   It checks close/far cameras and finer camera tessellation, rendered triangles
-   against native rays within 1 mm, an explicit
-   2 cm negative case, route texture bindings on new contact tiles, physical
-   wheel marks after driving, and reduced graphics settings. Inspect its driving
-   captures and performance reads; another active simulator can affect timing.
-   For scene replacement during a graphics-quality change, run
-   `scripts/api/test_terrain_restart_quality.py --scene <scene> --port <free-port>
-   --output <evidence>`. Its retained Rhai observer checks two replacements and
-   the ready, pinned physical cover after each one.
+   For wheels moving over terrain, inspect physical support through
+   `TerrainLodStatus.contacts` and visual fidelity through each `camera_cover` row.
+   Physical rows report the authored lattice and readiness; they do not require
+   render tiles. Compare native wheel contacts and source/visual height error at
+   triangle interiors, rims and seams against the scene's declared tolerance.
+   Camera detail comes from the consumed output's pose, projection and pixels.
+   Exercise the main avatar view, selected mounted rover camera and a visible rover
+   feed simultaneously. Inactive cameras must withdraw demand. A distant main view
+   keeps its own cover while the feed resolves nearby crater relief.
+   Use `camera_terrain_view_fidelity.rhai` for bounded per-view status checks after
+   the driver has positioned both views and moved the physical body. Inspect GPU
+   images and all prepasses/shadows separately; status is not image proof.
+   Keep route and wheel-mark annotations registered through view/LOD changes.
+   Scene replacement must retire view demand, queued work, cover caches and camera
+   retention by exact scene/source/output identity. Check restart and close/reopen
+   with work in flight; report each observed result.
 4. Compare a settled frame sequence, not one screenshot. Fast color changes
    usually indicate changing inputs, repeated derived bakes, missing asset
    readiness, or unstable lighting—not a reason to clamp the image in a
    shader. Find the owner and gate the work by asset/revision events. Camera-
    driven terrain cover selection runs at 30 Hz wall-clock cadence and uses
    shared bounded background admission on native visual hosts; changes to the
-   contact footprint and other admission inputs wake it immediately. The owner fences
-   and commits current results in `Update`; tile-mesh bake admission still uses
-   its per-terrain queue. Offline capture lockstep bypasses the cadence and runs
+   consumed output, source and quality revisions wake it immediately. Finalized
+   camera/output snapshots and view cover publication run in `PostUpdate` after
+   camera pose and viewport binding. Tile-mesh work uses shared bounded admission. Offline capture lockstep bypasses the cadence and runs
    selection synchronously for each captured frame. Profile remaining frame
    hitches before changing LOD budgets.
    For black flashes during loading or cover changes, verify that newly keyed
@@ -391,9 +392,9 @@ from the replaced `SurfaceOracle` into the shared visual invalidator, collider
 ring, static-collider debounce, and derived maps. Bounded reuse requires the
 consumer's cached source key to match the record's previous key; the collider
 ring also requires the immediately preceding revision. Reject static-collider
-jobs whose oracle key is stale. Physics owns contact sampling; presentation consumes that lattice on the
-support cover. Keep discretionary visual caches independent from collider
-residency and never make physics wait for presentation.
+jobs whose oracle key is stale. Physics owns its contact sampling and residency;
+visual products sample their own bands per consumed camera. Keep visual caches
+independent from collider residency and never make physics wait for presentation.
 
 Use `inspect-simulation`, `record-video`, or the API screenshot surface for
 visual evidence. Preserve authored DEM resolution, shadow ranges, BigSpace,
@@ -465,3 +466,100 @@ Hot nozzle metal uses the shared generated Planck/CIE approximation after
 interpolating temperature. Check its generator and the production thermal gate;
 wall cooling continues after delivered thrust reaches zero. Measure actual
 engine close-ups separately from whole-scene FPS.
+
+## Camera navigation near the surface
+
+Use the typed terrain sphere-sweep result from the full composed source for camera
+movement, scroll transit and follow booms, independently of rover collider residency.
+Distinguish clear motion, first contact, initial overlap and unavailable work.
+Conservative bounds prune work; an uncertain upper bound is not a hit.
+Sphere sweeps use the source's `HeightEnclosure` scalar and affine residual bounds
+to retain slope correlation, including analytic modifier gradients. Do not substitute an enclosure height for a contact witness or raise
+the work budget to hide ineffective pruning. Native prop
+collision stays active while the separate native terrain realization is excluded
+from the camera's terrain resolution. Lateral input must not trigger automatic lift.
+Movement casts the physical sphere and applies skin as a directional pullback
+from approaching contact; it does not collide with an enlarged skin shell.
+The source-safe movement is also checked against the solid heightfield represented
+by the meshes currently drawn for
+that camera, including stitch and morph state with correlated camera/triangle time
+intervals. Coarse approximation or preparation
+uncertainty holds the pose and requests refinement along the path. A
+current finest static visual contact joins the same bounded contact-plane
+projection loop as source terrain and props. Recast every projected segment and
+keep a normal-space tolerance margin at grazing incidence; do not add positional
+depenetration or an upward step. A pending follow corridor survives render frames and orientation damping while its camera
+position, source, output and projection remain valid. Cover capacity refusal must
+remain visible and retain their exact request until input or admission changes.
+Refused counts must belong to current committed requirements. A pending scroll keeps its exact target/source lease and retries on draw revision changes;
+it must cancel on new input, pose, mode, source or frame changes. Explicit upward
+recovery from source-certified initial overlap remains user-controlled.
+Rendered initial overlap may permit explicit separating input only through the
+actual convex contact plane and with all later terrain columns still checked.
+Never treat a camera below a rendered triangle as clear merely because its sphere
+does not touch the top surface.
+
+Cover publication must separately certify the full candidate geometry, morph and
+stitch state against the admitted camera. Keep replacements hidden and retain the
+published cover until that transaction is safe. `presentation_pending` withdraws
+latest-view readiness without holding physics. Do not mutate a resident tile's
+morph/stitch material ahead of publication admission.
+
+The sphere envelope must account for camera clearance and its projection footprint.
+The shared interactive lunar camera authors a 0.01 m near clipping plane through
+standard `UsdGeomCamera.clippingRange`; inspect composed lens overrides when an
+envelope remains unexpectedly large. Author lens changes through document tools.
+Perspective-avatar celestial adaptation preserves those authored clipping floors;
+fixed and mounted cameras retain their authored projection.
+Read the current `CameraCollisionEnvelope.radius_m`, `.skin_m` and
+`.sweep_tolerance_m` reflected fields on the navigating camera before measuring
+achieved clearance. Flat-ground target clearance is radius plus skin; allow only
+the declared geometric tolerance. Run
+`camera_freeflight_terrain.rhai` with explicit `clearance_m`,
+`clearance_tolerance_m`, `maximum_lateral_altitude_drift_m`,
+`source_half_extent_m`, `minimum_support_distance_m`, and driver-resolved
+`avatar_id`/`support_id` parameters. The production driver uses the repository's
+flat DEM fixture and waits for the selected camera's current cover to settle.
+Its 11 checks include separation from the physical body and absence of native
+terrain support under the camera. Check both achieved clearance
+bounds and altitude drift. The driver also runs `camera_terrain_capacity.rhai`
+against the authored dig fixture, requiring a stable refusal and recovery after
+capacity restoration, stationary unsafe coarsening and publication recovery.
+Use the reflected camera sweep tolerance for cross-frame pose comparisons;
+raw camera/source identities remain exact equality-only values. It also runs
+`camera_terrain_rebase.rhai` across both directions of a
+native floating-origin cell boundary near the ground. Rebase checks compare
+continuous terrain coordinates with the actual native render-transform jump.
+Then inspect steep slopes, off-path ridges, initial
+penetration, thin features/high speed, ring-boundary crossing, paused navigation and
+props through authored production scenarios. Mounted cameras retain their authored
+mounts; inspect their reported terrain-local clearance. Current integration evidence is tracked
+in [the camera terrain review](../../docs/reviews/2026-11-12-camera-terrain-architecture.md).
+
+Use `scripts/api/test_camera_terrain_views.py` with explicit scene/body/avatar/mounted
+camera paths, main eye/look-at coordinates in the active physics frame, and independent
+metric spacing bounds for main/feed views. It records the stationary main cover before
+a real rover drive and feed creation, checks that this cover is unchanged, verifies
+native wheel-mark production, retires a temporary feed and checks demand removal, and
+captures both final images. Its 14-check authored status verdict requires separate
+visual inspection of the captured geometry, seams, crater relief and render passes.
+The same driver runs six authored rejection checks for invalid lattice sizes and
+atomic quality batches through `camera_terrain_quality_rejection.rhai`.
+
+Perspective detail follows distance, FOV and output pixels. Orthographic detail
+follows zoom and output pixels within its admitted footprint; moving along its
+viewing axis must preserve LOD. Both projections retain a projected posting-size
+floor at every range and clip against conservative full-source heights. Retained
+view envelopes use projected angular tolerances and hysteresis for both clipping
+and invalidation; verify that microscopic mounted-camera jitter can settle while
+meaningful telephoto pan/roll changes wake selection. Test zoom
+and lateral footprint changes separately. The motion driver also compares two
+otherwise identical distant-crater scenes with wide/telephoto focal lengths using
+`camera_terrain_zoom.rhai`; require finer visible postings without changing physical
+support, and inspect both captured images. Its scratch-Twin policy gate verifies
+that explicit through-soil traversal withdraws collision participation from both
+navigation and publication, then restores default collision and upward recovery.
+Orthographic covers use static edge stitching and discrete zoom transitions,
+without camera-distance morphing. Read `TerrainLodStatus.visual_foci` for the actual
+projection metric. Custom projections require a metric provider and reject
+unsupported metrics visibly.

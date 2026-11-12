@@ -234,4 +234,81 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             filter,
         )
     }
+    /// Checked native shape cast in the named active physics frame. Invalid
+    /// points, orientations and distances remain distinct from a clear cast.
+    pub fn cast_shape_grid(
+        &self,
+        shape: &Collider,
+        origin: GridPos,
+        rotation: bevy::prelude::Quat,
+        direction: Dir3,
+        distance: f64,
+        skin_m: f64,
+        filter: &SpatialQueryFilter,
+    ) -> Result<Option<ShapeHitData>, String> {
+        if self.physics_frame.is_none() {
+            return Err("shape cast has no active physics frame".into());
+        }
+        if !avian_backend_point_is_valid(origin.0)
+            || !avian_backend_point_is_valid(origin.0 + direction.as_dvec3() * distance)
+            || !rotation.is_finite()
+            || (rotation.length_squared() - 1.0).abs() > 1e-5
+            || !direction.as_vec3().is_finite()
+            || !distance.is_finite()
+            || distance < 0.0
+            || distance > f64::from(f32::MAX)
+            || !skin_m.is_finite()
+            || skin_m < 0.0
+            || skin_m > f64::from(f32::MAX)
+        {
+            return Err("shape cast input exceeds the native backend contract".into());
+        }
+        let config = ShapeCastConfig {
+            max_distance: distance as f32,
+            target_distance: skin_m as f32,
+            compute_contact_on_penetration: true,
+            ignore_origin_penetration: true,
+        };
+        Ok(self
+            .spatial
+            .cast_shape(shape, origin.0, rotation, direction, &config, filter))
+    }
+
+    /// Shape cast from a source Grid, returning native hit facts in the active
+    /// physics frame. Both origin and orientation cross the shared frame map.
+    pub fn cast_shape_in_grid(
+        &self,
+        source_grid: bevy::prelude::Entity,
+        shape: &Collider,
+        origin: GridPos,
+        rotation: bevy::prelude::Quat,
+        direction: Dir3,
+        distance: f64,
+        skin_m: f64,
+        filter: &SpatialQueryFilter,
+    ) -> Result<Option<ShapeHitData>, String> {
+        let frame = self
+            .physics_frame
+            .as_deref()
+            .ok_or("shape cast has no active physics frame")?;
+        let (position, orientation) = pose_in_grid(
+            source_grid,
+            frame.0,
+            &self.parents,
+            &self.grids,
+            &self.nodes,
+        )
+        .ok_or("shape cast cannot resolve source grid")?;
+        let direction = Dir3::new((orientation * direction.as_dvec3()).as_vec3())
+            .map_err(|_| "shape cast frame produced invalid direction")?;
+        self.cast_shape_grid(
+            shape,
+            GridPos(position + orientation * origin.0),
+            (orientation * rotation.as_dquat()).as_quat(),
+            direction,
+            distance,
+            skin_m,
+            filter,
+        )
+    }
 }

@@ -38,6 +38,8 @@ lunco-hash = { path = "../lunco-hash" }
 # The generic Web Worker pool (spawn / handshake / transfer / respawn), shared
 # with the Modelica Fast-Run workers.
 lunco-worker-transport = { path = "../lunco-worker-transport" }
+lunco-storage = { path = "../lunco-storage" }
+lunco-precompute = { path = "../lunco-precompute" }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }

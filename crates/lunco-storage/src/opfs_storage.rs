@@ -386,10 +386,14 @@ impl OpfsStorage {
 
 /// The OPFS root directory handle (`navigator.storage.getDirectory()`).
 async fn segments_root() -> StorageResult<web_sys::FileSystemDirectoryHandle> {
-    let navigator = web_sys::window()
-        .map(|w| w.navigator())
-        .ok_or_else(|| unsupported("no window (OPFS needs a browsing context)"))?;
-    let manager = navigator.storage();
+    let manager = if let Some(window) = web_sys::window() {
+        window.navigator().storage()
+    } else {
+        let worker = js_sys::global()
+            .dyn_into::<web_sys::WorkerGlobalScope>()
+            .map_err(|_| unsupported("OPFS requires a window or worker context"))?;
+        worker.navigator().storage()
+    };
     JsFuture::from(manager.get_directory())
         .await
         .map_err(js_err)?

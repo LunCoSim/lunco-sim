@@ -11,31 +11,50 @@ const ZOOM_FACTOR_MIN: f64 = 0.75;
 const ZOOM_FACTOR_MAX: f64 = 1.25;
 
 const CAMERA_NEAR_SURFACE_RATIO: f64 = 0.001;
-const CAMERA_NEAR_MIN_M: f64 = 0.1;
 const CAMERA_NEAR_MAX_M: f64 = 10_000.0;
-const CAMERA_FAR_MIN_M: f64 = 10_000_000.0;
 
-/// Derive perspective clip planes from the nearest surface and farthest body.
-///
-/// This is a camera precision policy, not a celestial or avatar policy. The
-/// caller supplies distances measured in its authoritative spatial frame.
+/// Explicit f64 source/adaptation to f32 rendering boundary. Round upward when
+/// needed so either clipping plane retains its source floor after conversion.
+pub fn projection_clip_range(near_m: f64, far_m: f64) -> Option<(f32, f32)> {
+    if !near_m.is_finite() || !far_m.is_finite() || near_m <= 0.0 || far_m <= near_m {
+        return None;
+    }
+    let upward = |value: f64| {
+        let native = value as f32;
+        if f64::from(native) < value {
+            native.next_up()
+        } else {
+            native
+        }
+    };
+    let near = upward(near_m);
+    let far = upward(far_m);
+    (near.is_finite() && far.is_finite() && near > 0.0 && far > near).then_some((near, far))
+}
+
+/// Derive perspective precision above the camera's valid source clipping floors.
+/// No celestial bodies is the explicit (positive infinity, zero) empty extent;
+/// it retains the source range. Invalid bounds reject adaptation visibly.
 pub fn adaptive_clip_planes(
     nearest_surface_distance_m: f64,
     farthest_body_distance_m: f64,
+    source: &crate::AdaptiveNearPlane,
 ) -> Option<(f32, f32)> {
-    if farthest_body_distance_m <= 0.0 {
-        if !farthest_body_distance_m.is_finite() {
-            return None;
-        }
-        return Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32));
+    projection_clip_range(source.source_near_m, source.source_far_m)?;
+    if nearest_surface_distance_m == f64::INFINITY && farthest_body_distance_m == 0.0 {
+        return projection_clip_range(source.source_near_m, source.source_far_m);
     }
-    if !nearest_surface_distance_m.is_finite() || !farthest_body_distance_m.is_finite() {
+    if !nearest_surface_distance_m.is_finite()
+        || !farthest_body_distance_m.is_finite()
+        || farthest_body_distance_m <= 0.0
+    {
         return None;
     }
     let near = (nearest_surface_distance_m * CAMERA_NEAR_SURFACE_RATIO)
-        .clamp(CAMERA_NEAR_MIN_M, CAMERA_NEAR_MAX_M);
-    let far = (farthest_body_distance_m * 1.05).max(CAMERA_FAR_MIN_M);
-    (near.is_finite() && far.is_finite() && far > near).then_some((near as f32, far as f32))
+        .min(CAMERA_NEAR_MAX_M)
+        .max(source.source_near_m);
+    let far = (farthest_body_distance_m * 1.05).max(source.source_far_m);
+    projection_clip_range(near, far)
 }
 
 /// Resolve the shared camera decay rate from an authored base rate and
@@ -146,30 +165,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn close_surface_approach_keeps_a_submetre_near_plane() {
-        let (near, far) = adaptive_clip_planes(5.0, 1_000_000.0).unwrap();
-
-        assert_eq!(near, 0.1);
-        assert_eq!(far, CAMERA_FAR_MIN_M as f32);
+    fn close_surface_approach_retains_the_declared_near_floor() {
+        let source = crate::AdaptiveNearPlane::new(0.01, 1_000_000.0).unwrap();
+        let (near, far) = adaptive_clip_planes(5.0, 1_000_000.0, &source).unwrap();
+        assert!(f64::from(near) >= source.source_near_m && near < 0.011);
+        assert!(f64::from(far) >= 1_050_000.0);
+        let source = crate::AdaptiveNearPlane::new(0.5, 2_000_000.0).unwrap();
+        let (near, far) = adaptive_clip_planes(5.0, 1_000_000.0, &source).unwrap();
+        assert_eq!((near, far), (0.5, 2_000_000.0));
     }
 
     #[test]
-    fn orbital_distance_scales_near_plane_with_a_precision_ceiling() {
-        let (near, _) = adaptive_clip_planes(5_000_000.0, 100_000_000.0).unwrap();
+    fn orbital_adaptation_keeps_its_ceiling_and_larger_source_floors() {
+        let source = crate::AdaptiveNearPlane::new(0.01, 1_000_000.0).unwrap();
+        let (near, _) = adaptive_clip_planes(5_000_000.0, 100_000_000.0, &source).unwrap();
         assert_eq!(near, 5_000.0);
-
-        let (near, _) = adaptive_clip_planes(20_000_000.0, 100_000_000.0).unwrap();
+        let (near, _) = adaptive_clip_planes(20_000_000.0, 100_000_000.0, &source).unwrap();
         assert_eq!(near, CAMERA_NEAR_MAX_M as f32);
+        let source = crate::AdaptiveNearPlane::new(20_000.0, 200_000_000.0).unwrap();
+        assert_eq!(
+            adaptive_clip_planes(20_000_000.0, 100_000_000.0, &source),
+            Some((20_000.0, 200_000_000.0))
+        );
     }
 
     #[test]
-    fn bodyless_and_invalid_bounds_have_explicit_results() {
+    fn bodyless_invalid_and_unrepresentable_ranges_are_explicit() {
+        let source = crate::AdaptiveNearPlane::new(0.01, 1_000_000.0).unwrap();
         assert_eq!(
-            adaptive_clip_planes(f64::INFINITY, 0.0),
-            Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32))
+            adaptive_clip_planes(f64::INFINITY, 0.0, &source),
+            projection_clip_range(0.01, 1_000_000.0)
         );
-        assert_eq!(adaptive_clip_planes(f64::NAN, 1_000.0), None);
-        assert_eq!(adaptive_clip_planes(1.0, f64::INFINITY), None);
+        assert_eq!(adaptive_clip_planes(f64::NAN, 1_000.0, &source), None);
+        assert_eq!(adaptive_clip_planes(1.0, f64::INFINITY, &source), None);
+        assert_eq!(adaptive_clip_planes(1.0, 0.0, &source), None);
+        assert!(crate::AdaptiveNearPlane::new(0.0, 1.0).is_none());
+        assert!(crate::AdaptiveNearPlane::new(1.0, f64::MAX).is_none());
+        let (near, far) = projection_clip_range(0.010000000123, 1_000_000.000123).unwrap();
+        assert!(f64::from(near) >= 0.010000000123 && f64::from(far) >= 1_000_000.000123);
     }
 
     #[test]

@@ -19,12 +19,12 @@ use lunco_terrain_core::{HeightSource, QuadCoord, Square};
 
 use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
-use crate::tile_mesh::{TileMesh, bake_tile_mesh, bake_tile_mesh_with_boundary};
+use crate::tile_mesh::{TileMesh, bake_tile_mesh_with_boundary};
 
 /// Current geometry/layout contract for persisted visual tile bakes. Bump on
 /// changes to sampling math, boundary topology, normals, morphs, or blob layout.
 /// The revision is part of the content key; incompatible bakes cannot be read.
-const CACHE_FORMAT_VERSION: u64 = 16;
+const CACHE_FORMAT_VERSION: u64 = 18;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -34,7 +34,6 @@ struct TileBake<'a> {
     res: usize,
     dem_half_extent: f64,
     origin_xz: [f64; 2],
-    contact: Option<u8>,
 }
 
 impl lunco_precompute::Bake for TileBake<'_> {
@@ -49,7 +48,6 @@ impl lunco_precompute::Bake for TileBake<'_> {
         h.write_u64(self.coord.x as u64);
         h.write_u64(self.coord.z as u64);
         h.write_u64(self.res as u64);
-        h.write_u64(self.contact.map_or(0, |depth| u64::from(depth) + 1));
         // region/origin derive from (root extent, coord), but fold them anyway so
         // a root-extent change can never alias.
         h.write_u64(self.region.center[0].to_bits());
@@ -59,10 +57,9 @@ impl lunco_precompute::Bake for TileBake<'_> {
     }
 
     fn bake(&self) -> TileMesh {
-        // Band-limit via the shared filter policy ([`SurfaceBand`]) — the same
-        // definitions the collider ring and derived-layer bakes use, so what
-        // this tile DRAWS is the same band the others sample. The visual band
-        // keeps features ≥ 2·step (Nyquist for this tile's vertex spacing); the
+        // Each terrain product derives its filter from its own lattice through
+        // [`SurfaceBand`]. The visual band keeps features ≥ 2·step (Nyquist for
+        // this tile's vertex spacing); the
         // morph-target band lives on the parent's 2×-spaced lattice so it gates
         // at 4·step (a fully-morphed tile IS the parent surface).
         let step = self.region.side() / (self.res.max(2) - 1) as f64;
@@ -83,51 +80,7 @@ impl lunco_precompute::Bake for TileBake<'_> {
         let origin_y = self
             .oracle
             .height_at(self.region.center[0], self.region.center[1]);
-        if let Some(depth) = self.contact {
-            if self.coord.depth > depth {
-                let physical = crate::collider_ring::SampledContactSurface::prepare(
-                    self.oracle,
-                    self.region,
-                    margin,
-                    depth,
-                    self.res,
-                );
-                return bake_tile_mesh(
-                    &physical,
-                    &physical,
-                    self.region,
-                    self.res,
-                    self.dem_half_extent,
-                    self.origin_xz,
-                    origin_y,
-                );
-            }
-            // Use the collider owner's exact quantized postings. Both meshes use
-            // the same anti-diagonal grid triangles; only GPU positions narrow.
-            let heights = crate::collider_ring::sample_heights_xz(
-                self.oracle,
-                self.region,
-                self.res,
-                origin_y,
-                SurfaceBand::physics(step),
-            );
-            let mut mesh = bake_tile_mesh(
-                &limited,
-                &parent_limited,
-                self.region,
-                self.res,
-                self.dem_half_extent,
-                self.origin_xz,
-                origin_y,
-            );
-            for (x, column) in heights.iter().enumerate() {
-                for (z, &height) in column.iter().enumerate() {
-                    mesh.positions[z * self.res + x][1] = height as f32;
-                }
-            }
-            return mesh;
-        }
-        bake_tile_mesh_with_boundary(
+        let mesh = bake_tile_mesh_with_boundary(
             &limited,
             &parent_limited,
             self.oracle,
@@ -136,8 +89,9 @@ impl lunco_precompute::Bake for TileBake<'_> {
             self.dem_half_extent,
             self.origin_xz,
             origin_y,
-            self.oracle.grid().res,
-        )
+            self.oracle.domain_resolution(),
+        );
+        local_material_uvs(mesh, self.oracle)
     }
 
     fn store(dir: &Path, out: &TileMesh) -> lunco_precompute::StorageResult<()> {
@@ -149,6 +103,20 @@ impl lunco_precompute::Bake for TileBake<'_> {
     }
 }
 
+/// Keep authored site maps in their original metre frame when the geometry
+/// domain extends beyond the site. The region's appearance owner can use UVs
+/// outside [0, 1] to transition away from the local material.
+fn local_material_uvs(mut mesh: TileMesh, oracle: &SurfaceOracle) -> TileMesh {
+    let scale = oracle.domain_half_extent() / oracle.half_extent();
+    if scale != 1.0 {
+        for uv in &mut mesh.uvs {
+            uv[0] = (uv[0] - 0.5) * scale + 0.5;
+            uv[1] = (uv[1] - 0.5) * scale + 0.5;
+        }
+    }
+    mesh
+}
+
 /// Bake one CDLOD tile through the content-addressed disk cache: load on a key
 /// hit, bake + persist on a miss. Pure either way; safe off-thread.
 pub fn bake_tile_mesh_cached(
@@ -158,7 +126,6 @@ pub fn bake_tile_mesh_cached(
     res: usize,
     dem_half_extent: f64,
     origin_xz: [f64; 2],
-    contact: Option<u8>,
 ) -> TileMesh {
     lunco_precompute::bake_or_load(
         &TileBake {
@@ -168,7 +135,6 @@ pub fn bake_tile_mesh_cached(
             res,
             dem_half_extent,
             origin_xz,
-            contact,
         },
         &lunco_assets_core::cache_dir(),
     )
@@ -185,7 +151,6 @@ pub async fn bake_tile_mesh_cached_async(
     res: usize,
     dem_half_extent: f64,
     origin_xz: [f64; 2],
-    contact: Option<u8>,
 ) -> TileMesh {
     use lunco_precompute::Bake;
 
@@ -196,7 +161,6 @@ pub async fn bake_tile_mesh_cached_async(
         res,
         dem_half_extent,
         origin_xz,
-        contact,
     };
     let key_hex = lunco_precompute::key_hex(bake.key());
     if let Some(blob) = lunco_storage::opfs_blob::read(TileBake::NAMESPACE, &key_hex).await {
@@ -312,6 +276,65 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visual_bake_retains_submillimetre_measured_relief() {
+        use lunco_obstacle_field::field::HeightGrid;
+        use lunco_precompute::Bake;
+        use std::sync::Arc;
+
+        let mut grid = HeightGrid::new_flat(9, 4.0);
+        grid.heights[4 * 9 + 5] = 0.0004;
+        let oracle = SurfaceOracle::bare(Arc::new(grid));
+        let mesh = TileBake {
+            oracle: &oracle,
+            coord: QuadCoord {
+                depth: 2,
+                x: 2,
+                z: 2,
+            },
+            region: Square {
+                center: [1.0, 1.0],
+                half: 1.0,
+            },
+            res: 5,
+            dem_half_extent: 4.0,
+            origin_xz: [1.0, 1.0],
+        }
+        .bake();
+        // This interior tile's first row crosses the measured post at (1, 0).
+        // Rendering keeps the source height at its explicit f32 boundary.
+        assert_eq!(mesh.positions[2], [0.0, 0.0004_f32, -1.0]);
+    }
+
+    #[test]
+    fn regional_mesh_preserves_site_material_coordinates() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        use lunco_obstacle_field::field::HeightGrid;
+        use lunco_terrain_bake::regional::RegisteredRegionalSurface;
+        use std::sync::Arc;
+        let local = Arc::new(HeightGrid::new_flat(17, 8.0));
+        let regional = Arc::new(HeightGrid::new_flat(33, 32.0));
+        let geo = |half: f64, res| {
+            GeoTransform::centred_square(2.0 * half, res, 1_737_400.0, 26.0, 3.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let pair =
+            RegisteredRegionalSurface::new(local, geo(8.0, 17), regional, geo(32.0, 33), 4.0, 0.0)
+                .unwrap();
+        let oracle = SurfaceOracle::registered(Arc::new(pair), Vec::new());
+        let mesh = TileMesh {
+            positions: vec![],
+            morph_targets: vec![],
+            morph_normals: vec![],
+            normals: vec![],
+            edge_masks: vec![],
+            uvs: vec![[0.375, 0.625], [0.0, 1.0]],
+            indices: vec![],
+        };
+        let remapped = local_material_uvs(mesh, &oracle);
+        assert_eq!(remapped.uvs, vec![[0.0, 1.0], [-1.5, 2.5]]);
+    }
 
     #[test]
     fn roundtrip_bytes() {

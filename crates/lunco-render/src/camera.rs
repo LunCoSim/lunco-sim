@@ -154,6 +154,49 @@ pub struct SceneCamera {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct CameraFeedCamera(pub SceneCamera);
 
+/// Consumer of one concrete writing render camera. Authored cameras acquire
+/// demand only when a presentation owner consumes their image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneViewOutput {
+    MainViewport,
+    Observation { id: u64 },
+    Preview { id: u64 },
+    Capture { id: u64 },
+}
+
+/// Presentation lease on the actual render camera. The camera entity's
+/// generation, source entity and output identity form its lease. Projection,
+/// physical target size and layers are read from that same camera.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneViewDemand {
+    pub source: Entity,
+    pub output: SceneViewOutput,
+}
+
+/// Active output's private geometry channel and its ordinary scene mask.
+/// Layer 0 is the live scene, 1..=31 are USD preview sessions, and 64..320
+/// are reserved for these transient output leases. Construct private masks
+/// with `RenderLayers::none().with(layer)`; the const constructor is limited.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct SceneViewLayers {
+    pub layer: usize,
+    pub base: bevy::camera::visibility::RenderLayers,
+}
+
+/// Geometry prepared for exactly one consumed output camera. The renderer
+/// projects this ownership into that camera's native shadow views as well as
+/// its ordinary draw mask.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneViewGeometry {
+    pub camera: Entity,
+}
+
+/// Publish admitted outputs after camera selection and physical target updates.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SceneViewDemandSet {
+    Publish,
+}
+
 /// Marks a concrete camera whose presentation ownership has ended.
 ///
 /// Retirement is a transition state, not a replacement camera contract. The
@@ -171,6 +214,10 @@ fn retire_camera(mut world: DeferredWorld, context: HookContext) {
     if let Some(mut camera) = world.get_mut::<Camera>(context.entity) {
         camera.is_active = false;
     }
+    world
+        .commands()
+        .entity(context.entity)
+        .remove::<(SceneViewDemand, bevy::camera::ShadowLodOrigin)>();
 }
 
 /// Opts an engine-owned camera into live persisted Graphics look settings.

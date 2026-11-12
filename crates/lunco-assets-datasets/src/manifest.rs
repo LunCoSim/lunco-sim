@@ -331,6 +331,22 @@ fn entry_relative_path(entry: &AssetEntry) -> std::io::Result<PathBuf> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn hash_file_into(path: &Path, hasher: &mut sha2::Sha256) -> std::io::Result<()> {
+    use sha2::Digest;
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(());
+        }
+        hasher.update(&buffer[..read]);
+    }
+}
+
 /// Check a non-processed destination against its manifest integrity contract.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn installed_destination_present(entry: &AssetEntry, destination: &Path) -> bool {
@@ -354,10 +370,12 @@ pub fn installed_destination_present(entry: &AssetEntry, destination: &Path) -> 
                 .is_ok_and(|actual| actual.trim().eq_ignore_ascii_case(expected));
         }
         use sha2::{Digest, Sha256};
-        let Ok(bytes) = std::fs::read(destination) else {
+        let mut hasher = Sha256::new();
+        if hash_file_into(destination, &mut hasher).is_err() {
             return false;
-        };
-        let actual: String = Sha256::digest(&bytes)
+        }
+        let actual: String = hasher
+            .finalize()
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
@@ -414,7 +432,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> std::io::Result<PathBuf> {
 }
 
 /// Current processing pipeline identity used by bake completion stamps.
-pub const PROCESS_PIPELINE_VERSION: u32 = 12;
+pub const PROCESS_PIPELINE_VERSION: u32 = 14;
 
 /// Resolve the output path of a manifest process declaration.
 pub fn process_output_path(
@@ -472,19 +490,49 @@ pub fn bake_stamp_path(output_path: &Path, process: &ProcessConfig) -> PathBuf {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Resolve the detached label used by a PDS image.
+pub fn pds_detached_label(source: &Path) -> Result<PathBuf, std::io::Error> {
+    ["LBL", "lbl"]
+        .iter()
+        .map(|ext| source.with_extension(ext))
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "detached PDS image has no sibling label",
+            )
+        })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Content-address the source, process declaration, and pipeline identity.
 pub fn bake_key(source: &Path, config: &ProcessConfig) -> Result<String, std::io::Error> {
     use sha2::{Digest, Sha256};
+    use std::io::Read;
 
     let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(source)?;
-    let mut buffer = vec![0u8; 1 << 20];
-    loop {
-        let read = std::io::Read::read(&mut file, &mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
+    let is_pds = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("img"));
+    let attached_pds_label = if is_pds {
+        let mut header = Vec::new();
+        std::fs::File::open(source)?
+            .take(64 * 1024)
+            .read_to_end(&mut header)?;
+        String::from_utf8_lossy(&header)
+            .trim_start()
+            .starts_with("PDS_VERSION_ID")
+    } else {
+        false
+    };
+    hash_file_into(source, &mut hasher)?;
+    // A detached PDS label defines the raster's geometry, scaling and missing
+    // values. It is part of the source identity just like the image bytes.
+    if is_pds && !attached_pds_label {
+        let label = pds_detached_label(source)?;
+        hasher.update(b"\0PDS3 detached label\0");
+        hash_file_into(&label, &mut hasher)?;
     }
     // TOML is the manifest's canonical serialization format. It is stable for
     // this field-ordered config and avoids pulling JSON into the lightweight
@@ -550,6 +598,48 @@ pub fn processed_output_present(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn streamed_file_integrity_rejects_changed_payload() {
+        use sha2::Digest;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let bytes = vec![42u8; (1 << 20) + 19];
+        lunco_storage::write_file_sync(&source, &bytes).unwrap();
+        let digest = sha2::Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut entry: AssetEntry = toml::from_str(&format!(
+            "name='source'\nurl='https://example.invalid/source.bin'\nsha256='{digest}'\n"
+        ))
+        .unwrap();
+        assert!(installed_destination_present(&entry, &source));
+        entry.sha256 = Some("00".repeat(32));
+        assert!(!installed_destination_present(&entry, &source));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pds_bake_identity_tracks_the_authoritative_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("regional.IMG");
+        let label = dir.path().join("regional.LBL");
+        let config: ProcessConfig =
+            toml::from_str("kind='dem'\noutput='terrain/example'\n").unwrap();
+        lunco_storage::write_file_sync(&source, &[1, 2, 3, 4]).unwrap();
+        assert!(bake_key(&source, &config).is_err());
+        lunco_storage::write_file_sync(&label, b"first label").unwrap();
+        let first = bake_key(&source, &config).unwrap();
+        lunco_storage::write_file_sync(&label, b"changed label").unwrap();
+        assert_ne!(bake_key(&source, &config).unwrap(), first);
+        lunco_storage::write_file_sync(&source, b"PDS_VERSION_ID = PDS3\nEND\n").unwrap();
+        let attached = bake_key(&source, &config).unwrap();
+        lunco_storage::write_file_sync(&label, b"unused label").unwrap();
+        assert_eq!(bake_key(&source, &config).unwrap(), attached);
+    }
 
     #[test]
     fn package_only_inputs_require_bundle_targets_and_cannot_be_recommended() {

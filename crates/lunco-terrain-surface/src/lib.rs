@@ -44,6 +44,7 @@ pub mod band;
 pub mod collider_ring;
 mod collision;
 pub mod derived_layers;
+mod draw_collision;
 pub mod georef;
 mod occlusion;
 pub mod oracle;
@@ -70,6 +71,7 @@ pub use collider_ring::{
     resolve_collider_settings,
 };
 pub use derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps, TerrainDerivedStatus};
+pub use draw_collision::{DrawTerrainQuery, DrawTerrainSweep};
 pub use georef::{DEFAULT_ANCHOR_BODY, FlatSiteSurface, TerrainGeoref};
 /// The base raster [`SurfaceOracle`] composes over.
 ///
@@ -96,13 +98,14 @@ pub use stream_viz::{
 pub use surface_query::report_unreachable_dem_frame;
 pub use surface_query::{
     GridSurfaceQuery, SurfaceFit, SurfaceHit, SurfaceSample, TerrainPoseInPhysicsFrame,
-    TerrainSurfaceSnapshot, fit_footprint, height_in_footprint,
+    TerrainSphereHit, TerrainSphereSweep, TerrainSurfaceSnapshot, fit_footprint,
+    height_in_footprint,
 };
 pub use terrain::{
     BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface,
     DocBackedTerrain, FlattenTerrain, PlaceCrater, PlaceRock, RegenerateTerrainLayers,
-    RemoveTerrainLayer, SpawnDemTerrain, TERRAIN_BUILD_FAULT_KIND, TerrainGenPhase,
-    TerrainGenStatus, resolve_dem_request_parameters,
+    RegionalDemRequest, RemoveTerrainLayer, SpawnDemTerrain, TERRAIN_BUILD_FAULT_KIND,
+    TerrainGenPhase, TerrainGenStatus, resolve_dem_request_parameters,
 };
 pub use terrain_layers::{
     EDITS_LAYER_ID, EditKind, EditsLayer, LayerAttrSource, LayerEntry, LayerId, LayerScatterCx,
@@ -112,3 +115,6 @@ pub use terrain_layers::{
     rock_instance_layer, terrain_layer_params,
 };
 pub use tile_mesh::{TileMesh, bake_tile_mesh};
+
+/// Presentation preparation targets used by camera navigation.
+pub use stream_viz::TerrainCameraTargets;

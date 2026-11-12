@@ -84,12 +84,31 @@ coverage, 0 where the DEM processor must interpolate or the source is absent.
 It describes coverage, not additional measurements. `zero_is_nodata = true`
 explicitly selects an orthophoto-style zero mask. DEM, albedo, map and normalmap
 operations share projection-aware sampling. Source polar stereographic
-(north/south) and equirectangular GeoTIFFs use their standard spherical CRS,
+(north/south), equirectangular and orthographic GeoTIFFs use their standard spherical CRS,
 false origin, scale, tiepoint and area/point registration. Unsupported CRS or
-ellipsoidal metadata is rejected. Plain rasters/PDS products retain their
-explicit extent-based processing contract. Output crops use the existing
-crop-centred equirectangular GeoTIFF contract; a crop crossing a pole is rejected.
+ellipsoidal metadata is rejected. PDS `SIMPLE CYLINDRICAL`, `EQUIRECTANGULAR`, and polar stereographic sources with an
+explicit spherical radius, east-positive longitude, map scale and line/sample
+projection offsets use those pixel-centre coordinates directly. The processor
+reads only the required PDS rows and columns. Other plain rasters and PDS
+products retain their extent-based processing contract. Output crops default to a centred
+equirectangular GeoTIFF; `output_projection = "orthographic"` selects a
+tangent-plane crop from a spherical georeferenced source. The processor reads
+only source TIFF chunks intersecting requested grayscale DEM, coverage, albedo
+or normal-map samples.
 DEM artifacts retain f64 values through processing and float64 storage.
+The PDS decoder applies the label's sample scale and offset; the DEM recipe
+must explicitly convert those decoded values into metres and the intended
+vertical datum with `source_height_scale_m_per_unit` and
+`source_height_offset_m` when required by the product.
+For a source already photometrically normalized to a stated reference geometry,
+`kind = "albedo"` with `albedo_input = "normalized_reflectance"` preserves
+valid linear samples and writes their coverage into PNG alpha. RGB is
+coverage-premultiplied in linear light; consumers divide by filtered alpha and
+use it when compositing. An unobserved pixel is not black terrain.
+This mode does not turn reference-geometry reflectance into intrinsic albedo.
+The bake identity includes a detached PDS label as well as its image, so a label
+change invalidates the processed result. Pinned source checksums and bake keys
+hash files incrementally rather than loading a large source into memory.
 
 ## Dynamic code
 

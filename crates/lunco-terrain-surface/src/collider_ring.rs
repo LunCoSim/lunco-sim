@@ -92,6 +92,39 @@ impl TerrainColliderSettings {
         }
         Ok(())
     }
+
+    /// Preserve the authored contact lattice when the surface domain grows.
+    /// The expanded domain must be a power-of-two multiple of the local one,
+    /// so both its sample spacing and its grid origin stay identical.
+    pub fn for_expanded_domain(
+        self,
+        local_half_extent: f64,
+        domain_half_extent: f64,
+    ) -> Result<Self, &'static str> {
+        self.validate()?;
+        if !local_half_extent.is_finite()
+            || local_half_extent <= 0.0
+            || !domain_half_extent.is_finite()
+            || domain_half_extent < local_half_extent
+        {
+            return Err("invalid local or regional collider extent");
+        }
+        let local_scale = local_half_extent / f64::from(1u32 << self.max_depth);
+        let mut depth = self.max_depth;
+        while domain_half_extent / f64::from(1u32 << depth) > local_scale {
+            if depth == MAX_COLLIDER_DEPTH {
+                return Err("regional terrain exceeds the supported collider depth");
+            }
+            depth += 1;
+        }
+        if domain_half_extent / f64::from(1u32 << depth) != local_scale {
+            return Err("regional terrain is not aligned to the local collider lattice");
+        }
+        Ok(Self {
+            max_depth: depth,
+            ..self
+        })
+    }
 }
 
 impl Default for TerrainColliderSettings {
@@ -192,8 +225,14 @@ pub struct ColliderTiles {
 }
 
 impl ColliderTiles {
+    /// Whether this support node has current source geometry resident.
+    pub(crate) fn support_ready(&self, coord: QuadCoord, source_key: u64) -> bool {
+        self.oracle_key == Some(source_key)
+            && !self.stale.contains(&coord)
+            && self.map.contains_key(&coord)
+    }
     /// Canonical support footprint plus build-ahead, published by physics.
-    /// Presentation consumes these nodes without selecting or delaying physics.
+    /// Diagnostics consume these nodes without selecting or delaying physics.
     pub(crate) fn contact_nodes(&self) -> &[QuadCoord] {
         &self.last_ring_nodes
     }
@@ -265,88 +304,6 @@ pub(crate) fn sample_heights_xz(
         cols.push(col);
     }
     cols
-}
-
-/// A render bake's bounded view of the canonical physical triangles. Finer
-/// camera grids subdivide these planes rather than inventing another surface.
-pub(crate) struct SampledContactSurface {
-    tree: Quadtree,
-    res: usize,
-    tiles: std::collections::HashMap<QuadCoord, (Vec<Vec<f64>>, f64)>,
-}
-
-impl SampledContactSurface {
-    /// Prepare every canonical tile touched by vertex, normal and morph taps.
-    pub(crate) fn prepare(
-        oracle: &SurfaceOracle,
-        region: Square,
-        margin: f64,
-        depth: u8,
-        res: usize,
-    ) -> Self {
-        let half = f64::from(oracle.half_extent());
-        let tree = Quadtree::new(half, depth, 1.0, half);
-        let low = tree.node_containing(
-            depth,
-            [
-                region.center[0] - region.half - margin,
-                region.center[1] - region.half - margin,
-            ],
-        );
-        let high = tree.node_containing(
-            depth,
-            [
-                region.center[0] + region.half + margin,
-                region.center[1] + region.half + margin,
-            ],
-        );
-        let mut tiles = std::collections::HashMap::new();
-        for z in low.z..=high.z {
-            for x in low.x..=high.x {
-                let coord = QuadCoord { depth, x, z };
-                let square = tree.region(coord);
-                let origin = oracle.height_at(square.center[0], square.center[1]);
-                let band = SurfaceBand::physics(square.side() / (res - 1) as f64);
-                tiles.insert(
-                    coord,
-                    (sample_heights_xz(oracle, square, res, origin, band), origin),
-                );
-            }
-        }
-        Self { tree, res, tiles }
-    }
-}
-
-impl HeightSource for SampledContactSurface {
-    fn height_at(&self, x: f64, z: f64) -> f64 {
-        let half = self.tree.root_half_extent;
-        let x = x.clamp(-half, half);
-        let z = z.clamp(-half, half);
-        let coord = self.tree.node_containing(self.tree.max_depth, [x, z]);
-        let square = self.tree.region(coord);
-        let (heights, origin) = self
-            .tiles
-            .get(&coord)
-            .expect("contact bake stays inside its prepared footprint");
-        let step = square.side() / (self.res - 1) as f64;
-        let fx = ((x - square.center[0] + square.half) / step).clamp(0.0, (self.res - 1) as f64);
-        let fz = ((z - square.center[1] + square.half) / step).clamp(0.0, (self.res - 1) as f64);
-        let ix = (fx.floor() as usize).min(self.res - 2);
-        let iz = (fz.floor() as usize).min(self.res - 2);
-        let tx = fx - ix as f64;
-        let tz = fz - iz as f64;
-        // Same anti-diagonal as Parry's heightfield and the shared grid mesh.
-        let height = if tx + tz <= 1.0 {
-            heights[ix][iz]
-                + tx * (heights[ix + 1][iz] - heights[ix][iz])
-                + tz * (heights[ix][iz + 1] - heights[ix][iz])
-        } else {
-            heights[ix + 1][iz + 1]
-                + (1.0 - tx) * (heights[ix][iz + 1] - heights[ix + 1][iz + 1])
-                + (1.0 - tz) * (heights[ix + 1][iz] - heights[ix + 1][iz + 1])
-        };
-        origin + height
-    }
 }
 
 /// Re-bake the resident ring when its shape is retuned.
@@ -1142,7 +1099,7 @@ pub(crate) fn update_collider_ring(
             continue;
         };
         let oracle = &hf.0;
-        let h = oracle.half_extent() as f64;
+        let h = oracle.domain_half_extent() as f64;
         let nodes = 1u32 << ring.depth;
         let side = (2.0 * h) / nodes as f64;
         // Quadtree only for the coord↔region maps (range_factor irrelevant here).
@@ -1486,7 +1443,7 @@ pub fn hold_physics_until_dem_ready(
                 blocker = Some(TerrainReadinessBlocker::TerrainPoseUnavailable { terrain });
                 break 'terrains;
             };
-            let half = hf.0.half_extent() as f64;
+            let half = hf.0.domain_half_extent() as f64;
             let qt = Quadtree::new(half, ring.depth, 1.0, half);
             for assembly in &cache.assemblies {
                 required_nodes.clear();
@@ -2231,7 +2188,7 @@ pub(crate) fn validate_initial_physics_poses(
             &spatial_transforms,
         )
         .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))?;
-        let half = hf.0.half_extent() as f64;
+        let half = hf.0.domain_half_extent() as f64;
         let terrain_from_physics = terrain_rotation.0.inverse();
         let terrain_up = terrain_rotation.0 * DVec3::Y;
         // Initial-state validation must query the same surface product that the
@@ -2856,8 +2813,8 @@ fn on_recover_vessel(
             .iter()
             .find_map(|(terrain_position, terrain_rotation, oracle)| {
                 let local = terrain_rotation.0.inverse() * (pivot - *terrain_position);
-                (local.x.abs() <= oracle.half_extent() as f64
-                    && local.z.abs() <= oracle.half_extent() as f64)
+                (local.x.abs() <= oracle.domain_half_extent() as f64
+                    && local.z.abs() <= oracle.domain_half_extent() as f64)
                     .then(|| terrain_rotation.0 * DVec3::Y)
             })
             .unwrap_or(DVec3::Y)
@@ -2925,7 +2882,7 @@ fn recover_assembly(
         // its local surface (only ever lifting — gravity handles settling down).
         let mut lift = 0.0_f64;
         for (terrain_world, terrain_rotation, oracle) in terrain_surfaces {
-            let half = oracle.half_extent() as f64;
+            let half = oracle.domain_half_extent() as f64;
             let terrain_from_physics = terrain_rotation.0.inverse();
             // Cross from avian's grid-absolute frame into the composed terrain
             // frame before sampling. A terrain can be site-mounted and rotated;
@@ -2997,6 +2954,75 @@ mod tests {
         let ring = TerrainColliderRing::from_settings(100.0, settings);
         assert_eq!(ring.depth, settings.max_depth);
         assert_eq!(ring.res, settings.tile_resolution);
+    }
+
+    #[test]
+    fn expanded_domain_preserves_the_authored_contact_lattice() {
+        let local = TerrainColliderSettings {
+            max_depth: 9,
+            tile_resolution: 65,
+        };
+        let expanded = local.for_expanded_domain(500.0, 8_000.0).unwrap();
+        assert_eq!(expanded.max_depth, 13);
+        let old = TerrainColliderRing::from_settings(500.0, local);
+        let new = TerrainColliderRing::from_settings(8_000.0, expanded);
+        let old_step = 1_000.0 / f64::from(1u32 << old.depth) / (old.res - 1) as f64;
+        let new_step = 16_000.0 / f64::from(1u32 << new.depth) / (new.res - 1) as f64;
+        assert_eq!(new_step.to_bits(), old_step.to_bits());
+        assert_eq!(
+            (8_000.0 - 500.0) / old_step,
+            ((8_000.0 - 500.0) / old_step).round()
+        );
+        assert_eq!(local.for_expanded_domain(500.0, 500.0).unwrap(), local);
+        assert!(local.for_expanded_domain(500.0, 10_000.0).is_err());
+        assert!(local.for_expanded_domain(0.0, 10_000.0).is_err());
+        assert!(local.for_expanded_domain(500.0, 1e12).is_err());
+    }
+
+    #[test]
+    fn registered_region_keeps_local_collider_tile_bit_identical() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        use lunco_terrain_bake::regional::RegisteredRegionalSurface;
+        use std::sync::Arc;
+
+        let mut local = HeightGrid::new_flat(17, 8.0);
+        for (index, height) in local.heights.iter_mut().enumerate() {
+            *height = -1900.0 + (index as f64 * 0.03).sin() * 3.0;
+        }
+        let local = Arc::new(local);
+        let mut region = HeightGrid::new_flat(33, 32.0);
+        region.heights.fill(-1904.0);
+        let geo = |half: f64, res| {
+            GeoTransform::centred_square(half * 2.0, res, 1_737_400.0, 26.0, 3.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let pair = RegisteredRegionalSurface::new(
+            local.clone(),
+            geo(8.0, 17),
+            Arc::new(region),
+            geo(32.0, 33),
+            3.0,
+            0.0,
+        )
+        .unwrap();
+        let before = SurfaceOracle::bare(local);
+        let after = SurfaceOracle::registered(Arc::new(pair), Vec::new());
+        let settings = TerrainColliderSettings {
+            max_depth: 2,
+            tile_resolution: 9,
+        };
+        let expanded = settings.for_expanded_domain(8.0, 32.0).unwrap();
+        let old_tree = Quadtree::new(8.0, settings.max_depth, 1.0, 8.0);
+        let new_tree = Quadtree::new(32.0, expanded.max_depth, 1.0, 32.0);
+        let point = [2.1, 3.2];
+        let old_region = old_tree.region(old_tree.node_containing(settings.max_depth, point));
+        let new_region = new_tree.region(new_tree.node_containing(expanded.max_depth, point));
+        assert_eq!(old_region, new_region);
+        let origin = before.height_at(old_region.center[0], old_region.center[1]);
+        let band = SurfaceBand::physics(old_region.side() / (settings.tile_resolution - 1) as f64);
+        let old = sample_heights_xz(&before, old_region, settings.tile_resolution, origin, band);
+        let new = sample_heights_xz(&after, new_region, expanded.tile_resolution, origin, band);
+        assert_eq!(old, new);
     }
 
     #[test]

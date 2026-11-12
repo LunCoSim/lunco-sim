@@ -17,11 +17,11 @@
 //! folds every modifier's parameter hash for exactly that — cache keys downstream
 //! mix it with their own inputs.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use bevy::prelude::Component;
 use lunco_obstacle_field::field::HeightGrid;
-use lunco_terrain_core::{HeightModifier, HeightSource};
+use lunco_terrain_core::{HeightEnclosure, HeightModifier, HeightPlane, HeightSource};
 
 /// The composed surface oracle retained on a terrain entity.
 ///
@@ -76,9 +76,12 @@ pub fn curvature_contribution(radius_m: f64, datum_m: f64) -> HeightContribution
 /// The composed surface: raster `base` + ordered analytic `modifiers`. Cheap to
 /// clone-share (`Arc` it once per terrain); `Send + Sync` so off-thread bakes
 /// sample it directly.
+#[derive(Clone)]
 pub struct SurfaceOracle {
     /// The raster base every modifier folds over (cropped DEM working grid).
     base: Arc<HeightGrid>,
+    /// Optional registered regional continuation over the unchanged base grid.
+    regional: Option<Arc<lunco_terrain_bake::regional::RegisteredRegionalSurface>>,
     /// Analytic modifiers in fold order (USD prim order — index 0 first).
     modifiers: Vec<Arc<dyn HeightModifier>>,
     /// Folded [`HeightContribution::content_key`]s (0 with no modifiers).
@@ -87,37 +90,239 @@ pub struct SurfaceOracle {
     /// compose time so per-tile cache keys never re-fold the multi-million-point
     /// grid.
     base_key: u64,
+    /// Identity of the local grid, independent of any regional continuation.
+    local_base_key: u64,
+    /// Geometry-wide certificate prepared once by asynchronous presentation work.
+    /// Clones share immutable geometry; filtered variants own a fresh certificate.
+    global_bounds: Arc<OnceLock<Result<[f64; 2], String>>>,
+}
+
+fn checked_height_bounds(bounds: [f64; 2]) -> Result<[f64; 2], String> {
+    if bounds[0].is_finite() && bounds[1].is_finite() && bounds[0] <= bounds[1] {
+        Ok(bounds)
+    } else {
+        Err("invalid terrain height enclosure".into())
+    }
+}
+
+/// Check the complete raw grid before an enclosure reader indexes its posts.
+/// The checked product also bounds the preparation scan and regional budget.
+fn validated_grid_cell_count(grid: &HeightGrid) -> Result<usize, String> {
+    if grid.res < 2
+        || grid.res.checked_mul(grid.res) != Some(grid.heights.len())
+        || !grid.half_extent.is_finite()
+        || grid.half_extent <= 0.0
+        || !grid.spacing().is_finite()
+        || grid.spacing() <= 0.0
+        || grid.heights.iter().any(|height| !height.is_finite())
+    {
+        return Err("invalid terrain raster for global height enclosure".into());
+    }
+    (grid.res - 1)
+        .checked_mul(grid.res - 1)
+        .ok_or_else(|| "global terrain height enclosure cell count overflow".into())
 }
 
 impl SurfaceOracle {
-    /// Conservative composed enclosure for one raster cell's subrectangle.
+    pub(crate) fn has_regional_surface(&self) -> bool {
+        self.regional.is_some()
+    }
+    /// Ordered modifier composition shared by scalar and affine query products.
+    fn fold_modifiers<T>(
+        &self,
+        mut input: T,
+        mut apply: impl FnMut(&dyn HeightModifier, T) -> Result<T, String>,
+    ) -> Result<T, String> {
+        for modifier in &self.modifiers {
+            input = apply(modifier.as_ref(), input)?;
+        }
+        Ok(input)
+    }
+
+    /// Conservative scalar enclosure; scalar consumers do not request analytic
+    /// gradients or lose the tight independent height interval.
     pub(crate) fn height_bounds_in_cell(
         &self,
         cell: [usize; 2],
         rect: [f64; 4],
+        remaining_cells: &mut usize,
     ) -> Result<[f64; 2], String> {
-        let mut bounds = self.base.cell_height_bounds(cell, rect);
-        for modifier in &self.modifiers {
-            bounds = modifier
-                .height_bounds(rect, bounds)
-                .ok_or("terrain modifier has no conservative height bounds")?;
-        }
-        if !bounds[0].is_finite() || !bounds[1].is_finite() || bounds[0] > bounds[1] {
-            return Err("invalid terrain height enclosure".into());
-        }
-        Ok(bounds)
+        let initial = checked_height_bounds(match &self.regional {
+            Some(regional) => regional
+                .height_bounds(rect, remaining_cells)
+                .map_err(str::to_owned)?,
+            None => self.base.cell_height_bounds(cell, rect),
+        })?;
+        self.fold_modifiers(initial, |modifier, input| {
+            checked_height_bounds(
+                modifier
+                    .height_bounds(rect, input)
+                    .ok_or("terrain modifier has no conservative height bounds")?,
+            )
+        })
     }
-    pub(crate) fn base_resolution(&self) -> usize {
-        self.base.res
+
+    /// Conservative enclosure of the entire admitted composed surface, including
+    /// raster interpolation, regional continuation and every ordered modifier.
+    /// The first call scans the bounded source rasters. Invoke it in asynchronous
+    /// preparation, never from a render, navigation or physics hot path; identical
+    /// immutable clones subsequently reuse the result, including a failed proof.
+    pub fn global_height_bounds(&self) -> Result<[f64; 2], String> {
+        self.global_bounds
+            .get_or_init(|| self.compute_global_height_bounds())
+            .clone()
+    }
+
+    /// Read an already prepared optional clipping certificate without starting
+    /// a raster scan. Synchronous presentation consumers keep uncertain nodes
+    /// eligible when no certificate has been prepared by a worker.
+    pub fn cached_global_height_bounds(&self) -> Option<Result<[f64; 2], String>> {
+        self.global_bounds.get().cloned()
+    }
+
+    fn compute_global_height_bounds(&self) -> Result<[f64; 2], String> {
+        let local_cells = validated_grid_cell_count(&self.base)?;
+        let half = f64::from(self.domain_half_extent());
+        let rect = [-half, -half, half, half];
+        let base = match &self.regional {
+            Some(regional) => {
+                let regional_cells = validated_grid_cell_count(regional.regional_grid())?;
+                // The registered owner examines local, regional and regional-edge
+                // grids at most once each for this full-domain rectangle.
+                let mut remaining = regional_cells
+                    .checked_mul(2)
+                    .and_then(|regional| local_cells.checked_add(regional))
+                    .ok_or("global regional height enclosure cell count overflow")?;
+                regional
+                    .height_bounds(rect, &mut remaining)
+                    .map_err(str::to_owned)?
+            }
+            None => {
+                let spacing = f64::from(self.base.spacing());
+                let last = self.base.res - 2;
+                let cut = |index: usize| (-half + index as f64 * spacing).clamp(-half, half);
+                let mut bounds = [f64::INFINITY, f64::NEG_INFINITY];
+                for z in 0..=last {
+                    for x in 0..=last {
+                        let cell_rect = [
+                            cut(x),
+                            cut(z),
+                            if x == last { half } else { cut(x + 1) },
+                            if z == last { half } else { cut(z + 1) },
+                        ];
+                        let cell =
+                            checked_height_bounds(self.base.cell_height_bounds([x, z], cell_rect))?;
+                        bounds[0] = bounds[0].min(cell[0]);
+                        bounds[1] = bounds[1].max(cell[1]);
+                    }
+                }
+                bounds
+            }
+        };
+        self.fold_modifiers(checked_height_bounds(base)?, |modifier, input| {
+            checked_height_bounds(
+                modifier
+                    .height_bounds(rect, input)
+                    .ok_or("terrain modifier has no conservative height bounds")?,
+            )
+        })
+    }
+
+    /// The raster tangent is a fit only. Its restricted Bézier residual and
+    /// every subsequent modifier certificate prove the final composed model.
+    fn base_height_plane(&self, rect: [f64; 4]) -> Result<HeightPlane, String> {
+        let origin = [
+            rect[0] + (rect[2] - rect[0]) * 0.5,
+            rect[1] + (rect[3] - rect[1]) * 0.5,
+        ];
+        let grid = self
+            .regional
+            .as_ref()
+            .map_or(self.base.as_ref(), |regional| {
+                let half = f64::from(regional.local_grid().half_extent);
+                if origin[0].abs() <= half && origin[1].abs() <= half {
+                    regional.local_grid().as_ref()
+                } else {
+                    regional.regional_grid().as_ref()
+                }
+            });
+        let (_, gradient, _) = grid.height_and_derivatives_at(origin[0], origin[1]);
+        let height = match &self.regional {
+            Some(regional) => regional
+                .height_at(origin[0], origin[1])
+                .map_err(str::to_owned)?,
+            None => self.base.height_at(origin[0], origin[1]),
+        };
+        let plane = HeightPlane {
+            origin,
+            height,
+            gradient,
+        };
+        if plane.is_finite() {
+            Ok(plane)
+        } else {
+            Err("invalid terrain affine reference".into())
+        }
+    }
+
+    /// One scalar-plus-affine model for the full immutable composed source.
+    /// Analytic additive modifiers may update the slope as well as the residual.
+    pub(crate) fn height_enclosure_in_cell(
+        &self,
+        cell: [usize; 2],
+        rect: [f64; 4],
+        remaining_cells: &mut usize,
+    ) -> Result<HeightEnclosure, String> {
+        if rect.into_iter().any(|v| !v.is_finite()) || rect[0] > rect[2] || rect[1] > rect[3] {
+            return Err("invalid terrain affine enclosure input".into());
+        }
+        let plane = self.base_height_plane(rect)?;
+        let checked = |model: HeightEnclosure| {
+            if model.is_valid(rect) {
+                Ok(model)
+            } else {
+                Err("invalid composed terrain affine enclosure".to_owned())
+            }
+        };
+        let initial = checked(match &self.regional {
+            Some(regional) => regional
+                .height_enclosure(rect, plane, remaining_cells)
+                .map_err(str::to_owned)?,
+            None => self.base.cell_height_enclosure(cell, rect, plane),
+        })?;
+        self.fold_modifiers(initial, |modifier, input| {
+            checked(
+                modifier
+                    .height_enclosure(rect, input)
+                    .ok_or("terrain modifier has no conservative affine enclosure")?,
+            )
+        })
+    }
+    /// Number of postings across the complete sampled terrain domain.
+    pub fn domain_resolution(&self) -> usize {
+        self.regional
+            .as_ref()
+            .map_or(self.base.res, |regional| regional.regional_grid().res)
+    }
+    /// Spacing used for conservative queries over the complete terrain domain.
+    pub fn occlusion_spacing(&self) -> f64 {
+        self.regional
+            .as_ref()
+            .map_or(f64::from(self.base.spacing()), |regional| {
+                f64::from(regional.regional_grid().spacing())
+            })
     }
     /// An oracle that is just the raster base — no analytic layers.
     pub fn bare(base: Arc<HeightGrid>) -> Self {
         let base_key = lunco_terrain_bake::grid_content_key(&base);
         Self {
             base,
+            regional: None,
             modifiers: Vec::new(),
             content_key: 0,
             base_key,
+            local_base_key: base_key,
+            global_bounds: Arc::new(OnceLock::new()),
         }
     }
 
@@ -158,10 +363,28 @@ impl SurfaceOracle {
         }
         Self {
             base,
+            regional: None,
             modifiers,
             content_key,
             base_key,
+            local_base_key: base_key,
+            global_bounds: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Compose modifiers over an admitted registered local/regional surface.
+    pub fn registered(
+        regional: Arc<lunco_terrain_bake::regional::RegisteredRegionalSurface>,
+        contributions: Vec<HeightContribution>,
+    ) -> Self {
+        let mut surface = Self::new_with_base_key(
+            regional.local_grid().clone(),
+            contributions,
+            regional.content_key(),
+        );
+        surface.local_base_key = regional.local_content_key();
+        surface.regional = Some(regional);
+        surface
     }
 
     /// The raster base grid (extents, spacing, raw ground reads).
@@ -172,6 +395,30 @@ impl SurfaceOracle {
     /// Half side length (metres) of the terrain footprint.
     pub fn half_extent(&self) -> f32 {
         self.base.half_extent
+    }
+
+    /// Half extent of the complete admitted surface, including regional data.
+    pub fn domain_half_extent(&self) -> f32 {
+        self.regional
+            .as_ref()
+            .map_or(self.base.half_extent, |regional| {
+                regional.regional_grid().half_extent
+            })
+    }
+
+    /// Rendering-boundary width for fading maps outside the local crop.
+    pub fn regional_map_blend_m(&self) -> f32 {
+        self.regional
+            .as_ref()
+            .map_or(0.0, |regional| regional.blend_width_m() as f32)
+    }
+
+    /// Convert local-crop UV offsets to regional-crop UV offsets at the GPU boundary.
+    pub fn regional_uv_scale(&self) -> f32 {
+        self.regional.as_ref().map_or(0.0, |regional| {
+            (f64::from(self.base.half_extent) / f64::from(regional.regional_grid().half_extent))
+                as f32
+        })
     }
 
     /// Metres between adjacent base-grid samples (the raster resolution floor —
@@ -193,6 +440,14 @@ impl SurfaceOracle {
     pub fn surface_key(&self) -> u64 {
         let mut h = lunco_precompute::Fnv1a::new();
         h.write_u64(self.base_key);
+        h.write_u64(self.content_key);
+        h.finish()
+    }
+
+    /// Identity of samples restricted to the unchanged local footprint.
+    pub fn local_surface_key(&self) -> u64 {
+        let mut h = lunco_precompute::Fnv1a::new();
+        h.write_u64(self.local_base_key);
         h.write_u64(self.content_key);
         h.finish()
     }
@@ -219,9 +474,12 @@ impl SurfaceOracle {
             .collect();
         SurfaceOracle {
             base: self.base.clone(),
+            regional: self.regional.clone(),
             modifiers,
             content_key: self.content_key,
             base_key: self.base_key,
+            local_base_key: self.local_base_key,
+            global_bounds: Arc::new(OnceLock::new()),
         }
     }
 
@@ -254,9 +512,12 @@ impl SurfaceOracle {
             .collect();
         SurfaceOracle {
             base: self.base.clone(),
+            regional: self.regional.clone(),
             modifiers,
             content_key: self.content_key,
             base_key: self.base_key,
+            local_base_key: self.local_base_key,
+            global_bounds: Arc::new(OnceLock::new()),
         }
     }
 
@@ -292,7 +553,20 @@ impl SurfaceOracle {
 
 impl HeightSource for SurfaceOracle {
     fn height_at(&self, x: f64, z: f64) -> f64 {
-        let mut h = HeightSource::height_at(self.base.as_ref(), x, z);
+        let mut h = match &self.regional {
+            Some(regional) => match regional.height_at(x, z) {
+                Ok(height) => height,
+                Err(error) => {
+                    if !NON_FINITE_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        bevy::log::error!(
+                            "regional terrain sample rejected at ({x}, {z}): {error}"
+                        );
+                    }
+                    return f64::NAN;
+                }
+            },
+            None => HeightSource::height_at(self.base.as_ref(), x, z),
+        };
         for m in &self.modifiers {
             h = m.apply(x, z, h);
         }
@@ -398,9 +672,9 @@ pub(crate) fn raycast_surface_distance(
     {
         return Err("invalid terrain ray".into());
     }
-    let half = oracle.half_extent() as f64;
-    let spacing = f64::from(oracle.spacing());
-    let resolution = oracle.base_resolution();
+    let half = oracle.domain_half_extent() as f64;
+    let spacing = oracle.occlusion_spacing();
+    let resolution = oracle.domain_resolution();
     if resolution < 2 || !spacing.is_finite() || spacing <= 0.0 {
         return Err("terrain ray has invalid raster geometry".into());
     }
@@ -507,6 +781,7 @@ pub(crate) fn raycast_surface_distance(
     };
     let mut cells = 0usize;
     let mut subdivisions = 0usize;
+    let mut remaining_enclosures = MAX_SURFACE_RAY_SUBDIVISIONS;
 
     while t <= max_t {
         cells += 1;
@@ -535,7 +810,8 @@ pub(crate) fn raycast_surface_distance(
                     p0.x.max(p1.x),
                     p0.z.max(p1.z),
                 ];
-                let bounds = oracle.height_bounds_in_cell([ix, iz], rect)?;
+                let bounds =
+                    oracle.height_bounds_in_cell([ix, iz], rect, &mut remaining_enclosures)?;
                 let ray_low = p0.y.min(p1.y);
                 let ray_high = p0.y.max(p1.y);
                 let terrain_low = bounds[0] - margin;
@@ -612,6 +888,310 @@ mod tests {
     use super::*;
     use bevy::math::DVec3;
     use lunco_terrain_core::{Crater, Craters};
+
+    #[test]
+    fn global_height_bounds_enclose_bicubic_overshoot_and_ordered_modifiers() {
+        #[derive(Clone)]
+        struct Affine {
+            scale: f64,
+            offset: f64,
+        }
+        impl HeightModifier for Affine {
+            fn apply(&self, _: f64, _: f64, height: f64) -> f64 {
+                height * self.scale + self.offset
+            }
+            fn height_bounds(&self, _: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+                let ends = input.map(|height| self.apply(0.0, 0.0, height));
+                Some([ends[0].min(ends[1]), ends[0].max(ends[1])])
+            }
+        }
+        let mut grid = HeightGrid::new_flat(5, 2.0);
+        for row in grid.heights.chunks_exact_mut(5) {
+            row.copy_from_slice(&[0.0, 1.0, 1.0, 0.0, 0.0]);
+        }
+        let base = Arc::new(grid);
+        let bare = SurfaceOracle::bare(base.clone());
+        let bounds = bare.global_height_bounds().unwrap();
+        assert!(
+            bounds[1] > 1.1,
+            "a raw posting maximum misses bicubic overshoot: {bounds:?}"
+        );
+        let oracle = SurfaceOracle::new(
+            base.clone(),
+            vec![
+                HeightContribution {
+                    modifier: Arc::new(Affine {
+                        scale: -2.0,
+                        offset: 0.0,
+                    }),
+                    content_key: 1,
+                },
+                HeightContribution {
+                    modifier: Arc::new(Affine {
+                        scale: 1.0,
+                        offset: 3.0,
+                    }),
+                    content_key: 2,
+                },
+            ],
+        );
+        let composed = oracle.global_height_bounds().unwrap();
+        for z in 0..=64 {
+            for x in 0..=64 {
+                let x = -2.0 + x as f64 / 16.0;
+                let z = -2.0 + z as f64 / 16.0;
+                let raw = bare.height_at(x, z);
+                let height = oracle.height_at(x, z);
+                assert!(bounds[0] <= raw && raw <= bounds[1]);
+                assert!(
+                    composed[0] <= height && height <= composed[1],
+                    "({x},{z}) {height} outside {composed:?}"
+                );
+            }
+        }
+        assert!((composed[0] - (3.0 - 2.0 * bounds[1])).abs() < 1e-12);
+        assert!((composed[1] - (3.0 - 2.0 * bounds[0])).abs() < 1e-12);
+        let reversed = SurfaceOracle::new(
+            base,
+            vec![
+                HeightContribution {
+                    modifier: Arc::new(Affine {
+                        scale: 1.0,
+                        offset: 3.0,
+                    }),
+                    content_key: 2,
+                },
+                HeightContribution {
+                    modifier: Arc::new(Affine {
+                        scale: -2.0,
+                        offset: 0.0,
+                    }),
+                    content_key: 1,
+                },
+            ],
+        );
+        assert_ne!(composed, reversed.global_height_bounds().unwrap());
+    }
+
+    #[test]
+    fn global_height_bounds_cache_shares_clones_and_resets_filtered_geometry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counted {
+            height: f64,
+            calls: Arc<AtomicUsize>,
+        }
+        impl HeightModifier for Counted {
+            fn apply(&self, _: f64, _: f64, height: f64) -> f64 {
+                height + self.height
+            }
+            fn height_bounds(&self, _: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                Some(input.map(|height| height + self.height))
+            }
+            fn with_min_wavelength(&self, _: f64) -> Option<Arc<dyn HeightModifier>> {
+                Some(Arc::new(Self {
+                    height: 2.0,
+                    calls: self.calls.clone(),
+                }))
+            }
+            fn for_region(
+                &self,
+                _: [f64; 2],
+                _: [f64; 2],
+                wavelength: f64,
+            ) -> Option<Arc<dyn HeightModifier>> {
+                self.with_min_wavelength(wavelength)
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let source = SurfaceOracle::new(
+            flat(5, 2.0),
+            vec![HeightContribution {
+                modifier: Arc::new(Counted {
+                    height: 1.0,
+                    calls: calls.clone(),
+                }),
+                content_key: 1,
+            }],
+        );
+        assert!(source.cached_global_height_bounds().is_none());
+        let bounds = source.global_height_bounds().unwrap();
+        let clone = source.clone();
+        assert!(Arc::ptr_eq(&source.global_bounds, &clone.global_bounds));
+        assert_eq!(clone.cached_global_height_bounds(), Some(Ok(bounds)));
+        assert_eq!(clone.global_height_bounds().unwrap(), bounds);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        for filtered in [
+            source.detail_limited(4.0),
+            source.detail_limited_region(4.0, [-1.0; 2], [1.0; 2]),
+        ] {
+            assert!(!Arc::ptr_eq(&source.global_bounds, &filtered.global_bounds));
+            assert!(filtered.cached_global_height_bounds().is_none());
+            let filtered_bounds = filtered.global_height_bounds().unwrap();
+            assert!(
+                filtered_bounds[0] > bounds[1],
+                "filtered geometry must not reuse the full-band proof"
+            );
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn global_height_bounds_cover_registered_transition_and_full_modifier_stack() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        let make_grid = |res: usize, half: f32, offset: f64, slope: f64| {
+            let mut grid = HeightGrid::new_flat(res, half);
+            let spacing = f64::from(grid.spacing());
+            for z in 0..res {
+                for x in 0..res {
+                    grid.heights[z * res + x] =
+                        offset + slope * (-f64::from(half) + x as f64 * spacing);
+                }
+            }
+            Arc::new(grid)
+        };
+        let geo = |half: f64, res: usize| {
+            GeoTransform::centred_square(half * 2.0, res, 1_737_400.0, -84.0, 29.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let regional = lunco_terrain_bake::regional::RegisteredRegionalSurface::new(
+            make_grid(5, 2.0, 5.0, 0.5),
+            geo(2.0, 5),
+            make_grid(9, 8.0, -2.0, 0.1),
+            geo(8.0, 9),
+            3.0,
+            7.0,
+        )
+        .unwrap();
+        let source = SurfaceOracle::registered(
+            Arc::new(regional),
+            vec![
+                crater_contribution(),
+                curvature_contribution(1_737_400.0, 5.0),
+            ],
+        );
+        let bounds = source.global_height_bounds().unwrap();
+        for z in 0..=128 {
+            for x in 0..=128 {
+                let x = -8.0 + x as f64 / 8.0;
+                let z = -8.0 + z as f64 / 8.0;
+                let height = source.height_at(x, z);
+                assert!(
+                    bounds[0] <= height && height <= bounds[1],
+                    "regional ({x},{z}) {height} outside {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_height_bounds_reject_malformed_rasters_and_cache_missing_proofs() {
+        for grid in [
+            HeightGrid {
+                res: 1,
+                half_extent: 1.0,
+                heights: vec![0.0],
+            },
+            HeightGrid {
+                res: 3,
+                half_extent: 1.0,
+                heights: vec![0.0; 8],
+            },
+            HeightGrid {
+                res: usize::MAX,
+                half_extent: 1.0,
+                heights: vec![],
+            },
+            HeightGrid {
+                res: 2,
+                half_extent: f32::NAN,
+                heights: vec![0.0; 4],
+            },
+            HeightGrid {
+                res: 2,
+                half_extent: 1.0,
+                heights: vec![f64::NAN; 4],
+            },
+        ] {
+            let source = SurfaceOracle::new_with_base_key(Arc::new(grid), vec![], 1);
+            assert!(
+                source
+                    .global_height_bounds()
+                    .unwrap_err()
+                    .contains("invalid terrain raster")
+            );
+        }
+        struct Missing;
+        impl HeightModifier for Missing {
+            fn apply(&self, _: f64, _: f64, height: f64) -> f64 {
+                height
+            }
+        }
+        let source = SurfaceOracle::new(
+            flat(3, 1.0),
+            vec![HeightContribution {
+                modifier: Arc::new(Missing),
+                content_key: 1,
+            }],
+        );
+        let error = source.global_height_bounds().unwrap_err();
+        assert!(error.contains("no conservative height bounds"));
+        assert_eq!(source.clone().global_height_bounds().unwrap_err(), error);
+        assert!(source.global_bounds.get().unwrap().is_err());
+        struct Invalid([f64; 2]);
+        impl HeightModifier for Invalid {
+            fn apply(&self, _: f64, _: f64, height: f64) -> f64 {
+                height
+            }
+            fn height_bounds(&self, _: [f64; 4], _: [f64; 2]) -> Option<[f64; 2]> {
+                Some(self.0)
+            }
+        }
+        for bounds in [[2.0, 1.0], [0.0, f64::INFINITY]] {
+            let source = SurfaceOracle::new(
+                flat(3, 1.0),
+                vec![HeightContribution {
+                    modifier: Arc::new(Invalid(bounds)),
+                    content_key: 2,
+                }],
+            );
+            assert!(
+                source
+                    .global_height_bounds()
+                    .unwrap_err()
+                    .contains("invalid terrain height enclosure")
+            );
+        }
+    }
+
+    #[test]
+    fn composed_affine_owner_rejects_inconsistent_modifier_certificates() {
+        struct Inconsistent;
+        impl HeightModifier for Inconsistent {
+            fn apply(&self, _: f64, _: f64, height: f64) -> f64 {
+                height
+            }
+            fn height_enclosure(&self, _: [f64; 4], _: HeightEnclosure) -> Option<HeightEnclosure> {
+                Some(HeightEnclosure {
+                    height: [1.0, 2.0],
+                    plane: HeightPlane::horizontal(0.0),
+                    residual: [0.0; 2],
+                })
+            }
+        }
+        let oracle = SurfaceOracle::new(
+            Arc::new(HeightGrid::new_flat(5, 2.0)),
+            vec![HeightContribution {
+                modifier: Arc::new(Inconsistent),
+                content_key: 1,
+            }],
+        );
+        let mut budget = 8192;
+        let error = oracle
+            .height_enclosure_in_cell([2, 2], [0.1, 0.1, 0.4, 0.4], &mut budget)
+            .unwrap_err();
+        assert!(error.contains("invalid composed terrain affine enclosure"));
+    }
 
     fn flat(res: usize, half: f32) -> Arc<HeightGrid> {
         Arc::new(HeightGrid::new_flat(res, half))

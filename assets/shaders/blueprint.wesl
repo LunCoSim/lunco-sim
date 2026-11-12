@@ -7,7 +7,7 @@ import bevy_pbr::render::{
 @if((!PREPASS_PIPELINE))
 import super::pbr_lit::lit_n_occluded_sun_response;
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{terrain_continuation_gradients, terrain_continuation_weight};
+import super::terrain_surface::{terrain_continuation_gradients, terrain_continuation_weight, terrain_surface_occlusion};
 import bevy_pbr::render::{pbr_functions, mesh_view_bindings::view};
 @if((PREPASS_PIPELINE))
 import bevy_pbr::prepass::io as prepass_io;
@@ -152,6 +152,8 @@ fn vertex(vertex: GlobeVertex) -> prepass_io::VertexOutput {
 //!@default site_weight_rough 0.0
 //!@engine  site_weight_ao
 //!@default site_weight_ao 0.0
+//!@engine  site_authored_surface_on
+//!@default site_authored_surface_on 0.0
 //!@ui      major_grid_spacing 0.1 5000 "Major grid spacing (m)"
 //!@default major_grid_spacing 1.0
 //!@ui      minor_grid_spacing 0.1 5000 "Minor grid spacing (m)"
@@ -193,6 +195,7 @@ struct Material {
     site_weight_albedo: f32,
     site_weight_rough: f32,
     site_weight_ao: f32,
+    site_authored_surface_on: f32,
     site_base_color: vec4<f32>,
     site_photometry: vec4<f32>,
     sun_dir_world: vec3<f32>,
@@ -420,7 +423,7 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>, surface_n
         );
         ao = mix(
             ao,
-            site_surface.g,
+            terrain_surface_occlusion(site_surface, 1.0, mat.site_authored_surface_on),
             clamp(mat.site_weight_ao, 0.0, 1.0) * site_weight,
         );
     }

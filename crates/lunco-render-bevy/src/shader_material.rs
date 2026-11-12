@@ -166,6 +166,10 @@ pub struct ShaderMaterial {
     #[texture(23)]
     #[sampler(24)]
     pub displacement_map: Option<Handle<Image>>,
+    /// Regional reflectance with coverage-premultiplied RGB and alpha mask.
+    #[texture(25)]
+    #[sampler(26)]
+    pub regional_albedo_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -233,6 +237,7 @@ impl Default for ShaderMaterial {
             detail_normal_map: None,
             detail_surface_map: None,
             displacement_map: None,
+            regional_albedo_map: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),

@@ -41,7 +41,7 @@ fn terrain_morph_weight(
     }
     // A fine edge meets its coarser neighbour on their shared parent lattice.
     let edge = edge_mask * stitch_edges;
-    return max(morph, max(max(edge.x, edge.y), max(edge.z, edge.w)));
+    return clamp(max(morph, max(max(edge.x, edge.y), max(edge.z, edge.w))), 0.0, 1.0);
 }
 
 /// C1 material fade across a rectangular crop. Multiplying the axial weights
@@ -52,6 +52,21 @@ fn terrain_continuation_weight(uv: vec2<f32>, half_extent: f32, widths: vec4<f32
     let width = vec2(select(widths.y, widths.x, uv.x < 0.0),
                      select(widths.z, widths.w, uv.y < 0.0));
     let weight = 1.0 - smoothstep(vec2(0.0), vec2(1.0), outside / max(width, vec2(1e-6)));
+    return weight.x * weight.y;
+}
+
+/// Fade a local raster inside its crop when a regional surface continues it.
+/// The center retains local detail and each edge reaches the regional mesh.
+fn terrain_local_overlap_weight(
+    uv: vec2<f32>, half_extent: f32, widths: vec4<f32>, regional_on: f32,
+) -> f32 {
+    if (regional_on <= 0.0) {
+        return terrain_continuation_weight(uv, half_extent, widths);
+    }
+    let edge_m = (vec2(0.5) - abs(uv - vec2(0.5))) * (2.0 * half_extent);
+    let widths_m = vec2(select(widths.y, widths.x, uv.x < 0.5),
+                        select(widths.z, widths.w, uv.y < 0.5));
+    let weight = smoothstep(vec2(0.0), max(min(widths_m, vec2(0.5 * half_extent)), vec2(1e-6)), edge_m);
     return weight.x * weight.y;
 }
 

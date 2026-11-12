@@ -33,17 +33,33 @@ presentation decisions, separate from physical or Modelica integration. The
 existing orbital rig, mounted cameras, and subject-binding transactions remain
 the owners of their respective camera modes; this seam tunes the spring arm.
 
-The native solver checks the focus offset and boom against scene collision,
-excluding the followed articulated assembly. It also checks the analytic DEM
-in the active physics frame, because physical terrain colliders are streamed
-only around contact bodies. The DEM boom check reserves the avatar collision
-radius along the terrain's local up axis, even for shallow approaches. The nearest physics or
-terrain hit retracts the boom before pose publication; recovery eases outward.
-A policy cannot disable that safety. The terrain query is a sampled ray, not a
-camera-frustum sweep; narrow ridges and near-plane clipping still require
-separate visual acceptance.
+The solver sweeps the lens-centred camera sphere along the focus offset, boom
+and actual damped movement. Native prop casts exclude the followed articulated
+assembly and native DEM realizations. The terrain owner sweeps the full composed
+source independently of physical support residency. The camera envelope encloses
+the near-plane corners; source overlap and unavailable work remain explicit.
+Movement casts the physical sphere and applies skin as a directional pullback
+from an approaching contact, matching Avian's movement mechanism. The margin is
+not an enlarged colliding shell, so clear tangent travel remains possible.
+The nearest source or prop contact retracts the boom before pose publication;
+recovery eases outward. The retained draw-geometry query then certifies presentation.
+Coarse or preparing geometry holds the pose and requests stable refinement,
+without introducing an upward offset. A policy cannot disable this safety.
+Preparation covers the continuous requested corridor and persists across render
+frames while its camera position, output, source and projection remain valid.
+The spring arm publishes orientation and translation together after admission;
+preparation holds the rig pose while free-flight look retains its own input owner.
+Rotation input alone does not cancel stationary preparation. Capacity refusal
+is reported explicitly rather than admitting a partially prepared corridor.
+Narrow ridges, steep slopes, props and near-plane clearance still require
+production visual acceptance.
 `scripts/api/test_camera_terrain_follow.py` runs the production scene and
-checks clearance continuously while a long boom turns through eight directions.
+checks clearance and actual displacement while a long boom turns through eight
+directions, allowing its declared bounded preparation window only while work is
+pending. It then tests low free flight, capacity refusal/recovery, unsafe stationary
+coarsening, render-origin rebasing, explicit traversal policy and distant zoom on
+repository DEM fixtures. These gates prove clearance and bounded recovery rather
+than a preparation-latency or frame-time target.
 
 An absent optional policy retains the authored rig. A registered callback fault,
 unknown field, invalid mode, non-finite number or out-of-range weight holds the

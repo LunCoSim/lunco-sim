@@ -26,27 +26,64 @@ pub enum AvatarSoilCollisionPolicy {
     Unavailable,
 }
 
-/// Physical shape used by the kinematic avatar controller.
-///
-/// This is engine geometry, not a user preference and not a USD fact: the
-/// avatar is a runtime camera embodiment rather than an authored rigid body.
-/// Keeping the dimensions in one resource gives the controller one owner for
-/// its measured shape without duplicating a collider in every scene.
+/// Camera navigation envelope and bounded sweep/slide precision.
+/// The sphere encloses the lens and near-plane corners. Scene rigid bodies
+/// retain their independently authored physical shapes.
 #[derive(Resource, Reflect, Clone, Copy, Debug, PartialEq)]
 #[reflect(Resource)]
 pub struct AvatarCollisionSettings {
-    /// Capsule radius in stage metres.
+    /// Minimum lens-centred camera radius, in metres.
     pub radius_m: f64,
-    /// Length of the capsule's central segment in stage metres.
-    pub capsule_length_m: f64,
+    /// Separation maintained around both props and analytic terrain.
+    pub skin_m: f64,
+    /// Maximum geometric separation from a witnessed camera contact, in metres.
+    pub sweep_tolerance_m: f64,
+    /// Bounded number of contact-plane projections per input step.
+    pub max_slides: usize,
 }
 
 impl Default for AvatarCollisionSettings {
     fn default() -> Self {
         Self {
-            radius_m: 0.35,
-            capsule_length_m: 1.1,
+            radius_m: 0.025,
+            skin_m: 0.002,
+            sweep_tolerance_m: 0.0001,
+            max_slides: 4,
         }
+    }
+}
+
+impl AvatarCollisionSettings {
+    /// Enclose all near-plane corners using the current runtime projection.
+    /// Invalid or absent lens state is a visible unavailable movement contract.
+    pub fn camera_radius(&self, projection: &bevy::camera::Projection) -> Result<f64, String> {
+        if !self.radius_m.is_finite()
+            || self.radius_m <= 0.0
+            || !self.skin_m.is_finite()
+            || self.skin_m <= 0.0
+            || !self.sweep_tolerance_m.is_finite()
+            || self.sweep_tolerance_m <= 0.0
+            || self.sweep_tolerance_m >= self.skin_m
+            || self.max_slides == 0
+            || self.max_slides > 16
+        {
+            return Err("invalid camera collision envelope settings".into());
+        }
+        let inverse = projection.get_clip_from_view().inverse();
+        if !inverse.is_finite() {
+            return Err("camera collision projection is singular".into());
+        }
+        let mut radius = self.radius_m;
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                let corner = inverse.project_point3(Vec3::new(x, y, 1.0));
+                if !corner.is_finite() {
+                    return Err("camera collision near plane is invalid".into());
+                }
+                radius = radius.max(corner.as_dvec3().length());
+            }
+        }
+        Ok(radius)
     }
 }
 
@@ -92,6 +129,25 @@ pub fn avatar_soil_collision_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_envelope_encloses_near_plane_and_rejects_invalid_lens() {
+        let settings = AvatarCollisionSettings::default();
+        let projection =
+            bevy::camera::Projection::Perspective(bevy::camera::PerspectiveProjection {
+                near: 0.1,
+                fov: std::f32::consts::FRAC_PI_2,
+                aspect_ratio: 2.0,
+                ..default()
+            });
+        let radius = settings.camera_radius(&projection).unwrap();
+        assert!((radius - 0.1_f64 * 6.0_f64.sqrt()).abs() < 1e-6);
+        let invalid = AvatarCollisionSettings {
+            skin_m: f64::NAN,
+            ..settings
+        };
+        assert!(invalid.camera_radius(&projection).is_err());
+    }
 
     #[test]
     fn omitted_policy_is_safe_and_missing_session_is_visible() {

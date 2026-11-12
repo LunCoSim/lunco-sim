@@ -31,7 +31,7 @@ use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_celestial_spatial_core::{
     LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
 };
-use lunco_core::{on_command, register_commands};
+use lunco_core::{AppSceneExt, on_command, register_commands};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_spatial::attach::{local_pose_to_grid_storage, migrate_to_grid_local_pose};
@@ -65,13 +65,21 @@ impl Plugin for AvatarCelestialCameraPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CameraDefaults>()
+            .init_scene_resource::<lunco_terrain_surface::TerrainCameraTargets>()
             .init_resource::<lunco_avatar_policy::AvatarCollisionSettings>()
             .init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
             .init_resource::<lunco_celestial_spatial_core::OrbitalViewPin>()
             .register_type::<lunco_avatar_policy::AvatarCollisionSettings>()
+            .register_type::<lunco_camera_core::CameraCollisionEnvelope>()
+            .add_observer(locomotion::retire_navigation::<SpringArmCamera>)
+            .add_observer(locomotion::retire_navigation::<FreeFlightCamera>)
+            .add_observer(locomotion::retire_navigation::<SurfaceCamera>)
+            .add_observer(locomotion::retire_navigation::<OrbitCamera>)
+            .add_observer(locomotion::lock_navigation)
             .add_systems(
                 PostUpdate,
                 (
+                    locomotion::sync_camera_collision_envelopes,
                     spring_arm::spring_arm_system,
                     orbit_system,
                     transactions::orbit_return_transition_system,
@@ -82,7 +90,13 @@ impl Plugin for AvatarCelestialCameraPlugin {
             )
             .add_systems(
                 lunco_time::InteractionSchedule,
-                scroll_transit::freeflight_scroll_transit_system.before(CameraUpdateSet),
+                (
+                    locomotion::sync_camera_collision_envelopes,
+                    scroll_transit::retire_pending_camera_scroll,
+                    scroll_transit::freeflight_scroll_transit_system,
+                )
+                    .chain()
+                    .before(CameraUpdateSet),
             )
             .add_systems(
                 lunco_time::InteractionSchedule,

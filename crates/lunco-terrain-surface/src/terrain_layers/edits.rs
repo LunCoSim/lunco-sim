@@ -19,7 +19,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use lunco_terrain_core::{BrushModifier, CRATER_REACH, Crater, FlattenModifier, HeightModifier};
+use lunco_terrain_core::{
+    BrushModifier, CRATER_REACH, Crater, FlattenModifier, HeightEnclosure, HeightModifier,
+};
 
 use super::{LayerAttrSource, LayerId, TerrainLayer};
 use crate::oracle::HeightContribution;
@@ -272,19 +274,32 @@ pub fn edit_attr_writes(kind: &EditKind) -> Vec<(&'static str, &'static str, Str
 /// order at each sampled point (additive brush adds, flatten blends from the
 /// accumulated height).
 impl HeightModifier for EditsLayer {
-    fn height_bounds(&self, rect: [f64; 4], mut input: [f64; 2]) -> Option<[f64; 2]> {
+    fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+        Some(
+            self.height_enclosure(rect, HeightEnclosure::from_bounds(input))?
+                .height,
+        )
+    }
+
+    fn height_enclosure(
+        &self,
+        rect: [f64; 4],
+        mut input: HeightEnclosure,
+    ) -> Option<HeightEnclosure> {
         for (_, kind) in &self.edits {
             input = match *kind {
                 EditKind::Brush {
                     center,
                     radius,
                     amplitude,
-                } => BrushModifier::new(center, radius, amplitude).height_bounds(rect, input)?,
+                } => BrushModifier::new(center, radius, amplitude).height_enclosure(rect, input)?,
                 EditKind::Flatten {
                     center,
                     radius,
                     target_y,
-                } => FlattenModifier::new(center, radius, target_y).height_bounds(rect, input)?,
+                } => {
+                    FlattenModifier::new(center, radius, target_y).height_enclosure(rect, input)?
+                }
                 EditKind::Crater {
                     center,
                     radius,
@@ -292,7 +307,7 @@ impl HeightModifier for EditsLayer {
                 } => {
                     let b = manual_crater(center, radius, depth)
                         .delta_bounds(rect, self.min_wavelength)?;
-                    [input[0] + b[0], input[1] + b[1]]
+                    input.add_delta(b)
                 }
             };
         }

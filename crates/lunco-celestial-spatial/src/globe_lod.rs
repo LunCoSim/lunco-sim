@@ -179,8 +179,13 @@ impl SiteSurfaceSource {
     fn boundary_gradient(&self, x: f64, z: f64, half_extent: f64) -> [f64; 2] {
         match self {
             Self::Dem { oracle, .. } => {
-                let normal =
-                    normal_at_bounded(oracle.as_ref(), x, z, oracle.spacing() as f64, half_extent);
+                let normal = normal_at_bounded(
+                    oracle.as_ref(),
+                    x,
+                    z,
+                    oracle.occlusion_spacing(),
+                    half_extent,
+                );
                 [-normal[0] / normal[1], -normal[2] / normal[1]]
             }
             Self::Flat { .. } => [0.0, 0.0],
@@ -662,7 +667,7 @@ impl GlobeHandoff {
         if !half_extent.is_finite() || half_extent <= 0.0 {
             return Err("DEM half extent must be finite and positive");
         }
-        let posting_m = square_boundary_posting_spacing(half_extent, oracle.grid().res)
+        let posting_m = square_boundary_posting_spacing(half_extent, oracle.domain_resolution())
             .ok_or("DEM has no finite square boundary posting grid")?;
         let globe = MeanSphereSource {
             radius_m: render_radius_m,
@@ -675,8 +680,12 @@ impl GlobeHandoff {
             oracle: oracle.clone(),
             datum_m: border_datum,
         };
-        let boundary_profiles =
-            site.boundary_collar_profile(&globe, half_extent, oracle.grid().res, posting_m)?;
+        let boundary_profiles = site.boundary_collar_profile(
+            &globe,
+            half_extent,
+            oracle.domain_resolution(),
+            posting_m,
+        )?;
         let collar_m = boundary_profiles.width_m;
         let collar_widths = [collar_m; 4];
         let max_east = half_extent + collar_widths[0].max(collar_widths[1]);
@@ -713,7 +722,7 @@ impl GlobeHandoff {
         let collar_geometry = Arc::new(create_rectangular_handoff_collar_geometry(
             geometry,
             &source,
-            oracle.grid().res,
+            oracle.domain_resolution(),
             edge_segments,
             collar_radial_segments(collar_m, posting_m)?,
         )?);
@@ -1514,6 +1523,7 @@ pub(crate) fn update_globe_lod(
                     // the continuation policy composes local maps here.
                     render_look.clone(),
                     lunco_core::SystemManaged,
+                    lunco_core::SceneOwned,
                     ChildOf(lod.surface_grid),
                 ));
                 if let Some(source) = handoff.terrain_source() {

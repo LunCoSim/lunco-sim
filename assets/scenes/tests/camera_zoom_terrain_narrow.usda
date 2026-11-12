@@ -1,0 +1,16 @@
+#usda 1.0
+(
+    defaultPrim = "CameraZoomTerrain"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "CameraZoomTerrain" (
+    prepend references = @lunco://scenes/tests/camera_zoom_terrain.usda@</CameraZoomTerrain>
+)
+{
+    over "Avatar"
+    {
+        float focalLength = 1500.0
+    }
+}

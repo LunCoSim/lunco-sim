@@ -15,7 +15,10 @@
 //! multi-band DTM products; a future colour ortho would extend
 //! [`PdsImage::decode`] rather than grow a new path).
 
-use std::path::Path;
+use std::{
+    io::{Read, Seek, SeekFrom},
+    path::Path,
+};
 
 /// Geographic extent a PDS3 `IMAGE_MAP_PROJECTION` object declares.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,7 +79,19 @@ struct Label {
     missing_radix: Vec<u64>,
     extent: Option<PdsExtent>,
     map_scale_m: Option<f64>,
+    map_resolution: Option<f64>,
+    has_map_resolution: bool,
     projection: Option<String>,
+    map_rotation: Option<f64>,
+    has_map_rotation: bool,
+    map_radius_m: Option<f64>,
+    map_b_radius_m: Option<f64>,
+    map_c_radius_m: Option<f64>,
+    longitude_direction: Option<String>,
+    map_center_lat: Option<f64>,
+    map_center_lon: Option<f64>,
+    line_projection_offset: Option<f64>,
+    sample_projection_offset: Option<f64>,
 }
 
 fn strip_units(v: &str) -> &str {
@@ -92,6 +107,22 @@ fn parse_f64(v: &str) -> Option<f64> {
     // decimal number, so they are rejected here and handled by
     // [`parse_pds_radix`] — see its note for why they must NOT be dropped.
     strip_units(v).trim_matches('"').parse::<f64>().ok()
+}
+
+fn parse_metres(v: &str) -> Option<f64> {
+    let value = parse_f64(v)?;
+    let unit = match v.split_once('<') {
+        Some((_, tail)) => Some(tail.split_once('>')?.0.trim().to_ascii_uppercase()),
+        None if v.contains('>') => return None,
+        None => None,
+    };
+    match unit.as_deref() {
+        Some("KM") | Some("KM/PIX") | Some("KM/PIXEL") | Some("KILOMETERS/PIXEL") => {
+            Some(value * 1000.0)
+        }
+        Some("M") | Some("M/PIX") | Some("M/PIXEL") | Some("METERS/PIXEL") | None => Some(value),
+        _ => None,
+    }
 }
 
 /// Parse PDS integer-radix notation — `base#digits#`, e.g. `16#FF7FFFFB#`.
@@ -195,7 +226,13 @@ fn parse_label(text: &str) -> Label {
                 }
                 "SCALING_FACTOR" => lbl.scaling_factor = parse_f64(val),
                 "OFFSET" => lbl.offset = parse_f64(val),
-                "MISSING_CONSTANT" | "NULL" | "CORE_NULL" => {
+                "MISSING_CONSTANT"
+                | "NULL"
+                | "CORE_NULL"
+                | "CORE_LOW_REPR_SATURATION"
+                | "CORE_LOW_INSTR_SATURATION"
+                | "CORE_HIGH_REPR_SATURATION"
+                | "CORE_HIGH_INSTR_SATURATION" => {
                     // Decimal (`-3.4028227e38`) resolves now; radix
                     // (`16#FF7FFFFB#`) is deferred until the sample layout is
                     // known, since the label may declare it before SAMPLE_TYPE.
@@ -213,7 +250,26 @@ fn parse_label(text: &str) -> Label {
                 "MAP_PROJECTION_TYPE" => {
                     lbl.projection = Some(strip_units(val).trim_matches('"').to_uppercase())
                 }
-                "MAP_SCALE" => lbl.map_scale_m = parse_f64(val),
+                "MAP_PROJECTION_ROTATION" => {
+                    lbl.has_map_rotation = true;
+                    lbl.map_rotation = parse_f64(val);
+                }
+                "MAP_SCALE" => lbl.map_scale_m = parse_metres(val),
+                "MAP_RESOLUTION" => {
+                    lbl.has_map_resolution = true;
+                    lbl.map_resolution = parse_f64(val);
+                }
+                "A_AXIS_RADIUS" => lbl.map_radius_m = parse_metres(val),
+                "B_AXIS_RADIUS" => lbl.map_b_radius_m = parse_metres(val),
+                "C_AXIS_RADIUS" => lbl.map_c_radius_m = parse_metres(val),
+                "POSITIVE_LONGITUDE_DIRECTION" => {
+                    lbl.longitude_direction =
+                        Some(strip_units(val).trim_matches('"').to_uppercase())
+                }
+                "CENTER_LATITUDE" => lbl.map_center_lat = parse_f64(val),
+                "CENTER_LONGITUDE" => lbl.map_center_lon = parse_f64(val),
+                "LINE_PROJECTION_OFFSET" => lbl.line_projection_offset = parse_f64(val),
+                "SAMPLE_PROJECTION_OFFSET" => lbl.sample_projection_offset = parse_f64(val),
                 "MINIMUM_LATITUDE" => min_lat = parse_f64(val),
                 "MAXIMUM_LATITUDE" => max_lat = parse_f64(val),
                 "WESTERNMOST_LONGITUDE" => west_lon = parse_f64(val),
@@ -246,34 +302,129 @@ fn io_err(msg: String) -> std::io::Error {
     std::io::Error::other(msg)
 }
 
+fn read_label(path: &Path, file: &mut std::fs::File) -> std::io::Result<(Label, Option<usize>)> {
+    let mut prefix = Vec::new();
+    file.take(64 * 1024).read_to_end(&mut prefix)?;
+    let head = String::from_utf8_lossy(&prefix);
+    if head.trim_start().starts_with("PDS_VERSION_ID") {
+        return Ok((parse_label(&head), None));
+    }
+    let label_path = lunco_assets_datasets::pds_detached_label(path)?;
+    Ok((parse_label(&std::fs::read_to_string(label_path)?), Some(0)))
+}
+
+/// A source lattice with explicit spherical projection and pixel registration.
+pub(crate) struct ProjectedPds {
+    pub width: u32,
+    pub height: u32,
+    pub geo: lunco_geotiff::SphericalRaster,
+}
+
+/// Read projection facts without loading the raster. PDS projection offsets
+/// locate the projection origin relative to the first sample centre.
+pub(crate) fn projected_metadata(path: &Path) -> std::io::Result<Option<ProjectedPds>> {
+    let mut file = std::fs::File::open(path)?;
+    let (label, _) = read_label(path, &mut file)?;
+    if !matches!(
+        label.projection.as_deref(),
+        Some("SIMPLE CYLINDRICAL" | "EQUIRECTANGULAR" | "POLAR STEREOGRAPHIC")
+    ) {
+        return Ok(None);
+    }
+    let invalid = || {
+        io_err(format!(
+            "{}: incomplete or invalid PDS raster projection",
+            path.display()
+        ))
+    };
+    let width = u32::try_from(label.line_samples.ok_or_else(invalid)?).map_err(|_| invalid())?;
+    let height = u32::try_from(label.lines.ok_or_else(invalid)?).map_err(|_| invalid())?;
+    let radius = label.map_radius_m.ok_or_else(invalid)?;
+    let b_radius = label.map_b_radius_m.ok_or_else(invalid)?;
+    let c_radius = label.map_c_radius_m.ok_or_else(invalid)?;
+    let scale = label.map_scale_m.ok_or_else(invalid)?;
+    let lat = label.map_center_lat.ok_or_else(invalid)?;
+    let lon = label.map_center_lon.ok_or_else(invalid)?;
+    let line = label.line_projection_offset.ok_or_else(invalid)?;
+    let sample = label.sample_projection_offset.ok_or_else(invalid)?;
+    if width == 0
+        || height == 0
+        || !radius.is_finite()
+        || radius <= 0.0
+        || b_radius != radius
+        || c_radius != radius
+        || label.longitude_direction.as_deref() != Some("EAST")
+        || !scale.is_finite()
+        || scale <= 0.0
+        || !lat.is_finite()
+        || lat.abs() > 90.0
+        || !lon.is_finite()
+        || !line.is_finite()
+        || !sample.is_finite()
+        || (label.has_map_rotation && label.map_rotation != Some(0.0))
+    {
+        return Err(invalid());
+    }
+    if label.has_map_resolution {
+        let ppd = label.map_resolution.ok_or_else(invalid)?;
+        if !ppd.is_finite() || ppd <= 0.0 {
+            return Err(invalid());
+        }
+        let expected = radius * std::f64::consts::PI / (180.0 * ppd);
+        if ((scale - expected) / expected).abs() > 1e-5 {
+            return Err(invalid());
+        }
+    }
+    let projection = match label.projection.as_deref() {
+        Some("SIMPLE CYLINDRICAL") => lunco_geotiff::RasterProjection::Equirectangular {
+            parallel_deg: 0.0,
+            latitude_deg: lat,
+            longitude_deg: lon,
+        },
+        Some("EQUIRECTANGULAR") if lat.abs() < 90.0 => {
+            lunco_geotiff::RasterProjection::Equirectangular {
+                parallel_deg: lat,
+                latitude_deg: 0.0,
+                longitude_deg: lon,
+            }
+        }
+        Some("POLAR STEREOGRAPHIC") if lat.abs() == 90.0 => {
+            lunco_geotiff::RasterProjection::PolarStereographic {
+                north: lat > 0.0,
+                longitude_deg: lon,
+                scale: 1.0,
+            }
+        }
+        _ => return Err(invalid()),
+    };
+    Ok(Some(ProjectedPds {
+        width,
+        height,
+        geo: lunco_geotiff::SphericalRaster {
+            radius_m: radius,
+            pixel_size_m: [scale, scale],
+            origin_m: [-sample * scale, line * scale],
+            false_origin_m: [0.0, 0.0],
+            projection,
+        },
+    }))
+}
+
 impl PdsImage {
     /// Decode a PDS3 raster from `path` (`.IMG`). The label is taken from the
     /// file head when attached, else from a sibling `.LBL`/`.lbl` (detached).
     pub fn decode(path: &Path) -> Result<PdsImage, std::io::Error> {
-        let bytes = std::fs::read(path)?;
+        Self::decode_region(path, None, None)
+    }
 
-        // Attached label? The head of a labelled file is printable PDS text
-        // starting with `PDS_VERSION_ID`. Probe generously — labels are small.
-        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(64 * 1024)]).into_owned();
-        let (label, data_offset_hint) = if head.trim_start().starts_with("PDS_VERSION_ID") {
-            (parse_label(&head), None)
-        } else {
-            // Detached label: same stem, .LBL / .lbl.
-            let sibling = ["LBL", "lbl"].iter().find_map(|ext| {
-                let p = path.with_extension(ext);
-                p.is_file().then_some(p)
-            });
-            let Some(lbl_path) = sibling else {
-                return Err(io_err(format!(
-                    "{}: no attached PDS3 label and no detached .LBL sibling",
-                    path.display()
-                )));
-            };
-            let text = std::fs::read_to_string(&lbl_path)?;
-            // Detached labels address the data file from record 1 unless the
-            // `^IMAGE` pointer says otherwise.
-            (parse_label(&text), Some(0usize))
-        };
+    /// Decode a bounded band-zero window in source sample coordinates.
+    pub(crate) fn decode_region(
+        path: &Path,
+        region: Option<(u32, u32, u32, u32)>,
+        control: Option<&crate::process::ProcessControl>,
+    ) -> Result<PdsImage, std::io::Error> {
+        let mut file = std::fs::File::open(path)?;
+        let (label, data_offset_hint) = read_label(path, &mut file)?;
 
         let lines = label
             .lines
@@ -313,19 +464,20 @@ impl PdsImage {
                 bands.max(1)
             ))
         };
-        let n = lines
+        let total = lines
             .checked_mul(line_samples)
             .ok_or_else(geometry_overflow)?;
-        let need = n
+        let need = total
             .checked_mul(bands.max(1))
             .and_then(|v| v.checked_mul(bytes_per))
             .and_then(|v| v.checked_add(data_offset))
             .ok_or_else(geometry_overflow)?;
-        if bytes.len() < need {
+        let file_len = file.metadata()?.len();
+        if file_len < need as u64 {
             return Err(io_err(format!(
                 "{}: file too short for label geometry ({} < {} bytes; {}×{}×{}b at offset {})",
                 path.display(),
-                bytes.len(),
+                file_len,
                 need,
                 line_samples,
                 lines,
@@ -334,8 +486,33 @@ impl PdsImage {
             )));
         }
 
-        // Band-sequential band 0.
-        let data = &bytes[data_offset..data_offset + n * bytes_per];
+        let (x, y, width, height) = match region {
+            None => (0, 0, line_samples, lines),
+            Some((x, y, w, h)) => (x as usize, y as usize, w as usize, h as usize),
+        };
+        if width == 0
+            || height == 0
+            || x.checked_add(width).is_none_or(|end| end > line_samples)
+            || y.checked_add(height).is_none_or(|end| end > lines)
+        {
+            return Err(io_err("PDS sample window lies outside the raster".into()));
+        }
+        let n = width.checked_mul(height).ok_or_else(geometry_overflow)?;
+        let row_bytes = width.checked_mul(bytes_per).ok_or_else(geometry_overflow)?;
+        let mut data = vec![0; n.checked_mul(bytes_per).ok_or_else(geometry_overflow)?];
+        for row in 0..height {
+            if let Some(control) = control {
+                control.check()?;
+            }
+            let offset = (y + row)
+                .checked_mul(line_samples)
+                .and_then(|v| v.checked_add(x))
+                .and_then(|v| v.checked_mul(bytes_per))
+                .and_then(|v| v.checked_add(data_offset))
+                .ok_or_else(geometry_overflow)?;
+            file.seek(SeekFrom::Start(offset as u64))?;
+            file.read_exact(&mut data[row * row_bytes..(row + 1) * row_bytes])?;
+        }
         let le = stype.contains("PC_") || stype.contains("LSB");
         let unsigned = stype.contains("UNSIGNED");
         let real = stype.contains("REAL");
@@ -406,8 +583,8 @@ impl PdsImage {
         }
 
         Ok(PdsImage {
-            width: line_samples,
-            height: lines,
+            width,
+            height,
             samples,
             extent: label.extent,
             map_scale_m: label.map_scale_m,
@@ -419,6 +596,193 @@ impl PdsImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polar_pds_preserves_sample_registration_and_rejects_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("polar.IMG");
+        let samples = [0.13_f32, f32::from_bits(0xff7f_fffc), 0.15, 0.16];
+        let bytes: Vec<u8> = samples.into_iter().flat_map(f32::to_le_bytes).collect();
+        lunco_storage::write_file_sync(&path, &bytes).unwrap();
+        let label = r#"PDS_VERSION_ID = PDS3
+OBJECT = IMAGE
+ LINES = 2
+ LINE_SAMPLES = 2
+ SAMPLE_TYPE = PC_REAL
+ SAMPLE_BITS = 32
+ CORE_LOW_REPR_SATURATION = 16#FF7FFFFC#
+END_OBJECT = IMAGE
+OBJECT = IMAGE_MAP_PROJECTION
+ MAP_PROJECTION_TYPE = "POLAR STEREOGRAPHIC"
+ MAP_PROJECTION_ROTATION = 0.0
+ MAP_SCALE = 100 <METERS/PIXEL>
+ A_AXIS_RADIUS = 1737.4 <KM>
+ B_AXIS_RADIUS = 1737.4 <KM>
+ C_AXIS_RADIUS = 1737.4 <KM>
+ POSITIVE_LONGITUDE_DIRECTION = EAST
+ CENTER_LATITUDE = -90
+ CENTER_LONGITUDE = 0
+ LINE_PROJECTION_OFFSET = 0.5
+ SAMPLE_PROJECTION_OFFSET = 0.5
+END_OBJECT = IMAGE_MAP_PROJECTION
+END
+"#;
+        let label_path = dir.path().join("polar.LBL");
+        lunco_storage::write_file_sync(&label_path, label.as_bytes()).unwrap();
+        let raster = projected_metadata(&path).unwrap().unwrap().geo;
+        assert_eq!(raster.pixel_at(-90.0, 0.0), [0.5, 0.5]);
+        assert!(raster.pixel_at(-89.999, 0.0)[1] < 0.5);
+        let decoded = PdsImage::decode(&path).unwrap();
+        assert!(decoded.samples[1].is_nan());
+        assert!((decoded.samples[0] - 0.13).abs() < 1e-7);
+        lunco_storage::write_file_sync(
+            &label_path,
+            label.replace("ROTATION = 0.0", "ROTATION = 1.0").as_bytes(),
+        )
+        .unwrap();
+        assert!(projected_metadata(&path).is_err());
+    }
+
+    #[test]
+    fn projected_pds_reads_registered_window_and_rejects_invalid_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("regional.IMG");
+        let pixels: Vec<u8> = (0..12).flat_map(|i| (i as f32).to_le_bytes()).collect();
+        lunco_storage::write_file_sync(&path, &pixels).unwrap();
+        let label = r#"PDS_VERSION_ID = PDS3
+OBJECT = IMAGE
+ LINES = 3
+ LINE_SAMPLES = 4
+ SAMPLE_BITS = 32
+ SAMPLE_TYPE = PC_REAL
+ SCALING_FACTOR = 2
+ OFFSET = 10
+END_OBJECT = IMAGE
+OBJECT = IMAGE_MAP_PROJECTION
+ MAP_PROJECTION_TYPE = "SIMPLE CYLINDRICAL"
+ MAP_SCALE = 0.0592252938 <km/pix>
+ A_AXIS_RADIUS = 1737.4 <km>
+ B_AXIS_RADIUS = 1737.4 <km>
+ C_AXIS_RADIUS = 1737.4 <km>
+ POSITIVE_LONGITUDE_DIRECTION = "EAST"
+ CENTER_LATITUDE = 0
+ CENTER_LONGITUDE = 180
+ LINE_PROJECTION_OFFSET = 1.0 <pix>
+ SAMPLE_PROJECTION_OFFSET = 1.5 <pix>
+END_OBJECT = IMAGE_MAP_PROJECTION
+END
+"#;
+        let label_path = dir.path().join("regional.LBL");
+        lunco_storage::write_file_sync(&label_path, label.as_bytes()).unwrap();
+        let metadata = projected_metadata(&path).unwrap().unwrap();
+        assert_eq!((metadata.width, metadata.height), (4, 3));
+        assert_eq!(metadata.geo.radius_m, 1_737_400.0);
+        assert!((metadata.geo.pixel_size_m[0] - 59.2252938).abs() < 1e-9);
+        let center = metadata.geo.pixel_at(0.0, 180.0);
+        assert!((center[0] - 1.5).abs() < 1e-12 && (center[1] - 1.0).abs() < 1e-12);
+        let window = PdsImage::decode_region(&path, Some((1, 1, 2, 2)), None).unwrap();
+        assert_eq!((window.width, window.height), (2, 2));
+        assert_eq!(window.samples, vec![20.0, 22.0, 28.0, 30.0]);
+        assert!(PdsImage::decode_region(&path, Some((3, 2, 2, 1)), None).is_err());
+        lunco_storage::write_file_sync(
+            &label_path,
+            label
+                .replace(" A_AXIS_RADIUS = 1737.4 <km>\n", "")
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(projected_metadata(&path).is_err());
+        lunco_storage::write_file_sync(
+            &label_path,
+            label
+                .replace(
+                    " B_AXIS_RADIUS = 1737.4 <km>",
+                    " B_AXIS_RADIUS = 1736.0 <km>",
+                )
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(projected_metadata(&path).is_err());
+        lunco_storage::write_file_sync(
+            &label_path,
+            label
+                .replace(
+                    " POSITIVE_LONGITUDE_DIRECTION = \"EAST\"",
+                    " POSITIVE_LONGITUDE_DIRECTION = \"WEST\"",
+                )
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(projected_metadata(&path).is_err());
+        lunco_storage::write_file_sync(
+            &label_path,
+            label
+                .replace("0.0592252938 <km/pix>", "0.0592252938 <unknown>")
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(projected_metadata(&path).is_err());
+        lunco_storage::write_file_sync(
+            &label_path,
+            label
+                .replace(
+                    "\nOBJECT = IMAGE_MAP_PROJECTION",
+                    "\nOBJECT = IMAGE_MAP_PROJECTION\n MAP_RESOLUTION = invalid",
+                )
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(projected_metadata(&path).is_err());
+        lunco_storage::write_file_sync(
+            &label_path,
+            label
+                .replace("0.0592252938 <km/pix>", "0.0592252938 <km/pix")
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(projected_metadata(&path).is_err());
+    }
+
+    #[test]
+    fn equirectangular_pds_uses_center_latitude_as_standard_parallel() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("site.IMG");
+        lunco_storage::write_file_sync(&path, &[0]).unwrap();
+        let label = r#"PDS_VERSION_ID = PDS3
+OBJECT = IMAGE
+ LINES = 10673
+ LINE_SAMPLES = 2984
+ SAMPLE_BITS = 32
+ SAMPLE_TYPE = PC_REAL
+END_OBJECT = IMAGE
+OBJECT = IMAGE_MAP_PROJECTION
+ MAP_PROJECTION_TYPE = EQUIRECTANGULAR
+ MAP_SCALE = 5 <METERS/PIXEL>
+ A_AXIS_RADIUS = 1737.4 <KM>
+ B_AXIS_RADIUS = 1737.4 <KM>
+ C_AXIS_RADIUS = 1737.4 <KM>
+ POSITIVE_LONGITUDE_DIRECTION = EAST
+ CENTER_LATITUDE = 26
+ CENTER_LONGITUDE = 180
+ LINE_PROJECTION_OFFSET = 162962.5
+ SAMPLE_PROJECTION_OFFSET = 963210.5
+END_OBJECT = IMAGE_MAP_PROJECTION
+END
+"#;
+        lunco_storage::write_file_sync(&dir.path().join("site.LBL"), label.as_bytes()).unwrap();
+        let raster = projected_metadata(&path).unwrap().unwrap().geo;
+        let upper_left = raster.pixel_at(26.87079391, 3.29288009);
+        // The published geographic bound need not be a sample center.
+        assert!(upper_left[0].abs() < 0.51, "{upper_left:?}");
+        assert!(upper_left[1].abs() < 0.01, "{upper_left:?}");
+        let sample = raster.pixel_at(26.0, 179.0);
+        let degrees = std::f64::consts::PI / 180.0;
+        let pixels_per_degree = 1_737_400.0 * degrees / 5.0;
+        assert!(
+            (sample[0] - (963_210.5 - pixels_per_degree * (26.0_f64 * degrees).cos())).abs() < 1e-8
+        );
+        assert!((sample[1] - (162_962.5 - 26.0 * pixels_per_degree)).abs() < 1e-8);
+    }
 
     fn write_attached_img(
         dir: &Path,

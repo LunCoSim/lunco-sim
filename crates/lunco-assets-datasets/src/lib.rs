@@ -19,8 +19,8 @@ pub use manifest::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use manifest::{
-    bake_key, installed_destination_present, processed_output_present, source_read_path,
-    version_marker_path,
+    bake_key, installed_destination_present, pds_detached_label, processed_output_present,
+    source_read_path, version_marker_path,
 };
 pub use plugin::{DatasetProvisioningActive, DatasetRegistryPlugin};
 pub use registry::{

@@ -121,7 +121,10 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
         let wz = z0 + (iz as f64 - 1.0) * step;
         for ix in 0..pad {
             let wx = x0 + (ix as f64 - 1.0) * step;
-            lattice[iz * pad + ix] = src.height_at(wx, wz);
+            lattice[iz * pad + ix] = src.height_at(
+                wx.clamp(-dem_half_extent, dem_half_extent),
+                wz.clamp(-dem_half_extent, dem_half_extent),
+            );
         }
     }
     // Lattice lookup in VERTEX indices (ghost ring at -1 and `res`).
@@ -158,7 +161,10 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
         let wz = z0 + (iz as f64 - 1.0) * pstep;
         for ix in 0..ppad {
             let wx = x0 + (ix as f64 - 1.0) * pstep;
-            plattice[iz * ppad + ix] = morph_src.height_at(wx, wz);
+            plattice[iz * ppad + ix] = morph_src.height_at(
+                wx.clamp(-dem_half_extent, dem_half_extent),
+                wz.clamp(-dem_half_extent, dem_half_extent),
+            );
         }
     }
     let ph_at =
@@ -857,6 +863,40 @@ fn push_triangle_up(mesh: &TileMesh, indices: &mut Vec<u32>, a: u32, b: u32, c: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outer_tile_samples_stay_inside_declared_domain() {
+        struct Bounded;
+        impl HeightSource for Bounded {
+            fn height_at(&self, x: f64, z: f64) -> f64 {
+                assert!(
+                    x.abs() <= 8.0 && z.abs() <= 8.0,
+                    "outside terrain: {x}, {z}"
+                );
+                x + z
+            }
+        }
+        let source = Bounded;
+        let mesh = bake_tile_mesh(
+            &source,
+            &source,
+            Square {
+                center: [4.0, 4.0],
+                half: 4.0,
+            },
+            9,
+            8.0,
+            [4.0, 4.0],
+            0.0,
+        );
+        assert!(
+            mesh.positions
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite())
+        );
+        assert!(mesh.normals.iter().flatten().all(|value| value.is_finite()));
+    }
     use lunco_obstacle_field::field::HeightGrid;
 
     fn flat_dem() -> HeightGrid {

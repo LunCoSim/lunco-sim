@@ -900,7 +900,7 @@ pub(crate) fn avatar_init_system(
         ),
     >,
     q_proj: Query<
-        Entity,
+        (Entity, &Projection),
         (
             With<Embodiment>,
             With<LocalEmbodiment>,
@@ -909,6 +909,7 @@ pub(crate) fn avatar_init_system(
             With<lunco_render::SceneCamera>,
         ),
     >,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     for (entity, tf, history) in q_avatar.iter() {
         if history.is_none() {
@@ -923,17 +924,42 @@ pub(crate) fn avatar_init_system(
         // Rhai selects richer behavior through typed camera commands.
         let mut avatar = commands.entity(entity);
         let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-        avatar.try_insert((
-            AdaptiveNearPlane,
-            FreeFlightCamera {
-                yaw,
-                pitch,
-                damping: None,
-            },
-        ));
+        avatar.try_insert(FreeFlightCamera {
+            yaw,
+            pitch,
+            damping: None,
+        });
     }
-    for entity in q_proj.iter() {
-        commands.entity(entity).try_insert(AdaptiveNearPlane);
+    let mut failure = None;
+    for (entity, projection) in q_proj.iter() {
+        if let Projection::Perspective(projection) = projection {
+            if let Some(source) =
+                AdaptiveNearPlane::new(f64::from(projection.near), f64::from(projection.far))
+            {
+                commands.entity(entity).try_insert(source);
+            } else {
+                failure = Some(format!(
+                    "cannot seed adaptive clipping from invalid source projection on {entity:?}"
+                ));
+            }
+        }
+    }
+    let previous = diagnostics
+        .as_deref()
+        .and_then(|diagnostics| {
+            diagnostics
+                .findings
+                .iter()
+                .find(|finding| finding.producer == "camera-clip-source")
+        })
+        .map(|finding| finding.message.as_str());
+    if previous != failure.as_deref() {
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "camera-clip-source",
+            "LocalEmbodiment",
+            failure,
+        );
     }
 }
 
@@ -944,6 +970,51 @@ mod tests {
     use lunco_camera_core::FollowAttitude;
     use lunco_celestial_spatial_core::LocalGravityField;
     use lunco_control_core::ControlLink;
+
+    #[test]
+    fn generic_avatar_clipping_seeds_once_and_preserves_authored_source() {
+        let mut app = App::new();
+        app.add_systems(Update, avatar_init_system);
+        let source = AdaptiveNearPlane::new(0.01, 1_000_000.0).unwrap();
+        let authored = app
+            .world_mut()
+            .spawn((
+                Embodiment,
+                LocalEmbodiment,
+                Transform::IDENTITY,
+                lunco_render::SceneCamera::default(),
+                Projection::Perspective(PerspectiveProjection::default()),
+                source,
+            ))
+            .id();
+        let generic = app
+            .world_mut()
+            .spawn((
+                Embodiment,
+                LocalEmbodiment,
+                Transform::IDENTITY,
+                lunco_render::SceneCamera::default(),
+                Projection::Perspective(PerspectiveProjection {
+                    near: 0.02,
+                    far: 500.0,
+                    ..default()
+                }),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            *app.world().get::<AdaptiveNearPlane>(authored).unwrap(),
+            source
+        );
+        let seeded = app.world().get::<AdaptiveNearPlane>(generic).unwrap();
+        assert_eq!(seeded.source_near_m, f64::from(0.02_f32));
+        assert_eq!(seeded.source_far_m, 500.0);
+        app.update();
+        assert_eq!(
+            *app.world().get::<AdaptiveNearPlane>(authored).unwrap(),
+            source
+        );
+    }
 
     #[test]
     fn animate_orbit_camera_direction_preserves_radius_and_rejects_bad_pitch() {

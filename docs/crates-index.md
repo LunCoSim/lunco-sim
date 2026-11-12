@@ -535,13 +535,13 @@ surface gravity selects linked consumers and existing fields, retaining
 native-position change detection and body-relative math.
 
 **`lunco-terrain-core`**
-Projection-agnostic terrain LOD spine. Provides quadtree-CDLOD tile selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde only) with no bevy/avian/DEM/sphere dependency, so it is shared by both the planar DEM streamer (`lunco-terrain-surface`) and the cube-sphere planetary tiler (`lunco-terrain-globe`).
+Projection-agnostic terrain LOD spine. Provides quadtree-CDLOD tile selection, tile-grid math, the `HeightSource` trait and conservative `HeightEnclosure` scalar/affine contracts for composed modifiers. Pure (std + serde only) with no bevy/avian/DEM/sphere dependency, so it is shared by both the planar DEM streamer (`lunco-terrain-surface`) and the cube-sphere planetary tiler (`lunco-terrain-globe`).
 
 **`lunco-terrain-globe`**
 Whole-body cube-sphere geometry at orbital/planetary scale: balanced multi-focus quadtree selection, canonical f64 tile/cutout/collar geometry, its explicit GPU mesh adapter, and `big_space` tile identities. Native contact residency belongs to `lunco-celestial-spatial`; the DEM collider ring belongs to `lunco-terrain-surface`. The "globe" projection of the terrain family; pairs with `lunco-terrain-surface` (local DEM ground) over the shared `lunco-terrain-core` LOD spine.
 
 **`lunco-terrain-surface`**
-Local high-detail DEM ground terrain at surface scale: `TerrainSurfaceChange` carries the replaced/current oracle identity and dirty bounds through visual tiles, the collider ring, static collider rebuilds, and derived maps; physics retains its authored lattice and cache contract. Camera LOD reserves nearby visual detail and physical support, and finer camera meshes subdivide canonical contact triangles without changing physics. Also owns per-node geometry/envelope caching, nearest 3D camera distance through the shared `big_space` frame, and `big_space` per-tile anchoring and the layered color pipeline. The "surface" projection pairs with `lunco-terrain-globe` over the shared `lunco-terrain-core` LOD spine.
+Local high-detail DEM ground terrain at surface scale: `TerrainSurfaceChange` carries the replaced/current oracle identity and dirty bounds through visual tiles, the collider ring, static collider rebuilds, and derived maps; physics retains its authored lattice and cache contract. Each consumed camera owns a restricted visual cover, projected error metric, stitch/morph context and readiness, sharing source-keyed mesh bakes. Visual sampling is independent of the physical lattice; regional extent expansion preserves metric finest spacing. Also owns per-node geometry/envelope caching, nearest 3D camera distance through the shared `big_space` frame, and `big_space` per-tile anchoring and the layered color pipeline. The "surface" projection pairs with `lunco-terrain-globe` over the shared `lunco-terrain-core` LOD spine.
 
 Wired environment probes receive sampled Sun visibility and physical irradiance
 from this owner before cosimulation propagation. Certified f64 terrain queries
@@ -549,8 +549,9 @@ reuse bounded surface-revision-scoped cell enclosures; selected equipment
 proxies use the physics owner’s f64 shape BVH. See the
 [physical illumination contract](architecture/terrain-layered-rendering.md) for
 USD sampling, optical collections, required inputs and Modelica consumers.
-The same composed terrain bounds certify free-camera capsule movement beyond
-the physical collider ring.
+Typed camera sphere sweeps against the composed terrain resolve navigation
+independently of the physical collider ring, with contact, initial-overlap and
+unavailable results distinguished. Camera movement does not add automatic lift.
 
 **`lunco-terrain-bake`**
 The pure (bevy/avian-free) DEM bake pipeline, factored out of `lunco-terrain-surface` so the SAME code runs on native and in a browser Web Worker: GeoTIFF decode → native crop → optional coarse-preview resample → crater stamp → `HeightGrid` (`bake_grid`/`finish_bake`), plus the serializable `DemBakeJob`/`StampSpec`. On native `lunco-terrain-surface` calls it inside an `AsyncComputeTaskPool` task; on wasm — where that pool runs on the page's main thread and the ~40 MB decode + crater stamp froze the tab — it dispatches to the `dem_worker` companion binary over `lunco-worker-transport`, which decodes once then streams a coarse preview (`COARSE_RES`) and then the full native grid back (coarse-then-full progressive). Only the avian collider + Bevy mesh derive stays in `lunco-terrain-surface`, where those types live.

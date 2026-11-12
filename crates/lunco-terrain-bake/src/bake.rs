@@ -78,6 +78,20 @@ pub fn crop_centered(grid: &HeightGrid, half_window: f64) -> HeightGrid {
     }
 }
 
+/// Crop a centered grid and move its georeferenced sample origin by the same
+/// number of source posts. The geographic center and sample spacing stay fixed.
+pub fn crop_centered_with_transform(
+    grid: &HeightGrid,
+    mut transform: lunco_geotiff::GeoTransform,
+    half_window: f64,
+) -> (HeightGrid, lunco_geotiff::GeoTransform) {
+    let cropped = crop_centered(grid, half_window);
+    let trim = (grid.res - cropped.res) / 2;
+    transform.origin_x_m += trim as f64 * transform.pixel_size_m;
+    transform.origin_y_m -= trim as f64 * transform.pixel_size_m;
+    (cropped, transform)
+}
+
 /// Sample `src` into a square, origin-centred `res`×`res` grid spanning
 /// `[-half_extent, half_extent]` on both X and Z (metres). Sample positions
 /// coincide with the grid nodes, so resampling a grid at its own resolution is
@@ -179,6 +193,20 @@ mod tests {
         assert_eq!(cropped.res, 2);
         assert_eq!(cropped.half_extent, 0.5);
         assert_eq!(cropped.heights, vec![5.0, 6.0, 9.0, 10.0]);
+    }
+
+    #[test]
+    fn centered_crop_moves_the_georeferenced_origin_with_the_samples() {
+        let src = HeightGrid::new_flat(9, 4.0);
+        let geo = lunco_geotiff::GeoTransform::centred_square(8.0, 9, 1_737_400.0, 26.0, 3.0);
+        let (cropped, adjusted) = crop_centered_with_transform(&src, geo, 2.0);
+        assert_eq!(cropped.res, 5);
+        assert_eq!((adjusted.origin_x_m, adjusted.origin_y_m), (-2.0, 2.0));
+        assert_eq!(adjusted.pixel_size_m, geo.pixel_size_m);
+        assert_eq!(
+            (adjusted.center_lat_deg, adjusted.center_lon_deg),
+            (geo.center_lat_deg, geo.center_lon_deg)
+        );
     }
 
     #[test]

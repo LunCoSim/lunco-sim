@@ -1061,6 +1061,12 @@ fn create_preview_view(
             Name::new(format!("UsdPreviewCamera-{}-{}", preview.0, view.0)),
         ))
         .id();
+    commands
+        .entity(camera)
+        .insert(lunco_render::camera::SceneViewDemand {
+            source: camera,
+            output: lunco_render::camera::SceneViewOutput::Preview { id: view.0 },
+        });
     let light = commands
         .spawn((
             DirectionalLight {

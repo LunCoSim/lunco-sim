@@ -1,12 +1,9 @@
 //! Wheel-sinking parity check — does the rover's ride height stay STABLE as it
 //! drives over the streamed terrain?
 //!
-//! The wheel-sinking artifact (visual terrain vs physics collider band
-//! mismatch) shows up as the rover dropping progressively below the terrain
-//! surface as it crosses tiles — the collider keeps relief the drawn/morphed
-//! surface flattens, so the rover falls into dips the eye cannot see. With the
-//! SurfaceBand contact-floor + morph-pinning fixes, the collider and the drawn
-//! surface agree, so the rover's offset from the analytic surface stays bounded.
+//! Compare the rover's physical ride-height drift with the analytic terrain
+//! source over the drive. Rendered terrain fidelity is checked separately by
+//! the consumed-camera gates.
 //!
 //! ## What this measures
 //!

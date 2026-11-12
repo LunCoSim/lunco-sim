@@ -125,6 +125,8 @@ pub struct TerrainAuthoredMaps {
     /// illumination-bearing grayscale orthophoto, the `kind = "albedo"`
     /// asset pipeline must produce this stable map before it is bound here.
     pub albedo: Option<lunco_materials::ShaderTexture>,
+    /// Regional reference-geometry reflectance with explicit alpha coverage.
+    pub regional_albedo: Option<lunco_materials::ShaderTexture>,
     /// `inputs:mineral_map` — a classification/analysis drape, composited
     /// UNLIT so it stays readable in shadow (doc 18 §4).
     pub mineral: Option<lunco_materials::ShaderTexture>,
@@ -165,6 +167,7 @@ impl TerrainAuthoredMaps {
             _ => 0.0,
         };
         let albedo = look.textures.get(&TextureLayer::Albedo).cloned();
+        let regional_albedo = look.textures.get(&TextureLayer::RegionalAlbedo).cloned();
         let mineral = look.textures.get(&TextureLayer::Mineral).cloned();
         let engine_layer_on = |name: &str| {
             matches!(
@@ -199,6 +202,7 @@ impl TerrainAuthoredMaps {
             weight_ao: weight("weight_ao", surface.is_some()),
             weight_normal: weight("weight_normal", normal.is_some()),
             albedo,
+            regional_albedo,
             mineral,
             surface,
             normal,
@@ -491,14 +495,14 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
     type Output = DerivedMaps;
     const NAMESPACE: &'static str = "terrain/derived";
 
-    /// Content hash of the canonical composed-surface identity plus every bake
-    /// parameter. The oracle already owns the base-grid identity, so this stays
-    /// O(1) even for a multi-million-sample DEM.
+    /// The maps sample only the local footprint, so changing an exterior
+    /// regional tier does not invalidate this bake. The oracle retains the
+    /// local surface identity separately from its complete domain identity.
     fn key(&self) -> u64 {
         let grid = self.oracle.grid();
         let mut h = lunco_precompute::Fnv1a::new();
         h.write_u64(CACHE_FORMAT_VERSION);
-        h.write_u64(self.oracle.surface_key());
+        h.write_u64(self.oracle.local_surface_key());
         h.write_u64(grid.res as u64);
         h.write_u64(grid.half_extent.to_bits() as u64);
         h.write_u64(self.profile.terrain_derived_map_resolution as u64);
@@ -980,6 +984,82 @@ mod tests {
             }
             .key(),
             "the bake key follows the oracle identity, not a second DEM hash"
+        );
+    }
+
+    #[test]
+    fn local_derived_maps_reuse_cache_across_regional_changes() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        use lunco_obstacle_field::field::HeightGrid;
+        use lunco_terrain_bake::regional::RegisteredRegionalSurface;
+
+        let local = Arc::new(HeightGrid::new_flat(3, 10.0));
+        let geo = |half, res| {
+            GeoTransform::centred_square(half * 2.0, res, 1_737_400.0, 0.0, 0.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let make = |height| {
+            let mut outer = HeightGrid::new_flat(5, 40.0);
+            outer.heights.fill(height);
+            SurfaceOracle::registered(
+                Arc::new(
+                    RegisteredRegionalSurface::new(
+                        local.clone(),
+                        geo(10.0, 3),
+                        Arc::new(outer),
+                        geo(40.0, 5),
+                        5.0,
+                        0.0,
+                    )
+                    .unwrap(),
+                ),
+                Vec::new(),
+            )
+        };
+        let first = make(0.0);
+        let second = make(1.0);
+        assert_ne!(first.surface_key(), second.surface_key());
+        assert_eq!(first.local_surface_key(), second.local_surface_key());
+        let profile = terrain_profile();
+        assert_eq!(
+            DerivedBake {
+                oracle: &first,
+                profile
+            }
+            .key(),
+            DerivedBake {
+                oracle: &second,
+                profile
+            }
+            .key()
+        );
+        let mut changed_local = (*local).clone();
+        changed_local.heights[4] = 1.0;
+        let edited = SurfaceOracle::registered(
+            Arc::new(
+                RegisteredRegionalSurface::new(
+                    Arc::new(changed_local),
+                    geo(10.0, 3),
+                    Arc::new(HeightGrid::new_flat(5, 40.0)),
+                    geo(40.0, 5),
+                    5.0,
+                    0.0,
+                )
+                .unwrap(),
+            ),
+            Vec::new(),
+        );
+        assert_ne!(
+            DerivedBake {
+                oracle: &first,
+                profile
+            }
+            .key(),
+            DerivedBake {
+                oracle: &edited,
+                profile
+            }
+            .key()
         );
     }
 

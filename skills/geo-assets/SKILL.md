@@ -7,9 +7,28 @@ description: Download and process lunar geo assets (DEMs, stable material albedo
 
 The application pipeline is composed by `crates/lunco-assets`; the heavy native
 processors live in `crates/lunco-assets-processing`. Pure Rust — no GDAL.
-Sources may be **GeoTIFF or PDS3 `.IMG`**. Spherical polar-stereographic
+Sources may be **GeoTIFF or PDS3 `.IMG`**. PDS simple-cylindrical labels with
+an explicit spherical radius and line/sample projection offsets use registered
+sample centres and bounded row reads. The recipe owns conversion from decoded
+PDS sample values to metres and its intended vertical datum. A detached PDS label
+is included in the bake identity. Spherical polar-stereographic
 (north/south) and equirectangular GeoTIFFs use their own CRS and sample
 registration. Raw PDS/plain rasters use their declared geographic metadata.
+The pure registered regional sampler requires both grids to declare the same
+body frame, projection and center, and takes an explicit vertical offset and
+transition width. It is not yet wired into the runtime terrain oracle; preparing
+a regional crop alone does not extend a scene's terrain.
+Build `lunco-terrain-bake`'s `regional_probe` example to check two prepared
+GeoTIFFs. Its local-frame argument is an explicit provenance declaration and
+must agree with any frame already recorded in the local GeoTIFF; the regional
+GeoTIFF must carry its own frame. Treat its edge checks as data diagnostics,
+not proof of runtime rendering or physical registration.
+GeoTIFF DEM, coverage, albedo and normal-map processing reads only TIFF chunks
+intersecting the requested output lattice. A geographic recipe may set `output_projection =
+"orthographic"` for a spherical tangent-plane crop; the resulting GeoTIFF
+declares that projection. This is appropriate for regional ENU-aligned terrain,
+where the default equirectangular crop can distort positions far from its centre.
+Orthographic output requires a spherical georeferenced source.
 Read [artifact processing](../../docs/architecture/asset-processing.md) for
 ordered `kind = "pipeline"` recipes, additional raw sources, declared outputs,
 Rhai customization, WESL image kernels, Modelica results, and external stages.
@@ -288,19 +307,23 @@ image math in Rust while making the assembly policy replaceable and extensible.
 1. Find the product: `https://data.lroc.im-ldi.com/lroc/view_rdr/NAC_DTM_<SITE>`;
    files under `https://pds.lroc.im-ldi.com/data/LRO-L-LROC-5-RDR-V1.0/LROLRC_2001/DATA/SDP/NAC_DTM/<SITE>/`.
 2. For an LROC PDS3 source, read its `.LBL`: `MAP_PROJECTION_TYPE`
-   (`.IMG` currently uses EQUIRECTANGULAR; spherical polar/equirectangular
-   GeoTIFFs use standard tags), `MAP_SCALE` → `pixel_scale_m`, and
-   `MIN/MAXIMUM_LATITUDE` + `EASTERNMOST/WESTERNMOST_LONGITUDE` → the four
-   `src_*` fields. **Label longitudes are 0–360 °E — author `center_lon` in
-   the same convention.** Never trust `CENTER_LONGITUDE` (body-frame quirk).
+   (`.IMG` supports registered SIMPLE CYLINDRICAL, EQUIRECTANGULAR and
+   POLAR STEREOGRAPHIC; spherical polar/equirectangular
+   GeoTIFFs use standard tags). For extent-based sources, use `MAP_SCALE` for
+   `pixel_scale_m` and the latitude/longitude bounds for the four `src_*`
+   fields. **Label longitudes are 0–360 °E — author `center_lon` in
+   the same convention.** For extent-based products, do not infer the crop from
+   `CENTER_LONGITUDE`; simple-cylindrical labels use it together with their
+   explicit line/sample projection offsets.
    For a GeoTIFF, verify its spherical CRS/geotransform. Standard polar
    stereographic and equirectangular metadata is consumed natively; plain TIFFs
    require explicit scale and extent declarations.
 3. Pick `center_lat/lon` (the POI), `window_m` (scene size),
    `target_resolution ≈ window_m / native m-per-px` (square).
 4. `sha256 = ""` on first download → the tool prints the hash; paste it in.
-5. PDS3 `.IMG` sources declare extent/scale in their label — `src_*` may be
-   omitted (an authored manifest extent wins when all four are set).
+5. Registered PDS3 `.IMG` sources use the projection and sample positions in
+   their label. For extent-based sources, an authored complete `src_*` extent
+   selects the crop mapping; otherwise the label supplies the extent.
 
 ## Wiring maps as terrain layers (USD)
 

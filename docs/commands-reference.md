@@ -2812,8 +2812,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the Twin that declared the source root. |
-| `authority` | `String` |  Exact `twin://` authority returned by the asset owner. |
-| `id` | `String` |  Twin-scoped source-root key, beginning with `twin:<id>:`. |
+| `source_index` | `u32` |  Index in the selected Twin's ordered Modelica root list. |
 | `path` | `String` |  Twin-relative directory or an explicitly declared absolute external path. |
 
 ### `lunco-modelica-ui-core` <a id="lunco-modelica-ui-core"></a>
@@ -3148,7 +3147,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the active Twin. |
-| `authority` | `String` |  Exact `twin://` authority returned by the asset owner. |
 | `timeline_name` | `String` |  Timeline name exposed through `ListTimelines`. |
 | `relative_path` | `String` |  Indexed JSON file relative to the Twin root. |
 
@@ -3340,7 +3338,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the active Twin. |
-| `authority` | `String` |  Exact `twin://` authority returned by the asset owner. |
 | `library_name` | `String` |  Library name assigned by policy. |
 | `relative_path` | `String` |  Indexed Rhai source path relative to the Twin root. |
 
@@ -3368,8 +3365,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `twin_id` | `u64` |  Workspace identity of the Twin whose source authority was mounted. |
-| `authority` | `String` |  Exact `twin://` authority returned by the asset owner. |
+| `twin_id` | `u64` |  Workspace identity of the Twin that owns the source. |
 | `relative_path` | `String` |  Indexed `.sysml` or `.kerml` path relative to the Twin root. |
 
 #### `PrepareTwinSysmlAnalysis`
@@ -3381,7 +3377,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the mounted Twin. |
-| `authority` | `String` |  Exact `twin://` authority assigned to the Twin. |
 | `relative_paths` | `Vec < String >` |  Complete ordered source selection from the Twin loading policy. |
 
 ### `lunco-telemetry` <a id="lunco-telemetry"></a>
@@ -3521,7 +3516,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"lunco://scenes/luncosim/sandbox_scene.usda"}}`
 
- - `path`: root-qualified USD address (`lunco://…` or stable `twin://<source-identity>/…`). Internal Twin mount authorities are rejected.
+ - `path`: root-qualified USD address (`lunco://…` or `twin://…`).
  - `root_prim`: optional override for the SDF path of the prim to
    spawn. Empty (default) reads the stage's `defaultPrim` metadata;
    if absent, the scene load fails visibly; a whole-stage `/` mount is not a
@@ -3548,7 +3543,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Root-qualified USD address (`lunco://…` or stable `twin://<source-identity>/…`). Filesystem paths are opened through `OpenFile`. Internal Twin mount authorities are rejected; the stable URI resolves to the current mount before scene-transition admission. |
+| `path` | `String` |  Root-qualified USD address (`lunco://…` or stable  `twin://<source-identity>/…`). Internal mount authorities are rejected;  filesystem paths are opened through `OpenFile`. |
 | `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads  `defaultPrim` from the stage's metadata header. A missing `defaultPrim`  is a visible scene-load error; the runtime never mounts `/`. |
 
 #### `OpenTwinScene`
@@ -3559,8 +3554,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `twin_id` | `u64` |  Workspace identity of the Twin whose source authority was mounted. |
-| `authority` | `String` |  Exact `twin://` authority returned by the asset owner. |
+| `twin_id` | `u64` |  Workspace identity of the Twin whose source owns the scene. |
 | `relative_path` | `String` |  Indexed path relative to the Twin root. |
 
 #### `ResetSceneRuntime`
@@ -4685,7 +4679,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 315 commands from the runtime schema; scanned 1093 .rs files for docs (0 parse failure(s) skipped).
+<!-- 315 commands from the runtime schema; scanned 1098 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, MountCachedScenarioTwin, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

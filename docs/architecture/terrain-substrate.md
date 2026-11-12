@@ -4,9 +4,9 @@
 
 How LunCoSim represents planetary surfaces from orbit down to a rover wheel,
 with one analytic source that composes under **USD layering** and **scales to a
-whole solar system**. Camera-driven rendering consumes the physical terrain
-contract without changing physics quality or scheduling. Physical support stays
-independent of camera position, graphics settings and visual worker completion.
+whole solar system**. One immutable source supplies independently sampled physical,
+visual and camera-navigation products. Physical support stays independent of camera
+position, graphics settings and visual worker completion.
 
 This doc is the design narrative. Per-crate quick-starts live in
 [`lunco-terrain-core`](../../crates/lunco-terrain-core/README.md),
@@ -52,61 +52,162 @@ intervals that can contain an intersection, so narrow crater rims and ridges
 cannot be skipped by a fixed-distance march. A ray with no DEM in the scene
 returns no terrain hit, allowing physics-only placement to continue.
 
-These queries return either a certified hit/miss or an error when an interval
-needs bounds that a modifier cannot provide, a DEM lacks a complete active-frame
-pose, or the work budget is exhausted. Callers must keep those outcomes distinct:
-follow-camera motion holds its last position and reports the query failure,
-while the spawn preview hides its old marker and the click path refuses to
-place an entity. `TerrainRaycast` uses the same
-intersection kernel. Visual LOD selection may omit its optional forward-focus
-bias when the query cannot be certified; the camera-centered cover and
-physics-support cover remain authoritative. The production camera gate includes
-a rapid-reposition Rhai test that checks clearance, cover readiness, stream
-settling and use of a coarser distant LOD.
+These point-ray queries return a certified hit/miss or an error for unavailable
+bounds, missing active-frame poses or exhausted work. Callers preserve that
+outcome. Point rays do not establish camera-volume clearance or resolve initial
+penetration.
 
-The physics product chooses its authored collider lattice; graphics quality
-cannot add physics work or change contact geometry. The visual cover reserves
-that same lattice on the physics ring's support footprint and build-ahead nodes.
-`Quadtree::constrain_selection` refines coarse ancestors and pins the required
-support leaves while preserving finer camera leaves and 2:1 neighbour seams. Contact tiles reuse
-`sample_heights_xz`, including the world-anchored 1 mm quantization and native
-grid triangle diagonal; only GPU positions narrow to f32. Finer camera tiles
-use `SampledContactSurface` to subdivide those exact canonical triangle planes,
-including their parent morph lattice, rather than evaluating extra relief that
-physical contact cannot represent. The ring resolution
-also supplies the streamed visual lattice so parent/child seams stay nested.
+Camera navigation uses the terrain owner's typed sphere sweep against the full
+composed surface. Its result distinguishes clear motion, witnessed contact
+proximity with point and normal, initial overlap, and unavailable work. Conservative enclosures
+prune clear intervals; an enclosure upper bound alone is not a collision. The
+source returns one `HeightEnclosure`: scalar height bounds and a `HeightPlane`
+with residual bounds for the same composed surface. Raster Bézier controls,
+registered regional blends and analytic modifier gradients retain slope
+correlation; additive modifiers may update the plane. The sphere solver combines restricted column bounds with an
+upper-plane half-space bound, so shallow travel over a smooth slope does not
+subdivide the whole path to clearance-sized rectangles. Only exact source samples
+provide contact witnesses. Admission ends at a certified clear-prefix boundary
+with an actual solid witness no farther than the sphere radius plus the
+configured geometric separation tolerance. The returned normal samples the
+same full source at the actual witness, including at grazing incidence. The
+overzoom enclosure bounds each value-noise octave at rectangle and lattice-cut
+corners, using monotone interpolation within each cell. Its warp bounds use the
+same actual rectangle. Overzoom bounds value-noise partial derivatives, the warp
+Jacobian and crater profile derivatives before fitting its affine contribution.
+The residual encloses the remaining variation over the rectangle; the fit alone
+never certifies separation. Source evaluation remains within the existing work
+budget; neither an enclosure nor an exhausted search becomes a contact. The camera owner combines terrain
+and native prop constraints through the existing movement mechanism. Movement
+casts the physical camera radius; skin is a directional pullback from an
+approaching contact, rather than an enlarged collision shell. Each projected
+slide is recast against all sources and props. Camera terrain queries exclude the separate native DEM
+collider realization, so navigation does not change at a rover's collider-ring
+boundary. Requested lateral motion does not generate an automatic upward step.
+The camera envelope includes its declared clearance and projection footprint;
+free movement, scroll transit and follow booms consume the same geometry contract.
+The shared interactive `lunar_surface_camera.usda` explicitly authors the standard
+`clippingRange` near plane at 0.01 m, so an omitted USD near plane does not impose
+a metre-scale navigation envelope. Scene-authored lens overrides remain authoritative.
+Perspective-avatar celestial clipping preserves that source minimum; fixed
+observers and mounted sensors retain their authored clipping range.
+The presentation query then checks the retained draw meshes as solid terrain,
+including the columns below their triangles, together with stitch uniforms and
+camera-dependent morph interval. Camera and triangle motion use the same time
+subinterval, so a later morph state cannot block an earlier camera position.
+If coarse or preparing geometry intersects the
+source-safe path, navigation holds its current pose and publishes a bounded
+refinement corridor. It never slides on a coarse approximation.
+An initially overlapping fixed convex column permits explicitly requested
+non-inward motion only when its actual contact plane proves penetration cannot
+increase along the segment; every other column remains checked.
+A fixed contact on the current finest drawn surface joins source and prop
+contacts in one bounded Avian contact-plane projection loop. Each projected step
+is recast against all three owners. Its admitted prefix retains a normal-space
+tolerance margin even at grazing incidence. This redirects requested motion
+along a real contact; it never adds positional depenetration or an upward step.
+Strict source-up travel can leave
+drawn overlap because distance to every column of that heightfield is nondecreasing.
+Terrain publication is a separate admission boundary. New meshes remain hidden
+and same-coordinate replacements retain their published predecessor until the
+complete candidate cover, morph windows and stitches clear the navigating camera.
+One commit publishes geometry, material deformation and visibility together.
+An unsafe candidate keeps the admitted cover and camera pose, reports
+`presentation_pending`, and withdraws latest-cover readiness. Physics continues.
+Candidate admission uses the same bounded solid-heightfield geometry query as
+navigation; a plane above the camera cannot pass as a clear isolated triangle.
+The continuous corridor remains pending across render frames while the camera
+position and source/output/projection lease remain valid; orientation damping
+alone does not cancel it. Capacity refusal retains the exact request and remains
+terminal until its input or admission changes. Refused-node counts describe only
+the current committed requirement and admission. Scroll retains
+its exact request and source/frame lease, and retries after the draw revision
+changes; input or lease changes retire that request. Deliberately requested,
+source-certified upward recovery from initial overlap remains possible while
+native props remain checked. Mounted cameras retain their authored pose; their
+terrain-local clearance is available in `TerrainLodStatus.camera_cover`.
+Runtime acceptance is tracked in
+[the camera terrain review](../reviews/2026-11-12-camera-terrain-architecture.md).
 
-The camera cover remains budgeted and is prepared off-thread at interactive
-priority because it serves the active viewport. When a new selection cycle
-produces a newer camera demand, its owner withdraws an older queued immutable
-cover request; work already dispatched is fenced at the completion boundary.
-This keeps camera motion from accumulating a backlog of obsolete cover plans.
-Contact constraints are applied by that same worker after discretionary
-split/merge work. The worker also reserves the finest tile under every nearby active camera plus
-its edge neighbours, using the camera's real local clearance and configured
-near-detail radius. It builds the required restricted tree first and reserves
-its split cost before allocating the remaining budget to discretionary camera
-LOD. Required camera/support geometry takes precedence when that minimum tree
-alone exceeds the graphics budget.
-Moving support nodes participate in the selection signature and receive bake
-priority. Cached geometry distinguishes contact from visual-only tiles, and
-resident material morph windows update when nodes enter or leave support.
-A newly committed cover publishes those windows before taking the idle path,
-including when every required mesh was already resident. Mesh readiness alone
-does not establish that the material has consumed the new contact pins.
-Frozen cinematic selection applies only without active contact demands. Physics
-never waits for visual preparation. `TerrainLodStatus.contacts` reports support
-nodes (including finer render descendants), visible readiness, the physical
-lattice and the consumed morph pin. `camera_cover` reports the actual local
-camera pose, clearance, selected depth, readiness and pin.
+### Independent visual views and physical support
 
-Routes and wheel marks are `SurfaceCurveAnnotation` material inputs indexed in
-terrain-local XZ. They inherit these triangles directly, without another raised
-mesh or height sampler. New tile looks retain the shared annotation texture;
-route overlays stay unlit, while physical wheel marks receive terrain lighting.
-Run `scripts/api/test_terrain_contact_visual.py` against a real Twin for the
-authored contact/route/trail verdict, including driving and a constrained visual
-budget.
+The physics product chooses its authored collider lattice, filter and deterministic
+quantization. Dynamic assemblies demand their own support and build-ahead nodes.
+Graphics quality and camera output residency do not change that selection.
+
+The visual product consumes finalized camera/output snapshots in `PostUpdate`.
+Main viewport, visible feeds and explicit captures contribute only while their
+output is consumed. Pose, projection, physical output dimensions, scene identity
+and source lease belong to the snapshot. An inactive or retired output contributes
+no visual demand. Each view evaluates its own projected error and owns its exact,
+restricted draw cover, parent fallback, stitch topology and morph context. Mesh
+bakes are shared by source, node and resolution; view state is separate. All color,
+shadow and prepass passes use the same parent view context.
+
+Perspective error uses output pixels, vertical FOV and three-dimensional camera
+distance. Orthographic error uses pixels per metre from the finalized projection
+area and output dimensions. Translating an orthographic camera along its viewing
+axis preserves scale; zoom and lateral motion change detail or its footprint.
+Both projections clip nodes against the finalized view volume using conservative
+full-source height bounds. A projected posting-size floor keeps unresolved small
+features eligible at every distance, including telephoto views where coarse probes
+filter them out. The immutable oracle caches its full-domain enclosure; native
+cover workers compute it, while synchronous web preparation only reads an already
+cached enclosure and otherwise keeps uncertain nodes eligible. Selection retains
+conservative local clip envelopes with hysteresis; angular tolerances derive from
+the projection, output pixels and configured pixel error. The same retained envelope
+owns invalidation and clipping, so subpixel rig jitter can reuse preparation while
+meaningful telephoto pans and roll changes wake selection. Native lens/output
+changes retire incompatible preparation. Orthographic tiles use static parent-edge stitching without distance
+morphing and discrete zoom cover changes. Unsupported custom projection metrics
+produce a diagnostic.
+
+Visual tiles sample the oracle through their own visual band. Their parent targets
+sample the parent lattice's band and indexed triangle interpolation. Visual posting
+counts are odd, so parent and child grids nest. Graphics maximum depth describes the
+local domain; a power-of-two regional expansion adds its exact depth offset while
+preserving finest spacing in metres. Unsupported domain ratios or effective depth
+are diagnosed before admission. Collider settings do not select visual resolution.
+
+Each consumed view has its configured tile budget. Cover preparation and tile
+bakes share bounded asynchronous admission, upload budgets and cache byte limits.
+The graphics byte ceiling retains its GPU upload meaning. Accounting counts
+unique uploaded geometry across views and sources, including live old generations
+and retiring tiles; retained CPU vertex/index payload is reported separately. Uploads wait
+before allocation if residents consume the configured limit. Lowering the limit
+does not discard visible coverage; pressure remains explicit in streaming status.
+The consumed-output registry and output pixel admission bound the number and size
+of views. New demands withdraw obsolete queued work; already-running
+work retains exact scene/source/view leases at publication. Ready ancestors remain
+visible until replacements and materials are admitted. Camera retention is bounded
+in three dimensions and scoped to its view and source. A requested minimum detail
+tree that cannot fit the selected resource budget is reported as unfulfilled quality.
+Physics never waits for visual preparation.
+
+`TerrainLodStatus.camera_cover` reports each view's local pose, clearance, selected
+depth, effective maximum depth, metric spacing, readiness, pin state, wanted,
+resident and drawn counts, and refused refinements. `contacts` reports physical
+support readiness and lattice parameters independently of rendered tiles.
+`presented_ready` describes the retained drawable cover; `ready` additionally
+requires the latest requested selection to be settled in its current generation.
+`stream.selection_pending` counts unqueued follow-up work and newly consumed
+outputs as well as unfinished selections, so retained residency cannot authorize
+an unfinished numbered capture. Finalized demand publication updates this fence
+before the Last-stage offline capture decision. One-shot screenshots retain their
+explicit current-presentation semantics. Neither status proves image quality.
+Near-camera visual/source error and physical/source
+error require separate measured tolerances; exact equality between their sampled
+triangles is not assumed.
+
+`visual_foci` distinguishes perspective FOV from orthographic area and pixel
+density. Streaming mesh accounting reports unique retained GPU upload estimates and separate CPU payload,
+resident/cache/retired subsets, the configured ceiling and refused uploads.
+
+Routes and wheel marks remain shared `SurfaceCurveAnnotation` material inputs in
+terrain-local XZ. Each view's own terrain fragments consume them without rebuilding
+annotation data for camera motion or LOD. Route overlays stay unlit; physical wheel
+marks receive terrain lighting. Production acceptance covers physical support,
+independent main/feed detail, contact appearance, and route/trail registration.
 
 ### One committed-change contract, independent product caches
 
@@ -129,82 +230,21 @@ being replaced. The visual and physics quad lattices share the core
 `Square::overlaps_aabb` spatial rule, while their resolution, bands, scheduling,
 and cache lifetimes remain independent.
 
-### Why (the bug this replaces)
+### Analytic detail and product fidelity
 
-The first crater implementation had **two materializations** of the surface: a
-fixed-resolution `HeightGrid` that craters were *stamped* into (truth for tiles +
-collider) **and** a separate high-fidelity *overlay mesh* floated over the near
-craters with a constant vertical `lift` to win the depth test. Two surfaces can
-never agree:
+Measured DEM heights and analytic modifiers form one source function. A crater
+modifier can resolve below the base DEM posting interval because the modifier is
+analytic; the measured DEM does not acquire new measured detail through interpolation.
+The visual mesh samples the combined function at its selected spacing. Explicitly
+authored `overzoom` supplies deterministic synthetic craterlets and micro-relief,
+with provenance distinct from measured topography.
 
-- the `lift` made craters sit visibly **above** the surrounding terrain (a
-  pedestal/step at the crater edge);
-- the overlay was built off the *smooth* pre-crater grid while the tiles were
-  built off the *stamped* grid → craters **floated free** of neighbouring relief;
-- the collider was the coarse stamped grid, never the crisp overlay → rovers
-  drove a blocky bowl while *seeing* a sharp one → **contact felt wrong exactly
-  on craters**.
-
-All three symptoms are one root cause: more than one surface. The oracle has
-exactly one. `crater_delta`
-([`lunco-obstacle-field/field.rs`](../../crates/lunco-obstacle-field/src/field.rs))
-is reused verbatim — as *math you call*, not pixels you stamp.
-
-> **Invariant: there is exactly one surface builder — the DEM terrain.** It owns
-> crater/rock generation from the spec; the obstacle-field crate is a pure generator
-> that spawns nothing. The rebuild trigger is `UpdateObstacleFieldSpec`, observed by
-> the terrain crates.
->
-> This used to be a *mode*: `ObstacleFieldMode::Standalone` built its own flat-slab
-> arena, and it was the default once, costing **43× the frame rate**. It was demoted
-> to opt-in, then became unreachable — nothing (scene attribute, API, or rhai) could
-> select it — and the mode enum plus the whole slab-build path have since been
-> deleted. Recorded because the lesson outlives the code: a default that is the
-> pathological path is a fuse, not a fix, and it will be found by whoever forgets to
-> set the mode, which is everyone.
-
-### Won't killing the overlay lose crater detail?
-
-No — it *gains* detail. The overlay's original rationale was real: a crater should
-be crisper than the coarse (~5 m) DEM mesh. But that rationale conflated two ideas:
-
-- **"craters are a distinct composable layer"** — keep this, it was right;
-- **"craters render as a separate floating mesh"** — drop this. A layer ≠ a second
-  surface.
-
-What let the overlay out-detail the DEM was **never that it was a separate mesh** —
-it was that it sampled craters **analytically** (`crater_delta` as a function),
-decoupled from the DEM's 5 m grid. The oracle keeps exactly that. In the composed
-sample `height_at = dem.height_at(x,z) + crater_delta(…)`, the two terms have
-different resolution limits: `dem.height_at` is bilinear off the coarse DEM (smooth,
-low-frequency — correct, since there *is* no sub-5 m ground data to invent), while
-`crater_delta` is **analytic → infinite resolution, no grid.** And a CDLOD tile's
-vertex density is *not* the DEM's density: a near tile is 33² verts over a small,
-deeply-subdivided patch, so the crater rim resolves as sharply as the tile
-tessellates — well below 5 m via error-driven refinement + over-zoom — while the
-ground under it stays smooth. The crater is crisper than the DEM mesh *because* its
-contribution is a function, not baked pixels.
-
-The overlay's one genuine win — **dense-rim tessellation** (many polys on the rim,
-few on the floor, more poly-efficient than a uniform tile) — is preserved as the
-**feature-declared radial remesh** (lever 2 under *Detail on demand*): the same
-dense-rim/sparse-floor patch, but sampling the *same* composed oracle (coincident,
-no `lift`) and stitched into the tile instead of floating over a different surface.
-
-Net comparison:
-
-| | Overlay (today) | Crater layer as `HeightSource` modifier |
-|---|---|---|
-| Detail source | analytic `crater_delta` | **same** analytic `crater_delta` |
-| Sub-DEM resolution | yes (floated) | **yes (coincident)** |
-| Dense-rim tessellation | yes | **yes** (feature remesh, honest) |
-| Follows ground relief | no (smooth base + `lift`) | **yes** (sampled on the real surface) |
-| Collider uses the visual-quality contract | **no** (independent product) | **no** (ring samples the same source through authored physics settings) |
-
-The only casualties are `lift` and the smooth-base sampling — precisely the two
-things that caused *elevated / doesn't-follow-ground / colliders-suck*. The
-better-than-DEM detail is preserved and strengthened; it never actually required a
-second surface.
+Each product's sampling and filter determine which source frequencies it retains.
+The renderer's pixel error controls visible approximation; the physics lattice
+controls contacts; camera navigation uses full-source volume queries. Quantify their
+height and normal discrepancies at triangle interiors, crater rims and tile edges,
+including visible wheel contact. Correct inadequate physical sampling at the
+physical owner independently of camera rendering quality.
 
 ## USD describes the stack (two senses of "layer")
 
@@ -235,6 +275,25 @@ is realized by the USD-to-Avian bridge after its asynchronous `Mesh3d` loads;
 `"dem"` and `"layered"` are realized by `lunco-terrain-surface` from the
 `SurfaceOracle`. The bridge does not install a mesh placeholder for DEM-backed
 terrain, so a visual mesh cannot replace the oracle-derived physics surface.
+DEM elevation samples remain `f64` in the native and worker paths and in the
+worker's persistent grid cache. Cached and fresh grids therefore retain the
+same values; conversion to `f32` occurs at the rendering boundary.
+The DEM worker owns cache hashing, decoding, encoding and OPFS persistence, so
+the browser page does not perform those raster-sized operations.
+
+`lunco-terrain-bake::regional::RegisteredRegionalSurface` provides the pure
+sampling and registration checks for a pair of centered DEM grids. It preserves
+the local grid inside its footprint, continues the difference between the local
+and regional edge surfaces through a finite blend, and keeps measured regional
+relief throughout the transition. Edge derivative contributions are bounded
+by the respective sample spacings. Registration
+requires matching declared frames and projections plus an
+explicit vertical offset. `SurfaceOracle` can compose that sampler with its
+height modifiers, and its certified solar traversal uses the regional footprint
+and conservative enclosures. Those enclosures consume the same cell budget on
+cache hits and misses and return an error on exhaustion. Authored terrain layers
+can declare a registered regional DEM alongside the local surface; the native
+loader admits the pair together.
 
 ## Three channels: what a layer actually contributes
 
@@ -285,59 +344,26 @@ and takes over inside. Make the carve field a small composable **SDF** and "a
 cave mouth carved into a crater wall" is just a smooth-union of the two, with no
 special-casing.
 
-## Detail on demand: earned by measured error
+## Detail on demand: measured error and metric spacing
 
-Detail should be **earned by measured error, not spent by camera distance.**
-Today `Quadtree::geometric_error(depth)` is *uniform* (`root / 2^depth`) — it
-assumes every tile at a depth is equally complex, so a flat plain near the camera
-gets the same polygons as a jagged rim crest, and a central peak seen from far
-rounds off. The oracle makes the fix cheap. Four levers, in priority order:
+The visual selector measures source height against the mesh's indexed anti-diagonal
+triangles at node vertices and interior probes. These samples estimate visual error
+and the node height range; they are not conservative collision certificates. Each
+consumed view projects that error using its own output height,
+projection and terrain-local pose. Nearest three-dimensional distance,
+restricted 2:1 neighbors and bounded retention keep the selected cover continuous.
 
-1. **Per-tile geometric error from the oracle.** When baking a node, sample the
-   composed oracle over its bbox and measure `max |true − coarse|` (or a curvature
-   integral); store that as the node's *real* geometric error. Then CDLOD
-   selection (distance vs error at a fixed screen metric — the locked,
-   view-independent, peer-deterministic design) **automatically refines tiles
-   over peaks and rims deeper than tiles over plains at the same distance.** This
-   is the main lever and it is currently the largest gap.
+For domain width `W`, depth `d` and odd posting count `n`, visual spacing is
+`W / (2^d * (n - 1))`. Effective depth expands with a registered regional root so
+local finest spacing is retained. The visual band retains wavelengths at least twice
+its spacing; parent morph targets use twice the spacing and the corresponding band.
+Source sampling and tile mesh generation remain CPU-side, bakeable and content keyed.
 
-2. **Feature-declared concentration** (the honest version of the old overlay). A
-   feature with a known shape — a crater's rim crest and central peak — declares a
-   radial remesh, dense at rim + peak, sparse on the floor. Crucially it **samples
-   the same composed oracle** (so it is *coincident* — no lift, no float) and
-   *refines the tile patch* rather than floating a disc over a different surface.
-
-3. **Procedural over-zoom.** Below the authored feature resolution (1 m off a 5 m
-   DEM), the oracle **synthesizes** deterministic fractal micro-relief — a
-   high-frequency height modifier gated by LOD depth (Outerra-style 5 m → 2.5 cm).
-   Infinite zoom, nothing stored, `seed`-deterministic so visual, collider, and
-   all peers agree on the source function while retaining independent product
-   sampling contracts.
-
-4. **Physics parameters are explicit.** The DEM generator authors
-   `colliderDepth` and `colliderResolution` on the `dem` layer. They are copied
-   into `DemTerrainRequest` and are the only quality inputs to the collider ring;
-   visual LOD and `RenderingQualitySettings` are not read by physics.
-   For terrain width `W`, depth `d` and tile resolution `n`, contact spacing is
-   `W / (2^d * (n - 1))`; the physics band excludes features below twice that
-   spacing. The overzoom generator fully retains crater radii at six times the
-   spacing. Author enough contact resolution for the scene's smallest intended
-   physical crater, then compare native ray hits with the oracle near a body.
-   Matching the height source alone does not match differently filtered products.
-
-**Constraint that shapes all of it:** detail generation stays **CPU-side /
-bakeable**, never GPU tessellation or mesh shaders. It must be wasm-safe (locked
-no-VTF/no-compute rule), it must feed **avian colliders** (which cannot consume a
-GPU-tessellated surface), and each detailed tile — however tessellated — must be
-**content-addressable** (via `lunco-precompute`, keyed on `(stack-hash, quad,
-lod)`). GPU displacement would give visuals the physics and cache can't see.
-
-*Worked example — a crater central peak:* a height term in the crater modifier
-for large craters (`+peak_h · gauss(d / peak_r)`) → single-valued, so the oracle
-owns it. It renders crisp because **(1)** error-driven CDLOD subdivides it,
-**(2)** the crater's radial remesh guarantees ring density on the peak, **(3)**
-over-zoom adds micro-relief up close, and **(4)** the collider refines there too.
-One function, four LOD mechanisms feeding off its measured error.
+Physics parameters are explicit: `colliderDepth` and `colliderResolution` on the DEM
+layer supply `DemTerrainRequest`. The same spacing formula determines the physical
+band from that independent lattice. Author enough resolution for the smallest
+intended physical feature and measure native contact/source discrepancy. The
+physics sampler, scheduling and support readiness do not consume camera metrics.
 
 ## Scale: orbit to rover, one abstraction
 
@@ -572,7 +598,7 @@ floor and retention band use the same distance. Camera poses are resolved in
 the terrain-local f64 frame through `lunco-spatial`'s shared-grid `big_space`
 conversion. Range factor comes from the canonical screen metric (`pixel_error`),
 and bounded deterministic split/merge edits retain an exact cover under the tile
-budget. The physics collider ring additionally constrains the visual support cover; **streaming** — off-thread tile bakes (budgeted per frame,
+budget for each consumed view; **streaming** — off-thread tile bakes (budgeted per frame,
 bounded in flight) keeps a root fallback queued first while refined tiles
 publish, then orders selected work by screen-space benefit weighted toward the
 camera heading, with a reveal morph settling each child onto its parent's lattice,
@@ -633,26 +659,19 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
 > only for the *authoring* plane: a raw authored `sdf::Data` layer, deliberately
 > pre-composition. Two read planes, two traits; don't conflate them.
 
-**Known gaps (in the order they should land):**
+**Remaining terrain extensions:**
 
-1. ~~Kill the two-surface crater path~~ — **done**: craters are an analytic
-   `Craters` modifier on the `SurfaceOracle`, sampled by the tile baker and the
-   collider ring at their own resolutions. The collider ring's depth and tile
-   resolution are authored on the DEM layer and are never selected from the
-   graphics-quality profile; rendered tile count and physics contact density
-   therefore remain independent in both windowed and headless execution.
-2. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
+1. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
    heightfield→trimesh fallback on mouth tiles).
-3. **Canonical-Stage read migration** — move `bridge_usd_dem_terrain` + the layer parsers onto
+2. **Canonical-Stage read migration** — move `bridge_usd_dem_terrain` + the layer parsers onto
    `UsdRead`/`StageView`; replace the `AssetEvent<UsdStageAsset>` reload observer
    with a terrain `UsdAttrProjection` off StageSink; make regen a physics-atomic
    activation unit (see *Alignment* above).
-4. **Tile bake cache** — **partly done**: visual tile meshes are
+3. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
    + tile coord), so a warm reload of the same composed surface streams instead
-   of baking. Still open: sharing the bake with the collider ring (one sample
-   pass feeding visuals + physics) and shipping bakes as spec+hash across peers
-   via the `lunco_precompute::Bake` pattern.
+   of baking. Shipping visual bakes as spec+hash across peers remains open. Physics and
+   visual meshes retain independent product identities and sampling contracts.
 
 [Cesium-for-Omniverse]: https://github.com/CesiumGS/cesium-omniverse
 

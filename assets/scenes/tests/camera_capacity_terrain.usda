@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "CameraCapacityTerrain"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    doc = "Finite-capacity camera preparation over a deterministic excavated flat DEM."
+)
+
+def Xform "CameraCapacityTerrain" (
+    prepend references = @lunco://scenes/tests/camera_flat_terrain.usda@</CameraFlatTerrain>
+)
+{
+    over "Terrain"
+    {
+        def Xform "Dig" (
+            prepend apiSchemas = ["LunCoTerrainLayerAPI", "LunCoTerrainEditAPI"]
+        )
+        {
+            uniform token lunco:layer = "edit"
+            uniform token lunco:edit:kind = "brush"
+            double2 lunco:edit:center = (120.0, 0.0)
+            double lunco:edit:radius = 4.0
+            double lunco:edit:amount = -5.0
+        }
+    }
+}

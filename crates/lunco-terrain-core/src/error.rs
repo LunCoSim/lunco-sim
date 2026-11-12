@@ -28,7 +28,7 @@ pub struct NodeGeometry {
     pub height_range: [f64; 2],
 }
 
-/// Measure lost bilinear detail and the height envelope using the node's mesh
+/// Measure lost triangle detail and the height envelope using the node's mesh
 /// vertices and interior probes. `res` is the vertex count per side (at least two).
 pub fn measure_node_geometry(src: &dyn HeightSource, region: Square, res: usize) -> NodeGeometry {
     thread_local! {
@@ -72,13 +72,13 @@ pub fn measure_node_geometry(src: &dyn HeightSource, region: Square, res: usize)
             let h01 = verts[(cj + 1) * n + ci];
             let h11 = verts[(cj + 1) * n + ci + 1];
             for &(u, v) in CELL_SAMPLES {
-                let bil = bilerp(h00, h10, h01, h11, u, v);
+                let mesh_height = triangle_height(h00, h10, h01, h11, u, v);
                 let px = x0 + (ci as f64 + u) * step;
                 let pz = z0 + (cj as f64 + v) * step;
                 let truth = src.height_at(px, pz);
                 height_range[0] = height_range[0].min(truth);
                 height_range[1] = height_range[1].max(truth);
-                let e = (truth - bil).abs();
+                let e = (truth - mesh_height).abs();
                 if e > max_err {
                     max_err = e;
                 }
@@ -94,12 +94,15 @@ pub fn measure_node_geometry(src: &dyn HeightSource, region: Square, res: usize)
     }
 }
 
-/// Bilinear interpolation of a cell's four corner heights at unit-cell `(u, v)`.
+/// Interpolate the indexed mesh triangles at unit-cell `(u, v)` coordinates.
+/// The shared diagonal joins `(1, 0)` and `(0, 1)`.
 #[inline]
-fn bilerp(h00: f64, h10: f64, h01: f64, h11: f64, u: f64, v: f64) -> f64 {
-    let a = h00 + (h10 - h00) * u;
-    let b = h01 + (h11 - h01) * u;
-    a + (b - a) * v
+fn triangle_height(h00: f64, h10: f64, h01: f64, h11: f64, u: f64, v: f64) -> f64 {
+    if u + v <= 1.0 {
+        h00 + u * (h10 - h00) + v * (h01 - h00)
+    } else {
+        h11 + (1.0 - u) * (h01 - h11) + (1.0 - v) * (h10 - h11)
+    }
 }
 
 #[cfg(test)]
@@ -136,7 +139,7 @@ mod tests {
 
     #[test]
     fn flat_surface_has_zero_error() {
-        // A plane is represented exactly by any bilinear mesh → no error anywhere.
+        // A plane is represented exactly by the mesh triangles.
         assert_eq!(
             measure_node_geometry(&Flat, sq(0.0, 0.0, 100.0), 8).error,
             0.0
@@ -148,6 +151,40 @@ mod tests {
         assert_eq!(
             measure_node_geometry(&Flat, sq(0.0, 0.0, 100.0), 8).height_range,
             [42.0, 42.0]
+        );
+    }
+
+    #[test]
+    fn saddle_error_measures_the_indexed_triangles() {
+        struct Saddle;
+        impl HeightSource for Saddle {
+            fn height_at(&self, x: f64, z: f64) -> f64 {
+                x * z
+            }
+        }
+        let region = sq(0.5, 0.5, 0.5);
+        // The centre of the diagonal has source height 1/4 while both
+        // triangle endpoints have height zero. Quarter probes exercise both
+        // triangles; finer cells reduce the error by the squared spacing.
+        assert_eq!(measure_node_geometry(&Saddle, region, 2).error, 0.25);
+        assert_eq!(measure_node_geometry(&Saddle, region, 3).error, 0.0625);
+    }
+
+    #[test]
+    fn indexed_triangle_surface_has_zero_residual() {
+        struct Triangles;
+        impl HeightSource for Triangles {
+            fn height_at(&self, x: f64, z: f64) -> f64 {
+                if x + z <= 1.0 {
+                    2.0 * x + 3.0 * z
+                } else {
+                    7.0 - 4.0 * (1.0 - x) - 5.0 * (1.0 - z)
+                }
+            }
+        }
+        assert_eq!(
+            measure_node_geometry(&Triangles, sq(0.5, 0.5, 0.5), 2).error,
+            0.0
         );
     }
 

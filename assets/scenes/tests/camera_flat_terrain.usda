@@ -1,0 +1,60 @@
+#usda 1.0
+(
+    defaultPrim = "CameraFlatTerrain"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    doc = "Flat lunar DEM camera navigation regression: a free camera 120 m from native physical support. Raster elevations are f64 at -1918 m."
+)
+
+def Xform "CameraFlatTerrain" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2451545.0
+    def Xform "Terrain" (
+        prepend apiSchemas = ["LunCoTerrainAPI", "LunCoAssetAPI", "MaterialBindingAPI"]
+    )
+    {
+        custom rel material:binding = </CameraFlatTerrain/TerrainMaterial>
+        string lunco:assetMode = "dem"
+        def Xform "DEM" (
+            prepend apiSchemas = ["LunCoTerrainLayerAPI"]
+        )
+        {
+            uniform token lunco:layer = "dem"
+            asset lunco:layer:demSource = @fixtures/camera_flat_terrain@
+            float lunco:layer:windowM = 0.0
+            int lunco:layer:targetRes = 0
+            bool lunco:layer:lodViz = true
+            bool lunco:layer:colliderRing = true
+            int lunco:layer:colliderResolution = 65
+        }
+    }
+    def Material "TerrainMaterial" (
+        prepend references = @lunco://scenes/tests/terrain_shader_appearance.usda@</TerrainShaderAppearance/Looks/LunarTerrain>
+    )
+    {
+    }
+    def Camera "Avatar" (
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        custom double3 xformOp:translate = (120.0, -1888.0, 0.0)
+        double3 lunco:cameraLookAt = (120.0, -1888.0, -1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cube "SupportBody" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        float physics:mass = 10.0
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+        custom double3 xformOp:translate = (0.0, -1917.4, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

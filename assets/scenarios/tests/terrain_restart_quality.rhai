@@ -43,10 +43,17 @@ fn on_tick(me, params) {
         || status.stream.pending != 0 { return; }
     let valid = true;
     for tile in status.contacts {
-        valid = valid && tile.ready && tile.drawn && tile.pinned;
+        valid = valid && tile.ready;
     }
-    if !valid { return; }
-    this.checks.push(t_true(valid, "replacement contact cover is ready and pinned"));
+    let views = 0;
+    for view in status.camera_cover {
+        if view.source == status.contacts[0].source {
+            views += 1;
+            valid = valid && view.ready && view.wanted > 0 && view.resident == view.wanted && view.drawn > 0;
+        }
+    }
+    if !valid || views == 0 { return; }
+    this.checks.push(t_true(valid && views > 0, "replacement physical support and camera covers are ready"));
     this.source = status.contacts[0].source;
     if this.phase == 1 {
         this.checks.push(t_true(status.config.max_depth.to_int() == 6,

@@ -1,5 +1,7 @@
 // @timing presentation
 // Rapid view changes preserve clearance and settle the latest camera cover.
+import "lunco://scripting/tests/lib/terrain_camera.rhai" as terrain_camera;
+
 const TEST_KIND = "graphics";
 
 fn simulation_dependencies(me, params) {
@@ -20,6 +22,12 @@ fn set_pose(index) {
 }
 
 fn on_start(me, params) {
+    if !(params.clearance_tolerance_m > 0.0) { throw "camera gate requires a declared clearance tolerance"; }
+    let status = query("TerrainLodStatus", #{});
+    this.camera = status.viewport_camera;
+    let camera = terrain_camera::main_cover(status, this.camera, ());
+    if camera == () { throw "rapid camera gate needs a main viewport terrain cover"; }
+    this.source = camera.source;
     this.index = 0;
     this.samples = 0;
     this.all_clear = true;
@@ -35,12 +43,11 @@ fn on_start(me, params) {
 fn on_tick(me, params) {
     if this.done { return; }
     let status = query("TerrainLodStatus", #{});
-    let cameras = status.camera_cover;
-    if cameras.len() == 1 {
-        let camera = cameras[0];
+    let camera = terrain_camera::main_cover(status, this.camera, this.source);
+    if camera != () {
         let position = camera.position_local_m;
         this.samples += 1;
-        this.all_clear = this.all_clear && camera.clearance_m > 0.1;
+        this.all_clear = this.all_clear && terrain_camera::above_ground(camera, params.clearance_tolerance_m);
         this.all_cover_ready = this.all_cover_ready && camera.ready;
         if this.last_position != () {
             let dx = position[0] - this.last_position[0];
@@ -49,6 +56,9 @@ fn on_tick(me, params) {
             this.maximum_motion_m = max(this.maximum_motion_m, sqrt(dx * dx + dy * dy + dz * dz));
         }
         this.last_position = position;
+    } else {
+        this.all_clear = false;
+        this.all_cover_ready = false;
     }
 
     if this.index < 31 {
@@ -67,11 +77,11 @@ fn on_tick(me, params) {
         return;
     }
 
-    let settled = cameras.len() == 1 && cameras[0].ready
+    let settled = camera != () && camera.ready
         && status.stream.pending.to_int() == 0
         && status.stream.focus_resident.to_int() >= status.stream.focus_wanted.to_int();
-    let far_lod = cameras.len() == 1
-        && cameras[0].depth.to_int() < status.config.max_depth.to_int();
+    let far_lod = camera != () && camera.depth != ()
+        && camera.depth.to_int() < camera.effective_max_depth.to_int();
     if settled {
         print("camera rapid motion samples=" + this.samples
             + " moved_m=" + this.maximum_motion_m
@@ -85,7 +95,7 @@ fn on_tick(me, params) {
             t_true(status.stream.pending.to_int() == 0
                 && status.stream.focus_resident.to_int() >= status.stream.focus_wanted.to_int(),
                 "latest camera detail settled with no pending terrain work"),
-            t_true(cameras.len() == 1 && cameras[0].ready,
+            t_true(camera != () && camera.ready,
                 "latest camera cover is ready after the burst"),
             t_true(far_lod, "the distant camera uses a coarser terrain LOD")
         ], "CAMERA RAPID TERRAIN MOTION", "CAMERA_RAPID_TERRAIN_MOTION");
@@ -100,7 +110,7 @@ fn on_tick(me, params) {
                 "the burst moved the active camera across distinct terrain views"),
             t_true(this.all_clear, "camera terrain clearance held through the burst"),
             t_true(false, "latest camera terrain work did not settle within 15 seconds"),
-            t_true(cameras.len() == 1 && cameras[0].ready,
+            t_true(camera != () && camera.ready,
                 "latest camera cover is ready after the burst"),
             t_true(far_lod, "the distant camera uses a coarser terrain LOD")
         ], "CAMERA RAPID TERRAIN MOTION", "CAMERA_RAPID_TERRAIN_MOTION");

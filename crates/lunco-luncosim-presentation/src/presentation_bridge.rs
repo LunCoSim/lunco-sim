@@ -25,10 +25,13 @@ pub(crate) fn register(app: &mut App) {
         );
     app.add_systems(
         Update,
-        (
-            report_terrain_stream_status,
-            report_terrain_generation_status,
-        )
+        report_terrain_generation_status
+            .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
+    );
+    app.add_systems(
+        PostUpdate,
+        report_terrain_stream_status
+            .after(lunco_terrain_surface::stream_viz::TerrainPresentationSet::PublishDemands)
             .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
     );
     app.add_systems(
@@ -589,7 +592,7 @@ fn report_terrain_stream_status(
     // render-material publication finishes. Keep the typed live state active
     // until both fulfilment dimensions settle; otherwise the readiness gate
     // sees a false idle transition and the overlay disappears too early.
-    let streaming = status.wanted > 0 && (status.resident < status.wanted || status.pending > 0);
+    let streaming = status.pending > 0 || (status.wanted > 0 && status.resident < status.wanted);
     let completed = mirror.streaming
         && status.wanted > 0
         && status.resident >= status.wanted
@@ -811,6 +814,30 @@ mod terrain_status_tests {
                 .resource::<lunco_status_core::status_bus::StatusBus>()
                 .history()
                 .any(|event| event.message == "Terrain warning")
+        );
+        *app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
+            lunco_terrain_surface::TerrainStreamStatus {
+                pending: 1,
+                selection_pending: 1,
+                ..Default::default()
+            };
+        app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .active_progress()
+                .any(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE),
+            "a newly consumed output blocks capture before its first cover is selected"
+        );
+        *app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() = Default::default();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .active_progress()
+                .all(|event| event.source != lunco_status_core::status_bus::TERRAIN_SOURCE)
         );
     }
 }

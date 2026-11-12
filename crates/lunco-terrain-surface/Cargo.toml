@@ -6,6 +6,8 @@ license.workspace = true
 description = "Local high-detail DEM ground terrain (surface scale): heightfield colliders, CDLOD tile streaming, big_space per-tile anchoring. The 'surface' projection of the terrain family; pairs with lunco-terrain-globe over the shared lunco-terrain-core LOD spine."
 
 [dependencies]
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # The projection-agnostic LOD spine (quadtree-CDLOD selection, tile-grid ring
@@ -62,6 +64,7 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # the wasm Web Worker (`dem_worker`), so the off-thread web bake runs identical
 # code. Also owns the main-thread worker client (`worker_client`, wasm-only).
 lunco-terrain-bake = { path = "../lunco-terrain-bake" }
+lunco-geotiff = { path = "../lunco-geotiff" }
 # `ShaderLook` — the authored-shader appearance INTENT the LOD tiles state (the
 # USD material's source, CDLOD vertex source, params, and texture layers).
 # Also `ATTRIBUTE_MORPH_TARGET` (a `bevy_mesh` vertex attribute) for the tile bake.

@@ -77,6 +77,17 @@ pub struct WorldShellSet;
 #[reflect(Component)]
 pub struct OriginAnchor;
 
+/// The camera whose authoritative pose currently drives [`OriginAnchor`].
+///
+/// The viewport owner publishes this binding only after resolving the complete
+/// camera pose into `world_grid`, and removes it when that binding is absent.
+/// Spatial admission uses the identity; it never chooses a presentation camera.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderOriginController {
+    pub camera: Entity,
+    pub world_grid: Entity,
+}
+
 /// Startup configuration for the canonical [`WorldGrid`]. A *resource* so the
 /// binary or scene host can choose the frame before the world shell is created;
 /// core has one authoritative contract rather than copied `Grid::new` values.

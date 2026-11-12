@@ -37,10 +37,10 @@ fn schema_checks(path, fields, reports) {
     failures.push(t_true(report != () && report.ok == true,
         path + " failed standalone WESL schema validation"));
     // ValidateAsset exposes uniform_size as UInt; this bounded threshold keeps
-    // the <= 256 result exact after explicit conversion and avoids mixed types.
+    // the <= 512 result exact after explicit conversion and avoids mixed types.
     failures.push(t_true(report != () && report.info.uniform_size != ()
-        && to_float(report.info.uniform_size) <= 256.0,
-        path + " exceeds the 256-byte material uniform contract"));
+        && to_float(report.info.uniform_size) <= 512.0,
+        path + " exceeds the 512-byte material uniform contract"));
     for field in fields {
         failures.push(t_true(has_param(report, field.name, field.type),
             path + " is missing reflected " + field.name + ": " + field.type));
@@ -182,6 +182,7 @@ fn on_tick(me, ctx) {
         #{ name: "site_weight_albedo", type: "F32" },
         #{ name: "site_weight_rough", type: "F32" },
         #{ name: "site_weight_ao", type: "F32" },
+        #{ name: "site_authored_surface_on", type: "F32" },
         #{ name: "site_base_color", type: "Vec4" },
         #{ name: "site_photometry", type: "Vec4" },
     ], this.preflight.reports) { failures.push(failure); }
@@ -200,6 +201,7 @@ fn on_tick(me, ctx) {
         #{ name: "derived_surface_on", type: "F32" },
         #{ name: "derived_normal_on", type: "F32" },
         #{ name: "authored_surface_on", type: "F32" },
+        #{ name: "site_authored_surface_on", type: "F32" },
         #{ name: "authored_normal_on", type: "F32" },
         #{ name: "terrain_geometry_on", type: "F32" },
     ], this.preflight.reports) { failures.push(failure); }

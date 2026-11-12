@@ -12,13 +12,20 @@ use bevy::light::{ClusteredDecal, LightProbe, PointLight, SpotLight, cluster::Cl
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::render::view::Tonemapping;
-use lunco_render::camera::{MsaaLevel, SceneCamera, ToneMap};
+use lunco_render::camera::{
+    CameraRetiring, MsaaLevel, SceneCamera, SceneViewDemand, SceneViewDemandSet, SceneViewLayers,
+    SceneViewOutput, ToneMap,
+};
 
 use crate::RenderProfile;
 
 pub(crate) fn build(app: &mut App) {
     let initial_clusterable_object_count = count_clusterable_objects(app.world_mut());
     app.init_resource::<RenderProfile>()
+        .configure_sets(
+            PostUpdate,
+            SceneViewDemandSet::Publish.after(TransformSystems::Propagate),
+        )
         // Native camera passes use the existing typed component authoring path.
         .register_type::<DepthPrepass>()
         .register_type::<NormalPrepass>()
@@ -50,7 +57,214 @@ pub(crate) fn build(app: &mut App) {
                 rebind_changed_scene_camera,
             )
                 .chain(),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                publish_main_view_demand,
+                retire_removed_scene_view_demands,
+                publish_scene_view_layers,
+                publish_default_shadow_origin,
+            )
+                .chain()
+                .in_set(SceneViewDemandSet::Publish)
+                .after(lunco_viewport_core::SceneViewportSet::Reconcile)
+                .after(bevy::camera::CameraUpdateSystems)
+                .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
         );
+}
+
+#[derive(Component)]
+struct SelectedOutputShadowOrigin;
+
+/// An explicit authored origin takes precedence. Otherwise the selected main
+/// output supplies the application's shared point/spot shadow sampling origin.
+fn publish_default_shadow_origin(
+    outputs: Query<(Entity, &SceneViewDemand), With<SceneViewLayers>>,
+    origins: Query<(Entity, Has<SelectedOutputShadowOrigin>), With<bevy::camera::ShadowLodOrigin>>,
+    mut commands: Commands,
+) {
+    let authored = origins.iter().any(|(_, owned)| !owned);
+    let selected = (!authored)
+        .then(|| {
+            outputs
+                .iter()
+                .find(|(_, demand)| demand.output == SceneViewOutput::MainViewport)
+                .map(|(entity, _)| entity)
+        })
+        .flatten();
+    for (entity, owned) in &origins {
+        if owned && selected != Some(entity) {
+            commands
+                .entity(entity)
+                .remove::<(bevy::camera::ShadowLodOrigin, SelectedOutputShadowOrigin)>();
+        }
+    }
+    if let Some(entity) = selected {
+        if origins.get(entity).is_err() {
+            commands
+                .entity(entity)
+                .insert((bevy::camera::ShadowLodOrigin, SelectedOutputShadowOrigin));
+        }
+    }
+}
+
+fn publish_main_view_demand(
+    viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
+    cameras: Query<(Entity, &Camera, Option<&SceneViewDemand>), With<SceneCamera>>,
+    mut commands: Commands,
+) {
+    for (entity, camera, demand) in &cameras {
+        let selected = viewport
+            .as_ref()
+            .is_some_and(|v| v.visible && v.active_camera == Some(entity))
+            && camera.is_active
+            && matches!(
+                camera.output_mode,
+                bevy::camera::CameraOutputMode::Write { .. }
+            );
+        if selected {
+            let next = SceneViewDemand {
+                source: entity,
+                output: SceneViewOutput::MainViewport,
+            };
+            if demand != Some(&next) {
+                commands.entity(entity).insert(next);
+            }
+        } else if demand.is_some_and(|d| d.output == SceneViewOutput::MainViewport) {
+            commands.entity(entity).remove::<SceneViewDemand>();
+        }
+    }
+}
+
+#[derive(Default)]
+struct SceneViewLayerAllocator {
+    frame: u64,
+    leases: std::collections::BTreeMap<Entity, (SceneViewDemand, usize)>,
+    retired: Vec<(u64, usize)>,
+    failed: std::collections::HashSet<Entity>,
+}
+
+fn retire_removed_scene_view_demands(
+    mut removed: RemovedComponents<SceneViewDemand>,
+    mut views: Query<(
+        &mut bevy::camera::visibility::RenderLayers,
+        &SceneViewLayers,
+    )>,
+    mut commands: Commands,
+) {
+    for entity in removed.read() {
+        if let Ok((mut layers, lease)) = views.get_mut(entity) {
+            let base = layers.clone().without(lease.layer);
+            layers.set_if_neq(base);
+            commands.entity(entity).remove::<SceneViewLayers>();
+        }
+    }
+}
+
+/// Four publication boundaries allow retired geometry's two extraction grace
+/// frames to finish before another output can receive its channel.
+fn publish_scene_view_layers(world: &mut World, mut allocator: Local<SceneViewLayerAllocator>) {
+    use bevy::camera::visibility::RenderLayers;
+    allocator.frame = allocator.frame.saturating_add(1);
+    let frame = allocator.frame;
+    allocator.retired.retain(|(ready, _)| *ready > frame);
+    let mut query = world
+        .query_filtered::<(Entity, &Camera, &SceneViewDemand, Has<CameraRetiring>), With<Camera3d>>(
+        );
+    let mut active = query
+        .iter(world)
+        .filter(|(_, camera, demand, retiring)| {
+            !*retiring
+                && camera.is_active
+                && matches!(
+                    camera.output_mode,
+                    bevy::camera::CameraOutputMode::Write { .. }
+                )
+                && camera
+                    .physical_viewport_size()
+                    .is_some_and(|size| size.x > 0 && size.y > 0)
+                && world.get_entity(demand.source).is_ok()
+                && world.get::<CameraRetiring>(demand.source).is_none()
+                && world
+                    .get::<bevy::ecs::entity_disabling::Disabled>(demand.source)
+                    .is_none()
+        })
+        .map(|(entity, _, demand, _)| (entity, *demand))
+        .collect::<Vec<_>>();
+    active.sort_unstable_by_key(|(entity, _)| *entity);
+    allocator
+        .failed
+        .retain(|entity| active.iter().any(|(active, _)| active == entity));
+    let retired = allocator
+        .leases
+        .iter()
+        .filter_map(|(entity, (demand, _))| {
+            (world.get::<SceneViewLayers>(*entity).is_none()
+                || !active
+                    .iter()
+                    .any(|(active, current)| active == entity && current == demand))
+            .then_some(*entity)
+        })
+        .collect::<Vec<_>>();
+    for entity in retired {
+        let (_, layer) = allocator.leases.remove(&entity).unwrap();
+        allocator.retired.push((frame.saturating_add(4), layer));
+        allocator.failed.remove(&entity);
+        if let Ok(mut camera) = world.get_entity_mut(entity) {
+            let layers = camera
+                .get::<RenderLayers>()
+                .cloned()
+                .unwrap_or_default()
+                .without(layer);
+            camera.insert(layers).remove::<SceneViewLayers>();
+        }
+    }
+    for (entity, demand) in active {
+        let layer = if let Some((_, layer)) = allocator.leases.get(&entity).copied() {
+            layer
+        } else {
+            let available = (64..320).find(|candidate| {
+                !allocator
+                    .leases
+                    .values()
+                    .any(|(_, layer)| layer == candidate)
+                    && !allocator
+                        .retired
+                        .iter()
+                        .any(|(_, layer)| layer == candidate)
+            });
+            let Some(layer) = available else {
+                if allocator.failed.insert(entity) {
+                    lunco_core::trigger_runtime_error(
+                        &mut world.commands(),
+                        "scene-view-layer-budget",
+                        format!(
+                            "render camera {entity:?} exceeds the 256 active output layer leases"
+                        ),
+                    );
+                }
+                continue;
+            };
+            allocator.leases.insert(entity, (demand, layer));
+            allocator.failed.remove(&entity);
+            layer
+        };
+        let mut camera = world.entity_mut(entity);
+        let base = camera
+            .get::<RenderLayers>()
+            .cloned()
+            .unwrap_or_default()
+            .without(layer);
+        let effective = base.clone().with(layer);
+        if camera.get::<RenderLayers>() != Some(&effective) {
+            camera.insert(effective);
+        }
+        let next = SceneViewLayers { layer, base };
+        if camera.get::<SceneViewLayers>() != Some(&next) {
+            camera.insert(next);
+        }
+    }
 }
 
 fn tonemapping_of(t: ToneMap) -> Tonemapping {
@@ -369,13 +583,316 @@ fn rebind_changed_scene_camera(
 }
 
 #[cfg(test)]
+mod view_output_tests {
+    use super::*;
+    use bevy::camera::{Viewport, visibility::RenderLayers};
+
+    fn output(world: &mut World, source: Entity, id: u64) -> Entity {
+        world
+            .spawn((
+                Camera3d::default(),
+                Camera {
+                    viewport: Some(Viewport {
+                        physical_size: UVec2::new(640, 360),
+                        ..default()
+                    }),
+                    ..default()
+                },
+                SceneViewDemand {
+                    source,
+                    output: SceneViewOutput::Observation { id },
+                },
+                RenderLayers::layer(3),
+            ))
+            .id()
+    }
+
+    #[test]
+    fn active_outputs_isolate_geometry_and_release_only_their_owned_layer() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (retire_removed_scene_view_demands, publish_scene_view_layers).chain(),
+        );
+        let source = app.world_mut().spawn_empty().id();
+        let first = output(app.world_mut(), source, 1);
+        let second = output(app.world_mut(), source, 2);
+        app.update();
+        let first_layer = app.world().get::<SceneViewLayers>(first).unwrap().layer;
+        let second_layer = app.world().get::<SceneViewLayers>(second).unwrap().layer;
+        assert_ne!(first_layer, second_layer);
+        assert!(
+            !app.world()
+                .get::<RenderLayers>(first)
+                .unwrap()
+                .iter()
+                .any(|n| n == second_layer)
+        );
+        app.world_mut()
+            .entity_mut(first)
+            .insert(RenderLayers::layer(9).with(first_layer));
+        app.update();
+        assert_eq!(
+            app.world().get::<SceneViewLayers>(first).unwrap().base,
+            RenderLayers::layer(9)
+        );
+        app.world_mut().get_mut::<Camera>(first).unwrap().is_active = false;
+        app.update();
+        assert!(app.world().get::<SceneViewLayers>(first).is_none());
+        assert_eq!(
+            app.world().get::<RenderLayers>(first),
+            Some(&RenderLayers::layer(9))
+        );
+        assert_eq!(
+            app.world().get::<SceneViewLayers>(second).unwrap().layer,
+            second_layer
+        );
+        app.world_mut().get_mut::<Camera>(first).unwrap().is_active = true;
+        app.update();
+        assert_ne!(
+            app.world().get::<SceneViewLayers>(first).unwrap().layer,
+            first_layer,
+            "retired geometry cannot enter a newly admitted output during its extraction grace frames"
+        );
+    }
+
+    #[test]
+    fn replacing_output_or_source_retires_the_exact_lease_and_disabled_sources_release_it() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (retire_removed_scene_view_demands, publish_scene_view_layers).chain(),
+        );
+        let source = app.world_mut().spawn_empty().id();
+        let camera = output(app.world_mut(), source, 1);
+        app.update();
+        let first = app.world().get::<SceneViewLayers>(camera).unwrap().layer;
+        app.world_mut()
+            .get_mut::<SceneViewDemand>(camera)
+            .unwrap()
+            .output = SceneViewOutput::Observation { id: 2 };
+        app.update();
+        let second = app.world().get::<SceneViewLayers>(camera).unwrap().layer;
+        assert_ne!(first, second);
+        let demand = *app.world().get::<SceneViewDemand>(camera).unwrap();
+        app.world_mut()
+            .entity_mut(camera)
+            .remove::<SceneViewDemand>()
+            .insert(demand);
+        app.update();
+        let readded = app.world().get::<SceneViewLayers>(camera).unwrap().layer;
+        assert_ne!(
+            second, readded,
+            "remove/readd invalidates an identical output lease"
+        );
+        let replacement = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .get_mut::<SceneViewDemand>(camera)
+            .unwrap()
+            .source = replacement;
+        app.update();
+        assert_ne!(
+            app.world().get::<SceneViewLayers>(camera).unwrap().layer,
+            readded
+        );
+        app.world_mut()
+            .entity_mut(replacement)
+            .insert(bevy::ecs::entity_disabling::Disabled);
+        app.update();
+        assert!(app.world().get::<SceneViewLayers>(camera).is_none());
+        app.world_mut()
+            .entity_mut(replacement)
+            .remove::<bevy::ecs::entity_disabling::Disabled>();
+        app.update();
+        assert!(app.world().get::<SceneViewLayers>(camera).is_some());
+        app.world_mut()
+            .entity_mut(replacement)
+            .insert(CameraRetiring);
+        app.update();
+        assert!(app.world().get::<SceneViewLayers>(camera).is_none());
+    }
+
+    #[test]
+    fn only_the_visible_explicit_main_binding_publishes_main_demand() {
+        let mut app = App::new();
+        app.init_resource::<lunco_viewport_core::SceneViewport>()
+            .add_systems(
+                Update,
+                (publish_main_view_demand, publish_scene_view_layers).chain(),
+            );
+        let source = app.world_mut().spawn_empty().id();
+        let first = output(app.world_mut(), source, 1);
+        let second = output(app.world_mut(), source, 2);
+        for camera in [first, second] {
+            app.world_mut()
+                .entity_mut(camera)
+                .remove::<SceneViewDemand>()
+                .insert(SceneCamera::default());
+        }
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = Some(first);
+        app.update();
+        assert_eq!(
+            app.world().get::<SceneViewDemand>(first).unwrap().output,
+            SceneViewOutput::MainViewport
+        );
+        assert!(app.world().get::<SceneViewDemand>(second).is_none());
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = Some(second);
+        app.update();
+        assert!(app.world().get::<SceneViewLayers>(first).is_none());
+        assert_eq!(
+            app.world().get::<SceneViewDemand>(second).unwrap().source,
+            second
+        );
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .visible = false;
+        app.update();
+        assert!(app.world().get::<SceneViewDemand>(second).is_none());
+        assert!(app.world().get::<SceneViewLayers>(second).is_none());
+    }
+
+    #[test]
+    fn selected_main_shadow_origin_yields_to_an_explicit_origin_and_returns_after_removal() {
+        let mut app = App::new();
+        app.init_resource::<lunco_viewport_core::SceneViewport>()
+            .add_systems(
+                Update,
+                (
+                    publish_main_view_demand,
+                    publish_scene_view_layers,
+                    publish_default_shadow_origin,
+                )
+                    .chain(),
+            );
+        let source = app.world_mut().spawn_empty().id();
+        let camera = output(app.world_mut(), source, 1);
+        app.world_mut()
+            .entity_mut(camera)
+            .remove::<SceneViewDemand>()
+            .insert(SceneCamera::default());
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = Some(camera);
+        app.update();
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(camera)
+                .is_some()
+        );
+        app.world_mut()
+            .entity_mut(source)
+            .insert(bevy::camera::ShadowLodOrigin);
+        app.update();
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(camera)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(source)
+                .is_some()
+        );
+        app.world_mut()
+            .entity_mut(source)
+            .remove::<bevy::camera::ShadowLodOrigin>();
+        app.update();
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(camera)
+                .is_some()
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use lunco_render::camera::BloomLook;
 
+    fn valid_quality_profile() -> lunco_render::RenderQualityProfile {
+        lunco_render::RenderQualityProfile {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            directional_cascades: 2,
+            shadow_filtering_quality: lunco_render::ShadowFilteringQuality::Hardware2x2,
+            max_directional_shadow_casters: 1,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 1,
+            shadow_budget_bytes: 1024 * 1024 * 1024,
+            horizon_shadow_cache_enabled: false,
+            horizon_shadow_cache_sun_threshold_deg: 0.2,
+            horizon_march_steps: 24,
+            horizon_cache_samples_per_axis: 1,
+            shadow_minimum_distance: 0.1,
+            shadow_first_cascade_far_bound: 20.0,
+            shadow_maximum_distance: 600.0,
+            shadow_cascade_overlap: 0.1,
+            shadow_depth_bias: 0.1,
+            shadow_normal_bias: 4.0,
+            camera_tone_map: ToneMap::AgX,
+            camera_msaa: MsaaLevel::Off,
+            camera_exposure_ev100: 16.0,
+            render_failure_quiet_period_secs: 0.5,
+            render_failure_give_up_after_secs: 5.0,
+            editor_camera_bloom_enabled: false,
+            camera_bloom_intensity: 0.0,
+            camera_bloom_low_frequency_boost: 0.7,
+            editor_preview_illuminance: 128_000.0,
+            local_light_default_range: 20.0,
+            local_shadow_map_near_z: 0.2,
+            dome_cubemap_face_size: 512,
+            primitive_sphere_longitudes: 24,
+            primitive_sphere_latitudes: 16,
+            primitive_radial_segments: 32,
+            primitive_capsule_longitudes: 16,
+            primitive_capsule_latitudes: 8,
+            terrain_mesh_cache_bytes: 256 * 1024 * 1024,
+            terrain_derived_map_resolution: 512,
+            terrain_derived_ao_directions: 4,
+            terrain_derived_ao_steps: 4,
+            terrain_derived_ao_radius_fraction: 0.1,
+            terrain_derived_roughness_base: 0.6,
+            terrain_derived_roughness_saturation_radians: 0.6,
+            terrain_derived_texture_anisotropy: 1,
+            terrain_rock_max_instances: 2_000,
+            terrain_rock_mesh_buckets: 3,
+            terrain_rock_mesh_cube_count: 2,
+            terrain_rock_lod_start_distance: 1_500.0,
+            terrain_rock_lod_fade_distance: 300.0,
+            terrain_lod_tile_resolution: 33,
+            terrain_lod_cinematic_resolution: 1025,
+            terrain_lod_pixel_error: 4.0,
+            terrain_lod_max_depth: 6,
+            terrain_lod_probe_resolution: 5,
+            terrain_lod_bakes_per_frame: 8,
+            terrain_lod_max_inflight_bakes: 16,
+            terrain_lod_tile_budget: 256,
+            terrain_lod_cover_edits_per_frame: 16,
+            terrain_lod_hysteresis_ratio: 1.2,
+            terrain_lod_morph_start_ratio: 0.45,
+            nurbs_surface_samples_per_control_span: 3,
+            nurbs_surface_minimum_subdivisions: 6,
+            nurbs_surface_maximum_subdivisions: 64,
+            nurbs_trim_curve_samples: 12,
+            nurbs_trim_minimum_subdivisions: 8,
+            nurbs_trim_maximum_subdivisions: 48,
+            curve_samples_per_segment: 4,
+            curve_radial_segments: 6,
+        }
+    }
+
     fn app() -> App {
         let mut a = App::new();
         a.add_plugins(MinimalPlugins);
+        let mut settings = lunco_render::RenderingQualitySettings::default();
+        settings.apply_profile(valid_quality_profile());
+        assert!(settings.validated_profile().is_ok());
+        a.insert_resource(settings);
         build(&mut a);
         a
     }

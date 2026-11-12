@@ -38,6 +38,8 @@ web-sys = { workspace = true, features = [
     "Storage",
     # OPFS (Origin Private File System) — async, main-thread-legal write path.
     "Navigator",
+    "WorkerGlobalScope",
+    "WorkerNavigator",
     "StorageManager",
     "FileSystemDirectoryHandle",
     "FileSystemFileHandle",

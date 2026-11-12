@@ -49,6 +49,10 @@ const TERRAIN_SCHEMA_PROPERTIES: &[&str] = &[
     "lunco:terrain:surfaceRole",
     "lunco:layer",
     "lunco:layer:demSource",
+    "lunco:layer:regionalDemSource",
+    "lunco:layer:regionalBlendM",
+    "lunco:layer:regionalHeightOffsetM",
+    "lunco:layer:localFrame",
     "lunco:layer:windowM",
     "lunco:layer:targetRes",
     "lunco:layer:lodViz",
@@ -2019,113 +2023,206 @@ fn bridge_dem_prim_read<R: UsdRead>(
             return;
         }
     };
-    let address = match lunco_assets_core::asset_path::load_asset_path(
-        &identifier,
-        origin,
-        Some(twins),
-        reader.native_asset_paths(),
-    ) {
-        Ok(address) => address,
-        Err(error) => {
-            warn!("[usd-dem] source rejected: {error}");
-            lunco_core::trigger_runtime_error(
+    let region_fields = [
+        "lunco:layer:regionalBlendM",
+        "lunco:layer:regionalHeightOffsetM",
+        "lunco:layer:localFrame",
+    ];
+    let regional = if reader.has_authored_attribute(dem_layer, "lunco:layer:regionalDemSource") {
+        let source = match reader.asset_identifier(dem_layer, "lunco:layer:regionalDemSource") {
+            Ok(Some(source)) if !source.is_empty() => source,
+            _ => {
+                reject_local_surface(
+                    commands,
+                    prim_path,
+                    "regionalDemSource must name a regional DEM asset",
+                );
+                return;
+            }
+        };
+        let read_required_real = |name: &str| {
+            reader
+                .has_authored_attribute(dem_layer, name)
+                .then(|| reader.real(dem_layer, name))
+                .flatten()
+                .filter(|value| value.is_finite())
+        };
+        let Some(blend_m) = read_required_real(region_fields[0]).filter(|value| *value > 0.0)
+        else {
+            reject_local_surface(
                 commands,
-                "usd-dem-source-rejected",
-                error.to_string(),
+                prim_path,
+                "regionalBlendM must be an authored positive finite double",
+            );
+            return;
+        };
+        let Some(regional_offset_m) = read_required_real(region_fields[1]) else {
+            reject_local_surface(
+                commands,
+                prim_path,
+                "regionalHeightOffsetM must be an authored finite double",
+            );
+            return;
+        };
+        let local_frame = if reader.has_authored_attribute(dem_layer, region_fields[2]) {
+            match reader
+                .text(dem_layer, region_fields[2])
+                .and_then(|s| lunco_geotiff::LunarFrame::parse(&s))
+            {
+                Some(frame) => Some(frame),
+                None => {
+                    reject_local_surface(
+                        commands,
+                        prim_path,
+                        "localFrame must be MOON_ME or MOON_PA",
+                    );
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        Some((source, blend_m, regional_offset_m, local_frame))
+    } else {
+        if region_fields
+            .iter()
+            .any(|name| reader.has_authored_attribute(dem_layer, name))
+        {
+            reject_local_surface(
+                commands,
+                prim_path,
+                "regional parameters require regionalDemSource",
             );
             return;
         }
+        None
     };
-    let address = if address.source() == &bevy::asset::io::AssetSourceId::Default {
-        address.with_source(lunco_assets_core::LUNCO_SCHEME)
-    } else {
-        address
-    };
-    let uri = address.to_string();
-    // A Twin manifest is the authoritative declaration for a downloadable
-    // delivered artifact. Wait for its scan before deciding whether this
-    // source is available; an unscanned scope means "not known yet", not
-    // "missing". Once scanned, a declared-but-uninstalled product becomes a
-    // pending projection rather than a fake terrain build with no ready input.
-    if let Some((name, relative)) = lunco_assets_core::parse_twin_uri(&uri) {
-        let root = match twins.root_for(name) {
-            Ok(Some(root)) => root,
-            Ok(None) => {
-                warn!("[usd-dem] cannot resolve Twin root for '{name}'");
-                lunco_core::trigger_runtime_error(
-                    commands,
-                    "usd-dem-twin-authority-retired",
-                    format!("DEM source uses retired Twin authority `{name}`."),
-                );
-                return;
-            }
+    let mut identifiers = vec![identifier.clone()];
+    if let Some((source, _, _, _)) = &regional {
+        identifiers.push(source.clone());
+    }
+    let mut uris = Vec::with_capacity(identifiers.len());
+    for identifier in identifiers {
+        let address = match lunco_assets_core::asset_path::load_asset_path(
+            &identifier,
+            origin,
+            Some(twins),
+            reader.native_asset_paths(),
+        ) {
+            Ok(address) => address,
             Err(error) => {
-                error!("[usd-dem] Twin root lookup failed for '{name}': {error}");
+                warn!("[usd-dem] source rejected: {error}");
                 lunco_core::trigger_runtime_error(
                     commands,
-                    "usd-dem-twin-authority-invalid",
+                    "usd-dem-source-rejected",
                     error.to_string(),
                 );
                 return;
             }
         };
-        let source_identity = match twins.logical_identity_for_authority(name) {
-            Ok(identity) => identity,
-            Err(error) => {
-                lunco_core::trigger_runtime_error(
-                    commands,
-                    "usd-dem-twin-authority-invalid",
-                    error.to_string(),
-                );
-                return;
-            }
+        let address = if address.source() == &bevy::asset::io::AssetSourceId::Default {
+            address.with_source(lunco_assets_core::LUNCO_SCHEME)
+        } else {
+            address
         };
-        let display_name = match twins.display_name_for_authority(name) {
-            Ok(display_name) => display_name,
-            Err(error) => {
-                lunco_core::trigger_runtime_error(
-                    commands,
-                    "usd-dem-twin-authority-invalid",
-                    error.to_string(),
-                );
-                return;
-            }
-        };
-        let scope = lunco_assets_datasets::DatasetScope::Twin {
-            source_identity,
-            authority: Some(name.to_owned()),
-            display_name,
-            root,
-        };
-        if !datasets.is_scope_scanned(&scope) {
-            commands.entity(entity).try_remove::<DemBridged>();
-            commands
-                .entity(entity)
-                .try_insert(DemDatasetScanPending::new(scope));
-            return;
-        }
-        if let Some(entry) = datasets.declared_artifact(&scope, std::path::Path::new(relative)) {
-            if !entry.state.is_installed() {
-                let detail = format!(
-                    "Terrain data '{}' is not installed. Open Settings > Data & libraries to download and prepare it. Simulation stays paused.",
-                    entry.name
-                );
+        let uri = address.to_string();
+        // A Twin manifest is the authoritative declaration for a downloadable
+        // delivered artifact. Wait for its scan before deciding whether this
+        // source is available; an unscanned scope means "not known yet", not
+        // "missing". Once scanned, a declared-but-uninstalled product becomes a
+        // pending projection rather than a fake terrain build with no ready input.
+        if let Some((name, relative)) = lunco_assets_core::parse_twin_uri(&uri) {
+            let root = match twins.root_for(name) {
+                Ok(Some(root)) => root,
+                Ok(None) => {
+                    warn!("[usd-dem] cannot resolve Twin root for '{name}'");
+                    lunco_core::trigger_runtime_error(
+                        commands,
+                        "usd-dem-twin-authority-retired",
+                        format!("DEM source uses retired Twin authority `{name}`."),
+                    );
+                    return;
+                }
+                Err(error) => {
+                    error!("[usd-dem] Twin root lookup failed for '{name}': {error}");
+                    lunco_core::trigger_runtime_error(
+                        commands,
+                        "usd-dem-twin-authority-invalid",
+                        error.to_string(),
+                    );
+                    return;
+                }
+            };
+            let source_identity = match twins.logical_identity_for_authority(name) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    lunco_core::trigger_runtime_error(
+                        commands,
+                        "usd-dem-twin-authority-invalid",
+                        error.to_string(),
+                    );
+                    return;
+                }
+            };
+            let display_name = match twins.display_name_for_authority(name) {
+                Ok(display_name) => display_name,
+                Err(error) => {
+                    lunco_core::trigger_runtime_error(
+                        commands,
+                        "usd-dem-twin-authority-invalid",
+                        error.to_string(),
+                    );
+                    return;
+                }
+            };
+            let scope = lunco_assets_datasets::DatasetScope::Twin {
+                source_identity,
+                authority: Some(name.to_owned()),
+                display_name,
+                root,
+            };
+            if !datasets.is_scope_scanned(&scope) {
+                commands.entity(entity).try_remove::<DemBridged>();
                 commands
                     .entity(entity)
-                    .try_insert(DemDatasetPending::new(entry.id.clone()));
-                commands.trigger(lunco_telemetry_core::TelemetryEvent {
-                    name: "DEM_DATASET_REQUIRED".to_owned(),
-                    source: 0,
-                    severity: lunco_telemetry_core::Severity::Warning,
-                    data: lunco_telemetry_core::TelemetryValue::String(detail),
-                    timestamp: 0.0,
-                    sim_secs: 0.0,
-                    sim_tick: 0,
-                });
+                    .try_insert(DemDatasetScanPending::new(scope));
                 return;
             }
+            if let Some(entry) = datasets.declared_artifact(&scope, std::path::Path::new(relative))
+            {
+                if !entry.state.is_installed() {
+                    let detail = format!(
+                        "Terrain data '{}' is not installed. Open Settings > Data & libraries to download and prepare it. Simulation stays paused.",
+                        entry.name
+                    );
+                    commands
+                        .entity(entity)
+                        .try_insert(DemDatasetPending::new(entry.id.clone()));
+                    commands.trigger(lunco_telemetry_core::TelemetryEvent {
+                        name: "DEM_DATASET_REQUIRED".to_owned(),
+                        source: 0,
+                        severity: lunco_telemetry_core::Severity::Warning,
+                        data: lunco_telemetry_core::TelemetryValue::String(detail),
+                        timestamp: 0.0,
+                        sim_secs: 0.0,
+                        sim_tick: 0,
+                    });
+                    return;
+                }
+            }
         }
+
+        uris.push(uri);
     }
+    let uri = uris.remove(0);
+    let regional_request = regional.map(|(_, blend_m, regional_offset_m, local_frame)| {
+        lunco_terrain_surface::RegionalDemRequest {
+            uri: uris.remove(0),
+            blend_m,
+            regional_offset_m,
+            local_frame,
+        }
+    });
 
     // Directory lookup and heightmap reads run in the existing terrain worker.
     // The request retains the canonical contributing-layer address unchanged.
@@ -2240,6 +2337,9 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // part of the terrain projection contract.
 
     let layer_count = stack.0.len();
+    if let Some(regional_request) = regional_request {
+        commands.entity(entity).try_insert(regional_request);
+    }
     commands.entity(entity).try_insert((
         lunco_terrain_surface::DemTerrainRequest {
             uri,

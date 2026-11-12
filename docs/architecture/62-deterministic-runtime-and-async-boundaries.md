@@ -625,9 +625,14 @@ Ordinary parsing, analysis, editor work, optional LOD refinement, and
 physics-only readiness use their own owner boundary. Their selected owner
 plugins control their cadence. GUI terrain cover selection runs at a 30 Hz
 `Time<Real>` cadence; immutable cover preparation uses the shared background
-queue and current results commit in `Update`. Tile-mesh bake completion and
-residency also commit in `Update`. Offline capture bypasses the cadence and
-prepares covers synchronously at each captured frame.
+queue and admitted results commit in `Update`. Source/output/profile leases fence
+immutable work; focus and heading changes coalesce behind valid in-flight work.
+Held navigation additionally fences the exact eye/source pose and retains bounded
+fine-node requirements, with the current corridor ahead of superseded retention.
+Every movement still checks the actual drawn geometry. Tile-mesh bake completion
+and residency also commit in `Update`. Offline capture bypasses the selection
+cadence while retaining asynchronous preparation and readiness back-pressure for
+each logical captured frame.
 A reference batch on the primary scene shares its document-projection key from
 closure preparation through native authoring and active-root ECS projection.
 Preparation reads the current asset store and load state as well as lifecycle

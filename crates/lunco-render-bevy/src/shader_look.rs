@@ -223,6 +223,7 @@ fn shader_material(
             TextureLayer::Normal => &mut m.normal_map,
             TextureLayer::ShadowCache => &mut m.shadow_cache,
             TextureLayer::ContinuationAlbedo => &mut m.continuation_albedo_map,
+            TextureLayer::RegionalAlbedo => &mut m.regional_albedo_map,
             TextureLayer::ContinuationSurface => &mut m.continuation_surface_map,
             TextureLayer::SurfaceAnnotations => &mut m.surface_annotations,
             TextureLayer::DetailAlbedo => &mut m.detail_albedo_map,
@@ -503,6 +504,7 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAs
         Normal,
         ShadowCache,
         ContinuationAlbedo,
+        RegionalAlbedo,
         ContinuationSurface,
         SurfaceAnnotations,
         DetailAlbedo,
@@ -520,6 +522,7 @@ fn textures_match(m: &ShaderMaterial, look: &ShaderLook, rasters: &ShaderImageAs
             Normal => &m.normal_map,
             ShadowCache => &m.shadow_cache,
             ContinuationAlbedo => &m.continuation_albedo_map,
+            RegionalAlbedo => &m.regional_albedo_map,
             ContinuationSurface => &m.continuation_surface_map,
             SurfaceAnnotations => &m.surface_annotations,
             DetailAlbedo => &m.detail_albedo_map,
@@ -1458,6 +1461,7 @@ fn material_texture_handles(material: &ShaderMaterial) -> impl Iterator<Item = &
         material.normal_map.as_ref(),
         material.shadow_cache.as_ref(),
         material.continuation_albedo_map.as_ref(),
+        material.regional_albedo_map.as_ref(),
         material.continuation_surface_map.as_ref(),
         material.surface_annotations.as_ref(),
         material.detail_albedo_map.as_ref(),
@@ -1510,9 +1514,9 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        // `Image` is registered by `ImagePlugin` in a real build; the texture-layer
-        // test needs it in this bare one.
-        app.init_asset::<Image>();
+        // Native image and mesh plugins own these stores and their asset events
+        // in production. The bare binder fixture supplies the same prerequisites.
+        app.init_asset::<Image>().init_asset::<Mesh>();
         build(&mut app);
         app
     }

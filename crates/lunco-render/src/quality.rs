@@ -255,7 +255,8 @@ pub struct RenderQualityProfile {
     pub primitive_capsule_latitudes: u32,
     /// Maximum estimated GPU upload footprint retained by streamed terrain
     /// meshes. This is a requested cache limit, not an automatic quality
-    /// downgrade; eviction is the cache's explicit response when it is full.
+    /// downgrade. Unused entries are evicted first; uploads wait when live
+    /// residents consume the ceiling. Retained CPU payload is reported separately.
     pub terrain_mesh_cache_bytes: u64,
     /// Texels per side of terrain-derived roughness/AO/normal maps.
     pub terrain_derived_map_resolution: usize,
@@ -281,9 +282,9 @@ pub struct RenderQualityProfile {
     pub terrain_rock_lod_start_distance: f32,
     /// Native distance over which procedural rocks fade out.
     pub terrain_rock_lod_fade_distance: f32,
-    /// Vertices per side of one streamed terrain tile.
+    /// Odd vertex count per side of one streamed terrain tile, so parent lattices nest.
     pub terrain_lod_tile_resolution: usize,
-    /// Vertices per side of a frozen/cinematic terrain tile.
+    /// Odd vertex count per side of a frozen/cinematic terrain tile.
     pub terrain_lod_cinematic_resolution: usize,
     /// Screen-space terrain error in pixels that triggers refinement.
     pub terrain_lod_pixel_error: f64,
@@ -1132,13 +1133,17 @@ impl RenderingQualitySettings {
         {
             return Err("terrain rock LOD fade distance must be finite and greater than zero");
         }
-        if profile.terrain_lod_tile_resolution < 3 || profile.terrain_lod_tile_resolution > 4097 {
-            return Err("terrain tile resolution must be between 3 and 4097");
+        if profile.terrain_lod_tile_resolution < 3
+            || profile.terrain_lod_tile_resolution > 4097
+            || profile.terrain_lod_tile_resolution % 2 == 0
+        {
+            return Err("terrain tile resolution must be odd and between 3 and 4097");
         }
         if profile.terrain_lod_cinematic_resolution < 3
             || profile.terrain_lod_cinematic_resolution > 4097
+            || profile.terrain_lod_cinematic_resolution % 2 == 0
         {
-            return Err("cinematic terrain resolution must be between 3 and 4097");
+            return Err("cinematic terrain resolution must be odd and between 3 and 4097");
         }
         if !profile.terrain_lod_pixel_error.is_finite()
             || !(0.1..=32.0).contains(&profile.terrain_lod_pixel_error)

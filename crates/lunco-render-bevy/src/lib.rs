@@ -25,6 +25,7 @@ pub mod look_cache;
 mod procedural_sky;
 mod scene_camera;
 mod scene_depth;
+mod scene_view_shadows;
 mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
@@ -173,6 +174,7 @@ impl Plugin for LuncoRenderPlugin {
                 .add_systems(PostUpdate, apply_usd_prim_display_modes);
         }
         scene_camera::build(app);
+        scene_view_shadows::build(app);
         backend::build(app);
         scene_depth::build(app);
         gpu_culling::build(app);
@@ -214,8 +216,11 @@ impl Plugin for LuncoRenderPlugin {
     }
 
     fn finish(&self, app: &mut App) {
-        local_light_shadow_relevance::finish(app);
         shadow_view_schedule::finish(app);
+    }
+
+    fn cleanup(&self, app: &mut App) {
+        local_light_shadow_relevance::finish(app);
     }
 }
 
@@ -707,6 +712,17 @@ mod tests {
     use super::*;
     use bevy::light::ShadowFilteringMethod;
 
+    fn material_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_resource::<bevy::light::DirectionalLightShadowMap>()
+            .add_plugins(LuncoRenderPlugin);
+        app
+    }
+
     #[derive(Resource, Default)]
     struct PbrMaterialInsertions(usize);
 
@@ -756,10 +772,7 @@ mod tests {
     /// goes linear in the rock count.
     #[test]
     fn identical_looks_share_one_material() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
 
         let look = PbrLook::matte(LinearRgba::rgb(0.22, 0.21, 0.20));
         let ids: Vec<Entity> = (0..64)
@@ -787,10 +800,7 @@ mod tests {
 
     #[test]
     fn shadow_cast_intent_does_not_split_identical_materials() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
 
         let look = PbrLook::matte(LinearRgba::rgb(0.22, 0.21, 0.20));
         let caster = app.world_mut().spawn(look.clone()).id();
@@ -848,10 +858,7 @@ mod tests {
     /// Two different looks must NOT collide into one material.
     #[test]
     fn different_looks_get_different_materials() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
 
         app.world_mut()
             .spawn(PbrLook::matte(LinearRgba::rgb(1.0, 0.0, 0.0)));
@@ -864,11 +871,8 @@ mod tests {
 
     #[test]
     fn pbr_binding_skips_noop_rebinds_and_repairs_stale_state() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .init_resource::<PbrMaterialInsertions>()
-            .add_plugins(LuncoRenderPlugin)
+        let mut app = material_app();
+        app.init_resource::<PbrMaterialInsertions>()
             .add_observer(count_pbr_material_insertions);
 
         let entity = app
@@ -974,10 +978,7 @@ mod tests {
 
     #[test]
     fn shared_material_is_detached_before_an_unshared_tint() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
 
         let green = PbrLook::matte(LinearRgba::rgb(0.12, 0.72, 0.34));
         let reached = app.world_mut().spawn(green.clone()).id();
@@ -1042,10 +1043,7 @@ mod tests {
     /// terrain/rock shadow saving depends on it.
     #[test]
     fn no_shadow_cast_inserts_not_shadow_caster() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
 
         let e = app.world_mut().spawn(PbrLook::default().no_shadows()).id();
         app.update();
@@ -1056,10 +1054,7 @@ mod tests {
     /// its replacement look is an ordinary caster.
     #[test]
     fn shadow_casting_look_removes_stale_not_shadow_caster() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
 
         let e = app
             .world_mut()
@@ -1077,10 +1072,7 @@ mod tests {
     /// leaving two render pipelines attached to one mesh.
     #[test]
     fn pbr_look_replaces_a_preexisting_shader_material() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
         let shader = app
             .world_mut()
             .resource_mut::<Assets<ShaderMaterial>>()
@@ -1104,10 +1096,7 @@ mod tests {
     }
 
     fn app_with_n_distinct_looks(n: usize) -> (App, Vec<Entity>) {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>()
-            .add_plugins(LuncoRenderPlugin);
+        let mut app = material_app();
         let ids = (0..n)
             .map(|i| {
                 // Distinct base colours ⇒ distinct keys ⇒ one cache entry each.

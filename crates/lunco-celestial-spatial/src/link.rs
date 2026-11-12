@@ -866,7 +866,7 @@ fn terrain_blocks(a: DVec3, b: DVec3, terrains: &[(DVec3, DQuat, Arc<SurfaceOrac
     }
     let dir = d / seg;
     for (pos, rot, oracle) in terrains {
-        let he = oracle.half_extent() as f64;
+        let he = oracle.domain_half_extent() as f64;
         let max = seg.min(2.5 * he);
         // Into the DEM's own frame — a rigid inverse, kept in f64.
         let inv = rot.conjugate();
@@ -878,7 +878,7 @@ fn terrain_blocks(a: DVec3, b: DVec3, terrains: &[(DVec3, DQuat, Arc<SurfaceOrac
             [dl.x, dl.y, dl.z],
             max,
             he,
-            oracle.spacing().max(0.5) as f64,
+            oracle.occlusion_spacing().max(0.5),
             0.05, // endpoints sit above the surface — don't let them self-occlude
         );
         if hit.is_some() {

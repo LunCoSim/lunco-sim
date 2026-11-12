@@ -34,7 +34,8 @@ def main():
             status = response.get('data', {})
             contacts = status.get('contacts', [])
             stream = status.get('stream', {})
-            if (contacts and all(t['ready'] and t['drawn'] and t['pinned'] for t in contacts)
+            if (contacts and all(t['ready'] for t in contacts) and status.get('camera_cover')
+                    and all(v['ready'] and v['wanted'] == v['resident'] and v['drawn'] > 0 for v in status['camera_cover'])
                     and stream.get('wanted', 0) > 0
                     and stream['wanted'] == stream['resident'] and stream['pending'] == 0):
                 break

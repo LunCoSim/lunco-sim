@@ -88,7 +88,7 @@ fn sample_height(
             point.0.x,
             point.0.z,
             eps,
-            oracle.half_extent() as f64,
+            oracle.domain_half_extent() as f64,
         );
         let slope = normal[1].clamp(-1.0, 1.0).acos();
         return Some((*entity, height, normal, slope));
@@ -351,7 +351,7 @@ impl ApiQueryProvider for TerrainFieldProvider {
         // centre addresses the oracle directly, in f64 (`.0` at the oracle
         // boundary — `Square` is DEM-frame math).
         for oracle in terrains {
-            let hx = oracle.half_extent() as f64;
+            let hx = oracle.domain_half_extent() as f64;
             if center.0.x.abs() + half > hx || center.0.z.abs() + half > hx {
                 continue;
             }
@@ -548,14 +548,17 @@ impl ApiQueryProvider for TerrainRaycastProvider {
 /// `TerrainLodStatus` — the live inputs and fulfilment state of the visual
 /// terrain streamer. It reports the already-composed camera demands and the
 /// selected-cover progress; it does not calculate coordinates or change LOD.
+/// Camera `ready` requires the latest finalized demand to be settled and every
+/// selected leaf to be current-generation and drawn. `presented_ready` describes
+/// the retained drawable partition independently of that latest-demand fence.
 ///
 /// This makes a visual LOD report testable through the same API session that
 /// renders it. In particular, a mounted avatar camera must appear here at its
 /// full grid-absolute pose, never at its rig-local transform offset.
 /// `stream.pending` includes cover preparation, off-thread tile bakes, and mesh
 /// entities waiting for `ShaderLookReady` (including the root fallback), so a
-/// zero pending count means the selected work has crossed the render-resource
-/// boundary rather than merely leaving a worker queue.
+/// `selection_pending` also includes latest-demand work awaiting queue admission,
+/// so zero pending cannot describe only an older fully resident cover.
 /// `derived` reads the same optional-map lifecycle mirrored by the status bar;
 /// performance measurements can wait for it without holding simulation time.
 pub struct TerrainLodStatusProvider;
@@ -634,12 +637,27 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             .visual_focus_snapshot()
             .into_iter()
             .map(|(entity, position, forward, screen_height_px, fov_y_rad)| {
+                let (projection, orthographic_area_m, pixels_per_metre) =
+                    match demands.camera_projection(Entity::from_bits(entity)) {
+                        Some(crate::stream_viz::TerrainProjection::Perspective { .. }) => {
+                            ("perspective", None, None)
+                        }
+                        Some(crate::stream_viz::TerrainProjection::Orthographic {
+                            area,
+                            pixels_per_metre,
+                            ..
+                        }) => ("orthographic", Some(area), Some(pixels_per_metre)),
+                        None => unreachable!("snapshot camera must retain its admitted projection"),
+                    };
                 api_value!({
                     "entity": entity,
                     "position": position,
                     "forward": forward,
                     "screen_height_px": screen_height_px,
                     "fov_y_rad": fov_y_rad,
+                    "projection": projection,
+                    "orthographic_area_m": orthographic_area_m,
+                    "pixels_per_metre": pixels_per_metre,
                 })
             })
             .collect::<Vec<_>>();
@@ -744,6 +762,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                             .and_then(|mesh| mesh.try_attribute(Mesh::ATTRIBUTE_POSITION).ok())
                             .and_then(|p| p.as_float3()).map(|p| p.len());
                         api_value!({"entity": entity.to_bits(), "source": owner.0.to_bits(),
+                            "camera": world.get::<lunco_render::camera::SceneViewGeometry>(entity).map(|view| view.camera.to_bits()),
                             "vertex_count": vertex_count, "boundary_inspectable": vertex_count.is_some(),
                             "geometry": mesh_entity.and_then(|_| geometry_page(mesh, pose))})
                     }).collect::<Vec<_>>()
@@ -765,52 +784,49 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 .map(|mut query| {
                     let mut rows = Vec::new();
                     for (terrain, field, tiles) in query.iter(world) {
-                        let Some((origin, rotation)) = poses.pose(world, terrain) else {
-                            continue;
-                        };
                         for (raw, _, _, _, _) in demands.visual_focus_snapshot() {
-                            let Some((position, _)) = poses.pose(world, Entity::from_bits(raw))
-                            else {
-                                continue;
-                            };
-                            let local = rotation.0.inverse() * (position.0 - origin.0);
-                            let leaf = tiles.focus_tile([local.x, local.z]);
+                            let camera = Entity::from_bits(raw);
+                            let Some((local, _)) = demands.terrain_pose_snapshot(camera, terrain) else { continue; };
+                            let leaf = tiles.focus_tile(camera, [local.x, local.z]);
+                            let Some(view) = tiles.view_status(camera) else { continue; };
                             let height = field.0.height_at(local.x, local.z);
+                            let envelope = world.get::<lunco_camera_core::CameraCollisionEnvelope>(camera);
                             rows.push(api_value!({
                                 "source": terrain.to_bits(), "camera": raw,
                                 "position_local_m": local.to_array(), "clearance_m": local.y-height,
                                 "depth": leaf.map(|leaf| leaf.0),
-                                "ready": leaf.is_some_and(|leaf| leaf.1),
+                                "ready": view.ready,
+                                "selection_current": view.selection_current,
+                                "presented_ready": view.presented_ready,
+                                "presentation_pending": view.presentation_pending,
+                                "presentation_reason": view.presentation_reason,
+                                "focus_ready": view.selection_current && leaf.is_some_and(|leaf| leaf.1),
                                 "pinned": leaf.is_some_and(|leaf| leaf.2),
+                                "collision_radius_m": envelope.map(|envelope| envelope.radius_m),
+                                "collision_skin_m": envelope.map(|envelope| envelope.skin_m),
+                                "wanted": view.wanted, "resident": view.resident, "drawn": view.drawn,
+                                "budget_refused": view.budget_refused, "effective_max_depth": view.effective_max_depth,
+                                "spacing_m": leaf.map(|leaf| 2.0 * f64::from(field.0.domain_half_extent()) / f64::from(1u32 << leaf.0) / view.resolution.saturating_sub(1).max(1) as f64),
                             }));
                         }
                     }
                     rows
                 });
-        let contacts = QueryState::<(Entity,
+        let contacts = QueryState::<(Entity, &DemHeightField,
             &crate::collider_ring::TerrainColliderRing,
-            &crate::collider_ring::ColliderTiles,
-            &crate::stream_viz::LodTiles)>::try_new(world).map(|mut query| {
+            &crate::collider_ring::ColliderTiles)>::try_new(world).map(|mut query| {
             let mut rows = Vec::new();
-            for (terrain, ring, physical, visual) in query.iter(world) {
+            for (terrain, field, ring, physical) in query.iter(world) {
                 for coord in physical.contact_nodes() {
-                    let mut leaves = visual.contact_tiles(*coord).collect::<Vec<_>>();
-                    if leaves.is_empty() { leaves.push((*coord, None)); }
-                    for (coord, tile) in leaves {
+                    let collider = physical.map.get(coord).copied();
                     rows.push(api_value!({
                         "source": terrain.to_bits(),
                         "depth": coord.depth, "x": coord.x, "z": coord.z,
-                        "canonical_depth": ring.depth,
                         "resolution": ring.res,
                         "min_wavelength_m": ring.physics_band.min_wavelength,
-                        "entity": tile.map(|tile| tile.0.to_bits()),
-                        "ready": tile.is_some_and(|tile| tile.1),
-                        "drawn": tile.is_some_and(|tile| tile.2),
-                        "pinned": tile.is_some_and(|tile| tile.3 && world.get::<lunco_materials::ShaderLook>(tile.0)
-                            .is_some_and(|look| look.values().iter().any(|(name, value)|
-                                name == "morph_end" && value.as_floats().first().is_some_and(|end| *end >= 1.0e20)))),
+                        "entity": collider.map(Entity::to_bits),
+                        "ready": physical.support_ready(*coord, field.0.surface_key()) && collider.is_some_and(|entity| world.get::<avian3d::prelude::Collider>(entity).is_some() && world.get::<avian3d::prelude::ColliderDisabled>(entity).is_none()),
                     }));
-                    }
                 }
             }
             rows.sort_by_key(|row| (row.get("source").and_then(ApiValue::as_u64),
@@ -897,10 +913,22 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "wanted": status.wanted,
                 "resident": status.resident,
                 "pending": status.pending,
+                "selection_pending": status.selection_pending,
+                "presentation_pending": status.presentation_pending,
                 "stale_cancelled": status.stale_cancelled,
                 "budget_refused": status.budget_refused,
                 "focus_wanted": status.focus_wanted,
                 "focus_resident": status.focus_resident,
+                "mesh_accounted_bytes": status.mesh_accounted_bytes,
+                "mesh_cpu_bytes": status.mesh_cpu_bytes,
+                "mesh_resident_bytes": status.mesh_resident_bytes,
+                "mesh_cached_bytes": status.mesh_cached_bytes,
+                "mesh_retired_bytes": status.mesh_retired_bytes,
+                "mesh_byte_limit": status.mesh_byte_limit,
+                "mesh_upload_refused": status.mesh_upload_refused,
+                "mesh_upload_required_bytes": status.mesh_upload_required_bytes,
+                "draw_revision_exhausted": status.draw_revision_exhausted,
+                "preparation_refused": status.preparation_refused,
             },
             "derived": {
                 "active": derived.active,

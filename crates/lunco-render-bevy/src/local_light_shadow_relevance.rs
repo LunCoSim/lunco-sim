@@ -44,7 +44,10 @@ fn configure_point_light_visibility(
         .remove_systems_in_set(
             check_point_light_mesh_visibility,
             world,
-            ScheduleCleanupPolicy::RemoveSystemsOnly,
+            // Keep the peer directional-light system in its shared set. We
+            // restore this point-light system's set and visibility edges below;
+            // transitive cleanup tries to lift its set edges across that peer.
+            ScheduleCleanupPolicy::RemoveSystemsOnlyAllowBreakages,
         )
         .expect("native light schedule must be installed");
     assert_eq!(
@@ -301,6 +304,34 @@ mod tests {
         conservative_frustum_sphere, frustum_intersects_sphere_conservatively,
         local_light_shadow_is_irrelevant, point_light_influence_sphere,
     };
+
+    #[test]
+    fn native_visibility_replacement_builds_with_bevy_light_plugin() {
+        use bevy::{
+            app::PostUpdate,
+            asset::AssetPlugin,
+            camera::visibility::VisibilityPlugin,
+            light::LightPlugin,
+            prelude::{App, MinimalPlugins},
+            transform::TransformPlugin,
+        };
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            VisibilityPlugin,
+            LightPlugin,
+        ));
+        app.world_mut()
+            .schedule_scope(PostUpdate, |world, schedule| {
+                super::configure_point_light_visibility(world, schedule);
+                schedule
+                    .initialize(world)
+                    .expect("native visibility replacement must build the light schedule");
+            });
+    }
 
     #[test]
     fn native_local_visibility_follows_current_light_population() {

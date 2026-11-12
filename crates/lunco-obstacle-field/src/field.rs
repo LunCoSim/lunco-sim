@@ -8,7 +8,7 @@
 //! main thread with no raycasts.
 
 use bevy::math::Vec2;
-use lunco_terrain_core::HeightSource;
+use lunco_terrain_core::{HeightEnclosure, HeightPlane, HeightSource};
 
 use crate::sampler::Placement;
 use crate::spec::CraterLayer;
@@ -38,6 +38,29 @@ impl HeightGrid {
     /// control net to the query rectangle; the convex hull encloses the surface
     /// without losing correlations between polynomial coefficients.
     pub fn cell_height_bounds(&self, cell: [usize; 2], rect: [f64; 4]) -> [f64; 2] {
+        self.cell_height_enclosure(cell, rect, HeightPlane::horizontal(0.0))
+            .height
+    }
+
+    /// Produce scalar and affine certificates in the same restricted control
+    /// net pass; consumers choose the fact needed by their geometric query.
+    pub fn cell_height_enclosure(
+        &self,
+        cell: [usize; 2],
+        rect: [f64; 4],
+        plane: HeightPlane,
+    ) -> HeightEnclosure {
+        if !plane.is_finite()
+            || rect.into_iter().any(|v| !v.is_finite())
+            || rect[0] > rect[2]
+            || rect[1] > rect[3]
+        {
+            return HeightEnclosure {
+                height: [f64::NAN; 2],
+                plane,
+                residual: [f64::NAN; 2],
+            };
+        }
         fn restricted_controls(p: [f64; 4], t: [f64; 2]) -> [f64; 4] {
             use kurbo::{CubicBez, ParamCurve};
             // Catmull-Rom's interpolating endpoints and tangents define the
@@ -74,17 +97,155 @@ impl HeightGrid {
             *row = restricted_controls(p, tx);
         }
         let mut b = [f64::INFINITY, f64::NEG_INFINITY];
+        let mut raw = [f64::INFINITY, f64::NEG_INFINITY];
+        let effective = [
+            -half + (cell[0] as f64 + tx[0]) * s,
+            -half + (cell[1] as f64 + tz[0]) * s,
+            -half + (cell[0] as f64 + tx[1]) * s,
+            -half + (cell[1] as f64 + tz[1]) * s,
+        ];
+        let plane_magnitude = plane.height.abs()
+            + plane.gradient[0].abs() * (rect[0].abs().max(rect[2].abs()) + plane.origin[0].abs())
+            + plane.gradient[1].abs() * (rect[1].abs().max(rect[3].abs()) + plane.origin[1].abs());
+        let mut magnitude = anchor.abs().max(plane_magnitude).max(1.0);
+        let mut raw_magnitude = anchor.abs().max(1.0);
         for column in 0..4 {
             let controls = restricted_controls(std::array::from_fn(|row| rows[row][column]), tz);
-            for height in controls {
-                b[0] = b[0].min(height);
-                b[1] = b[1].max(height);
+            let x = effective[0] + (effective[2] - effective[0]) * column as f64 / 3.0;
+            for (row, height) in controls.into_iter().enumerate() {
+                let z = effective[1] + (effective[3] - effective[1]) * row as f64 / 3.0;
+                let reference = plane.height_at(x, z);
+                let residual = height + (anchor - reference);
+                let absolute = height + anchor;
+                raw[0] = raw[0].min(absolute);
+                raw[1] = raw[1].max(absolute);
+                raw_magnitude = raw_magnitude.max(height.abs()).max(absolute.abs());
+                magnitude = magnitude.max(height.abs()).max(reference.abs());
+                b[0] = b[0].min(residual);
+                b[1] = b[1].max(residual);
             }
         }
-        b[0] += anchor;
-        b[1] += anchor;
-        let pad = 64.0 * f64::EPSILON * b[0].abs().max(b[1].abs()).max(1.0);
-        [b[0] - pad, b[1] + pad]
+        // Boundary clamping can move the effective parameter endpoints by
+        // floating-point spacing error; retain that affine displacement.
+        let displacement = plane.gradient[0].abs()
+            * (rect[0] - effective[0])
+                .abs()
+                .max((rect[2] - effective[2]).abs())
+            + plane.gradient[1].abs()
+                * (rect[1] - effective[1])
+                    .abs()
+                    .max((rect[3] - effective[3]).abs());
+        let pad = displacement + 128.0 * f64::EPSILON * magnitude;
+        let raw_pad = 128.0 * f64::EPSILON * raw_magnitude;
+        HeightEnclosure {
+            height: [raw[0] - raw_pad, raw[1] + raw_pad],
+            plane,
+            residual: [b[0] - pad, b[1] + pad],
+        }
+    }
+
+    /// Conservative bounds for dx, dz and dx-dz derivatives in a raster cell.
+    /// The derivative control nets are restricted to `rect` before their
+    /// convex hull is taken, so the enclosure tightens as callers subdivide.
+    pub fn cell_derivative_bounds(&self, cell: [usize; 2], rect: [f64; 4]) -> [[f64; 2]; 3] {
+        fn bezier(p: [f64; 4]) -> [f64; 4] {
+            [
+                p[1],
+                p[1] + (p[2] - p[0]) / 6.0,
+                p[2] - (p[3] - p[1]) / 6.0,
+                p[2],
+            ]
+        }
+        fn split<const N: usize>(points: [f64; N], t: f64) -> ([f64; N], [f64; N]) {
+            let mut work = points;
+            let mut left = [0.0; N];
+            let mut right = [0.0; N];
+            left[0] = work[0];
+            right[N - 1] = work[N - 1];
+            for level in 1..N {
+                for i in 0..N - level {
+                    work[i] = work[i] + (work[i + 1] - work[i]) * t;
+                }
+                left[level] = work[0];
+                right[N - level - 1] = work[N - level - 1];
+            }
+            (left, right)
+        }
+        fn restrict<const N: usize>(points: [f64; N], interval: [f64; 2]) -> [f64; N] {
+            let [start, end] = interval;
+            if start >= 1.0 {
+                return [points[N - 1]; N];
+            }
+            let right = split(points, start).1;
+            split(right, (end - start) / (1.0 - start)).0
+        }
+        fn bounds<const X: usize, const Z: usize>(
+            net: [[f64; X]; Z],
+            tx: [f64; 2],
+            tz: [f64; 2],
+            pad: f64,
+        ) -> [f64; 2] {
+            let rows = net.map(|row| restrict(row, tx));
+            let mut result = [f64::INFINITY, f64::NEG_INFINITY];
+            for x in 0..X {
+                let col = restrict(std::array::from_fn::<_, Z, _>(|z| rows[z][x]), tz);
+                for value in col {
+                    result[0] = result[0].min(value);
+                    result[1] = result[1].max(value);
+                }
+            }
+            [result[0] - pad, result[1] + pad]
+        }
+
+        let spacing = f64::from(self.spacing());
+        let half = f64::from(self.half_extent);
+        let range = |lo: f64, hi: f64, i: usize| {
+            [
+                ((lo + half) / spacing - i as f64).clamp(0.0, 1.0),
+                ((hi + half) / spacing - i as f64).clamp(0.0, 1.0),
+            ]
+        };
+        let tx = range(rect[0], rect[2], cell[0]);
+        let tz = range(rect[1], rect[3], cell[1]);
+        let anchor = self.sample_extrapolated(cell[0] as isize, cell[1] as isize);
+        let mut rows = [[0.0; 4]; 4];
+        let mut largest = anchor.abs().max(1.0);
+        for (z, row) in rows.iter_mut().enumerate() {
+            let p = std::array::from_fn(|x| {
+                let h = self.sample_extrapolated(
+                    cell[0] as isize + x as isize - 1,
+                    cell[1] as isize + z as isize - 1,
+                );
+                largest = largest.max(h.abs());
+                h - anchor
+            });
+            *row = bezier(p);
+        }
+        let mut net = [[0.0; 4]; 4];
+        for x in 0..4 {
+            let col = bezier(std::array::from_fn(|z| rows[z][x]));
+            for z in 0..4 {
+                net[z][x] = col[z];
+            }
+        }
+        let dx = std::array::from_fn::<_, 4, _>(|z| {
+            std::array::from_fn::<_, 3, _>(|x| 3.0 * (net[z][x + 1] - net[z][x]) / spacing)
+        });
+        let dz = std::array::from_fn::<_, 3, _>(|z| {
+            std::array::from_fn::<_, 4, _>(|x| 3.0 * (net[z + 1][x] - net[z][x]) / spacing)
+        });
+        let mixed = std::array::from_fn::<_, 3, _>(|z| {
+            std::array::from_fn::<_, 3, _>(|x| {
+                9.0 * (net[z + 1][x + 1] - net[z + 1][x] - net[z][x + 1] + net[z][x])
+                    / (spacing * spacing)
+            })
+        });
+        let pad = 1024.0 * f64::EPSILON * largest / spacing.min(spacing * spacing).min(1.0);
+        [
+            bounds(dx, tx, tz, pad),
+            bounds(dz, tx, tz, pad),
+            bounds(mixed, tx, tz, pad),
+        ]
     }
     pub fn new_flat(res: usize, half_extent: f32) -> Self {
         let res = res.max(2);
@@ -252,6 +413,49 @@ impl HeightGrid {
             + (-p0 + p2) * t
             + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
             + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+    }
+
+    #[inline]
+    fn catmull_rom_derivative(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> f64 {
+        0.5 * ((-p0 + p2)
+            + 2.0 * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t
+            + 3.0 * (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t)
+    }
+
+    /// Height, inward gradient and mixed derivative on this grid.
+    /// Coordinates outside the measured footprint are clamped to its edge;
+    /// the derivatives there are the measured one-sided edge derivatives.
+    pub fn height_and_derivatives_at(&self, x: f64, z: f64) -> (f64, [f64; 2], f64) {
+        let spacing = self.spacing() as f64;
+        let half = self.half_extent as f64;
+        let fx = ((x + half) / spacing).clamp(0.0, self.res as f64 - 1.0);
+        let fz = ((z + half) / spacing).clamp(0.0, self.res as f64 - 1.0);
+        let ix = fx.floor() as isize;
+        let iz = fz.floor() as isize;
+        let tx = fx - ix as f64;
+        let tz = fz - iz as f64;
+        let mut rows = [0.0; 4];
+        let mut dx_rows = [0.0; 4];
+        for row in 0..4 {
+            let z = iz + row as isize - 1;
+            let p = [
+                self.sample_extrapolated(ix - 1, z),
+                self.sample_extrapolated(ix, z),
+                self.sample_extrapolated(ix + 1, z),
+                self.sample_extrapolated(ix + 2, z),
+            ];
+            rows[row] = Self::catmull_rom(p[0], p[1], p[2], p[3], tx);
+            dx_rows[row] = Self::catmull_rom_derivative(p[0], p[1], p[2], p[3], tx);
+        }
+        (
+            Self::catmull_rom(rows[0], rows[1], rows[2], rows[3], tz),
+            [
+                Self::catmull_rom(dx_rows[0], dx_rows[1], dx_rows[2], dx_rows[3], tz) / spacing,
+                Self::catmull_rom_derivative(rows[0], rows[1], rows[2], rows[3], tz) / spacing,
+            ],
+            Self::catmull_rom_derivative(dx_rows[0], dx_rows[1], dx_rows[2], dx_rows[3], tz)
+                / (spacing * spacing),
+        )
     }
 
     /// Bicubic (Catmull-Rom) ground height at world `(x, z)`, clamped to region.
@@ -468,6 +672,75 @@ mod tests {
         g
     }
 
+    #[test]
+    fn analytic_grid_gradient_matches_interpolation_and_boundary_slope() {
+        let mut grid = HeightGrid::new_flat(33, 16.0);
+        grid.stamp_crater(Vec2::new(3.0, -2.0), 7.0, 2.5, 0.4);
+        for iz in 0..grid.res {
+            for ix in 0..grid.res {
+                let x = ix as f64 - 16.0;
+                let z = iz as f64 - 16.0;
+                let index = grid.idx(ix, iz);
+                grid.heights[index] += 0.04 * x + 0.03 * z + 0.002 * x * z;
+            }
+        }
+        let eps = 1e-5;
+        for (x, z) in [(1.23, -4.56), (-16.0, 2.3), (16.0, -16.0)] {
+            let (height, gradient, mixed) = grid.height_and_derivatives_at(x, z);
+            assert_eq!(height, grid.height_at(x, z));
+            let dx = if x == -16.0 {
+                (grid.height_at(x + eps, z) - height) / eps
+            } else if x == 16.0 {
+                (height - grid.height_at(x - eps, z)) / eps
+            } else {
+                (grid.height_at(x + eps, z) - grid.height_at(x - eps, z)) / (2.0 * eps)
+            };
+            let dz = if z == -16.0 {
+                (grid.height_at(x, z + eps) - height) / eps
+            } else {
+                (grid.height_at(x, z + eps) - grid.height_at(x, z - eps)) / (2.0 * eps)
+            };
+            assert!((gradient[0] - dx).abs() < 1e-4, "x={x} z={z}");
+            assert!((gradient[1] - dz).abs() < 1e-4, "x={x} z={z}");
+            if x.abs() < 16.0 && z.abs() < 16.0 {
+                let forward = grid.height_and_derivatives_at(x, z + eps).1[0];
+                let backward = grid.height_and_derivatives_at(x, z - eps).1[0];
+                assert!((mixed - (forward - backward) / (2.0 * eps)).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn derivative_enclosures_cover_a_restricted_bicubic_cell() {
+        let mut grid = HeightGrid::new_flat(9, 4.0);
+        for z in 0..grid.res {
+            for x in 0..grid.res {
+                let index = grid.idx(x, z);
+                grid.heights[index] = -1900.0
+                    + (x as f64 * 0.7).sin() * 5.0
+                    + (z as f64 * 1.2).cos() * 3.0
+                    + (x * z) as f64 * 0.2;
+            }
+        }
+        let cell = [4, 3];
+        let rect = [0.17, -0.91, 0.76, -0.24];
+        let enclosure = grid.cell_derivative_bounds(cell, rect);
+        for i in 0..=20 {
+            for j in 0..=20 {
+                let x = rect[0] + (rect[2] - rect[0]) * i as f64 / 20.0;
+                let z = rect[1] + (rect[3] - rect[1]) * j as f64 / 20.0;
+                let (_, gradient, mixed) = grid.height_and_derivatives_at(x, z);
+                for (value, bounds) in [gradient[0], gradient[1], mixed].into_iter().zip(enclosure)
+                {
+                    assert!(
+                        value >= bounds[0] && value <= bounds[1],
+                        "{value} outside {bounds:?}"
+                    );
+                }
+            }
+        }
+    }
+
     /// The interpolant must pass THROUGH the DEM's measured samples. This is what
     /// makes the bilinear -> Catmull-Rom swap safe for physics: colliders and
     /// queries still see the same heights at every post, so nothing that rests on
@@ -570,8 +843,8 @@ mod tests {
         g.stamp_crater(Vec2::new(4.0, -4.0), 6.0, 3.0, 0.0);
         let av = g.to_avian_heights();
         // av[x][z] must equal the row-major sample.
-        for (z, row) in av.iter().enumerate() {
-            for (x, &height) in row.iter().enumerate() {
+        for (x, row) in av.iter().enumerate() {
+            for (z, &height) in row.iter().enumerate() {
                 assert_eq!(height, g.heights[z * g.res + x]);
             }
         }
@@ -591,6 +864,51 @@ mod tests {
 #[cfg(test)]
 mod enclosure_tests {
     use super::*;
+    #[test]
+    fn affine_reference_retains_planar_and_curved_bicubic_residuals() {
+        let mut grid = HeightGrid::new_flat(7, 3.0);
+        let plane = HeightPlane {
+            origin: [0.0; 2],
+            height: 1000.9,
+            gradient: [0.2, 0.1],
+        };
+        for z in 0..7 {
+            for x in 0..7 {
+                grid.heights[z * 7 + x] = plane.height_at(x as f64 - 3.0, z as f64 - 3.0);
+            }
+        }
+        let rect = [-0.83, -0.77, -0.27, -0.19];
+        let model = grid.cell_height_enclosure([2, 2], rect, plane);
+        assert!(model.is_valid(rect));
+        let bounds = model.residual;
+        assert!(
+            bounds[0] <= 0.0 && bounds[1] >= 0.0 && bounds[1] - bounds[0] < 1.0e-8,
+            "{bounds:?}"
+        );
+        for z in 0..7 {
+            for x in 0..7 {
+                let (wx, wz) = (x as f64 - 3.0, z as f64 - 3.0);
+                grid.heights[z * 7 + x] += 0.08 * wx * wz + 0.03 * wx * wx;
+            }
+        }
+        let model = grid.cell_height_enclosure([2, 2], rect, plane);
+        assert!(model.is_valid(rect));
+        let bounds = model.residual;
+        for z in 0..=16 {
+            for x in 0..=16 {
+                let wx = rect[0] + (rect[2] - rect[0]) * x as f64 / 16.0;
+                let wz = rect[1] + (rect[3] - rect[1]) * z as f64 / 16.0;
+                let height = grid.height_at(wx, wz);
+                assert!(height >= model.height[0] && height <= model.height[1]);
+                let residual = height - plane.height_at(wx, wz);
+                assert!(
+                    residual >= bounds[0] && residual <= bounds[1],
+                    "{residual} outside {bounds:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn planar_bicubic_enclosure_preserves_correlated_coefficients() {
         let mut grid = HeightGrid::new_flat(7, 3.0);
