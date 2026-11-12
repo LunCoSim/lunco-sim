@@ -14,7 +14,7 @@ fn record(path, persisted_result, text, error) {
 fn project(records) {
     invoke_hook("application.asset.lifecycle", ["json_scope_changed", #{
         provider: "catalog-source-probe", scope: "twin", twin_id: "42",
-        twin_name: "Catalog probe", asset_root_uri: "twin://catalog-probe/",
+        twin_display_name: "Catalog probe", asset_root_uri: "twin://catalog-probe/",
         payload: records
     }])
 }
@@ -31,7 +31,7 @@ fn has_lesson(result) {
 fn application_project(records) {
     invoke_hook("application.asset.lifecycle", ["json_scope_changed", #{
         provider: "catalog-application-probe", scope: "application", twin_id: (),
-        twin_name: (), asset_root_uri: "twin://catalog-probe/", payload: records
+        twin_display_name: (), asset_root_uri: "twin://catalog-probe/", payload: records
     }])
 }
 fn scenario_test_scene(uri, relative_path, stem, is_test, twin) {
@@ -60,7 +60,7 @@ fn viewport_has_label(actions, label) {
     false
 }
 fn scenario_menu_facts(show_test_assets) {
-    let twin = #{ id: "42", authority: "station", name: "Station",
+    let twin = #{ id: "42", source_identity: "station", source_ready: true, name: "Station",
         directory: "station-folder",
         default_scene: "scenes/main.usda" };
     let scenes = [
@@ -95,10 +95,10 @@ fn on_start(me, ctx) {
     if twin_featured.ok && twin_featured.value.viewport_actions.len() == 1 {
         twin_action = twin_featured.value.viewport_actions[0];
     }
-    checks.push(t_true(twin_action != () && twin_action.args.owner_twin_id == 42
+    checks.push(t_true(twin_action != () && !twin_action.args.contains("owner_twin_id")
         && twin_action.args.source_asset == "twin://catalog-probe/tutorials/probe.rhai"
         && twin_action.visibility == "always",
-        "a Twin featured action retains its exact owner and qualified lesson"));
+        "a Twin featured action uses its bound owner and qualified lesson without a Twin ID payload"));
     checks.push(t_true(has_lesson(project([
         source, record("results/snapshot.json", true, catalog(), ())
     ])), "persisted results cannot add a second tutorial catalog"));
@@ -205,7 +205,7 @@ fn on_start(me, ctx) {
         && hidden.value.viewport_actions[0].label == "Load default scene"
         && !viewport_has_label(hidden.value.viewport_actions, "Test Scene")
         && hidden.value.viewport_actions[0].args.twin_id == 42
-        && hidden.value.viewport_actions[0].args.authority == "station"
+        && !hidden.value.viewport_actions[0].args.contains("authority")
         && hidden.value.viewport_actions[0].args.relative_path == "scenes/main.usda",
         "the active-Twin welcome action comes from the Rhai policy and excludes test scenes"));
     checks.push(t_true(hidden.value.navigation_entries.len() == 3,
@@ -223,7 +223,7 @@ fn on_start(me, ctx) {
         "showing library tests adds them to quick-open"));
 
     let fallback_facts = scenario_menu_facts(false);
-    let fallback_twin = #{ id: "43", authority: "fallback", name: " ",
+    let fallback_twin = #{ id: "43", source_identity: "fallback", source_ready: true, name: " ",
         directory: "fallback-folder", default_scene: "scenes/main.usda" };
     fallback_facts.active_twin = fallback_twin;
     fallback_facts.twins = [fallback_twin];
@@ -235,7 +235,7 @@ fn on_start(me, ctx) {
         && scenario_find_label(scenario_menu_items(fallback.value), "fallback-folder") != (),
         "Twin display labels fall back to their source directory in Rhai"));
     let id_fallback_facts = scenario_menu_facts(false);
-    let id_fallback_twin = #{ id: "44", authority: "fallback", name: "", directory: (),
+    let id_fallback_twin = #{ id: "44", source_identity: "fallback", source_ready: true, name: "", directory: (),
         default_scene: "scenes/main.usda" };
     id_fallback_facts.active_twin = id_fallback_twin;
     id_fallback_facts.twins = [id_fallback_twin];

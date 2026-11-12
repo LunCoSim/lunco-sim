@@ -144,8 +144,6 @@ pub struct ActivateTwinTimelineScope {
 pub struct LoadTwinTimelineFile {
     /// Workspace identity of the active Twin.
     pub twin_id: u64,
-    /// Exact `twin://` authority returned by the asset owner.
-    pub name: String,
     /// Timeline name exposed through `ListTimelines`.
     pub timeline_name: String,
     /// Indexed JSON file relative to the Twin root.
@@ -272,17 +270,12 @@ fn on_load_twin_timeline_file(
             request.timeline_name, request.relative_path
         ));
     }
-    let mounted_root = roots
+    let authority = roots
         .as_deref()
         .ok_or_else(|| "TwinRoots is not installed".to_owned())?
-        .root_for(&request.name)
-        .map_err(|error| error.to_string())?;
-    if mounted_root.as_deref() != Some(twin.root.as_path()) {
-        return Err(format!(
-            "Twin asset authority `{}` does not belong to Twin {}",
-            request.name, request.twin_id
-        ));
-    }
+        .authority_for_root(&twin.root)
+        .map_err(|_| "Twin asset source is unavailable".to_owned())?
+        .ok_or_else(|| "Twin asset source is unavailable".to_owned())?;
     let asset_server = asset_server.ok_or_else(|| "AssetServer is not installed".to_owned())?;
     if pending
         .items
@@ -293,7 +286,7 @@ fn on_load_twin_timeline_file(
             lunco_command_contracts::OpId::new(),
         ));
     }
-    let uri = lunco_assets_core::twin_uri(&request.name, &request.relative_path);
+    let uri = lunco_assets_core::twin_uri(&authority, &request.relative_path);
     let path = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
         .map_err(|error| format!("invalid Twin source `{uri}`: {error}"))?;
     let handle = asset_server.load::<lunco_assets_runtime::TextAsset>(path);

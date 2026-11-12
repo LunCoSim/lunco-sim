@@ -590,7 +590,8 @@ Useful diagnosis order:
 
 For the dataset consent surface, trace `DatasetScope::id()` through
 `ListDatasets`, the row/action scope, and `assets::request_required`.
-Use `engine` or `twin:<name>`; never pass a display label as the selector.
+Use `engine` or `twin:<source_identity>`; never pass a display label as the
+selector. UUID-backed Twins use `uuid-<simple-uuid>` as their source identity.
 UI admission validates source/owner lifetime, independently of loading status.
 Application-owned exposure namespaces retain owner-scoped callbacks; scene
 namespaces pin the live scene lifecycle. Simulation admission stays in the

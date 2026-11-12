@@ -67,8 +67,8 @@ with `good` (default) for full res.
 
 The consent modal retains transfer/preparation progress and offers background
 work, cancellation, and retry with the failure detail. `ListDatasets` and
-`assets::request_required(scope)` use `engine` or `twin:<name>` from
-`DatasetScope::id()`. Recent Events records lifecycle transitions; live byte
+`assets::request_required(scope)` use `engine` or `twin:<source_identity>` from
+`DatasetScope::id()`. UUID-backed Twins use `uuid-<simple-uuid>`. Recent Events records lifecycle transitions; live byte
 progress stays in the registry. A required missing DEM holds simulation while
 UI remains usable, then the existing terrain bridge automatically retries the
 pending prim when the dataset is installed. Initial installation uses that bridge.

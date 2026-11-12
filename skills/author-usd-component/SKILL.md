@@ -655,7 +655,7 @@ through `StageView::rel_targets` on the composed stage.
 **Persistence:** only **doc-backed twin scenes** keep runtime edits. A scene
 opened as a raw file path reloads base bytes and discards every edit on restart.
 A twin is a folder with `twin.toml` (`name`, `[usd] default_scene`), addressed as
-`twin://<name>/<rel>`; runtime state lands in `.lunco/runtime/`, journal in
+`twin://<authority>/<rel>`; runtime state lands in `.lunco/runtime/`, journal in
 `history/`.
 
 ## Adding a new `lunco:*` property — source + regenerate

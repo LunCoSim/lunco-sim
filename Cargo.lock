@@ -8061,6 +8061,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.18",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -9099,6 +9100,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "big_space",
+ "lunco-assets-core",
  "lunco-capture",
  "lunco-celestial-spatial",
  "lunco-core",

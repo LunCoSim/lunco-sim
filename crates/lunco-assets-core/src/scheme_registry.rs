@@ -24,7 +24,7 @@
 //! # Roots are resolved lazily
 //!
 //! A handler is a closure over the scheme-relative remainder, not a fixed
-//! `PathBuf`, because not every scheme HAS one fixed root: `twin://<name>/<rel>`
+//! `PathBuf`, because not every scheme HAS one fixed root: `twin://<authority>/<rel>`
 //! picks its root per Twin name, and the set of open Twins changes at runtime. A
 //! closure covers both the constant case and the stateful one without the
 //! registry needing to know which is which.

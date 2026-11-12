@@ -13,7 +13,7 @@ fn simulation_dependencies(me, ctx) {
         entity_reads: [], entity_writes: [],
         query_reads: ["AnalyzeSysml", "InspectSysmlDocument", "ListOpenDocuments"],
         required_inputs: [
-            #{ owner: "sysml.twin-analysis", identity: twin_name() },
+            #{ owner: "sysml.twin-analysis", identity: twin_source_identity() },
         ],
     }
 }

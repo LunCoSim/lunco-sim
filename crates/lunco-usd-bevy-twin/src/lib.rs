@@ -151,7 +151,7 @@ impl DocBackedTwinScenes {
     ) -> Option<&lunco_usd_bevy_stage::asset::DocumentStageInputOwner> {
         self.map.get(&doc)?.source_input.as_ref()
     }
-    /// Return the document backing `twin://<name>/<rel>`, if any.
+    /// Return the document backing `twin://<authority>/<rel>`, if any.
     pub fn doc_for(&self, name: &str, rel: &str) -> Option<DocumentId> {
         self.map
             .iter()

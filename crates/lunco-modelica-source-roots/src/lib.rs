@@ -1017,10 +1017,8 @@ pub const STATUS_BUS_SOURCE: &str = "source-roots";
 pub struct LoadTwinModelicaSourceRoot {
     /// Workspace identity of the Twin that declared the source root.
     pub twin_id: u64,
-    /// Exact `twin://` authority returned by the asset owner.
-    pub name: String,
-    /// Twin-scoped source-root key, beginning with `twin:<id>:`.
-    pub id: String,
+    /// Index in the selected Twin's ordered Modelica root list.
+    pub source_index: u32,
     /// Twin-relative directory or an explicitly declared absolute external path.
     pub path: String,
 }
@@ -1046,25 +1044,12 @@ fn on_load_twin_modelica_source_root(
     {
         return Err(format!("Twin {} is not active", request.twin_id));
     }
-    let id_prefix = format!("twin:{}:{}:modelica:", request.twin_id, request.name);
-    if !request.id.starts_with(&id_prefix) || request.id.trim() == id_prefix {
-        return Err(format!(
-            "Modelica source-root id `{}` must be scoped to Twin {} authority `{}`",
-            request.id, request.twin_id, request.name
-        ));
-    }
-    let authority_root = roots
-        .as_deref()
-        .ok_or_else(|| "TwinRoots is not installed".to_owned())?
-        .root_for(&request.name)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("Twin asset authority `{}` is unavailable", request.name))?;
-    if authority_root != twin.root {
-        return Err(format!(
-            "Twin asset authority `{}` does not belong to Twin {}",
-            request.name, request.twin_id
-        ));
-    }
+    let roots = roots.ok_or_else(|| "TwinRoots is not installed".to_owned())?;
+    let authority = roots
+        .authority_for_root(&twin.root)
+        .map_err(|_| "Twin asset source is unavailable".to_owned())?
+        .ok_or_else(|| "Twin asset source is unavailable".to_owned())?;
+    let source_root_id = format!("twin:{}:modelica:{}", request.twin_id, request.source_index);
 
     let authored_path = PathBuf::from(&request.path);
     let root_dir = if authored_path.is_absolute() {
@@ -1104,9 +1089,7 @@ fn on_load_twin_modelica_source_root(
             ));
         }
         roots
-            .as_deref()
-            .ok_or_else(|| "TwinRoots is not installed".to_owned())?
-            .resolve_directory(&request.name, &authored_path)
+            .resolve_directory(&authority, &authored_path)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("Twin Modelica directory `{}` is unavailable", request.path))?
     };
@@ -1118,11 +1101,11 @@ fn on_load_twin_modelica_source_root(
     .map_err(|error| format!("cannot retire previous Twin Modelica roots: {error}"))?;
     let mut registry =
         registry.ok_or_else(|| "Modelica source-root registry is not installed".to_owned())?;
-    if let Some(existing) = registry.roots.get(&request.id) {
+    if let Some(existing) = registry.roots.get(&source_root_id) {
         if existing.owner != SourceRootOwner::Twin(twin_id) {
             return Err(format!(
                 "Modelica source-root id `{}` is owned by another runtime scope",
-                request.id
+                source_root_id
             ));
         }
         match &existing.kind {
@@ -1137,7 +1120,7 @@ fn on_load_twin_modelica_source_root(
                 LoadState::Failed(error) => {
                     return Err(format!(
                         "Modelica source root `{}` failed: {error}",
-                        request.id
+                        source_root_id
                     ));
                 }
                 LoadState::NotLoaded => {}
@@ -1145,22 +1128,22 @@ fn on_load_twin_modelica_source_root(
             _ => {
                 return Err(format!(
                     "Modelica source-root id `{}` is already assigned to another source",
-                    request.id
+                    source_root_id
                 ));
             }
         }
     } else {
-        registry.register_twin_disk_root(request.id.clone(), root_dir, twin_id);
+        registry.register_twin_disk_root(source_root_id.clone(), root_dir, twin_id);
     }
 
-    if !ensure_loaded(&mut registry, &request.id, &channels) {
-        let detail = match registry.state(&request.id) {
+    if !ensure_loaded(&mut registry, &source_root_id, &channels) {
+        let detail = match registry.state(&source_root_id) {
             Some(LoadState::Loading { .. }) | Some(LoadState::Ready) => None,
             Some(LoadState::Failed(error)) => Some(error.clone()),
             _ => Some("source-root load could not be queued".to_owned()),
         };
         if let Some(detail) = detail {
-            return Err(format!("Modelica source root `{}`: {detail}", request.id));
+            return Err(format!("Modelica source root `{source_root_id}`: {detail}"));
         }
     }
     Ok(lunco_command_contracts::Ack::new(

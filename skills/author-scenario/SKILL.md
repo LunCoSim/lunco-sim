@@ -137,7 +137,7 @@ fn simulation_dependencies(me, ctx) {
         entity_writes: [],
         query_reads: [],
         required_inputs: [
-            #{ owner: "sysml.twin-analysis", identity: twin_name() },
+            #{ owner: "sysml.twin-analysis", identity: twin_source_identity() },
         ],
     }
 }
@@ -295,9 +295,16 @@ in Modelica, and do not turn the recipe into an `on_tick` loop. See the
 
 Full reference: [`docs/scripting-guide.md`](../../docs/scripting-guide.md). The
 authoritative callable surface in one place: the `ScriptingCatalog` query for
-external authoring clients. Inside Rhai, use the existing bounded
-`ScriptComplete { prefix, limit }` query for discovery; the aggregate full
-catalog can exceed the sandbox value-size limit.
+external authoring clients. Rhai scripts that need catalog schemas request only
+the sections they consume, for example
+`query("ScriptingCatalog", #{sections: ["commands", "queries"]})`; the full
+catalog can exceed the sandbox value-size limit. `ScriptComplete { prefix,
+limit }` remains the bounded completion query. Twin-scoped catalog and
+completion schemas omit workspace Twin selectors. Twin-scoped query, command,
+hook, policy-status, reflected reads, Twin settings, and engine exposure reads
+also hide workspace Twin IDs; direct identity paths return no value. Rhai does
+not receive the private mount authority. Values and diagnostics show stable
+source identities; unknown opaque mount tokens are redacted.
 
 ## 1. Lifecycle hooks — the shape of every scenario
 

@@ -956,7 +956,7 @@ pub fn on_set_shader_source(
 // ─────────────────────────────────────────────────────────────────────────
 
 /// The asset path a shader named `stem` would be installed at: under the
-/// primary open Twin (`twin://<name>/shaders/<stem>.wesl`) or the engine library
+/// primary open Twin (`twin://<authority>/shaders/<stem>.wesl`) or the engine library
 /// (`shaders/<stem>.wesl`) when no Twin is open. Mirrors [`install_shader`]'s
 /// destination logic so callers (e.g. the Inspector) can predict the path.
 pub fn shader_asset_path_for(
@@ -1270,7 +1270,7 @@ pub fn on_delete_shader(
     }
     pending.cancel(&[crate::shader_doc::canonical_shader_path(&path)]);
     let removed = catalog.remove(&path);
-    // `twin://<name>/<rel>` → the Twin root, a bare `shaders/foo.wesl` → the
+    // `twin://<authority>/<rel>` → the Twin root, a bare `shaders/foo.wesl` → the
     // shipped library: both are the registry's job, so this crate re-derives
     // neither root (a copy here once joined a bare relative `"assets"`, resolving
     // against the CWD instead of the library path the loader uses).

@@ -13,7 +13,7 @@ use lunco_telemetry_core::TelemetryValue;
 pub struct ApplicationSceneCatalogChanged {
     /// Qualified scene address accepted by `LoadScene`, if one is committed.
     pub current_scene: Option<String>,
-    /// The active workspace Twin, including the asset authority selected by the asset owner.
+    /// The active workspace Twin, with a stable source identity.
     pub active_twin: Option<SceneCatalogTwin>,
     /// Open workspace Twins, including those with no scene inventory entries.
     pub twins: Vec<SceneCatalogTwin>,
@@ -35,7 +35,8 @@ pub struct ApplicationSceneCatalogChanged {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SceneCatalogTwin {
     pub id: u64,
-    pub authority: Option<String>,
+    pub source_identity: String,
+    pub source_ready: bool,
     /// Authored Twin manifest name, when present.
     pub name: Option<String>,
     /// Filesystem directory name, when it can be represented as text.

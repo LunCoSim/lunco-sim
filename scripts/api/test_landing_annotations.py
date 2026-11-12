@@ -23,8 +23,11 @@ def execute(session, command, **params):
 def gate(session, root, **params):
     headless = params.get("headless", False)
     offset = session.log_path.stat().st_size
+    source_identity = execute(session, "RunRhai", code="print(twin_source_identity());").get("stdout", "").strip()
+    if not source_identity:
+        raise RuntimeError("active Twin has no stable source identity")
     execute(session, "RunScenarioAsset", target=root,
-            source_asset="twin://astrobotic-griffin-1/scenarios/tests/griffin_landing_annotations.rhai",
+            source_asset=f"twin://{source_identity}/scenarios/tests/griffin_landing_annotations.rhai",
             params=params)
     if not headless:
         execute(session, "StepSimulation", steps=120)

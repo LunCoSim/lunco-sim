@@ -2,7 +2,7 @@
 //!
 //! One DRY scanner for "what files of extension `ext` does the project have": the
 //! engine asset *library* (the runtime `assets/` root, the default/`lunco://` source) plus
-//! every open Twin root (`twin://<name>/…`). Consumers (the spawn catalog for
+//! every open Twin root (`twin://<authority>/…`). Consumers (the spawn catalog for
 //! `usda`, the shader catalog for `wgsl`, pickers, the API) call [`list_assets`]
 //! instead of each re-walking the disk with their own scan.
 //!
@@ -44,8 +44,10 @@ pub struct AssetFile {
     /// without re-resolving the asset path. On the web there is no filesystem, so
     /// this is the bare relative path and [`crate::asset_read`] fetches instead.
     pub abs_path: std::path::PathBuf,
-    /// Open-Twin name this came from, or `None` for the engine library.
-    pub twin: Option<String>,
+    /// Exact `twin://` source authority used to load this asset.
+    pub twin_authority: Option<String>,
+    /// Human-readable manifest or folder name used in presentation.
+    pub twin_display_name: Option<String>,
 }
 
 /// The engine asset library's file listing — every loadable authored source that ships.
@@ -121,7 +123,8 @@ pub fn list_library_assets(
             abs_path: assets_dir.join(rel),
             #[cfg(target_arch = "wasm32")]
             abs_path: std::path::PathBuf::from(rel),
-            twin: None,
+            twin_authority: None,
+            twin_display_name: None,
             rel: rel.clone(),
         })
         .collect())
@@ -161,7 +164,8 @@ pub fn resolve_asset(
             stem: stem_of(rel),
             rel: rel.to_string(),
             abs_path,
-            twin: Some(name.to_string()),
+            twin_authority: Some(name.to_string()),
+            twin_display_name: Some(roots.display_name_for_authority(name)?),
         }))
     }
 
@@ -572,24 +576,27 @@ pub fn list_assets_with_extensions(
             abs_path: assets_dir.join(rel),
             #[cfg(target_arch = "wasm32")]
             abs_path: std::path::PathBuf::from(rel),
-            twin: None,
+            twin_authority: None,
+            twin_display_name: None,
             rel: rel.clone(),
         });
     }
 
-    // Open Twins → `twin://<name>/<rel>` so the `twin://` reader resolves them.
+    // Open Twins → `twin://<authority>/<rel>` so the `twin://` reader resolves them.
     // Native only: a Twin lives on disk, and the web has no filesystem to walk.
     #[cfg(not(target_arch = "wasm32"))]
-    for name in roots.names()? {
-        if let Some(root) = roots.root_of(&name)? {
+    for authority in roots.authorities()? {
+        if let Some(root) = roots.root_for(&authority)? {
+            let display_name = roots.display_name_for_authority(&authority)?;
             for rel in catalog_files(&root, extensions).map_err(|error| {
                 lunco_assets_core::TwinRootsError::AssetResolution(error.kind(), error.to_string())
             })? {
                 out.push(AssetFile {
-                    asset_path: lunco_assets_core::twin_uri(&name, &rel),
+                    asset_path: lunco_assets_core::twin_uri(&authority, &rel),
                     stem: stem_of(&rel),
                     abs_path: root.join(&rel),
-                    twin: Some(name.clone()),
+                    twin_authority: Some(authority.clone()),
+                    twin_display_name: Some(display_name.clone()),
                     rel,
                 });
             }
@@ -630,10 +637,10 @@ pub fn list_scene_assets(
     let mut out = list_assets(manifest, roots, "usda")?;
     // One manifest read per Twin, not per asset.
     let globs: std::collections::HashMap<String, Vec<String>> = roots
-        .names()?
+        .authorities()?
         .into_iter()
         .map(|name| {
-            let g = match roots.root_of(&name)? {
+            let g = match roots.root_for(&name)? {
                 Some(root) => scene_globs_of_twin(&root)?,
                 None => default_scene_globs(),
             };
@@ -641,7 +648,7 @@ pub fn list_scene_assets(
         })
         .collect::<Result<_, lunco_assets_core::TwinRootsError>>()?;
 
-    out.retain(|asset| match &asset.twin {
+    out.retain(|asset| match &asset.twin_authority {
         Some(name) => globs
             .get(name)
             .map(|g| {
@@ -668,7 +675,7 @@ pub fn list_indexed_scene_assets(
         asset.rel.ends_with(".usda") && lunco_assets_core::is_engine_scene_asset(&asset.rel)
     });
     for twin in twins {
-        let authority = roots.name_for_root(&twin.root)?.ok_or_else(|| {
+        let authority = roots.authority_for_root(&twin.root)?.ok_or_else(|| {
             lunco_assets_core::TwinRootsError::AssetResolution(
                 std::io::ErrorKind::NotFound,
                 format!("Workspace Twin is not mounted: {}", twin.root.display()),
@@ -702,7 +709,8 @@ pub fn list_indexed_scene_assets(
                     stem: stem_of(&rel),
                     abs_path: twin.root.join(&file.relative_path),
                     rel,
-                    twin: Some(authority.clone()),
+                    twin_authority: Some(authority.clone()),
+                    twin_display_name: Some(twin.display_name()),
                 });
             }
         }
@@ -855,7 +863,7 @@ mod tests {
         if let Ok(root) = std::env::var(CHILD) {
             let roots = TwinRoots::default();
             roots
-                .register("probe", std::path::PathBuf::from(&root))
+                .register_authority("probe", std::path::PathBuf::from(&root))
                 .unwrap();
             let result = list_assets(&AssetManifest::default(), &roots, "rhai");
             let error = result.expect_err("an escaped catalog entry must reject discovery");

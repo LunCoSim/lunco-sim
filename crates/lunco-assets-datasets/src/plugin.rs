@@ -280,26 +280,49 @@ fn live_dataset_scopes(
     // authorities. A real open Twin owns its store; otherwise one deterministic
     // mounted authority owns standalone-source preparation.
     let mut owners = std::collections::BTreeMap::new();
-    for name in roots.names().map_err(|e| e.to_string())? {
-        if let Some(root) = roots.root_for(&name).map_err(|e| e.to_string())? {
-            owners.entry(root).or_insert(name);
+    for authority in roots.authorities().map_err(|e| e.to_string())? {
+        if let Some(root) = roots.root_for(&authority).map_err(|e| e.to_string())? {
+            let source_identity = roots
+                .logical_identity_for_authority(&authority)
+                .map_err(|e| e.to_string())?;
+            let display_name = roots
+                .display_name_for_authority(&authority)
+                .map_err(|e| e.to_string())?;
+            owners
+                .entry(root)
+                .or_insert((source_identity, Some(authority), display_name));
         }
     }
     if let Some(workspace) = workspace {
         for (_, twin) in workspace.twins() {
-            if let Some(name) = roots
-                .mounted_name_for_logical(&lunco_assets_core::logical_twin_name(twin))
+            if let Some(authority) = roots
+                .mounted_authority_for_logical(&lunco_assets_core::logical_twin_source_identity(
+                    twin,
+                ))
                 .map_err(|e| e.to_string())?
             {
-                if let Some(root) = roots.root_for(&name).map_err(|e| e.to_string())? {
-                    owners.insert(root, name);
+                if let Some(root) = roots.root_for(&authority).map_err(|e| e.to_string())? {
+                    let source_identity = roots
+                        .logical_identity_for_authority(&authority)
+                        .map_err(|e| e.to_string())?;
+                    owners.insert(
+                        root,
+                        (source_identity, Some(authority), twin.display_name()),
+                    );
                 }
             }
         }
     }
     Ok(owners
         .into_iter()
-        .map(|(root, name)| DatasetScope::Twin { name, root })
+        .map(
+            |(root, (source_identity, authority, display_name))| DatasetScope::Twin {
+                source_identity,
+                authority,
+                display_name,
+                root,
+            },
+        )
         .collect())
 }
 
@@ -395,16 +418,29 @@ fn scan_open_twins_for_datasets(
         if registry.is_scope_scanned(&scope) || pending.contains(&scope) {
             continue;
         }
-        let DatasetScope::Twin { name, root } = &scope else {
+        let DatasetScope::Twin {
+            source_identity,
+            authority,
+            display_name,
+            root,
+        } = &scope
+        else {
             continue;
         };
-        let scan_name = name.clone();
+        let scan_source_identity = source_identity.clone();
+        let scan_authority = authority.clone();
+        let scan_display_name = display_name.clone();
         let scan_root = root.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let _span =
-                bevy::log::info_span!("dataset_twin_manifest_scan",twin=%scan_name).entered();
+            let _span = bevy::log::info_span!("dataset_twin_manifest_scan",twin=%scan_display_name)
+                .entered();
             let mut prepared = DatasetRegistry::default();
-            prepared.scan_twin(&scan_name, &scan_root);
+            prepared.scan_twin(
+                &scan_source_identity,
+                scan_authority.as_deref(),
+                &scan_display_name,
+                &scan_root,
+            );
             prepared
         });
         pending.scans.push_back(PendingTwinManifestScan {

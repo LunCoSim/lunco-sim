@@ -258,7 +258,8 @@ another dataset or changing its parameters is an `Assets.toml` edit. Rust change
 are needed only when adding a new processing algorithm or owner.
 
 `DatasetScope::id()` owns the scope identity used by `ListDatasets` and download
-actions: `engine` or `twin:<name>`. Display labels are not query selectors.
+actions: `engine` or `twin:<source_identity>`. UUID-backed Twins use
+`uuid-<simple-uuid>`; display labels are not query selectors.
 An unknown or undiscovered scope rejects explicitly; a discovered empty scope
 may return no entries. `RequestDataset` and `CancelDataset` return terminal
 command results for invalid identities or states.

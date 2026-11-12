@@ -184,7 +184,7 @@ fn discover_scene_test(
     let prepare = || -> anyhow::Result<_> {
         let absolute = lunco_storage::canonicalize_file_path(scene_path)?;
         let twin_root = lunco_twin::root_for_file(&absolute);
-        let authority = match roots.name_for_root(&twin_root)? {
+        let authority = match roots.authority_for_root(&twin_root)? {
             Some(authority) => authority,
             None => {
                 let twin = match lunco_twin::TwinMode::open(&twin_root)? {
@@ -406,7 +406,7 @@ mod tests {
         )
         .unwrap();
         let roots = lunco_assets_core::TwinRoots::default();
-        let authority = roots.register("fixture", &twin_root).unwrap();
+        let authority = roots.register_authority("fixture", &twin_root).unwrap();
         let id = lunco_assets_core::twin_uri(&authority, "sim/scenes/root.usda");
         let origin =
             lunco_assets_core::asset_path::load_asset_path(&id, None, Some(&roots), None).unwrap();

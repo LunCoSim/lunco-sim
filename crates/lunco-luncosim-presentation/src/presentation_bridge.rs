@@ -928,6 +928,7 @@ fn report_terrain_generation_status(
 /// both consumers on this shared mirror avoids dropping readiness signals.
 fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
     awaiting: Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
     projecting: Query<(), With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>>,
@@ -960,15 +961,23 @@ fn report_scene_spawn_status(
         return;
     }
     if let Some(g) = in_flight {
+        let source =
+            lunco_assets_core::asset_path::source_uri_for_address(&g.path, roots.as_deref());
+        let path = match source {
+            Ok(path) => path,
+            Err(error) => {
+                warn!("[scene-status] cannot resolve the public scene source URI: {error}");
+                bus.remove_progress(VISUAL_SOURCE);
+                bus.set_progress(SOURCE, "scene source unavailable", 0, 0);
+                return;
+            }
+        };
         let message = if projecting > 0 {
-            format!("projecting scene {} ({projecting} prims queued)", g.path)
+            format!("projecting scene {path} ({projecting} prims queued)")
         } else if pending_meshes > 0 {
-            format!(
-                "loading scene {} (streaming {pending_meshes} meshes)",
-                g.path
-            )
+            format!("loading scene {path} (streaming {pending_meshes} meshes)")
         } else {
-            format!("loading scene {}", g.path)
+            format!("loading scene {path}")
         };
         // `total = 0` is the bus's "indeterminate" encoding — the number of
         // descendants can grow as each projected prim exposes its children.

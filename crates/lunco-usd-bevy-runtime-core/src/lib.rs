@@ -48,7 +48,8 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.add_message::<lunco_usd_bevy_scene::UsdSceneChangeBatch>();
         scene::install_scene_lifecycle(app);
         app.add_observer(scene::on_scene_transition_intent);
-        app.add_observer(scene::execute_admitted_restart_scene);
+        app.add_observer(scene_runtime::execute_admitted_restart_scene);
+        app.add_observer(scene::execute_admitted_runtime_reset);
         app.add_observer(scene::execute_admitted_clear_scene);
         app.add_observer(scene::on_scene_transition_completed);
         app.add_observer(scene::on_scene_transition_failed);
@@ -62,7 +63,7 @@ impl Plugin for UsdSceneRuntimePlugin {
             twin_projection::reset_scene_projection_state,
         );
         app.add_observer(scene_runtime::execute_admitted_load_scene);
-        app.add_observer(scene_runtime::on_restart_scene_refresh_active_document);
+        app.init_resource::<scene_runtime::PendingSceneRestart>();
         app.add_plugins(lunco_usd_bevy_runtime_persistence::UsdRuntimePersistencePlugin);
 
         app.init_resource::<twin_projection::PendingTwinDocs>();
@@ -90,6 +91,8 @@ impl Plugin for UsdSceneRuntimePlugin {
                 twin_projection::mark_reference_layer_inputs,
                 native_references::advance.run_if(twin_projection::native_reference_inputs_ready),
                 live_consume::project_stage_changes,
+                scene_runtime::drain_pending_scene_restart,
+                scene_runtime::drain_pending_scene_restart,
             )
                 .chain()
                 .in_set(lunco_core::RuntimeCycleSet::Lifecycle)

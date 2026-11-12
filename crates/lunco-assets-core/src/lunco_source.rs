@@ -811,7 +811,7 @@ mod native_resolution_contract_tests {
         let roots = vec![authored, cached];
         let reader = crate::NativeAssetReader::new(roots.clone());
         let mounts = crate::TwinRoots::default();
-        let authority = mounts.register("owner", &roots[0]).unwrap();
+        let authority = mounts.register_authority("owner", &roots[0]).unwrap();
         let scope = mounts.read_scope(&authority).unwrap();
         for name in [&authority, "owner"] {
             assert_eq!(
@@ -831,7 +831,7 @@ mod native_resolution_contract_tests {
                 .kind(),
             std::io::ErrorKind::InvalidInput
         );
-        mounts.unregister_name(&authority).unwrap();
+        mounts.unregister_authority(&authority).unwrap();
         assert!(mounts.read_scope(&authority).is_err());
 
         let selected = resolve_native_asset(

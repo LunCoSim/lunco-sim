@@ -68,8 +68,12 @@ pub enum DatasetScope {
     Engine,
     /// A Twin manifest and its absolute root.
     Twin {
-        /// `twin://` authority.
-        name: String,
+        /// Stable source identity used for dataset IDs across mount lifetimes.
+        source_identity: String,
+        /// Live `twin://` authority. Offline verification has no runtime address.
+        authority: Option<String>,
+        /// Human-readable manifest or folder label.
+        display_name: String,
         /// Absolute Twin root.
         root: PathBuf,
     },
@@ -84,11 +88,13 @@ impl DatasetScope {
             _ => false,
         }
     }
-    /// Stable command/query identity, distinct from the human-readable label.
+    /// Stable command/query identity, distinct from the mount and display names.
     pub fn id(&self) -> String {
         match self {
             Self::Engine => "engine".to_owned(),
-            Self::Twin { name, .. } => format!("twin:{name}"),
+            Self::Twin {
+                source_identity, ..
+            } => format!("twin:{source_identity}"),
         }
     }
 
@@ -123,7 +129,7 @@ impl DatasetScope {
     pub fn label(&self) -> &str {
         match self {
             Self::Engine => "engine",
-            Self::Twin { name, .. } => name,
+            Self::Twin { display_name, .. } => display_name,
         }
     }
 }
@@ -295,10 +301,10 @@ impl DatasetEntry {
                 path.display()
             );
         }
-        format!(
-            "Prepared artifact {} is missing. Prepare this dataset before loading it.",
-            self.artifact_uri()
-        )
+        let location = self
+            .artifact_uri()
+            .unwrap_or_else(|| format!("{} in Twin {}", self.artifact_rel, self.scope.label()));
+        format!("Prepared artifact {location} is missing. Prepare this dataset before loading it.")
     }
 
     /// Exact read roots validated with this declaration on its scan worker.
@@ -353,15 +359,24 @@ impl DatasetEntry {
         Ok(None)
     }
 
-    /// Resolve the consumer-facing asset URI.
-    pub fn artifact_uri(&self) -> String {
+    /// Resolve the consumer-facing asset URI using the stable source identity.
+    /// Offline verification has no live Twin scope and cannot produce an address.
+    pub fn artifact_uri(&self) -> Option<String> {
         match &self.scope {
-            DatasetScope::Engine => {
-                lunco_assets_path::uri(lunco_assets_core::LUNCO_SCHEME, &self.artifact_rel)
-            }
-            DatasetScope::Twin { name, .. } => {
-                lunco_assets_core::twin_uri(name, &self.artifact_rel)
-            }
+            DatasetScope::Engine => Some(lunco_assets_path::uri(
+                lunco_assets_core::LUNCO_SCHEME,
+                &self.artifact_rel,
+            )),
+            DatasetScope::Twin {
+                source_identity,
+                authority,
+                ..
+            } => authority.as_ref().map(|_| {
+                lunco_assets_path::uri(
+                    lunco_assets_core::TWIN_SCHEME,
+                    &format!("{source_identity}/{}", self.artifact_rel),
+                )
+            }),
         }
     }
 }
@@ -727,9 +742,17 @@ impl DatasetRegistry {
 
     /// Scan and register an opened Twin's `Assets.toml`.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn scan_twin(&mut self, name: &str, root: &Path) -> usize {
+    pub fn scan_twin(
+        &mut self,
+        source_identity: &str,
+        authority: Option<&str>,
+        display_name: &str,
+        root: &Path,
+    ) -> usize {
         let scope = DatasetScope::Twin {
-            name: name.to_owned(),
+            source_identity: source_identity.to_owned(),
+            authority: authority.map(str::to_owned),
+            display_name: display_name.to_owned(),
             root: root.to_path_buf(),
         };
         self.forget_scope(&scope);
@@ -746,7 +769,7 @@ impl DatasetRegistry {
                 return 0;
             }
         };
-        self.register_scoped(&text, name, scope)
+        self.register_scoped(&text, display_name, scope)
     }
 
     /// Record a registry-owned failure for the runtime telemetry drain.
@@ -996,7 +1019,9 @@ impl DatasetRegistry {
 pub fn dataset_id(scope: &DatasetScope, group: &str, key: &str) -> String {
     match scope {
         DatasetScope::Engine => format!("engine/{group}/{key}"),
-        DatasetScope::Twin { name, .. } => format!("twin/{name}/{key}"),
+        DatasetScope::Twin {
+            source_identity, ..
+        } => format!("twin/{source_identity}/{key}"),
     }
 }
 
@@ -1077,7 +1102,9 @@ dest = "data/demo.csv"
         std::fs::write(&authored, b"").unwrap();
         std::fs::write(&cached, b"valid cached artifact").unwrap();
         let scope = DatasetScope::Twin {
-            name: "fixture".into(),
+            source_identity: "fixture".into(),
+            authority: Some("opaque-authority".into()),
+            display_name: "fixture".into(),
             root: root.path().to_path_buf(),
         };
         let mut invalid = DatasetRegistry::default();
@@ -1110,13 +1137,48 @@ dest = "data/demo.csv"
         assert_eq!(entry.scope.id(), "engine");
         assert_eq!(
             DatasetScope::Twin {
-                name: "named-fixture".into(),
+                source_identity: "stable-fixture".into(),
+                authority: Some("opaque-authority".into()),
+                display_name: "Named fixture".into(),
                 root: PathBuf::from("/fixture"),
             }
             .id(),
-            "twin:named-fixture"
+            "twin:stable-fixture"
         );
-        assert_eq!(entry.artifact_uri(), "lunco://data/demo.csv");
+        assert_eq!(
+            entry.artifact_uri().as_deref(),
+            Some("lunco://data/demo.csv")
+        );
+
+        let offline_scope = DatasetScope::Twin {
+            source_identity: "stable-fixture".into(),
+            authority: None,
+            display_name: "Named fixture".into(),
+            root: PathBuf::from("/fixture"),
+        };
+        let mut offline_registry = DatasetRegistry::default();
+        assert_eq!(
+            offline_registry.register_scoped(MANIFEST, "Named fixture", offline_scope),
+            1
+        );
+        let offline_entry = &offline_registry.entries()[0];
+        assert_eq!(offline_entry.id, "twin/stable-fixture/demo_vectors");
+        assert_eq!(offline_entry.scope.id(), "twin:stable-fixture");
+        assert_eq!(offline_entry.scope.label(), "Named fixture");
+        assert_eq!(offline_entry.artifact_uri(), None);
+        assert_eq!(
+            dataset_id(
+                &DatasetScope::Twin {
+                    source_identity: "stable-fixture".into(),
+                    authority: Some("fresh-authority".into()),
+                    display_name: "Renamed presentation label".into(),
+                    root: PathBuf::from("/fixture"),
+                },
+                "ignored-group",
+                "demo_vectors"
+            ),
+            offline_entry.id
+        );
     }
 
     #[test]
@@ -1159,7 +1221,9 @@ dest = "data/demo.csv"
     fn delivered_paths_are_scope_relative() {
         let mut registry = DatasetRegistry::default();
         let scope = DatasetScope::Twin {
-            name: "school".into(),
+            source_identity: "school".into(),
+            authority: Some("opaque-authority".into()),
+            display_name: "School".into(),
             root: PathBuf::from("/twins/school"),
         };
         assert_eq!(
@@ -1195,7 +1259,9 @@ output_root = "cache"
 output = "terrain/site/materials/textures/albedo.png"
 "#;
         let scope = DatasetScope::Twin {
-            name: "school".into(),
+            source_identity: "school".into(),
+            authority: Some("opaque-authority".into()),
+            display_name: "School".into(),
             root: PathBuf::from("/twins/school"),
         };
         let mut registry = DatasetRegistry::default();
@@ -1224,15 +1290,23 @@ fn dataset_scope_for_uri(
 ) -> Result<Option<(DatasetScope, PathBuf)>, String> {
     let (scope, relative) = if let Some(relative) = lunco_assets_core::parse_lunco_uri(uri) {
         (DatasetScope::Engine, relative)
-    } else if let Some((name, relative)) = lunco_assets_core::parse_twin_uri(uri) {
+    } else if let Some((authority, relative)) = lunco_assets_core::parse_twin_uri(uri) {
+        let roots = roots.ok_or("Twin asset registry is unavailable")?;
         let root = roots
-            .ok_or("Twin asset registry is unavailable")?
-            .root_of(name)
+            .root_for(authority)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Twin asset authority retired: {name}"))?;
+            .ok_or_else(|| format!("Twin asset authority retired: {authority}"))?;
+        let display_name = roots
+            .display_name_for_authority(authority)
+            .map_err(|e| e.to_string())?;
+        let source_identity = roots
+            .logical_identity_for_authority(authority)
+            .map_err(|e| e.to_string())?;
         (
             DatasetScope::Twin {
-                name: name.to_owned(),
+                source_identity,
+                authority: Some(authority.to_owned()),
+                display_name,
                 root,
             },
             relative,

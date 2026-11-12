@@ -206,9 +206,11 @@ At `assets_mounted`, the scripting owner supplies the indexed Twin, an optional
 session `scene_override`, and the admitted `scene_loading` value and source.
 The application policy returns an ordered typed command plan. When an explicit
 scene is requested, validation requires exactly one `OpenTwinScene` for that
-Twin, authority and path; when no override exists and automatic default loading
-is disabled, the plan cannot open the authored default. The scene command owner
-validates the source and performs the document-first mount. The decision is
+Twin and relative path; when no override exists and automatic default loading
+is disabled, the plan cannot open the authored default. The Rust command
+boundary binds the mounted workspace Twin to reflected command identity fields.
+The scene command resolves its stable source URI to the current private mount
+lease and performs the document-first mount. The decision is
 fixed at Twin-open admission and retired with that Twin; the hook is installed
 at application scope and may be replaced by the active Twin. A malformed plan
 or missing required explicit-scene action reports a lifecycle fault and queues
@@ -218,11 +220,17 @@ but does not select Twin tools, timelines, source sets, or authored policy
 overrides; there is no Twin manifest.
 
 Every `twin.lifecycle` invocation carries `Twin/Lifecycle` with generation
-zero and the mounted Twin's stable ID in `owner_id`, `RuntimeClock::None`, and
-the phase `Start`, `Event`, or `Stop`. `TwinId` is allocated monotonically for
-each mount within the owning workspace, so a later mount of the same path has a
-distinct owner. `policy_status().lifecycle.runtime_context` retains the exact
-context used for the latest delivery.
+zero, `RuntimeClock::None`, and the phase `Start`, `Event`, or `Stop`. The
+typed runtime retains the workspace Twin identity for ownership checks, while
+the Rhai-facing context and `policy_status()` omit it. `TwinId` is allocated
+for each workspace mount; application-level selection and API flows may use
+that ID, but Twin policy facts and actions do not. Twin-scoped Rhai query,
+command, hook, and policy-status results also omit workspace selector fields
+recursively. Compound reflected `get()` and `get_setting()` reads apply the
+same projection, while direct reads of selector fields return no value in Twin
+scope. Mount-local authorities in script values and diagnostics are translated
+to stable source identities. Only the application-facing API and application
+scripts retain workspace selectors; no script scope receives a mount lease.
 
 The generic asset layer owns asynchronous JSON reads and publishes
 `JsonAssetScopeLoading` and `JsonAssetScopeChanged` events for the engine
@@ -230,7 +238,7 @@ library and each opened Twin. The application manifest installs the optional,
 installable `application.asset.lifecycle(event: String, ctx: Map) -> Map` hook
 before those events can fire; the shipped application manifest requires this
 policy to install successfully. Its context carries the stable `provider`, the
-`scope`, optional `twin_id` and `twin_name`, and a `payload`: loading events
+`scope`, optional `twin_id` and `twin_display_name`, and a `payload`: loading events
 provide `has_json_assets`; changed events provide the complete array of
 `{asset_uri, persisted_result, text, error}` records for that scope.
 The asset owner derives `persisted_result` from the canonical scope URI and
@@ -362,20 +370,22 @@ unaffected control body.
 
 The lifecycle dispatcher validates the returned map, retains the typed result
 as the current lifecycle record, and exposes it through `policy_status()` and
-the API status view. On `assets_mounted`, the application policy receives
-`twin_id`, the exact asset authority `name`, `root`, `active`, the parsed
-`manifest` as a typed map (or `Unit` for a plain folder), indexed relative
-`files`, `scene_override`, and the admitted `scene_loading` value and source.
-It returns an ordered `actions` array whose entries contain a reflected
-`command` name and typed `params` map. The generic executor validates the plan
-shape and scene-selection invariants and dispatches each entry through the
-ordinary typed command bridge. The queue is applied only while
-that Twin remains active. A malformed plan faults the lifecycle result and
-queues no actions; an individual command rejection is logged and later actions
-continue. This lets Rhai own the choice and ordering while domain owners retain
-path validation and asynchronous loading mechanics. The application policy
-selects an explicit or enabled default USD scene, Twin tool libraries, timelines, SysML/KerML
-source files, and Modelica roots from the typed manifest and indexed inventory.
+the API status view. On `assets_mounted`, the application policy receives the
+human-readable `display_name`, `active`, the parsed `manifest` as a typed map
+(or `Unit` for a plain folder), indexed relative `files`, `scene_override`,
+and the admitted `scene_loading` value and source. It returns an ordered
+`actions` array whose entries contain a reflected `command` name and typed
+`params` map. Twin policy actions cannot supply `twin_id` or mount authority.
+The generic executor binds the known workspace Twin to reflected command
+identity fields, validates the plan shape and scene-selection invariants, and
+dispatches each entry through the ordinary typed command bridge. The queue is
+applied only while that Twin remains active. A malformed plan faults the
+lifecycle result and queues no actions; an individual command rejection is
+logged and later actions continue. This lets Rhai own the choice and ordering
+while domain owners retain path validation and asynchronous loading mechanics.
+The application policy selects an explicit or enabled default USD scene, Twin
+tool libraries, timelines, SysML/KerML source files, and Modelica roots from
+the typed manifest and indexed inventory.
 If a lifecycle seam is only a notification, its contract should instead return
 `Unit`.
 
@@ -407,8 +417,8 @@ asset publication, and runtime preparation run in that order. During a policy
 replacement, a temporarily unavailable classifier leaves the current admitted
 sources intact and closes script execution until the authored policy returns.
 Twin tool libraries and timelines are selected by the `twin.lifecycle` action
-plan. Their loaders validate the supplied live authority against its root;
-they do not substitute another authority that happens to name the same folder.
+plan. Their owners resolve action-relative paths against the mounted workspace
+Twin and keep the exact mount lease inside Rust.
 
 ### Tool layers and shutdown
 

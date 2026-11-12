@@ -60,8 +60,8 @@ impl BrowserSection for TwinDatasetsSection {
             );
             return;
         };
-        let twin_name = match roots.name_for_root(&twin_root) {
-            Ok(Some(name)) => name,
+        let twin_authority = match roots.authority_for_root(&twin_root) {
+            Ok(Some(authority)) => authority,
             Ok(None) => {
                 ui.label(
                     egui::RichText::new("Mounting Twin asset resources…")
@@ -87,7 +87,7 @@ impl BrowserSection for TwinDatasetsSection {
             return;
         };
 
-        let scope_matches = |scope: &DatasetScope| matches!(scope, DatasetScope::Twin { name, .. } if name == &twin_name);
+        let scope_matches = |scope: &DatasetScope| matches!(scope, DatasetScope::Twin { authority, .. } if authority.as_deref() == Some(twin_authority.as_str()));
         let scanned = registry.scanned_scopes().iter().any(scope_matches);
         if !scanned {
             ui.label(

@@ -538,5 +538,7 @@ Engineering failure policy uses `PauseSimulationObject`, not a physics-only
 freeze. The co-simulation owner includes the active mechanical island, owned
 controllers and all connected continuous models. Independent systems and an
 external mission supervisor remain live. Supply the measured condition and
-limit in `detail` for Recent Events; use `RestartScene` for recovery. The
+limit in `detail` for Recent Events; use `RestartScene` after correcting the
+authoritative source. Use `ResetSceneRuntime` for a deliberate retry from the
+currently mounted stage. The
 `paused_wheel_effort` production gate checks this with both wheel realizations.

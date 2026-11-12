@@ -35,7 +35,7 @@ fn loading_menu_items(ctx) {
     let tutorials = tutorials_menu_item(lessons);
     if ctx.scope == "twin" {
         let wrapper = #{};
-        wrapper.label = ctx.twin_name;
+        wrapper.label = ctx.twin_display_name;
         wrapper.children = [tutorials];
         let wrapped = [];
         wrapped.push(wrapper);
@@ -129,7 +129,7 @@ fn learning_path(first, catalog, root) {
     path
 }
 
-fn lesson_menu_item(lesson, source_asset, scene_asset, twin_id, path) {
+fn lesson_menu_item(lesson, source_asset, scene_asset, path) {
     let args = #{};
     args.source_asset = source_asset;
     args.scene_asset = scene_asset;
@@ -140,9 +140,6 @@ fn lesson_menu_item(lesson, source_asset, scene_asset, twin_id, path) {
         }
         if scene_asset != "" { throw source_asset + " cannot declare both twin_asset and scene_asset"; }
         args.twin_asset = path[0].twin_asset;
-    }
-    if twin_id != () {
-        args.owner_twin_id = twin_id.parse_int();
     }
     // Command payloads use the reload policy's serialized snake-case value.
     args.reload_policy = "restart";
@@ -319,7 +316,7 @@ fn application_asset_lifecycle(event, ctx) {
         let source_asset = qualify_catalog_asset(root, lesson["source_asset"]);
         let scene_asset = qualify_catalog_asset(root, scene_asset);
         let path = learning_path(lesson, catalog, root);
-        let menu_item = lesson_menu_item(lesson, source_asset, scene_asset, ctx.twin_id, path);
+        let menu_item = lesson_menu_item(lesson, source_asset, scene_asset, path);
         track_items[group].push(menu_item);
         viewport_actions = append_featured_action(
             viewport_actions, lesson, menu_item, catalog_uri, entry, ctx.scope);
@@ -332,7 +329,7 @@ fn application_asset_lifecycle(event, ctx) {
 
     let items = [tutorials_menu_item(tracks)];
     if ctx.scope == "twin" {
-        items = [#{ label: ctx.twin_name, children: items }];
+        items = [#{ label: ctx.twin_display_name, children: items }];
     }
     let result = scenario_menu_contribution(items, ctx);
     result.viewport_actions = viewport_actions;

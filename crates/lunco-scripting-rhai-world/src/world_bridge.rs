@@ -214,112 +214,10 @@ fn hook_operation_result(
     map.insert(
         "error".into(),
         error
-            .map(|error| Dynamic::from(error.to_owned()))
+            .map(|error| Dynamic::from(bridge_core::project_script_text(error.to_owned())))
             .unwrap_or(Dynamic::UNIT),
     );
     Dynamic::from_map(map)
-}
-
-fn lifecycle_status_dynamic(status: &crate::policy::LifecyclePolicyReport) -> Dynamic {
-    RhaiBuilder.map(vec![
-        ("event".into(), Dynamic::from(status.event.clone())),
-        ("status".into(), Dynamic::from(status.status.clone())),
-        (
-            "runtime_context".into(),
-            status
-                .runtime_context
-                .map(lunco_hooks::runtime_context_hook_value)
-                .map(|context| lunco_hooks_rhai::hook_to_dynamic(&context))
-                .unwrap_or(Dynamic::UNIT),
-        ),
-        (
-            "result".into(),
-            status
-                .result
-                .as_ref()
-                .map(lunco_hooks_rhai::hook_to_dynamic)
-                .unwrap_or(Dynamic::UNIT),
-        ),
-        (
-            "error".into(),
-            status
-                .error
-                .as_ref()
-                .map(|error| Dynamic::from(error.clone()))
-                .unwrap_or(Dynamic::UNIT),
-        ),
-    ])
-}
-
-fn policy_status_dynamic(
-    status: &crate::policy::PolicyLoadReport,
-    lifecycle: &crate::policy::LifecyclePolicyReport,
-    native_plugins: Dynamic,
-) -> Dynamic {
-    let strings = |values: &[String]| {
-        RhaiBuilder.array(
-            values
-                .iter()
-                .cloned()
-                .map(Dynamic::from)
-                .collect::<Vec<_>>(),
-        )
-    };
-    RhaiBuilder.map(vec![
-        ("scope".into(), Dynamic::from(status.scope.clone())),
-        ("installed".into(), strings(&status.installed)),
-        ("failed".into(), strings(&status.failed)),
-        ("unavailable".into(), strings(&status.unavailable)),
-        (
-            "required_failures".into(),
-            strings(&status.required_failures),
-        ),
-        (
-            "error".into(),
-            status
-                .error
-                .as_ref()
-                .map(|error| Dynamic::from(error.clone()))
-                .unwrap_or(Dynamic::UNIT),
-        ),
-        ("lifecycle".into(), lifecycle_status_dynamic(lifecycle)),
-        ("native_plugins".into(), native_plugins),
-    ])
-}
-
-fn empty_native_plugins_status_dynamic() -> Dynamic {
-    RhaiBuilder.map(vec![
-        ("loaded".into(), RhaiBuilder.array(Vec::new())),
-        ("failed".into(), RhaiBuilder.array(Vec::new())),
-    ])
-}
-
-#[cfg(feature = "native-plugins")]
-fn native_plugins_status_dynamic(world: &World) -> Dynamic {
-    let Some(plugins) = world.get_resource::<crate::native_plugins::NativeTwinPlugins>() else {
-        return empty_native_plugins_status_dynamic();
-    };
-    let loaded = RhaiBuilder.array(
-        plugins
-            .loaded
-            .iter()
-            .map(|plugin| Dynamic::from(plugin.id().to_owned()))
-            .collect::<Vec<_>>(),
-    );
-    let failed = RhaiBuilder.array(
-        plugins
-            .failed
-            .iter()
-            .cloned()
-            .map(Dynamic::from)
-            .collect::<Vec<_>>(),
-    );
-    RhaiBuilder.map(vec![("loaded".into(), loaded), ("failed".into(), failed)])
-}
-
-#[cfg(not(feature = "native-plugins"))]
-fn native_plugins_status_dynamic(_world: &World) -> Dynamic {
-    empty_native_plugins_status_dynamic()
 }
 
 fn lifecycle_status_value(status: &crate::policy::LifecyclePolicyReport) -> HookValue {
@@ -1833,6 +1731,22 @@ fn build_world_engine_base(
                 bridge_core::execution_context(),
             ) {
                 Ok(Some(value)) => {
+                    let value = match dynamic_to_hook_value(&value) {
+                        Ok(value) => bridge_core::build_from_value(
+                            &RhaiBuilder,
+                            &bridge_core::project_script_value(value),
+                        ),
+                        Err(error) => {
+                            return hook_operation_result(
+                                id.as_str(),
+                                false,
+                                "fault",
+                                true,
+                                Dynamic::UNIT,
+                                Some(&error),
+                            );
+                        }
+                    };
                     hook_operation_result(id.as_str(), true, "ok", true, value, None)
                 }
                 Ok(None) => hook_operation_result(
@@ -1907,25 +1821,10 @@ fn build_world_engine_base(
     // Loading errors belong to the policy loader, not to an individual hook
     // row, so expose the last startup/Twin transition report separately.
     engine.register_fn("policy_status", || -> Dynamic {
-        bridge_core::with_world(|world| {
-            world
-                .get_resource::<crate::policy::ScriptedPolicyRegistry>()
-                .map(|registry| {
-                    policy_status_dynamic(
-                        &registry.status,
-                        &registry.lifecycle,
-                        native_plugins_status_dynamic(world),
-                    )
-                })
-        })
-        .flatten()
-        .unwrap_or_else(|| {
-            policy_status_dynamic(
-                &crate::policy::PolicyLoadReport::default(),
-                &crate::policy::LifecyclePolicyReport::default(),
-                empty_native_plugins_status_dynamic(),
-            )
-        })
+        bridge_core::with_world(|world| policy_status_value(world))
+            .map(bridge_core::project_script_value)
+            .map(|status| bridge_core::build_from_value(&RhaiBuilder, &status))
+            .unwrap_or(Dynamic::UNIT)
     });
 
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
@@ -2765,48 +2664,59 @@ fn build_world_engine_base(
     engine.register_fn("clock_snapshot", || -> Dynamic {
         time_bridge::clock_snapshot(&RhaiBuilder)
     });
-    // execution_context() -> #{scope, cycle, phase, target_twin_id, clock, time_seconds,
-    // delta_seconds, sequence, producer}. This is the read-only
-    // owner context for the current callback and every nested Rhai function.
+    // execution_context() -> read-only owner context for the current callback.
+    // Twin-scoped scripts do not receive workspace Twin identity fields;
+    // command dispatch binds typed target fields from the internal owner.
     engine.register_fn("execution_context", || -> Dynamic {
         time_bridge::execution_context_value(&RhaiBuilder)
     });
 
-    // twin_root() -> String — absolute path of the ACTIVE twin's folder, i.e. the
-    // directory a path-loaded scene lives in ("" if none). Lets a scenario name a
-    // sibling file without hardcoding a machine-specific absolute path:
-    // `twin_root() + "/shots"`. See `bridge_core::twin_root`.
+    // twin_root() -> String — the active Twin's filesystem root, or empty.
     engine.register_fn("twin_root", || -> String { bridge_core::twin_root() });
-    // twin_name() -> String — live `twin://` mount authority of the active Twin
-    // ("" if none), for source-set and asset-provider queries.
-    engine.register_fn(
-        "twin_name",
-        || -> Result<String, Box<rhai::EvalAltResult>> {
-            bridge_core::twin_name().map_err(Into::into)
-        },
-    );
+    // twin_source_identity() -> String — stable logical identity of the active
+    // Twin ("" if none). The asset owner resolves it to a mount internally.
+    engine.register_fn("twin_source_identity", || -> String {
+        bridge_core::twin_source_identity()
+    });
+    // twin_display_name() -> String — human-readable label for UI and messages.
+    engine.register_fn("twin_display_name", || -> String {
+        bridge_core::twin_display_name()
+    });
 
-    // asset_source_relative_uri(document, relative) -> an addressable URI.
-    // This is the Rhai-facing form of the generic asset identity operation: it
-    // preserves the document's registered source (including a Twin authority)
-    // while rejecting unsafe relative input. It does not read the filesystem;
-    // authored tools and scene gates use it to exercise the same URI algebra as
-    // the runtime loader.
+    // asset_source_relative_uri(document, relative) -> a stable addressable URI.
+    // It preserves the document's logical source identity while keeping the
+    // current Twin mount lease inside the asset owner.
     engine.register_fn(
         "asset_source_relative_uri",
         |document: ImmutableString,
          relative: ImmutableString|
          -> Result<ImmutableString, Box<rhai::EvalAltResult>> {
             let path = lunco_assets_core::asset_path::load_asset_path(document.as_str(), None, None, None)
-                .map_err(|error| Box::<rhai::EvalAltResult>::from(format!("invalid source address `{document}`: {error}")))?;
-            lunco_assets_core::asset_path::source_relative_uri(&path, relative.as_str())
-                .map(Into::into)
+                .map_err(|error| {
+                    Box::<rhai::EvalAltResult>::from(bridge_core::project_script_text(
+                        format!("invalid source address `{document}`: {error}"),
+                    ))
+                })?;
+            let address = lunco_assets_core::asset_path::source_relative_uri(&path, relative.as_str())
                 .ok_or_else(|| {
-                    format!(
+                    bridge_core::project_script_text(format!(
                         "asset_source_relative_uri rejected relative asset `{relative}` for `{document}`"
-                    )
-                    .into()
-                })
+                    ))
+                })?;
+            let stable = bridge_core::with_world(|world| {
+                lunco_assets_core::asset_path::source_uri_for_address(
+                    &address,
+                    world.get_resource::<lunco_assets_core::TwinRoots>(),
+                )
+            })
+            .ok_or_else(|| "asset_source_relative_uri requires an active world scope".to_owned())?
+            .map_err(|error| {
+                bridge_core::project_script_text(format!(
+                    "cannot resolve stable source URI: {error}"
+                ))
+            })?;
+            Ok::<ImmutableString, Box<EvalAltResult>>(stable.into())
+                .map_err(Into::into)
         },
     );
 

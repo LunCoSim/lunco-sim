@@ -164,8 +164,8 @@ Required-input readiness is checked after `simulation_dependencies` returns.
 That hook declares exact owner keys and discovers live identities without
 reading pending owner facts. Source-selected entity access is committed with
 `track_entity_read`/`track_entity_write` during admitted initialization or
-startup before the first access. Twin SysML keys use the current mount authority
-returned by `twin_name()`.
+startup before the first access. Twin SysML keys use the stable source identity
+returned by `twin_source_identity()`; mount authorities remain inside the asset owner.
 
 
 `RuntimeCycleSet` names ordering lanes inside Bevy schedules. It does not by
@@ -1053,9 +1053,16 @@ requirement facts and the unmounted-Twin diagnostic. Source-asset changes admit
 a new revision, and `TwinClosed` retires queued work and fences late results for
 that Twin. An empty selected set commits an empty analysis without dispatching
 a worker. The `twin.lifecycle` hook receives `Twin/Lifecycle` with generation
-zero and the mounted `TwinId` in `owner_id`, no elapsed clock, and an explicit
-`Start`, `Event`, or `Stop` phase. Its retained `policy_status().lifecycle.runtime_context` makes
-the owner stamp inspectable from Rhai and the API. Identical Rhai source misses share one
+zero, no elapsed clock, and an explicit `Start`, `Event`, or `Stop` phase. The
+typed runtime retains the mounted `TwinId` for ownership checks; Rhai-facing
+`execution_context()` and `policy_status().lifecycle.runtime_context` omit
+workspace Twin identity fields in Twin scope. Typed Rhai query, command, hook,
+and policy-status results apply the same omission recursively. Compound
+reflected `get()` and `get_setting()` reads follow that rule, including direct
+selector-field paths. Script values and diagnostics translate private mount
+authorities to stable source identities. Application-scoped scripts retain
+workspace selectors, while the private mount lease stays inside Rust. Identical
+Rhai source misses share one
 immutable compile result. Rhai drains worker results into a scene-wide
 preparation barrier and commits the complete ready set in stable actor order
 before the fixed runner admits simulation time. Its exact progress holds remain

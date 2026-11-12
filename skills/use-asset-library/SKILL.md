@@ -115,19 +115,23 @@ callers propagate that error instead of inventing a root. The asset owner
 provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
 The complete read order comes from `lunco_assets_core::asset_read_roots()` in
 `crates/lunco-assets-core/src/lib.rs`.
-`twin://<assigned-mount>/<rel>` is the same shape one level down: the Twin's authored
-root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
-global downloaded product without putting a machine path into USD.
+`twin://<source-identity>/<rel>` is the stable user-facing Twin scene URI.
+`LoadScene` resolves it to the current mount; only internal asset reads use the
+mount authority. The current mount resolves assets to the Twin's authored
+root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a global
+downloaded product without putting a machine path or temporary cache address in
+USD or user-facing scene paths.
 Authored bytes always win over materialised ones. Schemes are registered in
 `crates/lunco-assets-runtime/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity
 for every delivered artifact. Canonical URI construction, separator normalization,
 and traversal validation come from `lunco-assets-path`;
 source roots and bytes are admitted by `lunco-assets-runtime` using the identity
-and cache contracts from `lunco-assets-core`. For reopened Twins, use the
-authority returned by the current mount, never reconstruct it from the
-manifest name or retain an outgoing address. Follow the canonical
-[mount identity contract](../../docs/architecture/55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity)
+and cache contracts from `lunco-assets-core`. User-authored addresses and scene
+commands use the stable source URI. The asset owner keeps the exact current
+mount lease private for internal reads; callers must not construct it from a
+manifest name or retain it across Twin closure. Follow the canonical
+[source URI and mount lease contract](../../docs/architecture/55-scene-addressing-and-roots.md#3-source-uris-and-internal-mount-leases)
 for provenance and scenario synchronization. Verify replacement content through
 the production app; resolver seam tests alone do not prove Bevy cache behavior.
 Native USD payloads, texture inputs, and Rhai asset sources use the

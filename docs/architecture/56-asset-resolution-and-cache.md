@@ -64,8 +64,16 @@ scheme: naming the mistake legibly would make it permanent.
 | Scheme | Resolves to | For |
 |---|---|---|
 | `lunco://` | `assets/`, then `assets/.cache`, then the machine-global cache | the shipped engine library (rovers, parts, shaders, stock textures) |
-| `twin://<name>/…` | the Twin's authored root, then `<twin>/.cache`, then the global cache | Twin-owned content, downloaded scenarios, and intentional global reuse |
+| `twin://<source-identity>/…` | the current mount for that stable source identity | authored content and user-facing scene addresses |
+| `twin://<authority>/…` | the exact live mount's authored root, then its `.cache`, then the global cache | internal reads that carry a mount lease |
 | (none) | no independent asset identity | derived outputs use their owning `lunco://` or `twin://` identity |
+
+Authored USD asset facts may keep the stable source identity in their composed
+dependency list. `SceneDatasetRequirements` resolves that identity to the current
+mount before reading Twin scope metadata. It also accepts an exact live authority
+for internal asset facts; a retired authority remains invalid and cannot be
+reinterpreted as a stable source identity. User scene commands use the same
+stable URI, with `asset_path::load_source_uri` resolving it at admission.
 
 Both schemes resolve **authored first, then the cache that travels with the
 unit, then the shared machine-global pool**. So a downloaded binary is reachable at its logical
@@ -162,7 +170,7 @@ Logical runtime reads do not acquire an ambient working-directory search.
 A **downloaded scenario is a Twin root** over its cache directory. Its load
 authority is local to the mount, while content provenance uses the shared
 logical source identity. The canonical ownership and conversion contract is
-[`Mount addresses and stable source identity`](55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity).
+[`Source URIs and internal mount leases`](55-scene-addressing-and-roots.md#3-source-uris-and-internal-mount-leases).
 
 ## Choosing a form when you author
 
@@ -265,7 +273,7 @@ re-derives that mapping:
 
 The same document-relative operation is available to authored Rhai as
 `asset_source_relative_uri(document, relative)`. It performs URI algebra only
-and preserves the document's registered source authority; the production
+and preserves the document's stable source identity; the production
 `scripting_asset_contracts` scene is the acceptance test for that public
 surface, while the runtime shader loader calls the Rust owner directly.
 

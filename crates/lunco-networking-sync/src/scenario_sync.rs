@@ -176,7 +176,7 @@ impl ClientScenarioLifecycle<'_> {
             if scene.owns_mount {
                 match self.roots.as_ref() {
                     Some(roots) => {
-                        if let Err(error) = roots.unregister_name(&scene.authority) {
+                        if let Err(error) = roots.unregister_authority(&scene.authority) {
                             error!("[net] could not retire downloaded Twin mount: {error}");
                         }
                     }
@@ -1405,7 +1405,7 @@ pub fn update_scenario_download_status(
 /// its authority; an already mounted cache remains owned by its existing caller.
 #[derive(Debug)]
 pub struct ScenarioTwinMount {
-    pub path: String,
+    pub source_uri: String,
     pub authority: String,
     pub root: PathBuf,
     pub owns_mount: bool,
@@ -1421,13 +1421,21 @@ pub fn mount_scenario_twin(
     name: &str,
     rel: &str,
 ) -> Result<ScenarioTwinMount, lunco_assets_core::twin_source::TwinRootsError> {
-    mount_cached_root(twins, scenario_cache_root(scenario_id, revision), name, rel)
+    let identity = format!("uuid-{}", uuid::Uuid::from_bytes(*scenario_id).simple());
+    mount_cached_root(
+        twins,
+        scenario_cache_root(scenario_id, revision),
+        &identity,
+        name,
+        rel,
+    )
 }
 
 fn mount_cached_root(
     twins: &lunco_assets_core::twin_source::TwinRoots,
     root: PathBuf,
-    name: &str,
+    source_identity: &str,
+    display_name: &str,
     rel: &str,
 ) -> Result<ScenarioTwinMount, lunco_assets_core::twin_source::TwinRootsError> {
     use lunco_assets_core::twin_source::TwinRootsError;
@@ -1437,7 +1445,7 @@ fn mount_cached_root(
             format!("unsafe scenario scene path `{rel}`"),
         )
     })?;
-    let existing = twins.name_for_root(&root)?;
+    let existing = twins.authority_for_root(&root)?;
     let existing_root = match existing.as_ref() {
         Some(authority) => Some(
             twins
@@ -1446,7 +1454,7 @@ fn mount_cached_root(
         ),
         None => None,
     };
-    let existing_logical = twins.mounted_name_for_logical(name)?;
+    let existing_logical = twins.mounted_authority_for_logical(source_identity)?;
     if let Some(logical_mount) = existing_logical.as_ref() {
         let logical_root = twins
             .root_for(logical_mount)?
@@ -1455,28 +1463,30 @@ fn mount_cached_root(
             return Err(TwinRootsError::AssetResolution(
                 std::io::ErrorKind::AlreadyExists,
                 format!(
-                    "logical Twin `{name}` is already mounted from another root; downloaded scenario requires its exact UUID/revision cache"
+                    "logical Twin source `{source_identity}` is already mounted from another root; downloaded scenario requires its exact UUID/revision cache"
                 ),
             ));
         }
     }
-    let assigned = twins.register(name, root)?;
+    let assigned =
+        twins.register_authority_with_display_name(source_identity, display_name, root)?;
     let owns_mount = existing_logical.as_deref() != Some(assigned.as_str());
-    let logical = twins.logical_name(&assigned)?;
-    if logical != name {
-        if owns_mount {
-            twins.unregister_name(&assigned)?;
-        }
-        return Err(TwinRootsError::LogicalIdentityMismatch {
-            requested: name.to_string(),
-            assigned: logical,
-        });
-    }
     let root = twins
         .root_for(&assigned)?
         .ok_or_else(|| TwinRootsError::UnknownAuthority(assigned.clone()))?;
+    let internal_path = lunco_assets_core::twin_uri(&assigned, rel);
+    let source_uri =
+        match lunco_assets_core::asset_path::source_uri_for_address(&internal_path, Some(twins)) {
+            Ok(source_uri) => source_uri,
+            Err(error) => {
+                if owns_mount {
+                    twins.unregister_authority(&assigned)?;
+                }
+                return Err(error);
+            }
+        };
     Ok(ScenarioTwinMount {
-        path: lunco_assets_core::twin_uri(&assigned, rel),
+        source_uri,
         authority: assigned,
         root,
         owns_mount,
@@ -1673,10 +1683,7 @@ fn on_mount_cached_scenario_twin(
     .map_err(|error| format!("could not mount downloaded scenario Twin: {error}"))?;
     Ok(Ack::with_data(
         OpId::new(),
-        HookValue::map([
-            ("path", HookValue::str(mount.path)),
-            ("authority", HookValue::str(mount.authority)),
-        ]),
+        HookValue::map([("source_uri", HookValue::str(mount.source_uri))]),
     ))
 }
 
@@ -1964,45 +1971,80 @@ mod tests {
         let first = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let roots = lunco_assets_core::TwinRoots::default();
-        let a =
-            mount_cached_root(&roots, first.path().to_path_buf(), "shared", "scene.usda").unwrap();
-        let repeated =
-            mount_cached_root(&roots, first.path().to_path_buf(), "shared", "scene.usda").unwrap();
+        let a = mount_cached_root(
+            &roots,
+            first.path().to_path_buf(),
+            "shared",
+            "Shared scenario",
+            "scene.usda",
+        )
+        .unwrap();
+        assert_eq!(a.source_uri, "twin://shared/scene.usda");
+        assert!(!a.source_uri.contains(&a.authority));
+        let repeated = mount_cached_root(
+            &roots,
+            first.path().to_path_buf(),
+            "shared",
+            "Shared scenario",
+            "scene.usda",
+        )
+        .unwrap();
         assert_eq!(a.authority, repeated.authority);
+        assert_eq!(a.source_uri, repeated.source_uri);
         assert_eq!(a.root, repeated.root);
         assert!(a.owns_mount);
         assert!(!repeated.owns_mount);
         let aliases = lunco_assets_core::TwinRoots::default();
-        aliases.register("editor", first.path()).unwrap();
-        let shared = aliases.register("shared", first.path()).unwrap();
-        let borrowed =
-            mount_cached_root(&aliases, first.path().to_path_buf(), "shared", "scene.usda")
-                .unwrap();
+        aliases.register_authority("editor", first.path()).unwrap();
+        let shared = aliases.register_authority("shared", first.path()).unwrap();
+        let borrowed = mount_cached_root(
+            &aliases,
+            first.path().to_path_buf(),
+            "shared",
+            "Shared scenario",
+            "scene.usda",
+        )
+        .unwrap();
         assert_eq!(borrowed.authority, shared);
         assert!(!borrowed.owns_mount);
         assert!(matches!(
-            mount_cached_root(&roots, other.path().to_path_buf(), "shared", "scene.usda"),
+            mount_cached_root(
+                &roots,
+                other.path().to_path_buf(),
+                "shared",
+                "Shared scenario",
+                "scene.usda"
+            ),
             Err(lunco_assets_core::TwinRootsError::AssetResolution(
                 std::io::ErrorKind::AlreadyExists,
                 _
             ))
         ));
-        assert_eq!(roots.names().unwrap(), vec![a.authority.clone()]);
+        assert_eq!(roots.authorities().unwrap(), vec![a.authority.clone()]);
         assert!(
             mount_cached_root(
                 &roots,
                 first.path().to_path_buf(),
                 "shared",
+                "Shared scenario",
                 "../scene.usda"
             )
             .is_err()
         );
-        roots.unregister_name(&a.authority).unwrap();
-        let replacement =
-            mount_cached_root(&roots, other.path().to_path_buf(), "shared", "scene.usda").unwrap();
+        roots.unregister_authority(&a.authority).unwrap();
+        let replacement = mount_cached_root(
+            &roots,
+            other.path().to_path_buf(),
+            "shared",
+            "Shared scenario",
+            "scene.usda",
+        )
+        .unwrap();
         assert_ne!(replacement.authority, a.authority);
         assert_eq!(
-            roots.logical_name(&replacement.authority).unwrap(),
+            roots
+                .logical_identity_for_authority(&replacement.authority)
+                .unwrap(),
             "shared"
         );
     }

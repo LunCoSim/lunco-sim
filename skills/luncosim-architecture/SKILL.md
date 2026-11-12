@@ -240,9 +240,19 @@ replacement is admitted. Reopening keeps logical source identity but receives
 a fresh load authority. Resolve authored dependencies through
 `lunco-assets-core::asset_path::load_asset_path` with the admitted live origin;
 retired origins fail before rebinding, and origin-free requests keep exact
-transport authority. Background file snapshots resolve logical source names
-and fence publication by scope and mount revision. See
+transport authority. Composed USD asset facts may retain authored logical
+source identities; `SceneDatasetRequirements` resolves those against the live
+mount before reading Twin dataset metadata. A retired authority remains invalid
+and never falls through to a same-named logical source. Background file
+snapshots resolve logical source names and fence publication by scope and mount
+revision. See
 [`61-scene-lifecycle-and-teardown.md`](../../docs/architecture/61-scene-lifecycle-and-teardown.md).
+Present scene paths through `asset_path::source_uri` or
+`source_uri_for_address`, and admit user scene addresses through
+`asset_path::load_source_uri`. `LoadScene` rejects internal mount authorities,
+even while live; loading notices, scenario menus and persisted current-scene
+paths use the stable source URI. Verify repeat load/reset/restart and direct
+lease rejection with `scripts/api/test_twin_source_uri.py`.
 
 Register scene-derived state with `AppSceneExt::init_scene_resource::<R>()` and
 implement `SceneResource` at its owner. The default reset drops owned caches and
@@ -305,6 +315,9 @@ available during loading. Callback commands also pin the exact
 `ToolHookBinding`. Retired targets reject through the shared terminal-result
 owner. `RuntimeExecutionContext.target_twin_id` retains the target separately
 from execution scope and clock, including nested commands.
+Scene loading keeps asset-cache leases internal: `SimulationProgress` reasons
+stay generic, and `/api/ready` `scene_load` labels convert through
+`source_uri_for_address` before they reach status surfaces.
 Queue admission publishes `CommandOutcome::Pending`; only execution or owner
 retirement may publish the terminal result.
 Parameter drafts pin their preview and document; document closure and preview
@@ -559,9 +572,23 @@ and an isolated Rhai hook reads it from the immutable `runtime_context` map.
 The shared hook registry rejects a clock that does not belong to its cycle,
 missing or invalid clock samples, and non-zero Core/Application generations
 before invoking either Rhai or native policy.
-`twin.lifecycle` uses the mounted Twin's `TwinId` as its `Twin/Lifecycle`
-generation, with explicit `Start`, `Event`, or `Stop` phase and no elapsed
-clock; `policy_status().lifecycle.runtime_context` exposes the exact stamp.
+`twin.lifecycle` uses `Twin/Lifecycle` with generation zero, an explicit
+`Start`, `Event`, or `Stop` phase, and no elapsed clock. The typed runtime
+retains the workspace Twin ID for ownership checks; Twin-scoped Rhai context
+and `policy_status()` do not expose that ID. Twin-scoped typed query, command,
+hook, and policy-status results also omit workspace selector fields
+recursively. Reflected `get()` and `get_setting()` apply the same projection to
+compound values and hide direct selector-field reads. Both `ScriptingCatalog`
+and `ScriptComplete` hide workspace selectors from Twin-scoped command and query
+discovery. Twin query response descriptions are withheld. Twin settings and
+engine exposure reads use the same projection; direct workspace identity paths
+return no value. Script values and diagnostics translate private mount
+authorities to stable source identities and redact unknown opaque tokens when
+lease metadata is unavailable.
+Rhai callers select only the needed catalog `sections` to stay within the
+shared value limit. Application scripts and APIs retain workspace selectors,
+while the internal mount authority remains private. Reflected command targets
+bind the ID inside Rust from the active owner.
 Rust call sites without a classified owner use the explicit unclassified hook
 entry point. The physics escape policy is a scheduled core simulation hook and
 receives its `Behavior` context from `SimTick` and `Time<Fixed>`; its authored
@@ -621,7 +648,7 @@ analyses do not hold simulation progress. Browser worker transport is explicit
 and remains unsupported by this native dispatcher. The Twin analysis producer
 registers `sysml.twin-analysis` and publishes each mounted Twin's state under
 its exact name. A scenario that needs those facts lists
-`#{ owner: "sysml.twin-analysis", identity: twin_name() }` in
+`#{ owner: "sysml.twin-analysis", identity: twin_source_identity() }` in
 `required_inputs`; only that scenario's activation hold waits for the async
 analysis. The analysis worker itself remains read-only and never acquires a
 world-time hold.

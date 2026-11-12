@@ -53,7 +53,9 @@ pub struct TextAssetEntry {
     /// Workspace Twin identity for Twin-owned content.
     pub twin_id: Option<lunco_workspace::TwinId>,
     /// Exact asset source authority assigned to a Twin.
-    pub twin_name: Option<String>,
+    pub twin_authority: Option<String>,
+    /// Human-readable Twin name for policy and presentation.
+    pub twin_display_name: Option<String>,
     /// Source read ownership or a history identity whose body is loaded on demand.
     pub content: TextAssetContent,
 }
@@ -112,7 +114,7 @@ pub struct JsonAssetScopeLoading {
     /// Workspace Twin identity, or `None` for the engine asset library.
     pub twin_id: Option<lunco_workspace::TwinId>,
     /// Assigned Twin asset authority when the scope is Twin-owned.
-    pub twin_name: Option<String>,
+    pub twin_display_name: Option<String>,
     /// Canonical URI root used to qualify references owned by this scope.
     pub asset_root_uri: String,
     /// Number of JSON assets whose asynchronous read must settle.
@@ -125,7 +127,7 @@ pub struct JsonAssetScopeChanged {
     /// Workspace Twin identity, or `None` for the engine asset library.
     pub twin_id: Option<lunco_workspace::TwinId>,
     /// Assigned Twin asset authority when the scope is Twin-owned.
-    pub twin_name: Option<String>,
+    pub twin_display_name: Option<String>,
     /// Canonical URI root used to qualify references owned by this scope.
     pub asset_root_uri: String,
     /// Every indexed JSON source in this scope and its read result.
@@ -215,7 +217,8 @@ fn discover_text_assets(
                 Some(TextAssetEntry {
                     asset_path: asset_path.clone(),
                     twin_id: None,
-                    twin_name: None,
+                    twin_authority: None,
+                    twin_display_name: None,
                     content: catalog_content(
                         &lunco_assets_core::engine_asset_uri(asset_path),
                         &results_root_uri,
@@ -241,7 +244,7 @@ fn discover_text_assets(
         .count();
     commands.trigger(JsonAssetScopeLoading {
         twin_id: None,
-        twin_name: None,
+        twin_display_name: None,
         asset_root_uri: asset_root_uri.clone(),
         asset_count: json_count,
     });
@@ -289,7 +292,7 @@ fn load_twin_text_assets(
     let Some(asset_server) = asset_server else {
         return;
     };
-    let asset_root_uri = lunco_assets_core::twin_uri(&trigger.event().name, "");
+    let asset_root_uri = lunco_assets_core::twin_uri(&trigger.event().authority, "");
     let results_root_uri = format!("{asset_root_uri}{}/", lunco_twin::RESULTS_DIR_NAME);
     for file in twin.files() {
         let extension = file
@@ -299,7 +302,8 @@ fn load_twin_text_assets(
         if !matches!(extension, Some("json" | "toml")) {
             continue;
         }
-        let asset_path = lunco_assets_core::twin_uri(&trigger.event().name, &file.relative_path);
+        let asset_path =
+            lunco_assets_core::twin_uri(&trigger.event().authority, &file.relative_path);
         let path =
             match lunco_assets_core::asset_path::load_asset_path(&asset_path, None, None, None) {
                 Ok(path) => path,
@@ -314,7 +318,8 @@ fn load_twin_text_assets(
         catalog.entries.push(TextAssetEntry {
             asset_path,
             twin_id: Some(twin_id),
-            twin_name: Some(trigger.event().name.clone()),
+            twin_authority: Some(trigger.event().authority.clone()),
+            twin_display_name: Some(trigger.event().display_name.clone()),
             content,
         });
     }
@@ -332,13 +337,13 @@ fn load_twin_text_assets(
         .count();
     commands.trigger(JsonAssetScopeLoading {
         twin_id: Some(twin_id),
-        twin_name: Some(trigger.event().name.clone()),
+        twin_display_name: Some(trigger.event().display_name.clone()),
         asset_root_uri: asset_root_uri.clone(),
         asset_count: json_count,
     });
     publish_json_scope_if_ready(
         Some(twin_id),
-        Some(trigger.event().name.clone()),
+        Some(trigger.event().display_name.clone()),
         asset_root_uri,
         &catalog,
         &readiness,
@@ -414,7 +419,7 @@ fn json_asset_uri(entry: &TextAssetEntry) -> String {
 
 fn publish_json_scope_if_ready(
     twin_id: Option<lunco_workspace::TwinId>,
-    twin_name: Option<String>,
+    twin_display_name: Option<String>,
     asset_root_uri: String,
     catalog: &TextAssetCatalog,
     readiness: &TextAssetReadiness,
@@ -451,7 +456,7 @@ fn publish_json_scope_if_ready(
         .collect();
     commands.trigger(JsonAssetScopeChanged {
         twin_id,
-        twin_name,
+        twin_display_name,
         asset_root_uri,
         assets: records,
     });
@@ -527,14 +532,21 @@ fn publish_json_asset_changes(
     dirty_scopes.sort_by_key(|scope| scope.map(lunco_workspace::TwinId::raw));
     dirty_scopes.dedup();
     for twin_id in dirty_scopes {
-        let twin_name = twin_id.and_then(|twin_id| {
+        let twin_authority = twin_id.and_then(|twin_id| {
             catalog
                 .entries
                 .iter()
                 .find(|entry| entry.twin_id == Some(twin_id))
-                .and_then(|entry| entry.twin_name.clone())
+                .and_then(|entry| entry.twin_authority.clone())
         });
-        let asset_root_uri = match (twin_id, twin_name.as_deref()) {
+        let twin_display_name = twin_id.and_then(|twin_id| {
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.twin_id == Some(twin_id))
+                .and_then(|entry| entry.twin_display_name.clone())
+        });
+        let asset_root_uri = match (twin_id, twin_authority.as_deref()) {
             (None, None) => lunco_assets_core::engine_asset_uri(""),
             (Some(_), Some(name)) if !name.is_empty() => lunco_assets_core::twin_uri(name, ""),
             _ => {
@@ -544,7 +556,7 @@ fn publish_json_asset_changes(
         };
         publish_json_scope_if_ready(
             twin_id,
-            twin_name,
+            twin_display_name,
             asset_root_uri,
             &catalog,
             &readiness,
@@ -605,7 +617,8 @@ mod tests {
         let make_entry = |asset_path, content| TextAssetEntry {
             asset_path,
             twin_id: None,
-            twin_name: None,
+            twin_authority: None,
+            twin_display_name: None,
             content,
         };
         let mut catalog = TextAssetCatalog {

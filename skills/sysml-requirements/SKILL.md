@@ -208,7 +208,7 @@ registry must bind that case to its scene and observer.
 For example, from an in-app Rhai tool with the Twin mounted:
 
 ```rhai
-let report = query("ValidateSysml", #{path: "twin://" + twin_name()});
+let report = query("ValidateSysml", #{path: "twin://" + twin_source_identity()});
 ```
 
 Review `report.errors`, `report.warnings`, and the structured
@@ -537,7 +537,7 @@ Important source-set rules:
 - Use qualified names such as `Project::VerifyVisual` as stable keys for
   requirements and verification cases. Do not rely on a short name when
   packages can contain collisions.
-- Use the existing `twin://<name>/...` and `lunco://...` identity schemes. Do
+- Use the existing `twin://<authority>/...` and `lunco://...` address schemes. Do
   not add a filesystem walker, a global source registry, or raw `std::fs` reads
   in a runtime crate.
 
@@ -588,7 +588,7 @@ by the authored Twin lifecycle policy. Non-empty source sets resolve against
 the embedded standard library on the async analysis worker; an empty optional
 source set commits an empty ready snapshot without initializing that library.
 Until the snapshot is ready, the query returns an explicit preparation result.
-Use `"twin://" + twin_name()` for the active source set and `twin_name()` for
+Use `"twin://" + twin_source_identity()` for the active source set and `twin_source_identity()` for
 its `sysml.twin-analysis` required-input identity. This is the current asset
 mount authority, including after reopen; the manifest display name cannot
 address a retired mount. A missing active mount fails visibly.

@@ -83,10 +83,16 @@ fn read_requested_dataset_artifact(
             .as_ref()
             .and_then(|registry| registry.entry(&trigger.event().id)),
     ) {
-        commands.trigger(lunco_assets_datasets::AssetRequired {
-            scene,
-            uri: entry.artifact_uri(),
-        });
+        let Some(uri) = entry.artifact_uri() else {
+            report_dataset_request_failure(
+                &trigger.event().id,
+                "the dataset has no live Twin mount authority".to_owned(),
+                &mut reads,
+                &mut commands,
+            );
+            return;
+        };
+        commands.trigger(lunco_assets_datasets::AssetRequired { scene, uri });
     }
     request_dataset_artifact(
         &trigger.event().id,
@@ -170,7 +176,15 @@ fn request_dataset_artifact(
         return;
     };
 
-    let asset_uri = entry.artifact_uri();
+    let Some(asset_uri) = entry.artifact_uri() else {
+        report_dataset_request_failure(
+            id,
+            "the dataset has no live Twin mount authority".to_owned(),
+            reads,
+            commands,
+        );
+        return;
+    };
     let asset_path =
         match lunco_assets_core::asset_path::load_asset_path(&asset_uri, None, None, None) {
             Ok(path) => path,

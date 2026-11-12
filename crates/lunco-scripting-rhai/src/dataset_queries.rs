@@ -14,7 +14,7 @@ use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 /// `ProcessDataset`, or `CancelDataset` according to the entry's `processed`
 /// flag and live state.
 ///
-/// params: `{ scope?: string }` where `scope` is `engine` or `twin:<name>`
+/// params: `{ scope?: string }` where `scope` is `engine` or `twin:<source_identity>`
 /// · returns `{ datasets: [{ id, key, group, scope, name, state, processed,
 ///   recommended, artifact_uri, metadata }] }`
 pub struct ListDatasetsProvider;
@@ -59,6 +59,11 @@ impl ApiQueryProvider for ListDatasetsProvider {
             .iter()
             .filter(|entry| filter.is_none_or(|value| entry.scope.id() == value))
             .map(|entry| {
+                let artifact_uri = entry.artifact_uri();
+                let query_artifact_uri = artifact_uri
+                    .clone()
+                    .map(ApiValue::str)
+                    .unwrap_or(ApiValue::Unit);
                 let state = match &entry.state {
                     lunco_assets_datasets::DatasetState::Queued => api_value!({"kind":"queued"}),
                     lunco_assets_datasets::DatasetState::Missing => {
@@ -99,7 +104,8 @@ impl ApiQueryProvider for ListDatasetsProvider {
                         })).collect();
                         let artifacts:Vec<_> = pipeline.artifacts.iter().map(|artifact| {
                             let dimensions = artifact.dimensions.map(|dimensions|api_value!([dimensions[0],dimensions[1]])).unwrap_or(ApiValue::Unit);
-                            api_value!({"uri":format!("{}/{}",entry.artifact_uri(),artifact.path),"kind":artifact.kind.clone(),"dimensions":dimensions})
+                            let uri = artifact_uri.as_ref().map(|base| ApiValue::str(format!("{}/{}",base,artifact.path))).unwrap_or(ApiValue::Unit);
+                            api_value!({"uri":uri,"kind":artifact.kind.clone(),"dimensions":dimensions})
                         }).collect();
                         api_value!({"steps":steps,"artifacts":artifacts})
                     }
@@ -116,7 +122,7 @@ impl ApiQueryProvider for ListDatasetsProvider {
                     "recommended": entry.recommended,
                     "required_for_scene": world.get_resource::<lunco_assets_datasets::SceneDatasetRequirements>()
                         .is_some_and(|requirements| requirements.ids.contains(&entry.id)),
-                    "artifact_uri": entry.artifact_uri(),
+                    "artifact_uri": query_artifact_uri,
                     "metadata": metadata,
                     "recipe": recipe,
                     "inputs": inputs,

@@ -601,12 +601,31 @@ fn apply_state(
         }
     }
     if state.is_installed() {
-        if let Some(entry) = registry.entry(id) {
-            info!("[datasets] '{}' installed", entry.key);
+        if let Some((entry_id, key, scope, artifact_uri)) = registry.entry(id).map(|entry| {
+            (
+                entry.id.clone(),
+                entry.key.clone(),
+                entry.scope.clone(),
+                entry.artifact_uri(),
+            )
+        }) {
+            let Some(artifact_uri) = artifact_uri else {
+                let detail = format!(
+                    "Dataset '{}' became installed without a live Twin mount authority.",
+                    key
+                );
+                let failure = DatasetState::Failed(detail.clone());
+                registry.set_state(id, failure.clone());
+                warn!("[datasets] '{id}' failed: {detail}");
+                report_phase(commands, id, &key, &failure);
+                commands.trigger(dataset_failed(detail));
+                return;
+            };
+            info!("[datasets] '{}' installed", key);
             commands.trigger(DatasetInstalled {
-                id: entry.id.clone(),
-                scope: entry.scope.clone(),
-                artifact_uri: entry.artifact_uri(),
+                id: entry_id,
+                scope,
+                artifact_uri,
             });
         }
     }

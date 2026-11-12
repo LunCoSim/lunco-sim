@@ -892,13 +892,13 @@ pub fn on_run_lint(
             .ok_or_else(|| "Twin registry is unavailable".to_owned())
             .and_then(|roots| {
                 roots
-                    .names()
+                    .authorities()
                     .map_err(|error| error.to_string())
                     .and_then(|names| {
                         names
                             .into_iter()
                             .find(|name| {
-                                roots.root_of(name).ok().flatten().as_ref() == Some(&twin_root)
+                                roots.root_for(name).ok().flatten().as_ref() == Some(&twin_root)
                             })
                             .ok_or_else(|| "Active Twin has no current asset mount".to_owned())
                     })
@@ -971,7 +971,7 @@ pub fn on_run_lint(
                     .get_resource::<lunco_assets_core::TwinRoots>()
                     .ok_or("Twin registry is unavailable")?;
                 if roots
-                    .root_of(&authority)
+                    .root_for(&authority)
                     .map_err(|error| error.to_string())?
                     .as_ref()
                     != Some(&twin_root)

@@ -126,12 +126,14 @@ pub fn logical_sequence() -> Option<u64> {
         .or(context.sequence)
 }
 
-/// Project the active typed execution context, including its stable owner
-/// identity, into a backend-native map.
+/// Project the active typed execution context into a backend-native map.
+/// Application selectors remain visible to application-scoped scripts; a
+/// Twin-scoped script receives lifecycle facts without the workspace's
+/// application-owned Twin identity.
 pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
     let context = execution_context();
     let route = context.route;
-    let entries = vec![
+    let mut entries = vec![
         (
             "scope".to_owned(),
             route.map_or_else(
@@ -153,14 +155,6 @@ pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
         (
             "generation".to_owned(),
             optional_u64(b, route.map(|route| route.generation)),
-        ),
-        (
-            "owner_id".to_owned(),
-            optional_u64(b, route.and_then(|route| route.owner_id)),
-        ),
-        (
-            "target_twin_id".to_owned(),
-            optional_u64(b, context.target_twin_id),
         ),
         (
             "clock".to_owned(),
@@ -196,6 +190,16 @@ pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
             optional_float(b, context.delta_seconds),
         ),
     ];
+    if !route.is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin) {
+        entries.push((
+            "owner_id".to_owned(),
+            optional_u64(b, route.and_then(|route| route.owner_id)),
+        ));
+        entries.push((
+            "target_twin_id".to_owned(),
+            optional_u64(b, context.target_twin_id),
+        ));
+    }
     b.map(entries)
 }
 

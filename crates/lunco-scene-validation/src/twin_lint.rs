@@ -133,7 +133,7 @@ impl TwinInspectionInput {
                 .map(|error| format!("Twin component registry: {error}")),
         );
         Self {
-            source_name: lunco_assets_core::twin_source::logical_twin_name(twin),
+            source_name: lunco_assets_core::twin_source::logical_twin_source_identity(twin),
             root: twin.root.clone(),
             name: twin_name(twin),
             files: twin

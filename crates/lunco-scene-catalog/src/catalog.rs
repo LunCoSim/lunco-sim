@@ -355,10 +355,8 @@ pub struct SpawnableEntry {
     pub source: SpawnSource,
     /// The authoritative owner of the asset discovered by the catalog.
     ///
-    /// This is captured from [`AssetFile::twin`] while discovery still knows
-    /// whether the file came from the engine library or an open Twin. It is
-    /// deliberately separate from the display name and source path so callers
-    /// cannot accidentally infer provenance from presentation strings.
+    /// Discovery supplies the Twin's display metadata separately from its load
+    /// authority and source URI.
     pub origin: SpawnOrigin,
     /// Default transform applied at spawn (overridden by click position).
     pub default_transform: Transform,
@@ -378,7 +376,7 @@ pub enum SpawnSource {
 pub enum SpawnOrigin {
     /// An asset shipped in LunCo's engine library.
     BuiltIn,
-    /// An asset authored by the named open Twin.
+    /// Human-readable display name of the Twin that authored the asset.
     Twin(String),
 }
 
@@ -398,10 +396,10 @@ impl SpawnOrigin {
                 "kind": "builtin",
                 "label": "Built-in LunCo",
             }),
-            Self::Twin(name) => api_value!({
+            Self::Twin(display_name) => api_value!({
                 "kind": "twin",
-                "name": name,
-                "label": format!("Active Twin: {name}"),
+                "display_name": display_name,
+                "label": format!("Active Twin: {display_name}"),
             }),
         }
     }
@@ -663,7 +661,7 @@ pub(crate) fn retire_catalogs_on_twin_closed(
     mut shaders: ResMut<lunco_materials::ShaderCatalog>,
     mut commands: Commands,
 ) {
-    let live = roots.names().and_then(|names| {
+    let live = roots.authorities().and_then(|names| {
         names
             .into_iter()
             .try_fold(std::collections::HashSet::new(), |mut live, name| {
@@ -816,7 +814,7 @@ pub fn maintain_catalogs(
         return;
     };
 
-    let names = match roots.names() {
+    let names = match roots.authorities() {
         Ok(names) => names,
         Err(error) => {
             error!("CATALOG_SCAN: Twin registry unavailable: {error}");
@@ -965,7 +963,7 @@ pub async fn read_asset_meta(
             #[cfg(not(target_arch = "wasm32"))]
             if meta.spawnable {
                 let twin_root = asset
-                    .twin
+                    .twin_authority
                     .as_deref()
                     .map(|name| roots.read_scope(name).map_err(|error| error.to_string()))
                     .transpose();
@@ -1125,7 +1123,7 @@ pub fn entry_for(asset: &AssetFile, _meta: &SpawnMeta) -> SpawnableEntry {
         category: categorize(&asset.rel),
         source: SpawnSource::UsdFile(asset.asset_path.clone()),
         origin: asset
-            .twin
+            .twin_display_name
             .as_deref()
             .map(|name| SpawnOrigin::Twin(name.to_string()))
             .unwrap_or(SpawnOrigin::BuiltIn),
@@ -1297,8 +1295,12 @@ mod tests {
         let outgoing = tempfile::tempdir().unwrap();
         let surviving = tempfile::tempdir().unwrap();
         let roots = lunco_assets_core::TwinRoots::default();
-        let first = roots.register("outgoing", outgoing.path()).unwrap();
-        let second = roots.register("surviving", surviving.path()).unwrap();
+        let first = roots
+            .register_authority("outgoing", outgoing.path())
+            .unwrap();
+        let second = roots
+            .register_authority("surviving", surviving.path())
+            .unwrap();
         let mut app = App::new();
         app.insert_resource(roots.clone())
             .init_resource::<CatalogScan>()
@@ -1310,7 +1312,8 @@ mod tests {
             stem: path.clone(),
             rel: path.clone(),
             abs_path: path.clone().into(),
-            twin: None,
+            twin_authority: None,
+            twin_display_name: None,
             asset_path: path,
         };
         let paths = [
@@ -1378,7 +1381,7 @@ mod tests {
                 .is_none()
         );
         // The close edge must also work after the asset owner has unmounted.
-        roots.unregister_name(&second).unwrap();
+        roots.unregister_authority(&second).unwrap();
         app.world_mut().trigger(lunco_workspace::TwinClosed {
             twin: lunco_workspace::TwinId::new(2),
             root: surviving.path().to_path_buf(),
@@ -1417,7 +1420,8 @@ mod tests {
             stem: "rover".into(),
             rel: "vessels/rovers/rover.usda".into(),
             abs_path: asset_path.into(),
-            twin: twin.map(str::to_string),
+            twin_authority: twin.map(str::to_string),
+            twin_display_name: twin.map(str::to_string),
         };
 
         assert_eq!(
@@ -1494,7 +1498,11 @@ mod tests {
                 stem: "rover".into(),
                 rel: "vessels/rovers/rover.usda".into(),
                 abs_path: source.into(),
-                twin: source
+                twin_authority: source
+                    .strip_prefix("twin://")
+                    .and_then(|path| path.split_once('/'))
+                    .map(|(name, _)| name.to_string()),
+                twin_display_name: source
                     .strip_prefix("twin://")
                     .and_then(|path| path.split_once('/'))
                     .map(|(name, _)| name.to_string()),
@@ -1763,7 +1771,8 @@ def Xform \"BrokenWheel\" (\n\
             stem: "broken_wheel".into(),
             rel: "broken_wheel.usda".into(),
             abs_path: path,
-            twin: None,
+            twin_authority: None,
+            twin_display_name: None,
         };
         let meta = futures_lite::future::block_on(read_asset_meta(
             &asset,

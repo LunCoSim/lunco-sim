@@ -54,8 +54,6 @@ fn twin_scene_actions(ctx) {
     }
     if scene != () {
         let params = #{};
-        params.twin_id = ctx.twin_id;
-        params.name = ctx.name;
         params.relative_path = scene;
         actions.push(twin_command("OpenTwinScene", params));
     } else {
@@ -78,7 +76,6 @@ fn twin_scene_actions(ctx) {
 fn twin_tool_actions(ctx) {
     let actions = [];
     let scope_params = #{};
-    scope_params.twin_id = ctx.twin_id;
     actions.push(twin_command("ActivateTwinToolScope", scope_params));
     for path in ctx.files {
         let in_tools = twin_parent_path(path) == "tools";
@@ -90,8 +87,6 @@ fn twin_tool_actions(ctx) {
             let names = filename.split(".rhai");
             let library_name = names[0];
             let params = #{};
-            params.twin_id = ctx.twin_id;
-            params.name = ctx.name;
             params.library_name = library_name;
             params.relative_path = path;
             actions.push(twin_command("LoadTwinToolLibrary", params));
@@ -103,7 +98,6 @@ fn twin_tool_actions(ctx) {
 fn twin_timeline_actions(ctx) {
     let actions = [];
     let scope_params = #{};
-    scope_params.twin_id = ctx.twin_id;
     actions.push(twin_command("ActivateTwinTimelineScope", scope_params));
     for path in ctx.files {
         let in_timelines = twin_parent_path(path) == "timelines";
@@ -115,8 +109,6 @@ fn twin_timeline_actions(ctx) {
             let names = filename.split(".json");
             let timeline_name = names[0];
             let params = #{};
-            params.twin_id = ctx.twin_id;
-            params.name = ctx.name;
             params.timeline_name = timeline_name;
             params.relative_path = path;
             actions.push(twin_command("LoadTwinTimelineFile", params));
@@ -173,16 +165,12 @@ fn twin_sysml_sources(ctx, roots) {
 
 fn twin_sysml_source_action(ctx, path) {
     let params = #{};
-    params.twin_id = ctx.twin_id;
-    params.name = ctx.name;
     params.relative_path = path;
     twin_command("LoadTwinSysmlSource", params)
 }
 
 fn twin_sysml_analysis_action(ctx, sources) {
     let params = #{};
-    params.twin_id = ctx.twin_id;
-    params.name = ctx.name;
     params.relative_paths = sources;
     twin_command("PrepareTwinSysmlAnalysis", params)
 }
@@ -215,7 +203,7 @@ fn twin_sysml_actions(ctx, manifest) {
     actions.push(twin_sysml_analysis_action(ctx, analysis_sources));
     let info = "";
     if source_count == 0 {
-        info = "Twin " + ctx.name + " declares no indexed .sysml or .kerml sources";
+        info = "Twin " + ctx.display_name + " declares no indexed .sysml or .kerml sources";
     }
     let plan = #{};
     plan.actions = actions;
@@ -309,9 +297,7 @@ fn twin_modelica_local_actions(ctx, roots, source_index) {
     let actions = [];
     for path in roots {
         let params = #{};
-        params.twin_id = ctx.twin_id;
-        params.name = ctx.name;
-        params.id = "twin:" + ctx.twin_id.to_string() + ":" + ctx.name + ":modelica:" + source_index.to_string();
+        params.source_index = source_index;
         params.path = path;
         actions.push(twin_command("LoadTwinModelicaSourceRoot", params));
         source_index += 1;
@@ -330,9 +316,7 @@ fn twin_modelica_external_actions(ctx, modelica, source_index) {
         let path = twin_path(external.path);
         if !path.starts_with("@bundled:") {
             let params = #{};
-            params.twin_id = ctx.twin_id;
-            params.name = ctx.name;
-            params.id = "twin:" + ctx.twin_id.to_string() + ":" + ctx.name + ":modelica:" + source_index.to_string();
+            params.source_index = source_index;
             params.path = path;
             actions.push(twin_command("LoadTwinModelicaSourceRoot", params));
             source_index += 1;
@@ -386,8 +370,6 @@ fn twin_lifecycle(event, ctx) {
     }
     let result = #{};
     result.event = event;
-    result.twin_id = ctx.twin_id;
-    result.root = ctx.root;
     result.scope = ctx.scope;
     result.installed = ctx.installed;
     result.failed = ctx.failed;

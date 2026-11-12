@@ -78,8 +78,9 @@ pub use lunco_source::{
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
-    TWIN_SCHEME, TwinReadScope, TwinRoots, TwinRootsError, TwinRootsSnapshot, logical_twin_name,
-    parse_twin_root_uri, parse_twin_uri, split_twin_rel, stable_source_path, twin_uri,
+    TWIN_SCHEME, TwinReadScope, TwinRoots, TwinRootsError, TwinRootsSnapshot,
+    logical_twin_source_identity, parse_twin_root_uri, parse_twin_uri,
+    redact_opaque_twin_authorities, split_twin_rel, stable_source_path, twin_uri,
 };
 
 /// Explicit native asset-library root override.
@@ -1151,7 +1152,7 @@ mod asset_directory_tests {
         lunco_storage::ensure_directory_sync(&authored).unwrap();
         lunco_storage::ensure_directory_sync(&cached).unwrap();
         let roots = TwinRoots::default();
-        let authority = roots.register("fixture", root.path()).unwrap();
+        let authority = roots.register_authority("fixture", root.path()).unwrap();
         let address = twin_uri(&authority, "parts/site # % 月");
         let origin =
             asset_path::load_asset_path(&twin_uri(&authority, "scene.usda"), None, None, None)
@@ -1214,8 +1215,8 @@ mod asset_directory_tests {
             lunco_storage::canonicalize_file_path(&cached).unwrap()
         );
         assert!(resolve(&twin_uri(&authority, "../escape")).is_err());
-        roots.unregister_name(&authority).unwrap();
-        roots.register("fixture", root.path()).unwrap();
+        roots.unregister_authority(&authority).unwrap();
+        roots.register_authority("fixture", root.path()).unwrap();
         assert!(matches!(
             resolve(&address),
             Err(TwinRootsError::UnknownAuthority(_))

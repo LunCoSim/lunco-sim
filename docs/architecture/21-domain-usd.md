@@ -1509,7 +1509,8 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
 |---|---|---|
 | (none) | Layer-relative refs **inside a Twin** (co-located terrain, textures) | the layer's own source |
 | `lunco://` | **Engine asset library** (rovers, parts, vessels, downloaded binaries) — location-independent ref usable from external Twins | `assets/...`, then `<cache>/...` |
-| `twin://<mount>/...` | **Internal, runtime-only.** The authority assigned to one Twin mount lifetime. Never authored into a file. | the opened Twin folder or downloaded scenario through `lunco-storage` |
+| `twin://<source-identity>/...` | Stable scene URI shown in the scene UI and accepted by `LoadScene`; never authored in USD. | the opened Twin folder or downloaded scenario |
+| `twin://<authority>/...` | **Internal asset address.** The authority assigned to one Twin mount lifetime. Never shown to users or authored in a file. | the registered Twin root through `lunco-storage` |
 
 The `lunco://` scheme is the engine library scheme. Collaboration protocols
 must use their own explicitly defined scheme.
@@ -1524,11 +1525,12 @@ must use their own explicitly defined scheme.
 >
 > **External Twins:** a scene living outside the project (its own repo) is opened
 > via File → Open Folder. The Twin-open flow registers the folder and loads
-> `twin://<assigned-mount>/<default_scene>`.
+> its stable `twin://<source-identity>/<default_scene>` scene URI. The asset
+> reader resolves that URI to the current mount authority internally.
 > The scene authors only **relative** paths (co-located terrain glb) and
 > `lunco://` library refs — so the `.usda` is portable and identity
 > (`Provenance`) comes from the asset owner's stable logical source conversion.
-> See the [mount identity contract](55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity).
+> See the [source URI and mount lease contract](55-scene-addressing-and-roots.md#3-source-uris-and-internal-mount-leases).
 
 ### Coordinate Systems
 

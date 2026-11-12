@@ -1,13 +1,14 @@
 // Production acceptance for the scheduled physics initialization hook.
 // The USD fixture selects a policy that accepts one finite body. The verdict
-// proves that the owner supplied the stable Twin identity in a discrete
-// lifecycle context and consumed the authored decision before physics admission.
+// proves Twin-scoped lifecycle and query values hide workspace identity, and
+// consumes the authored decision before physics admission.
 
 const BODY_PATH = "/SandboxScene/Box";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [find(BODY_PATH)], entity_writes: [],
-       query_reads: ["RuntimeDiagnostics", "PhysicsPerformance"], required_inputs: [] }
+       query_reads: ["ReadActiveTwinContract", "ScriptingCatalog",
+           "RuntimeDiagnostics", "PhysicsPerformance"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -17,8 +18,42 @@ fn on_start(me, ctx) {
     let lifecycle = policy_status().lifecycle;
     let lifecycle_context = lifecycle.runtime_context;
     this.twin_lifecycle_generation_valid = lifecycle_context.generation.to_int() == 0;
-    this.twin_lifecycle_owner_present = lifecycle_context.owner_id != ();
-    this.twin_lifecycle_owner_matches = lifecycle_context.owner_id == execution_context().owner_id;
+    this.twin_lifecycle_owner_hidden = !lifecycle_context.contains("owner_id")
+        && !lifecycle_context.contains("target_twin_id");
+    let active_context = execution_context();
+    this.twin_execution_owner_hidden = active_context.scope == "twin"
+        && !active_context.contains("owner_id")
+        && !active_context.contains("target_twin_id");
+    let twin_contract = query("ReadActiveTwinContract", #{});
+    this.twin_query_owner_hidden = twin_contract != ()
+        && !twin_contract.contains("twin_id");
+    let catalog = query("ScriptingCatalog", #{sections: ["commands", "queries"]});
+    let twin_identity_schema_hidden = catalog != () && catalog.commands != ()
+        && catalog.queries != ();
+    if twin_identity_schema_hidden {
+        for command in catalog.commands {
+            for field in command.fields {
+                if ["twin_id", "owner_twin_id", "target_twin_id",
+                        "workspace_twin_id", "active_twin_id"].contains(field.name)
+                    || (field.name == "twin" && field.type_name == "u64") {
+                    twin_identity_schema_hidden = false;
+                }
+            }
+        }
+        for query_schema in catalog.queries {
+            if query_schema.parameters != () {
+                for parameter in query_schema.parameters {
+                    if ["twin_id", "owner_twin_id", "target_twin_id",
+                            "workspace_twin_id", "active_twin_id", "scope_id",
+                            "active_twin", "host_twin"].contains(parameter.name)
+                        || (parameter.name == "twin" && parameter.type_name == "u64") {
+                        twin_identity_schema_hidden = false;
+                    }
+                }
+            }
+        }
+    }
+    this.twin_identity_schema_hidden = twin_identity_schema_hidden;
     let lifecycle_phase_matches = (lifecycle.event == "startup"
             || lifecycle.event == "reload")
         && lifecycle_context.phase == "start"
@@ -83,10 +118,14 @@ fn on_tick(me, ctx) {
         t_true(this.body >= 0, "the authored physics body resolves to its live API id"),
         t_true(this.twin_lifecycle_generation_valid,
             "Twin lifecycle hooks receive generation zero for their scene owner route"),
-        t_true(this.twin_lifecycle_owner_present,
-            "Twin lifecycle hooks receive their stable Twin owner identity"),
-        t_true(this.twin_lifecycle_owner_matches,
-            "Twin lifecycle and scenario routes carry the same stable owner identity"),
+        t_true(this.twin_lifecycle_owner_hidden,
+            "Twin lifecycle status does not expose application-owned Twin identity"),
+        t_true(this.twin_execution_owner_hidden,
+            "Twin-scoped Rhai execution context does not expose application-owned Twin identity"),
+        t_true(this.twin_query_owner_hidden,
+            "Twin-scoped contract queries do not expose application-owned Twin identity"),
+        t_true(this.twin_identity_schema_hidden,
+            "Twin-scoped command and query discovery omit application-owned identity fields"),
         t_true(this.twin_lifecycle_context_valid,
             "Twin lifecycle hooks run in the discrete lifecycle context"),
         t_true(state != () && state.ok != false, "the admitted body remains queryable"),

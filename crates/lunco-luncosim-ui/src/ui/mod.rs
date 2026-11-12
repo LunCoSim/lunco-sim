@@ -13,9 +13,7 @@ use lunco_core::{AppSceneExt, SceneResource};
 use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::ModelicaWorkbenchPlugin;
-use lunco_usd_bevy_camera::camera_switch::{
-    CameraSelectionStatus, ObserveAvatar,
-};
+use lunco_usd_bevy_camera::camera_switch::{CameraSelectionStatus, ObserveAvatar};
 use lunco_workbench_core::presentation::{ViewportPlaceholder, ViewportPlaceholderAction};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::{PanelCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
@@ -156,7 +154,7 @@ fn remember_placeholder_twin(
 ) {
     mounts
         .0
-        .insert(event.event().twin, event.event().name.clone());
+        .insert(event.event().twin, event.event().authority.clone());
 }
 
 fn forget_placeholder_twin(
@@ -178,11 +176,10 @@ fn scenario_twin_facts(
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned);
-    let authority = mounts
-        .0
-        .get(&id)
-        .cloned()
-        .or_else(|| roots.and_then(|roots| roots.name_for_root(&twin.root).ok().flatten()));
+    let mounted =
+        mounts.0.get(&id).cloned().or_else(|| {
+            roots.and_then(|roots| roots.authority_for_root(&twin.root).ok().flatten())
+        });
     let default_scene = twin
         .manifest
         .as_ref()
@@ -191,7 +188,8 @@ fn scenario_twin_facts(
         .map(|path| path.replace('\\', "/"));
     lunco_scripting_rhai_core::ui_bridge::SceneCatalogTwin {
         id: id.raw(),
-        authority,
+        source_identity: lunco_assets_core::logical_twin_source_identity(twin),
+        source_ready: mounted.is_some(),
         name,
         directory,
         default_scene,
@@ -307,13 +305,17 @@ fn publish_scene_catalog_facts(
                     let mut scenes = Vec::with_capacity(assets.len());
                     let mut error = None;
                     for asset in assets {
-                        let twin = match asset.twin.as_deref() {
+                        let twin = match asset.twin_authority.as_deref() {
                             None => None,
-                            Some(authority) => match facts
-                                .twins
-                                .iter()
-                                .find(|twin| twin.authority.as_deref() == Some(authority))
-                            {
+                            Some(authority) => match roots
+                                .logical_identity_for_authority(authority)
+                                .ok()
+                                .and_then(|identity| {
+                                    facts
+                                        .twins
+                                        .iter()
+                                        .find(|twin| twin.source_identity == identity)
+                                }) {
                                 Some(twin) => Some(twin.clone()),
                                 None => {
                                     error = Some(format!(
@@ -324,8 +326,24 @@ fn publish_scene_catalog_facts(
                                 }
                             },
                         };
+                        let uri = lunco_assets_core::asset_path::load_asset_path(
+                            &lunco_assets_core::engine_asset_uri(&asset.asset_path),
+                            None,
+                            None,
+                            None,
+                        )
+                        .and_then(|path| {
+                            lunco_assets_core::asset_path::source_uri(&path, Some(roots))
+                        });
+                        let uri = match uri {
+                            Ok(uri) => uri,
+                            Err(detail) => {
+                                error = Some(detail.to_string());
+                                break;
+                            }
+                        };
                         scenes.push(SceneCatalogEntry {
-                            uri: lunco_assets_core::engine_asset_uri(&asset.asset_path),
+                            uri,
                             relative_path: asset.rel.clone(),
                             stem: asset.stem,
                             description: metadata
@@ -642,12 +660,25 @@ impl Plugin for LunCoSimUiPlugin {
             )
             .add_observer(
                 |transition: On<lunco_core::SceneTransitionCompleted>,
+                 roots: Option<Res<lunco_assets_core::TwinRoots>>,
                  mut current: ResMut<CurrentScenePath>,
                  mut current_name: ResMut<CurrentSceneName>| {
                     match &transition.event().transition {
                         lunco_core::SceneTransition::Load { path, .. }
-                        | lunco_core::SceneTransition::Restart { path, .. } => {
-                            current.0 = path.clone();
+                        | lunco_core::SceneTransition::Restart { path, .. }
+                        | lunco_core::SceneTransition::RuntimeReset { path, .. } => {
+                            current.0 = match lunco_assets_core::asset_path::source_uri_for_address(
+                                path,
+                                roots.as_deref(),
+                            ) {
+                                Ok(uri) => uri,
+                                Err(error) => {
+                                    warn!("[scene] cannot publish the scene source URI: {error}");
+                                    current.0.clear();
+                                    current_name.0.clear();
+                                    return;
+                                }
+                            };
                             current_name.0 = std::path::Path::new(path)
                                 .file_name()
                                 .and_then(|file| file.to_str())
@@ -976,17 +1007,30 @@ impl SceneResource for PendingSceneLoadAction {
 
 fn on_scene_source_repair_ready(
     trigger: On<lunco_usd_bevy_runtime_core::SceneSourceRepairReady>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut pending: ResMut<PendingSceneLoadAction>,
     mut status: ResMut<lunco_status_core::status_bus::StatusBus>,
 ) {
     let event = trigger.event();
-    pending.0 = Some((event.path.clone(), event.root_prim.clone()));
+    let source_uri = roots.as_deref().and_then(|roots| {
+        lunco_assets_core::asset_path::source_uri_for_address(&event.path, Some(roots)).ok()
+    });
+    let Some(source_uri) = source_uri else {
+        pending.0 = None;
+        status.push(
+            USD_SCENE_STATUS_ACTION,
+            lunco_status_core::status_bus::StatusLevel::Error,
+            "The Twin source is no longer mounted. Reopen it before continuing.",
+        );
+        return;
+    };
+    pending.0 = Some((source_uri.clone(), event.root_prim.clone()));
     status.push(
         USD_SCENE_STATUS_ACTION,
         lunco_status_core::status_bus::StatusLevel::Attention,
         format!(
             "The replacement source is valid. The scene remains stopped; choose Continue to load `{}`.",
-            event.path
+            source_uri
         ),
     );
 }
@@ -1967,9 +2011,14 @@ mod tests {
         use bevy::prelude::*;
         use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 
+        let roots = lunco_assets_core::TwinRoots::default();
+        let authority = roots
+            .register_authority("demo", std::env::temp_dir())
+            .expect("register Twin source");
         let mut app = App::new();
         app.insert_resource(super::PendingSceneLoadAction::default())
             .insert_resource(StatusBus::default())
+            .insert_resource(roots)
             .insert_resource(RequestedScene::default())
             .add_observer(super::on_scene_source_repair_ready)
             .add_observer(super::on_scene_status_action)
@@ -1977,7 +2026,7 @@ mod tests {
 
         app.world_mut()
             .trigger(lunco_usd_bevy_runtime_core::SceneSourceRepairReady {
-                path: "twin://demo/scenes/mission.usda".to_owned(),
+                path: lunco_assets_core::twin_uri(&authority, "scenes/mission.usda"),
                 root_prim: "/Mission".to_owned(),
             });
         app.world_mut().flush();
@@ -1992,6 +2041,8 @@ mod tests {
         assert_eq!(event.level, StatusLevel::Attention);
         assert!(event.message.contains("scene remains stopped"));
         assert!(event.message.contains("choose Continue"));
+        assert!(event.message.contains("twin://demo/scenes/mission.usda"));
+        assert!(!event.message.contains(&authority));
 
         app.world_mut().trigger(StatusBarAction {
             source: "USD scene",

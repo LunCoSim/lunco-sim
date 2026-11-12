@@ -2221,7 +2221,7 @@ fn attach_component_at_socket(
 ) {
     use lunco_usd_core::attach::AttachSpec;
     // Ask `lunco-assets` where the reference lives — do NOT assume the shipped
-    // library. A component authored by an open Twin is `twin://<name>/…`, which
+    // library. A component authored by an open Twin is `twin://<authority>/…`, which
     // has no path under `assets/` at all; joining one produced a path that never
     // existed and the attach was skipped with a "no plug frame" warning.
     let Some(schemes) = world

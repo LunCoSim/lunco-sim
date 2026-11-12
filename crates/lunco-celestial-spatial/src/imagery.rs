@@ -476,12 +476,11 @@ pub(crate) fn bind_dataset_body_imagery(
         // The URI, not the path: `lunco://` searches the packed cache and the
         // shared pool in turn, so this one string resolves the same whether the
         // file shipped with the build or was downloaded a moment ago.
-        let path = match lunco_assets_core::asset_path::load_asset_path(
-            &entry.artifact_uri(),
-            None,
-            None,
-            None,
-        ) {
+        let Some(uri) = entry.artifact_uri() else {
+            error!("[celestial] dataset imagery has no live Twin mount authority");
+            continue;
+        };
+        let path = match lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None) {
             Ok(path) => path,
             Err(error) => {
                 error!("[celestial] dataset imagery rejected: {error}");

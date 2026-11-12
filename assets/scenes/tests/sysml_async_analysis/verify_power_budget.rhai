@@ -15,7 +15,7 @@ fn simulation_dependencies(me, ctx) {
         entity_reads: [], entity_writes: [],
         query_reads: ["AnalyzeSysml", "ReadActiveTwinContract"],
         required_inputs: [
-            #{ owner: "sysml.twin-analysis", identity: twin_name() },
+            #{ owner: "sysml.twin-analysis", identity: twin_source_identity() },
         ],
     }
 }
@@ -25,7 +25,7 @@ fn source_failure(message, actual) {
         "power-budget-source", false, message, actual, "typed 45 W minimum and 52 W observation");
     sysml_requirement_checks::finish_preflight(
         [check], "Power budget verification", "POWER_BUDGET",
-        twin_name(), "AsyncTwinAnalysis");
+        twin_source_identity(), "AsyncTwinAnalysis");
 }
 
 // Telemetry accepts the shared HookValue map/array/scalar ABI. Preserve native
@@ -126,7 +126,7 @@ fn finish_requirement(source, check, delivered_power, minimum_power) {
         source_revision: evaluation.source_revision, source_files: evaluation.source_files};
     report.source_evidence = [report_evidence(provenance.evidence)];
     report.source_evidence_failures = [];
-    report.metrics = #{clock: clock_snapshot(), root: twin_name(),
+    report.metrics = #{clock: clock_snapshot(), root: twin_source_identity(),
         component_package: "AsyncTwinAnalysis",
         verification: VERIFICATION, separate_component_document: true};
     report_structured_verdict(report, "Power budget verification", "POWER_BUDGET");

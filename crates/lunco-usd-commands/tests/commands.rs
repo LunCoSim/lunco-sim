@@ -45,25 +45,25 @@ fn plugin_boots_and_registers_kind() {
     assert!(
         app.world()
             .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
+            .authorities()
             .any(|name| name == "InspectUsdDocument")
     );
     assert!(
         app.world()
             .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
+            .authorities()
             .any(|name| name == "InspectUsdEditSession")
     );
     assert!(
         app.world()
             .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
+            .authorities()
             .any(|name| name == "ResolveUsdTarget")
     );
     assert!(
         app.world()
             .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
+            .authorities()
             .any(|name| name == "SyncUsdDocument")
     );
 }
