@@ -85,27 +85,48 @@ a collider or force-actuator frame. Keep a shared RCS actuator on its original
 mount and put its visual volume in a child, so volume scaling cannot change
 force position or direction.
 
-The existing shader-port adapter explicitly validates and lowers Modelica
-f64 values to GPU f32 uniforms. The shader interpolates stations, converts ray
-length to metres, and integrates isotropic `j*efficacy/(4*pi)` in cd/m2 with the
-camera's exposure. Both volume layers use additive RGB and zero alpha. Their
-energy fractions sum to one; compact radial weights have unit cross-sectional
-mean. Noise warps and attenuates the field, with per-instance variation; it
-cannot add radiative power. A tail fade loses light at the observation boundary.
-Modelica integrates transported distance in f64 and publishes its sine/cosine
-phase over a 1024-exit-radius period. This continuous bounded pair avoids GPU
-f32 precision loss on long burns; periodic noise joins the phase boundary.
-Pause and time scaling therefore apply to advection through the shared clock. The local light uses the same estimated luminous power as a
-raster illumination proxy; it is not an additional propulsive energy source or
-a volumetric lighting solver. Fuel colour remains a documented heuristic.
+The existing shader-port adapter validates and lowers Modelica f64 values to GPU
+f32 uniforms. One Cylinder and one material integrate both optical components.
+The shader interpolates the five stations, converts ray length to metres, and
+integrates isotropic `j*efficacy/(4*pi)` in cd/m2 with camera exposure. Output is
+additive RGB with zero alpha. `core_fraction` partitions the field between the
+outer profile and `core_width`; their normalized radial weights have unit
+cross-sectional mean. Each component retains its hot/edge colour parameters.
 
-The volume integration keeps station-constant logarithms outside its sample
-loop. Integer-power radial profiles and intermittency use explicit products;
-these are the same normalized polynomials, with no reduction in ray samples,
-noise octaves, station count or physical emission. The native perspective and
-orthographic depth fixture qualifies occlusion after shader changes. Arithmetic
-comparison is separate from native GPU acceptance and whole-frame FPS.
+The coherent lateral displacement is a function of axial position and the
+Modelica phase only. It translates each cross-section without changing its area.
+Its magnitude is bounded by the remaining observation-envelope radius, so the
+raster bound encloses the complete emitted support. Three-dimensional noise is
+bounded attenuation shared by both components. Attenuation and the explicit
+tail fade reduce the displayed radiant estimate; they do not conserve its exact
+integral. The underlying unattenuated field remains normalized to Modelica's
+radiative estimate. Numerical ray integration has a separate approximation error.
 
+`seed` is an authored, per-emitter scalar with default zero. Vehicle instances
+choose stable seeds on the bound `Shader.inputs:seed`; GPU instance allocation
+never determines appearance. An unconnected `Gprim.inputs:seed` does not feed
+a material uniform. Shared stock RCS tints use small local Material references
+with a seed override, so each emitter keeps its identity without copying the
+shader or its physical model.
+Modelica publishes a bounded sine/cosine phase over a 1024-exit-radius period.
+Both axial displacement and 3D attenuation wrap their integer lattices.
+Attenuation frequency is rounded to 1/1024 cell per exit radius so the transport
+period contains whole cells. Two optical noise bands need two 3D evaluations
+per accepted ray sample; neither band crossfades two full noise fields. The
+wrapped cubic interpolant joins values and slopes, so pause and transport rate use the simulation clock without a render-clock mirror.
+
+`steps` is a total ray ceiling, clamped to 16--512. The shared visual requests
+128. Clip all four station intervals to opaque depth first, estimate sampling
+demand from metric path length and core radius, then distribute the available
+samples proportionally with a cumulative partition. Every nonempty interval gets
+at least one sample; the sum cannot exceed the ceiling. Each interval uses its
+actual `ds`. This is a bounded numerical approximation, not an exact power
+conservation claim. Compare the selected budget with a higher-budget reference
+for close, end-on and side views before changing authored quality.
+
+The reusable stock lander's passive model is `/DescentLander/PlumePhotometry`,
+separate from rendered geometry and from the main propulsion model partition.
+The `engine_exhaust` authoring helper wires one volume and one local light.
 
 The reusable rocket visual anchors this point-light proxy at the nozzle exit
 (the unscaled Exhaust frame), independently of the observation volume. Its world position therefore stays at the nozzle as the
@@ -115,7 +136,7 @@ The ground illumination is an approximation, not resolved plume-surface radiatio
 
 ## Exit filling and hot nozzle walls
 
-Both optical layers start across the physical exit disk. The near-exit radial
+Both optical components start across the physical exit disk. The near-exit radial
 distribution is `(45/32)*(1-r^8)^2`, with unit disk mean. Over four exit radii
 it blends into the existing normalized downstream core distribution and its
 authored width. Advected intermittency develops over that same distance rather
@@ -140,12 +161,20 @@ defaults are explicitly study assumptions, not measured Griffin properties.
 The opaque `thermal_metal.wesl` material interpolates the three wall temperatures
 at their actual local axial positions using the same nozzle length. It converts
 the resulting temperature to visible
-emission with Planck's law and coarse CIE 1931 quadrature (400–700 nm, 20 nm
-spacing, [CIE 2019 data](https://doi.org/10.25039/CIE.DS.xvudnb9b)),
-then uses the shared PBR lighting path. Temperature and emissivity
-have explicit float GPU projection outputs; the thermal state and diagnostics
-remain double precision. The reported `wall_temperature_k` is a heat-capacity
-weighted mean, not the hot-zone temperature. Cold metal stays dark. Hot metal can remain luminous
+emission through the shared `blackbody_radiance.wesl` approximation of Planck's
+law and CIE 1931 quadrature (400--700 nm, 20 nm spacing,
+[CIE 2019 data](https://doi.org/10.25039/CIE.DS.xvudnb9b)). The shader interpolates
+temperature before the nonlinear conversion and multiplies by emissivity.
+`scripts/render/generate_blackbody_radiance.py` owns the spectral data and
+reproducibly generates piecewise Chebyshev coefficients for log(XYZ/T) in
+reciprocal temperature. The final interval extends to the Rayleigh--Jeans limit.
+Its float32 comparison requires relative XYZ error below 0.02% over 256--1e9 K
+and across interval boundaries. The explicit cutoff below 256 K omits less than
+4e-24 cd/m2 per XYZ component. There is no per-pixel wavelength loop or GPU
+lookup-resource lifetime. Temperature and emissivity retain the explicit GPU
+narrowing boundary; Modelica thermal state and diagnostics stay double precision.
+The reported `wall_temperature_k` is a heat-capacity weighted mean, not the
+hot-zone temperature. Cold metal stays dark. Hot metal can remain luminous
 after delivered thrust and plume light have reached zero. This is a surface
 emission model, not ray-traced indirect lighting or a combustion spectrum.
 
@@ -169,13 +198,23 @@ material-presence and camera lifecycle events invalidate that decision. Live
 uniform writes do not rescan the scene.
 
 The volume pipeline leaves depth writes off and lets the fragment shader own
-occlusion. Each ray starts at its pixel's near plane. The nearest opaque depth
-sample is reconstructed through the current view matrix and converted to the
-volume's local ray coordinate. Each station interval ends at
-`min(station_exit, opaque_surface_t)`; an empty interval emits nothing. Reverse-Z
-clear depth does not invent an opaque surface. Perspective and orthographic
-rays use their native projections; MSAA reads the corresponding depth sample.
-Before the required depth pass is available, the shader emits nothing.
+occlusion. It uses one centre ray per fragment. Each covered MSAA sample's
+opaque depth is reconstructed through the current view matrix and converted
+to that ray's local coordinate. Station intervals stop at the farthest covered
+exit. Within each integration segment, the shader averages the exact visible
+length fractions over covered samples; the rasterizer still applies the
+proxy's coverage. The material field is evaluated once, with visibility in
+[0,1], rather than once for every sample. This is centre-ray antialiasing with
+sample-specific depth limits, not supersampling the gas field.
+
+`sample_index` would force per-sample invocation when its result affects
+output ([WGSL built-in contract](https://www.w3.org/TR/WGSL/#sample-index-builtin-value)).
+`sample_mask` preserves coverage and also works on backends that supply a
+single-bit invocation mask; the performance gain is backend-dependent. The
+fixed array covers Bevy's supported 1/2/4/8 sample modes. Reverse-Z clear depth
+does not invent an opaque surface. Perspective and orthographic rays use their
+native projections. Before the required depth pass is available, the shader
+emits nothing.
 
 This clips against opaque and alpha-masked geometry in the native prepass. It does not implement
 transparent-surface extinction or ordered refractive volumes. Lens bloom can
@@ -197,3 +236,9 @@ Run `scripts/api/test_plume_depth.py --output <directory> --quality high` and
 repeat with `--quality low`. The visible graphics fixture verifies front,
 embedded and rear occluders and an inside-volume camera in both projections.
 It disables bloom only to isolate geometric clipping in its pixel verdicts.
+
+Run `python3 scripts/render/generate_blackbody_radiance.py` to check generated
+source and the independent spectral reference, including a perturbed-coefficient
+negative control. Run `scripts/api/test_plume_field_contract.py --output <dir>`
+for native GPU spectral samples, radial normalization, support, phase wrapping
+and total-budget partitioning; it requires green/red/green pixel controls.

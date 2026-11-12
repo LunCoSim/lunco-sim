@@ -288,9 +288,9 @@ When the shape is a field, use a simple bound and wire physical field samples
 to WESL. `assets/shaders/plume.wesl` integrates optically thin combustion
 emission inside a unit Cylinder. Modelica supplies five stations for radius,
 temperature and emissivity, metric bounds, and transported distance. The
-existing port adapter performs the explicit f64-to-f32 GPU conversion. Both
-layers return additive integrated RGB with zero alpha; energy fractions
-partition one radiative estimate. Noise warps and attenuates the field.
+existing port adapter performs the explicit f64-to-f32 GPU conversion. One volume returns additive integrated RGB with zero alpha; normalized broad/core
+components partition one radiative estimate. Axial displacement preserves
+cross-section area; bounded noise attenuates the field.
 
 A raymarched volume declares `//!@capability lunco.volume-depth.v1` to request
 native opaque depth and own its sample clipping. The render adapter supplies

@@ -22,7 +22,7 @@ def Xform "Engine"
                     color3f inputs:core_color = (1.0, 1.0, 1.0)
                     uniform token info:implementationSource = "sourceAsset"
                     float inputs:plume_length_fraction = 1.0
-                    float inputs:steps = 64.0
+                    float inputs:steps = 128.0
                     float inputs:flicker = 0.0
                     color3f inputs:edge_color = (1.0, 1.0, 1.0)
                     token outputs:surface = ""
@@ -47,11 +47,14 @@ def Xform "Engine"
                     custom float inputs:emission_w_m3_2 = 1000.0
                     custom float inputs:emission_w_m3_3 = 1000.0
                     custom float inputs:emission_w_m3_4 = 1000.0
-                    custom float inputs:energy_fraction = 1.0
-                    custom float inputs:radial_width = 1.0
                     custom float inputs:flow_phase_sin = 0.0
                     custom float inputs:flow_phase_cos = 1.0
                     asset info:wesl:sourceAsset = @lunco://shaders/plume.wesl@
+                    custom float inputs:core_fraction = 0.0
+                    custom float inputs:core_width = 0.44999998807907104
+                    custom color3f inputs:inner_hot_color = (1.0, 1.0, 1.0)
+                    custom color3f inputs:inner_edge_color = (1.0, 1.0, 1.0)
+                    custom float inputs:seed = 57141.0
                 }
             }
         }
@@ -76,8 +79,6 @@ def Xform "Engine"
             custom float inputs:throttle = 1.0
             custom float inputs:plume_length_fraction = 1.0
             custom float inputs:flicker = 0.0
-            custom float inputs:energy_fraction = 1.0
-            custom float inputs:radial_width = 1.0
             custom float inputs:bound_radius_m = 1.0
             custom float inputs:profile_length_m = 4.0
             custom float inputs:luminous_efficacy_lm_w = 200.0

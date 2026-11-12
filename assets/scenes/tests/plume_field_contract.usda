@@ -1,0 +1,70 @@
+#usda 1.0
+(
+    defaultPrim = "PlumeFieldContract"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    doc = "GPU thermal radiance accuracy, normalized optical field, conservative support, periodic advection and bounded ray sampling; green is success."
+)
+
+def Xform "PlumeFieldContract" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461302.91528
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/plume_field_contract.rhai@
+    }
+    def Scope "Looks"
+    {
+        def Material "Noise"
+        {
+            token outputs:surface
+            token outputs:surface.connect = </PlumeFieldContract/Looks/Noise/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                custom token outputs:surface = ""
+                custom asset info:wesl:sourceAsset = @lunco://shaders/tests/plume_field_contract.wesl@
+                custom float inputs:failure_control = 0.0
+            }
+        }
+    }
+    def Plane "Panel" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double width = 10.0
+        double length = 10.0
+        custom rel material:binding = </PlumeFieldContract/Looks/Noise>
+        custom float inputs:failure_control = 0.0
+        uniform bool doubleSided = true
+    }
+    def Camera "Camera" (
+        prepend apiSchemas = ["LunCoCameraAPI"]
+    )
+    {
+        custom double3 xformOp:translate = (0.0, 0.0, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        float focalLength = 18.0
+    }
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera
+        token lunco:activeCamera.timeSamples = {
+            0.0: "Camera",
+        }
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 1.0
+    }
+}
