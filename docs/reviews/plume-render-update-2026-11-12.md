@@ -152,3 +152,7 @@ and camera/body/leg motion receipt. The full landing-stability fixture ran
 300 seconds of simulated time, reproduced the near-ground climb-away and
 returned INCONCLUSIVE. Landing repair is the next task, not a passing gate in
 this camera/plume revision.
+
+The subsequent [contact-cutoff repair](lander-contact-cutoff-2026-11-12.md)
+resolves that reproduced landing failure and records its separate production
+landing and stability acceptance.
